@@ -117,6 +117,6 @@ module tb_controller();
     #1 f3_tb = 3'b110;
     #1 f3_tb = 3'b111;
     #1 opcode_tb = 7'b0011111; // default case
-    $finish
+    $finish;
   end
 endmodule
