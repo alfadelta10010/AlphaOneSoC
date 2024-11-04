@@ -26,7 +26,7 @@ module tb_controller();
                 );
   
   initial begin
-    $dumpfile("dump.vcd");
+    $dumpfile("controller.vcd");
     $dumpvars(0, tb_controller);
     f7_tb = 7'b0;
     opcode_tb = 7'b0;
