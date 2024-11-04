@@ -5,7 +5,7 @@ module tb_adder(a_tb, b_tb, s_tb);
   
   adder dut (.a(a_tb), 
              .b(b_tb), 
-             .s(s_tb), 
+             .s(s_tb) 
             );
   
   initial begin
@@ -15,5 +15,6 @@ module tb_adder(a_tb, b_tb, s_tb);
     b_tb = 32'h00000004;
     #1 a_tb = 32'hFA000004;
     #1 b_tb = 32'hFF000008;
+    $finish;
   end
 endmodule

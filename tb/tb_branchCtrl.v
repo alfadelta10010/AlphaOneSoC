@@ -1,8 +1,8 @@
 module tb_branchCtrl(bCtrl_tb, r1_tb, r2_tb, bSel_tb);
-  output logic [2:0] bCtrl_tb;
-  output logic [31:0] r1_tb;
-  output logic [31:0] r2_tb;
-  input logic [0:0] bSel_tb;
+  output reg [2:0] bCtrl_tb;
+  output reg [31:0] r1_tb;
+  output reg [31:0] r2_tb;
+  input wire [0:0] bSel_tb;
   
   branchCtrl dut (.bCtrl(bCtrl_tb),
                   .r1(r1_tb),
@@ -25,4 +25,5 @@ module tb_branchCtrl(bCtrl_tb, r1_tb, r2_tb, bSel_tb);
     #1 r2_tb = 32'hFFFFFFFF;
     #1 bCtrl_tb = 3'b101;
     #1 $finish;
+    end
 endmodule
