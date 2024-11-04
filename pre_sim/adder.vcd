@@ -1,0 +1,39 @@
+$date
+	Mon Nov  4 15:33:45 2024
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1s
+$end
+$scope module tb_adder $end
+$var wire 32 ! s_tb [31:0] $end
+$var reg 32 " a_tb [31:0] $end
+$var reg 32 # b_tb [31:0] $end
+$scope module dut $end
+$var wire 32 $ a [31:0] $end
+$var wire 32 % b [31:0] $end
+$var wire 32 & s [31:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+b100 &
+b100 %
+b0 $
+b100 #
+b0 "
+b100 !
+$end
+#1
+b11111010000000000000000000001000 !
+b11111010000000000000000000001000 &
+b11111010000000000000000000000100 "
+b11111010000000000000000000000100 $
+#2
+b11111001000000000000000000001100 !
+b11111001000000000000000000001100 &
+b11111111000000000000000000001000 #
+b11111111000000000000000000001000 %
