@@ -1,0 +1,93 @@
+#! /usr/bin/vvp
+:ivl_version "11.0 (stable)";
+:ivl_delay_selection "TYPICAL";
+:vpi_time_precision + 0;
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/system.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/vhdl_sys.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/vhdl_textio.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/v2005_math.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/va_math.vpi";
+S_0x5b4fdbfded90 .scope module, "tb_mux31" "tb_mux31" 2 1;
+ .timescale 0 0;
+    .port_info 0 /OUTPUT 32 "a_tb";
+    .port_info 1 /OUTPUT 32 "b_tb";
+    .port_info 2 /OUTPUT 32 "c_tb";
+    .port_info 3 /OUTPUT 2 "s_tb";
+    .port_info 4 /INPUT 32 "y_tb";
+v0x5b4fdc032050_0 .var "a_tb", 31 0;
+v0x5b4fdc032180_0 .var "b_tb", 31 0;
+v0x5b4fdc032290_0 .var "c_tb", 31 0;
+v0x5b4fdc032380_0 .var "s_tb", 1 0;
+v0x5b4fdc032440_0 .net "y_tb", 31 0, L_0x5b4fdc032840;  1 drivers
+S_0x5b4fdbfdef20 .scope module, "dut" "mux31" 2 8, 3 1 0, S_0x5b4fdbfded90;
+ .timescale 0 0;
+    .port_info 0 /INPUT 32 "a";
+    .port_info 1 /INPUT 32 "b";
+    .port_info 2 /INPUT 32 "c";
+    .port_info 3 /INPUT 2 "s";
+    .port_info 4 /OUTPUT 32 "y";
+P_0x5b4fdbfdf100 .param/l "N" 0 3 1, +C4<00000000000000000000000000100000>;
+v0x5b4fdc031a60_0 .net "a", 31 0, v0x5b4fdc032050_0;  1 drivers
+v0x5b4fdc031b40_0 .net "b", 31 0, v0x5b4fdc032180_0;  1 drivers
+v0x5b4fdc031c10_0 .net "c", 31 0, v0x5b4fdc032290_0;  1 drivers
+v0x5b4fdc031d10_0 .net "mux1", 31 0, L_0x5b4fdc032620;  1 drivers
+v0x5b4fdc031e00_0 .net "s", 1 0, v0x5b4fdc032380_0;  1 drivers
+v0x5b4fdc031f10_0 .net "y", 31 0, L_0x5b4fdc032840;  alias, 1 drivers
+L_0x5b4fdc0326e0 .part v0x5b4fdc032380_0, 0, 1;
+L_0x5b4fdc032900 .part v0x5b4fdc032380_0, 1, 1;
+S_0x5b4fdc01b760 .scope module, "m1" "mux21" 3 9, 3 13 0, S_0x5b4fdbfdef20;
+ .timescale 0 0;
+    .port_info 0 /INPUT 32 "a";
+    .port_info 1 /INPUT 32 "b";
+    .port_info 2 /INPUT 1 "s";
+    .port_info 3 /OUTPUT 32 "y";
+P_0x5b4fdc01b940 .param/l "N" 0 3 13, +C4<00000000000000000000000000100000>;
+v0x5b4fdc01ba50_0 .net "a", 31 0, v0x5b4fdc032050_0;  alias, 1 drivers
+v0x5b4fdc030fd0_0 .net "b", 31 0, v0x5b4fdc032180_0;  alias, 1 drivers
+v0x5b4fdc0310b0_0 .net "s", 0 0, L_0x5b4fdc0326e0;  1 drivers
+v0x5b4fdc031180_0 .net "y", 31 0, L_0x5b4fdc032620;  alias, 1 drivers
+L_0x5b4fdc032620 .functor MUXZ 32, v0x5b4fdc032050_0, v0x5b4fdc032180_0, L_0x5b4fdc0326e0, C4<>;
+S_0x5b4fdc031310 .scope module, "m2" "mux21" 3 10, 3 13 0, S_0x5b4fdbfdef20;
+ .timescale 0 0;
+    .port_info 0 /INPUT 32 "a";
+    .port_info 1 /INPUT 32 "b";
+    .port_info 2 /INPUT 1 "s";
+    .port_info 3 /OUTPUT 32 "y";
+P_0x5b4fdc031510 .param/l "N" 0 3 13, +C4<00000000000000000000000000100000>;
+v0x5b4fdc031650_0 .net "a", 31 0, L_0x5b4fdc032620;  alias, 1 drivers
+v0x5b4fdc031740_0 .net "b", 31 0, v0x5b4fdc032290_0;  alias, 1 drivers
+v0x5b4fdc031800_0 .net "s", 0 0, L_0x5b4fdc032900;  1 drivers
+v0x5b4fdc0318d0_0 .net "y", 31 0, L_0x5b4fdc032840;  alias, 1 drivers
+L_0x5b4fdc032840 .functor MUXZ 32, L_0x5b4fdc032620, v0x5b4fdc032290_0, L_0x5b4fdc032900, C4<>;
+    .scope S_0x5b4fdbfded90;
+T_0 ;
+    %vpi_call 2 16 "$dumpfile", "mux31.vcd" {0 0 0};
+    %vpi_call 2 17 "$dumpvars", 32'sb00000000000000000000000000000000, S_0x5b4fdbfded90 {0 0 0};
+    %pushi/vec4 2882400018, 0, 32;
+    %store/vec4 v0x5b4fdc032050_0, 0, 32;
+    %pushi/vec4 305419896, 0, 32;
+    %store/vec4 v0x5b4fdc032180_0, 0, 32;
+    %pushi/vec4 3133078222, 0, 32;
+    %store/vec4 v0x5b4fdc032290_0, 0, 32;
+    %delay 1, 0;
+    %pushi/vec4 0, 0, 2;
+    %store/vec4 v0x5b4fdc032380_0, 0, 2;
+    %delay 1, 0;
+    %pushi/vec4 1, 0, 2;
+    %store/vec4 v0x5b4fdc032380_0, 0, 2;
+    %delay 1, 0;
+    %pushi/vec4 2, 0, 2;
+    %store/vec4 v0x5b4fdc032380_0, 0, 2;
+    %delay 1, 0;
+    %pushi/vec4 3, 0, 2;
+    %store/vec4 v0x5b4fdc032380_0, 0, 2;
+    %delay 1, 0;
+    %vpi_call 2 25 "$finish" {0 0 0};
+    %end;
+    .thread T_0;
+# The file index is used to find the file name in the following table.
+:file_names 4;
+    "N/A";
+    "<interactive>";
+    "./tb/tb_mux31.v";
+    "./src/mux31.v";
