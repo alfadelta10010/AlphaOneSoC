@@ -7,7 +7,7 @@ module tb_mux21(a_tb, b_tb, s_tb, y_tb);
   mux21 #(32) dut (.a(a_tb), .b(b_tb), .s(s_tb), .y(y_tb));
   
   initial begin
-    $dumpfile("dump.vcd");
+    $dumpfile("mux21.vcd");
     $dumpvars(0, tb_mux21);
     a_tb = 32'hABCEDF12;
     b_tb = 32'h12345678;

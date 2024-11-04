@@ -7,7 +7,7 @@ module tb_ALU();
   alu dut (.d1(d1_tb), .d2(d2_tb), .result(result_tb), .control(control_tb));
   
   initial begin
-    $dumpfile("dump.vcd");
+    $dumpfile("alu.vcd");
     $dumpvars(0, tb_ALU);
     d1_tb = 32'hF31474A1;
     d2_tb = 32'hA214673C;
