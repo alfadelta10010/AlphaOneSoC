@@ -10,3 +10,10 @@ module mux31 #(parameter N = 32) (a, b, c, s, y);
   mux21 m2(mux1, c, s[1], y);
 endmodule
 
+module mux21 #(parameter N = 32) (a, b, s, y);
+  input wire [N-1:0] a; // 0
+  input wire [N-1:0] b; // 1
+  input wire s;
+  output wire [N-1:0] y;
+  assign y = s ? b : a;
+endmodule
