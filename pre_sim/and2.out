@@ -1,0 +1,51 @@
+#! /usr/bin/vvp
+:ivl_version "11.0 (stable)";
+:ivl_delay_selection "TYPICAL";
+:vpi_time_precision + 0;
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/system.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/vhdl_sys.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/vhdl_textio.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/v2005_math.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/va_math.vpi";
+S_0x5cdaa967a660 .scope module, "tb_and2" "tb_and2" 2 1;
+ .timescale 0 0;
+    .port_info 0 /OUTPUT 32 "a_tb";
+    .port_info 1 /OUTPUT 32 "b_tb";
+    .port_info 2 /INPUT 32 "y_tb";
+v0x5cdaa968bbd0_0 .var "a_tb", 31 0;
+v0x5cdaa968bcc0_0 .var "b_tb", 31 0;
+v0x5cdaa968bd90_0 .net "y_tb", 31 0, L_0x5cdaa968bed0;  1 drivers
+S_0x5cdaa967a840 .scope module, "dut" "and2" 2 6, 3 1 0, S_0x5cdaa967a660;
+ .timescale 0 0;
+    .port_info 0 /INPUT 32 "a";
+    .port_info 1 /INPUT 32 "b";
+    .port_info 2 /OUTPUT 32 "y";
+P_0x5cdaa967aa20 .param/l "N" 0 3 1, +C4<00000000000000000000000000100000>;
+L_0x5cdaa968bed0 .functor AND 32, v0x5cdaa968bbd0_0, v0x5cdaa968bcc0_0, C4<11111111111111111111111111111111>, C4<11111111111111111111111111111111>;
+v0x5cdaa9640cf0_0 .net "a", 31 0, v0x5cdaa968bbd0_0;  1 drivers
+v0x5cdaa968b980_0 .net "b", 31 0, v0x5cdaa968bcc0_0;  1 drivers
+v0x5cdaa968ba60_0 .net "y", 31 0, L_0x5cdaa968bed0;  alias, 1 drivers
+    .scope S_0x5cdaa967a660;
+T_0 ;
+    %vpi_call 2 12 "$dumpfile", "and2.vcd" {0 0 0};
+    %vpi_call 2 13 "$dumpvars", 32'sb00000000000000000000000000000000, S_0x5cdaa967a660 {0 0 0};
+    %pushi/vec4 305419896, 0, 32;
+    %store/vec4 v0x5cdaa968bbd0_0, 0, 32;
+    %pushi/vec4 305419896, 0, 32;
+    %store/vec4 v0x5cdaa968bcc0_0, 0, 32;
+    %delay 1, 0;
+    %pushi/vec4 0, 0, 32;
+    %store/vec4 v0x5cdaa968bbd0_0, 0, 32;
+    %delay 1, 0;
+    %pushi/vec4 4294967295, 0, 32;
+    %store/vec4 v0x5cdaa968bcc0_0, 0, 32;
+    %delay 1, 0;
+    %vpi_call 2 18 "$finish" {0 0 0};
+    %end;
+    .thread T_0;
+# The file index is used to find the file name in the following table.
+:file_names 4;
+    "N/A";
+    "<interactive>";
+    "./tb/tb_and2.v";
+    "./src/and2.v";

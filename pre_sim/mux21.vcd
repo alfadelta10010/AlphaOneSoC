@@ -1,0 +1,41 @@
+$date
+	Mon Nov  4 15:22:42 2024
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1s
+$end
+$scope module tb_mux21 $end
+$var wire 32 ! y_tb [31:0] $end
+$var reg 32 " a_tb [31:0] $end
+$var reg 32 # b_tb [31:0] $end
+$var reg 1 $ s_tb $end
+$scope module dut $end
+$var wire 32 % a [31:0] $end
+$var wire 32 & b [31:0] $end
+$var wire 1 $ s $end
+$var wire 32 ' y [31:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+b10101011110011101101111100010010 '
+b10010001101000101011001111000 &
+b10101011110011101101111100010010 %
+0$
+b10010001101000101011001111000 #
+b10101011110011101101111100010010 "
+b10101011110011101101111100010010 !
+$end
+#1
+b10010001101000101011001111000 !
+b10010001101000101011001111000 '
+1$
+#2
+b10101011110011101101111100010010 !
+b10101011110011101101111100010010 '
+0$
+#3
