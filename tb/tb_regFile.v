@@ -17,24 +17,76 @@ module tb_regFile();
                .dIn(dIn_tb)
               );
   
-  always
-    begin
-      clk_tb = 0;
-      #5;
-      clk_tb = 1;
-      #5;
-    end
+  always begin
+    clk_tb = 0;
+    #5;
+    clk_tb = 1;
+    #5;
+  end
   
   initial begin
     $dumpfile("regFile.vcd");
     $dumpvars(0, tb_regFile);
-    rd_tb = 5'b01010;
-    din_tb = 32'hBABEFACE;
-    #2 wrEn_tb = 1;
-    #2 rs1_tb = 5'b00010;
+    wrEn_tb = 1'b0;
+    for (int i = 0; i < 32; i = i + 1) 
+      begin
+        @(posedge clk_tb);
+        wrEn_tb = 1'b1;
+        rd_tb = i[4:0];
+        dIn_tb = 32'hFFFFFF00 + i;
+        @(posedge clk_tb);
+        wrEn_tb = 1'b0;
+      end
+    
+    #10;
+    rs1_tb = 5'b00001;
+    rs2_tb = 5'b00010;
+    #10;
+    rs1_tb = 5'b00011;
+    rs2_tb = 5'b00100;
+    #10;
+    rs1_tb = 5'b00101;
+    rs2_tb = 5'b00110;
+    #10;
+    rs1_tb = 5'b00111;
+    rs2_tb = 5'b01000;
+    #10;
+    rs1_tb = 5'b01001;
     rs2_tb = 5'b01010;
-    #5 rs2_tb = 5'bX;
-    rd_tb = 5'b00010;
-    #5 $finish;
+    #10;
+    rs1_tb = 5'b01011;
+    rs2_tb = 5'b01100;
+    #10;
+    rs1_tb = 5'b01101;
+    rs2_tb = 5'b01110;
+    #10;
+    rs1_tb = 5'b01111;
+    rs2_tb = 5'b10000;
+    #10;
+    rs1_tb = 5'b10001;
+    rs2_tb = 5'b10010;
+    #10;
+    rs1_tb = 5'b10011;
+    rs2_tb = 5'b10100;
+    #10;
+    rs1_tb = 5'b10101;
+    rs2_tb = 5'b10110;
+    #10;
+    rs1_tb = 5'b10111;
+    rs2_tb = 5'b11000;
+    #10;
+    rs1_tb = 5'b11001;
+    rs2_tb = 5'b11010;
+    #10;
+    rs1_tb = 5'b11011;
+    rs2_tb = 5'b11100;
+    #10;
+    rs1_tb = 5'b11101;
+    rs2_tb = 5'b11110;
+    #10;
+    rs1_tb = 5'b11111;
+    rs2_tb = 5'b00000;
+    #180;
+    $finish;
   end
 endmodule
