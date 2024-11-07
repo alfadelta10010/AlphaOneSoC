@@ -35,7 +35,7 @@ module signExt(opcode, instIn, immOut);
         immOut = {{20{instIn[31]}}, instIn[31:20]};
       end
       7'b0010011: begin // IR-Type
-        immOut = (instIn[14:12] == (3'b001 || 3'b101)) ? {27'b0, instIn[24:20]} : {{20{instIn[31]}}, instIn[31:20]};
+        immOut = (instIn[14:12] == (3'b001 | 3'b101)) ? {27'b0, instIn[24:20]} : {{20{instIn[31]}}, instIn[31:20]};
       end
       7'b0100011: begin
         immOut = {{20{instIn[31]}}, instIn[31:25], instIn[11:7]};
