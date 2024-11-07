@@ -10,26 +10,28 @@ module tb_signExt();
     $dumpfile("signExt.vcd");
     $dumpvars(0, tb_signExt);
     instIn_tb = 32'hX;
-    #1 opcode_tb = 7'b0110011; //R-type
-    instIn_tb = 32'h01190933; //XXXXXX
-    #1 opcode_tb = 7'b0010011; //I-type
-    instIn_tb = 32'hfffb8b93; // -1
-    #1 opcode_tb = 7'b0100011; //S-type
-    instIn_tb = 32'h0082a223; //4
-    #1 opcode_tb = 7'b0000011; //Load-type
-    instIn_tb = 32'h00C0A283; // 12
-    #1 opcode_tb = 7'b0010011; //I-type - SRAI
-    instIn_tb = 32'h40015093; // 0
-    #1 opcode_tb = 7'b1100011; //B-type
-    instIn_tb = 32'h014c6463; //0000002c
-    #1 opcode_tb = 7'b1100111; //JALR
-    instIn_tb = 32'h7ff080e7; // 0x7FF
-    #1 opcode_tb = 7'b1101111; //JAL
-    instIn_tb = 32'h0000006f; //0000007c
-    #1 opcode_tb = 7'b0110111; //LUI
-    instIn_tb = 32'h872370b7; //0x87237
-    #1 opcode_tb = 7'b0010111; //AUIPC
-    instIn_tb = 32'h10000917; //0x10000
+    #1 opcode_tb = 7'b0110011; // R-type
+    instIn_tb = 32'h00208033;  // 0x00000000
+    #1 opcode_tb = 7'b0010011; // I-type
+    instIn_tb = 32'h00b40413;  // 0x0000000B
+    #1 opcode_tb = 7'b0010011; // I-type
+    instIn_tb = 32'hff638393;  // 0xFFFFFFF6
+    #1 opcode_tb = 7'b0100011; // S-type
+    instIn_tb = 32'h00818323;  // 0x00000006
+    #1 opcode_tb = 7'b0000011; // Load-type
+    instIn_tb = 32'h00c18083;  // 0x0000000C
+    #1 opcode_tb = 7'b0010011; // I-type - SRAI
+    instIn_tb = 32'h4070d093;  // 7 !
+    #1 opcode_tb = 7'b1100011; // B-type
+    instIn_tb = 32'hfe000ae3;  // 0xFFFFFFF4
+    #1 opcode_tb = 7'b1100111; // JALR
+    instIn_tb = 32'h010100e7;  // 0x00000010
+    #1 opcode_tb = 7'b1101111; // JAL
+    instIn_tb = 32'h004000ef;  // 0x00000010 !
+    #1 opcode_tb = 7'b0110111; // LUI
+    instIn_tb = 32'hfffff037;  // 0xFFFFF000
+    #1 opcode_tb = 7'b0010111; // AUIPC
+    instIn_tb = 32'hf0101017;  // 0xF0101000
     #1 $finish;
   end
 endmodule
