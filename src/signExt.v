@@ -27,7 +27,6 @@ module signExt(opcode, instIn, immOut);
         immOut[11] = instIn[20];
         immOut[10:1] = instIn[30:21];
         immOut[0] = 1'b0;
-        //immOut = {{20{instIn[31]}}, instIn[19:12], instIn[13], instIn[30:21], 1'b0};
       end
       7'b1100111: begin // JALR
         immOut[11:0] = instIn[31:20];
