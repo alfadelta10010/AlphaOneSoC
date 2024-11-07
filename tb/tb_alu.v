@@ -10,7 +10,7 @@ module tb_ALU();
     $dumpfile("alu.vcd");
     $dumpvars(0, tb_ALU);
     d1_tb = 32'hF31474A1;
-    d2_tb = 32'hA214673C;
+    d2_tb = 32'h7214673C;
     #10 control_tb = 4'b0000;
     #10 control_tb = 4'b0001;
     #10 control_tb = 4'b0010;
