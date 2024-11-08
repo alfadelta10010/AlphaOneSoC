@@ -112,12 +112,12 @@ module fyracore(dataOut, addrOut, dataIn, wbOut, clk, rst);
   
   memCtrlr #(12) memoryController (
     .memCtrl(memCtrl), 
-    .addrIn(aluOut), 
-    .dataRI(dataR), 
-    .dataWI(dataIn), 
-    .dataRO(dataOut), 
-    .dataWO(dataW), 
-    .addrOut(addrOut), 
+    //.addrIn(aluOut), 
+    //.dataRI(dataR), 
+    //.dataWI(dataIn), 
+    //.dataRO(dataOut), 
+    //.dataWO(dataW), 
+    //.addrOut(addrOut), 
     .wrType(wrType)
   );
   
