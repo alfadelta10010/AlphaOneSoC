@@ -9,16 +9,13 @@
 
 | Components               | RTL                     | Pre-synthesis Simulation      | Post-synthesis Simulation       | Post-hardening Integration | Timing Analysis | GDS File |
 | :----------------------- |:----------------------- | :---------------------------- | :------------------------------ | :------------------------- | :-------------- | :------- |
-| **Processor**            | [No](src/fyracore.v)    | [No](pre_sim/fyracore.vcd)    | [No](post_sim/fyracore.vcd)     |                            |                 |          |
-| *Instruction Fetch*      | [No](src/if.v)          | [No](pre_sim/if.vcd)          | [No](post_sim/if.vcd)           |                            |                 | **-**    |
+| **Processor**            | [Yes](src/fyracore.v)   | [No](pre_sim/fyracore.vcd)    | [No](post_sim/fyracore.vcd)     |                            |                 |          |
 | Program Counter          | [Yes](src/regs.v)       | [No](pre_sim/regs.vcd)        | [No](post_sim/regs.vcd)         |                            |                 | **-**    |
 | Adder                    | [Yes](src/adder.v)      | [Yes](pre_sim/adder.vcd)      | [Yes](post_sim/adder.vcd)       |                            |                 | **-**    |
-| *Instruction Decode*     | [No](src/id.v)          | [No](pre_sim/id.vcd)          | [No](post_sim/id.vcd)           |                            |                 | **-**    |
 | Decoder                  | [Yes](src/decoder.v)    | [Yes](pre_sim/decoder.vcd)    | [Yes](post_sim/decoder.vcd)     |                            |                 | **-**    |
 | Register File            | [Yes](src/regFile.v)    | [Yes](pre_sim/regFile.vcd)    | [Yes](post_sim/regFile.vcd)     |                            |                 | **-**    |
 | Sign Extension           | [Yes](src/signExt.)     | [No](pre_sim/signExt.vcd)     | [No](post_sim/signExt.vcd)      |                            |                 | **-**    |
 | Control Unit             | [Yes](src/controller.v) | [Yes](pre_sim/controller.vcd) | [Yes](post_sim/controller.vcd)  |                            |                 | **-**    |
-| *Instruction Execute*    | [No](src/ie.v)          | [No](pre_sim/ie.vcd)          | [No](post_sim/ie.vcd)           |                            |                 | **-**    |
 | 2:1 MUX                  | [Yes](src/mux21.v)      | [Yes](pre_sim/mux21.vcd)      | [Yes](post_sim/mux21.vcd)       |                            |                 | **-**    |
 | ALU                      | [Yes](alu.v)            | [Yes](pre_sim/alu.vcd)        | [Yes](post_sim/alu.vcd)         |                            |                 | **-**    |
 | Branch Controller        | [Yes](src/branchCtrl.v) | [Yes](pre_sim/branchCtrl.vcd) | [Yes*](post_sim/branchCtrl.vcd) |                            |                 | **-**    |
@@ -30,10 +27,10 @@
 | M-type Instruction?      | [No]()                  |                               |                                 |                            |                 | **-**    |
 | A-type Instruction?      | [No]()                  |                               |                                 |                            |                 | **-**    |
 | **Peripharels**          | **-**                   | **-**                         | **-**                           | **-**                      | **-**           | **-**    |
-| **UART controller**      |                         |                               |                                 |                            |                 |          |
-| **SPI Memory**           |                         |                               |                                 |                            |                 |          |
-| **Simulated Memory**     |                         |                               |                                 |                            |                 |          |
-| **GPIO block**           |                         |                               |                                 |                            |                 |          |
-| **CLINT**                |                         |                               |                                 |                            |                 |          |
+| *UART controller*        |                         |                               |                                 |                            |                 |          |
+| *SPI Memory*             |                         |                               |                                 |                            |                 |          |
+| *Simulated Memory*       |                         |                               |                                 |                            |                 |          |
+| *GPIO block*             |                         |                               |                                 |                            |                 |          |
+| *CLINT*                  |                         |                               |                                 |                            |                 |          |
 
 
