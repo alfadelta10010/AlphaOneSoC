@@ -18,7 +18,7 @@ module controller (f3, f7, opcode, regWR, memWR, wbCtrl, aluOp, aluS1, aluS2, br
       branchCtrl = 3'b011;
       doJump = 1'b0;
       doBranch = 1'b0;
-      memCtrl = 3'b000;
+      memCtrl = 3'b101;
       aluOp = 4'b1001;
       wbCtrl = 2'b11;
       case(opcode)
@@ -53,7 +53,7 @@ module controller (f3, f7, opcode, regWR, memWR, wbCtrl, aluOp, aluS1, aluS2, br
             3'b010: memCtrl = 3'b010;   // LW
             3'b100: memCtrl = 3'b011;   // LBU
             3'b101: memCtrl = 3'b100;   // LHU
-            default: memCtrl = 3'b000;  // Malformed instruction
+            default: memCtrl = 3'b101;  // Malformed instruction
           endcase
         end
         
@@ -64,7 +64,7 @@ module controller (f3, f7, opcode, regWR, memWR, wbCtrl, aluOp, aluS1, aluS2, br
             3'b000: memCtrl = 3'b101;   // SB
             3'b001: memCtrl = 3'b110;   // SH
             3'b010: memCtrl = 3'b111;   // SW
-            default: memCtrl = 3'b000;  // Malformed instruction
+            default: memCtrl = 3'b101;  // Malformed instruction
           endcase          
         end
         
@@ -111,7 +111,7 @@ module controller (f3, f7, opcode, regWR, memWR, wbCtrl, aluOp, aluS1, aluS2, br
           doBranch = 1'b0;
           branchCtrl = 3'b011;
           aluOp = 4'b1001;
-          memCtrl = 3'b000;
+          memCtrl = 3'b101;
         end
     endcase
   end
