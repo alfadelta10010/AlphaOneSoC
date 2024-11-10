@@ -1,0 +1,403 @@
+$date
+	Sun Nov 10 19:42:33 2024
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1s
+$end
+$scope module tb_memController $end
+$var wire 24 ! spiAddrOut [23:0] $end
+$var wire 2 " memType [1:0] $end
+$var wire 32 # memDataOut [31:0] $end
+$var wire 32 $ inst [31:0] $end
+$var wire 4 % gpAddrOut [3:0] $end
+$var wire 1 & dataSend $end
+$var wire 32 ' dataR [31:0] $end
+$var wire 3 ( dataPosOut [2:0] $end
+$var reg 32 ) aluOut [31:0] $end
+$var reg 1 * aluReady $end
+$var reg 1 + clk $end
+$var reg 3 , dataPosIn [2:0] $end
+$var reg 1 - memClk $end
+$var reg 3 . memCtrl [2:0] $end
+$var reg 32 / memDataIn [31:0] $end
+$var reg 1 0 memReady $end
+$var reg 32 1 pcP [31:0] $end
+$var reg 32 2 r2 [31:0] $end
+$var reg 1 3 rst $end
+$scope module dut $end
+$var wire 32 4 aluOut [31:0] $end
+$var wire 1 * aluReady $end
+$var wire 1 + clk $end
+$var wire 3 5 dataPosIn [2:0] $end
+$var wire 1 - memClk $end
+$var wire 3 6 memCtrl [2:0] $end
+$var wire 32 7 memDataIn [31:0] $end
+$var wire 1 0 memReady $end
+$var wire 32 8 pcP [31:0] $end
+$var wire 32 9 r2 [31:0] $end
+$var wire 1 3 rst $end
+$var wire 1 : tmpClk $end
+$var wire 1 ; delayClk $end
+$var reg 32 < dataInBuffer [31:0] $end
+$var reg 3 = dataPosOut [2:0] $end
+$var reg 32 > dataR [31:0] $end
+$var reg 1 & dataSend $end
+$var reg 1 ? dataWait $end
+$var reg 4 @ gpAddrOut [3:0] $end
+$var reg 32 A inst [31:0] $end
+$var reg 1 B instWait $end
+$var reg 32 C memDataOut [31:0] $end
+$var reg 2 D memType [1:0] $end
+$var reg 24 E spiAddrOut [23:0] $end
+$scope module clkbuf1 $end
+$var wire 1 + a $end
+$var wire 1 + b $end
+$var wire 1 : y $end
+$upscope $end
+$scope module clkbuf2 $end
+$var wire 1 : a $end
+$var wire 1 : b $end
+$var wire 1 ; y $end
+$upscope $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+b0 E
+b0 D
+b0 C
+0B
+b0 A
+b0 @
+0?
+b0 >
+b0 =
+b0 <
+0;
+0:
+bx 9
+bx 8
+bx 7
+bx 6
+bx 5
+bx 4
+13
+bx 2
+bx 1
+x0
+bx /
+bx .
+0-
+bx ,
+0+
+x*
+bx )
+b0 (
+b0 '
+0&
+b0 %
+b0 $
+b0 #
+b0 "
+b0 !
+$end
+#1
+03
+#2
+0*
+00
+b0 ,
+b0 5
+b0 .
+b0 6
+b11110000111100001111000011110000 /
+b11110000111100001111000011110000 7
+b10100101101001011010010110100101 2
+b10100101101001011010010110100101 9
+b100000000000000000000000 )
+b100000000000000000000000 4
+b0 1
+b0 8
+#5
+1-
+#10
+b11 "
+b11 D
+1B
+1;
+1:
+0-
+1+
+#12
+b100 1
+b100 8
+#15
+1-
+#20
+0;
+0:
+0-
+0+
+#22
+b100000000000000000000100 !
+b100000000000000000000100 E
+1?
+b1 "
+b1 D
+1*
+b100000000000000000000100 )
+b100000000000000000000100 4
+#25
+1-
+#30
+b11 "
+b11 D
+b100 !
+b100 E
+1;
+1:
+0-
+1+
+#32
+0*
+#35
+1-
+#40
+0;
+0:
+0-
+0+
+#42
+0B
+0?
+10
+#45
+1-
+#50
+0B
+1;
+1:
+0-
+1+
+#52
+b100000000000000000001000 !
+b100000000000000000001000 E
+1?
+b10 "
+b10 D
+1*
+b100000000000000000001000 )
+b100000000000000000001000 4
+b100 .
+b100 6
+00
+#55
+1-
+#60
+0;
+0:
+0-
+0+
+#62
+0*
+#65
+1-
+#70
+b11 "
+b11 D
+1B
+b100 !
+b100 E
+1;
+1:
+0-
+1+
+#72
+0B
+0?
+10
+#75
+1-
+#80
+0;
+0:
+0-
+0+
+#82
+b100000000000000000001100 !
+b100000000000000000001100 E
+1?
+1*
+b100000000000000000001100 )
+b100000000000000000001100 4
+b10 .
+b10 6
+00
+#85
+1-
+#90
+1B
+b100 !
+b100 E
+1;
+1:
+0-
+1+
+#92
+0*
+#95
+1-
+#100
+0;
+0:
+0-
+0+
+#102
+0B
+0?
+10
+#105
+1-
+#110
+0B
+1;
+1:
+0-
+1+
+#112
+b100000000000000000000000 !
+b100000000000000000000000 E
+1&
+b1 "
+b1 D
+1*
+b1000000000000000000000000 )
+b1000000000000000000000000 4
+b101 .
+b101 6
+00
+#115
+b100 (
+b100 =
+b101 #
+b101 C
+1-
+#120
+0;
+0:
+0-
+0+
+#122
+0*
+#125
+b1 (
+b1 =
+b1010 #
+b1010 C
+1-
+#130
+b11 "
+b11 D
+1B
+b100 !
+b100 E
+1;
+1:
+0-
+1+
+#132
+0B
+10
+#135
+b101 (
+b101 =
+b101 #
+b101 C
+1-
+#140
+0;
+0:
+0-
+0+
+#142
+b100000000000000000001100 !
+b100000000000000000001100 E
+1*
+b100000000000000000001100 )
+b100000000000000000001100 4
+b111 .
+b111 6
+00
+#145
+b10 (
+b10 =
+b1010 #
+b1010 C
+1-
+#150
+1B
+b100 !
+b100 E
+1;
+1:
+0-
+1+
+#152
+0*
+#155
+b110 (
+b110 =
+b101 #
+b101 C
+1-
+#160
+0;
+0:
+0-
+0+
+#162
+0B
+10
+#165
+b11 (
+b11 =
+b1010 #
+b1010 C
+1-
+#170
+0B
+1;
+1:
+0-
+1+
+#172
+00
+#175
+b111 (
+b111 =
+b101 #
+b101 C
+1-
+#180
+0;
+0:
+0-
+0+
+#185
+0&
+b0 (
+b0 =
+b1010 #
+b1010 C
+1-
+#190
+1B
+1;
+1:
+0-
+1+
+#192
