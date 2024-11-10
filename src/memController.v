@@ -14,7 +14,7 @@ module memController(pcP, aluOut, r2, clk, memReady, aluReady, inst, dataR, memC
   output wire [31:0] inst, dataR;
   input wire [3:0] memCtrl;
   inout wire [31:0] memData;
-  output reg [1:0] memType;
+  output reg [1:0] memType = 2'b00;
   inout reg [2:0] dataPos;
   output wire dataSend;
   output wire [23:0] spiAddrOut;
