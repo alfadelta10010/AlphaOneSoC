@@ -1,13 +1,21 @@
-module fyracore(clk, rst, dIn);
+module fyracore(clk, rst, dIn, memReady, memDataIn, memDataOut, memType, dataPosOut, dataPosIn, dataSend, spiAddrOut, gpAddrOut, memClk, pcEn);
   wire [31:0] pcP, pcN, aluOut, pcIn, instIn, dIn, imm, aluD1, aluD2, dataOut;
   wire [6;0] opcode, f7;
   wire [4:0] rs1, rd, rs2;
   wire [3:0] aluOp;
   wire [2:0] f3, bCtrl, memCtrl;
   wire [1:0] wbCtrl;
-  wire branchSel, pcEn, regWR, memW, aluS1, aluS2, doJump, doBranch, branchValid, branchTrue;
-  input wire clk, rst;
-  output reg din;
+  wire branchSel, regWR, memW, aluS1, aluS2, doJump, doBranch, branchValid, branchTrue, aluReady;
+  input wire clk, rst, memReady, memClk, pcEn;
+  output reg dIn;
+  output wire dataSend;
+  input wire [31:0] memDataIn;
+  output wire [31:0] memDataOut;
+  output wire [1:0] memType;
+  output wire [2:0] dataPosOut;
+  input wire [2:0] dataPostIn;
+  output wire [23:0] spiAddrOut;
+  output wire [3:0] gpAddrOut;
   
   adder #(32) pcAdder (
     .a(32'd4),                   // Fixed Increment
@@ -78,7 +86,8 @@ module fyracore(clk, rst, dIn);
     .d1(aluD1),                  // ALU Data In 1
     .d2(aluD2),                  // ALU Data In 2
     .result(aluOut),             // ALU Output (To Memory Controller)
-    .control(aluOp)
+    .control(aluOp),
+    .aluReady(aluReady)
   );
   
   mux21 #(32) aluSrc1 (
@@ -114,7 +123,27 @@ module fyracore(clk, rst, dIn);
     .y(branchTrue)               // Branch Conditions True
   );
   
-
+  memController controller(
+    .pcP(pcP), 
+    .aluOut(aluOut), 
+    .r2(r2), 
+    .clk(clk), 
+    .memReady(memReady), 
+    .aluReady(aluReady), 
+    .inst(instIn), 
+    .dataR(dataOut), 
+    .memCtrl(memCtrl), 
+    .memDataIn(memDataIn), 
+    .memDataOut(memDataOut), 
+    .memType(memType), 
+    .dataPosOut(dataPosOut), 
+    .dataPosIn(dataPosIn), 
+    .dataSend(dataSend), 
+    .spiAddrOut(spiAddrOut), 
+    .gpAddrOut(gpAddrOut), 
+    .memClk(memClk), 
+    .rst(rst)
+  );
   
   mux31 #(32) writebackMUX (
     .a(aluOut),                  // ALU Output (To Memory Controller)

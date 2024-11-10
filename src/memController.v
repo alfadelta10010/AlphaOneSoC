@@ -219,14 +219,16 @@ module memController(pcP, aluOut, r2, clk, memReady, aluReady, inst, dataR, memC
   end
   
   // Post-fetch Instruction Logic
-  always @(instWait && memReady or posedge rst) begin
+  always @(*) begin
+    if(instWait) begin
     if (rst) begin
       inst <= 32'b0;
       instWait <= 1'b0;
     end else begin
+      if(memReady) begin
       inst <= dataInBuffer;
-      instWait <= 1'b0;
-    end
+        instWait <= 1'b0; end
+    end end
   end
   
   // Pre-fetch Load Logic
@@ -272,7 +274,8 @@ module memController(pcP, aluOut, r2, clk, memReady, aluReady, inst, dataR, memC
   end
   
   // Post-fetch Load Logic
-  always @(dataWait && memReady or posedge rst) begin
+  always @(*) begin
+    if(dataWait&& memReady) begin
     if (rst) begin
       dataR <= 32'b0;
       dataInBuffer <= 32'b0;
@@ -288,6 +291,7 @@ module memController(pcP, aluOut, r2, clk, memReady, aluReady, inst, dataR, memC
         dataInBuffer[31:8] <= {24{dataInBuffer[7]}};
       dataR <= dataInBuffer;
       dataWait <= 1'b0;
+    end
     end
   end
 endmodule
