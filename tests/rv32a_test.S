@@ -159,6 +159,77 @@ _start:
     amoadd.w t2, t1, (s2)  # t2 = old, M = old + 1 (wraps)
     bne   t2, t0, fail_15
 
+    # ===== Test 16: SC.W to different address than LR.W fails =====
+    addi  t0, zero, 10
+    sw    t0, 0(s2)         # M[0x1000] = 10
+    lr.w  t1, (s2)          # reservation at 0x1000
+    addi  t2, zero, 99
+    addi  s3, s2, 4         # s3 = 0x1004 (different address)
+    sw    zero, 0(s3)       # M[0x1004] = 0
+    sc.w  t3, t2, (s3)      # SC to 0x1004, reservation was at 0x1000 → fail
+    addi  t4, zero, 1
+    bne   t3, t4, fail_16   # t3 must be 1 (failure)
+    lw    t5, 0(s3)
+    bne   t5, zero, fail_16 # M[0x1004] must still be 0 (store didn't happen)
+
+    # ===== Test 17: AMOMIN.W with boundary values (0x80000000 vs 0x7FFFFFFF) =====
+    lui   t0, 0x80000       # t0 = 0x80000000 (INT_MIN)
+    sw    t0, 0(s2)
+    lui   t1, 0x7FFFF
+    addi  t1, t1, 0x7FF     # t1 = 0x7FFFFFFF (INT_MAX)
+    amomin.w t2, t1, (s2)   # t2 = old(INT_MIN), M = min(INT_MIN, INT_MAX) = INT_MIN
+    bne   t2, t0, fail_17   # t2 must be 0x80000000
+    lw    t3, 0(s2)
+    bne   t3, t0, fail_17   # M must still be 0x80000000
+
+    # ===== Test 18: AMOMAX.W with boundary values (0x80000000 vs 0x7FFFFFFF) =====
+    lui   t0, 0x80000       # t0 = 0x80000000 (INT_MIN)
+    sw    t0, 0(s2)
+    lui   t1, 0x7FFFF
+    addi  t1, t1, 0x7FF     # t1 = 0x7FFFFFFF (INT_MAX)
+    amomax.w t2, t1, (s2)   # t2 = old(INT_MIN), M = max(INT_MIN, INT_MAX) = INT_MAX
+    bne   t2, t0, fail_18   # t2 must be 0x80000000
+    lw    t3, 0(s2)
+    bne   t3, t1, fail_18   # M must be 0x7FFFFFFF
+
+    # ===== Test 19: AMOMINU.W with 0x00000000 vs 0xFFFFFFFF =====
+    sw    zero, 0(s2)       # M[0x1000] = 0
+    addi  t1, zero, -1      # t1 = 0xFFFFFFFF
+    amominu.w t2, t1, (s2)  # t2 = old(0), M = minu(0, 0xFFFFFFFF) = 0
+    bne   t2, zero, fail_19 # t2 must be 0
+    lw    t3, 0(s2)
+    bne   t3, zero, fail_19 # M must still be 0
+
+    # ===== Test 20: AMOMAXU.W with 0x00000000 vs 0xFFFFFFFF =====
+    sw    zero, 0(s2)       # M[0x1000] = 0
+    addi  t1, zero, -1      # t1 = 0xFFFFFFFF
+    amomaxu.w t2, t1, (s2)  # t2 = old(0), M = maxu(0, 0xFFFFFFFF) = 0xFFFFFFFF
+    bne   t2, zero, fail_20 # t2 must be 0
+    lw    t3, 0(s2)
+    bne   t3, t1, fail_20   # M must be 0xFFFFFFFF
+
+    # ===== Test 21: Reservation invalidated by SB to reserved word =====
+    addi  t0, zero, 42
+    sw    t0, 0(s2)         # M[0x1000] = 42
+    lr.w  t1, (s2)          # reservation at 0x1000
+    addi  t2, zero, 0xFF
+    sb    t2, 0(s2)         # byte store to same word → invalidates reservation
+    addi  t3, zero, 99
+    sc.w  t4, t3, (s2)      # should fail (reservation cleared by sb)
+    addi  t5, zero, 1
+    bne   t4, t5, fail_21
+
+    # ===== Test 22: Reservation invalidated by SH to reserved word =====
+    addi  t0, zero, 42
+    sw    t0, 0(s2)
+    lr.w  t1, (s2)          # reservation at 0x1000
+    addi  t2, zero, 0x123
+    sh    t2, 0(s2)         # halfword store → invalidates reservation
+    addi  t3, zero, 99
+    sc.w  t4, t3, (s2)      # should fail
+    addi  t5, zero, 1
+    bne   t4, t5, fail_22
+
     # SUCCESS
     addi  a0, zero, 0
     ecall
@@ -178,3 +249,10 @@ fail_12: addi a0, zero, 12; ecall
 fail_13: addi a0, zero, 13; ecall
 fail_14: addi a0, zero, 14; ecall
 fail_15: addi a0, zero, 15; ecall
+fail_16: addi a0, zero, 16; ecall
+fail_17: addi a0, zero, 17; ecall
+fail_18: addi a0, zero, 18; ecall
+fail_19: addi a0, zero, 19; ecall
+fail_20: addi a0, zero, 20; ecall
+fail_21: addi a0, zero, 21; ecall
+fail_22: addi a0, zero, 22; ecall
