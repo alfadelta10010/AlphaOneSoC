@@ -17,12 +17,14 @@ module fyracore(
     // Instruction memory interface (read-only, combinational)
     output wire [31:0] imem_addr,
     input  wire [31:0] imem_rdata,
+    input  wire        imem_ready,    // Instruction fetch data is valid
     // Data memory interface
     output wire [31:0] dmem_addr,
     output wire [31:0] dmem_wdata,
     output wire [3:0]  dmem_wmask,
     output wire        dmem_we,
     input  wire [31:0] dmem_rdata,
+    input  wire        dmem_ready,    // Data access complete
     // Debug / trace
     output wire [31:0] dbg_pc,
     output wire        dbg_retired,
@@ -56,6 +58,7 @@ module fyracore(
     reg [31:0] ifex_instr;
     reg [31:0] ifex_pc_next;
     reg        ifex_valid;
+    reg        ifex_c_illegal;  // Compressed decoder flagged illegal encoding
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -193,13 +196,56 @@ module fyracore(
                           (ctrl_csrOp == 2'b11) ? (csr_rdata_eff & ~ex_csr_wdata_src): // CSRRC
                           32'b0;
 
-    // Trap detection
-    wire ex_is_ecall  = ifex_valid && ctrl_isEcall  && (ifex_instr[24:20] == 5'b00000);
-    wire ex_is_ebreak = ifex_valid && ctrl_isEcall  && (ifex_instr[24:20] == 5'b00001);
-    wire ex_is_mret   = ifex_valid && ctrl_isMret;
+    // SYSTEM instruction field validation (ECALL/EBREAK/MRET require rd=0, rs1=0)
+    wire ex_system_fields_ok = (ex_rd == 5'b0) && (ex_rs1 == 5'b0);
+    wire ex_is_ecall  = ifex_valid && ctrl_isEcall && ex_system_fields_ok &&
+                        (ifex_instr[24:20] == 5'b00000);
+    wire ex_is_ebreak = ifex_valid && ctrl_isEcall && ex_system_fields_ok &&
+                        (ifex_instr[24:20] == 5'b00001);
+    wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok;
     wire ex_is_fencei = ifex_valid && ctrl_isFenceI;
-    wire ex_trap      = ifex_valid && (ex_is_ecall || ex_is_ebreak ||
-                                       (ctrl_illegal && !ctrl_isFence));
+
+    // Bad SYSTEM encoding: controller recognized the funct7 family but the full
+    // encoding doesn't match any valid instruction (wrong rd/rs1/rs2 fields)
+    wire ex_bad_system = ifex_valid && (ctrl_isEcall || ctrl_isMret) &&
+                         !(ex_is_ecall || ex_is_ebreak || ex_is_mret);
+
+    // CSR access validation (Zicsr spec):
+    //   - Access to non-existent CSR → illegal instruction
+    //   - Write to read-only CSR → illegal instruction
+    //   - CSRRS/CSRRC with rs1=0 and CSRRSI/CSRRCI with uimm=0 are read-only
+    //     operations, so they do NOT trap even for read-only CSRs.
+    wire ex_csr_active = (ctrl_csrOp != 2'b00);
+    wire ex_csr_writes = ex_csr_active && (
+        ctrl_csrOp == 2'b01 ||   // CSRRW/CSRRWI always write
+        ex_rs1 != 5'b0            // CSRRS/CSRRC write only if rs1/uimm != 0
+    );
+    wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
+    wire ex_csr_illegal = ifex_valid && ex_csr_active && (
+        !csr_addr_valid ||                     // Non-existent CSR
+        (ex_csr_writes && ex_csr_readonly)     // Write to read-only CSR
+    );
+
+    // Misalignment detection on computed address (ALU result)
+    // RISC-V: LH/SH require 2-byte alignment, LW/SW require 4-byte alignment.
+    // Atomics (LR/SC/AMO) always require 4-byte alignment.
+    // Rather than silently aliasing to an aligned address, trap per spec.
+    wire ex_mem_active = ctrl_memRD || ctrl_memWR || ctrl_isAmo || ctrl_isLR || ctrl_isSC;
+    wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (ex_alu_result[0] != 1'b0);
+    wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (ex_alu_result[1:0] != 2'b00);
+    wire ex_misaligned = ifex_valid && ex_mem_active &&
+                         (ex_misaligned_half || ex_misaligned_word);
+    wire ex_misalign_is_store = ctrl_memWR || ctrl_isSC || ctrl_isAmo;
+
+    // Trap detection
+    wire ex_trap = ifex_valid && (
+        ex_is_ecall || ex_is_ebreak ||
+        (ctrl_illegal && !ctrl_isFence) ||
+        ifex_c_illegal ||              // Illegal compressed instruction from IF
+        ex_bad_system ||               // Malformed SYSTEM encoding
+        ex_csr_illegal ||              // Invalid/read-only CSR access
+        ex_misaligned                  // Misaligned memory access
+    );
 
     // ================================================================
     //  Hazard Detection
@@ -213,7 +259,12 @@ module fyracore(
     // WB busy (AMO second cycle)
     reg wb_busy;
 
-    wire stall = load_use_hazard || wb_busy;
+    // Memory handshake stalls:
+    //   - IF stall: instruction memory not ready (multi-cycle fetch)
+    //   - WB stall: data memory not ready during active load/store
+    wire if_mem_stall = !imem_ready;
+    wire wb_mem_stall = exwb_valid && (exwb_memRD || exwb_memWR) && !dmem_ready;
+    wire stall = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall;
     wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei;
 
     // ================================================================
@@ -367,11 +418,13 @@ module fyracore(
     wire        csr_mret_signal = 1'b0; // MRET handled via PC redirect in EX
     wire [31:0] csr_mtvec, csr_mepc;
     wire        csr_mstatus_mie;
+    wire        csr_addr_valid;
 
     csr csr_unit(
         .clk        (clk),
         .rst        (rst),
-        .addr       ((exwb_valid && exwb_csrWR && !exwb_trap) ? exwb_csr_addr : ex_csr_addr),
+        .raddr      (ex_csr_addr),        // EX reads its own CSR address
+        .waddr      (exwb_csr_addr),      // WB writes its own CSR address
         .wdata      (exwb_csr_wdata),
         .op         (exwb_valid && exwb_csrWR ? 2'b01 : 2'b00), // Always CSRRW: EX pre-computes value
         .we         (exwb_valid && exwb_csrWR && !exwb_trap),
@@ -384,7 +437,8 @@ module fyracore(
         .mtvec_out  (csr_mtvec),
         .mepc_out   (csr_mepc),
         .instret_inc(exwb_valid && !exwb_trap && !wb_busy),
-        .mstatus_mie(csr_mstatus_mie)
+        .mstatus_mie(csr_mstatus_mie),
+        .csr_addr_valid(csr_addr_valid)
     );
 
     // CSR forwarding: when WB writes the same CSR that EX reads, forward the write value
@@ -395,8 +449,13 @@ module fyracore(
     // ================================================================
     //  PC Update Logic
     // ================================================================
-    wire [31:0] trap_target = csr_mtvec;
-    wire [31:0] mret_target = csr_mepc;
+    // Forward mtvec/mepc from WB CSR write to avoid stale redirect targets.
+    // Without this, sequences like "csrw mepc, t5; mret" read the old mepc
+    // because the WB write hasn't committed when EX computes next_pc.
+    wire mtvec_fwd = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h305);
+    wire mepc_fwd  = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h341);
+    wire [31:0] trap_target = mtvec_fwd ? exwb_csr_wdata : csr_mtvec;
+    wire [31:0] mret_target = mepc_fwd  ? {exwb_csr_wdata[31:1], 1'b0} : csr_mepc;
 
     reg [31:0] next_pc;
     always @(*) begin
@@ -429,10 +488,11 @@ module fyracore(
         if (rst) begin
             pc <= 32'h0000_0000;
             // IF/EX
-            ifex_pc      <= 32'b0;
-            ifex_instr   <= 32'h0000_0013; // NOP
-            ifex_pc_next <= 32'b0;
-            ifex_valid   <= 1'b0;
+            ifex_pc        <= 32'b0;
+            ifex_instr     <= 32'h0000_0013; // NOP
+            ifex_pc_next   <= 32'b0;
+            ifex_valid     <= 1'b0;
+            ifex_c_illegal <= 1'b0;
             // EX/WB
             exwb_alu_result <= 32'b0;
             exwb_rs2_data   <= 32'b0;
@@ -474,13 +534,15 @@ module fyracore(
                 // Hold IF/EX on stall
             end else if (flush) begin
                 // Insert bubble
-                ifex_valid <= 1'b0;
-                ifex_instr <= 32'h0000_0013; // NOP
+                ifex_valid     <= 1'b0;
+                ifex_instr     <= 32'h0000_0013; // NOP
+                ifex_c_illegal <= 1'b0;
             end else begin
-                ifex_pc      <= pc;
-                ifex_instr   <= if_instr;
-                ifex_pc_next <= if_pc_next;
-                ifex_valid   <= 1'b1;
+                ifex_pc        <= pc;
+                ifex_instr     <= if_instr;
+                ifex_pc_next   <= if_pc_next;
+                ifex_valid     <= 1'b1;
+                ifex_c_illegal <= if_compressed && if_c_illegal;
             end
 
             // ---- EX/WB Pipeline Register ----
@@ -526,13 +588,17 @@ module fyracore(
                 exwb_instr      <= ifex_instr;
                 exwb_trap_pc    <= ifex_pc;
 
-                // Trap
+                // Trap cause assignment (priority: ecall > ebreak > misalign > illegal)
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
                     if (ex_is_ecall)
                         exwb_trap_cause <= 32'd11; // Environment call from M-mode
                     else if (ex_is_ebreak)
                         exwb_trap_cause <= 32'd3;  // Breakpoint
+                    else if (ex_misaligned && !ex_misalign_is_store)
+                        exwb_trap_cause <= 32'd4;  // Load address misaligned
+                    else if (ex_misaligned && ex_misalign_is_store)
+                        exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned
                     else
                         exwb_trap_cause <= 32'd2;  // Illegal instruction
                 end else begin
