@@ -8,9 +8,11 @@ module tb_cpu;
 
     // Memory interface
     wire [31:0] imem_addr, imem_rdata;
+    wire        imem_ready;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire [3:0]  dmem_wmask;
     wire        dmem_we;
+    wire        dmem_ready;
 
     // Debug
     wire [31:0] dbg_pc, dbg_instr;
@@ -35,11 +37,13 @@ module tb_cpu;
         .rst       (rst),
         .imem_addr (imem_addr),
         .imem_rdata(imem_rdata),
+        .imem_ready(imem_ready),
         .dmem_addr (dmem_addr),
         .dmem_wdata(dmem_wdata),
         .dmem_wmask(dmem_wmask),
         .dmem_we   (dmem_we),
         .dmem_rdata(dmem_rdata),
+        .dmem_ready(dmem_ready),
         .dbg_pc    (dbg_pc),
         .dbg_retired(dbg_retired),
         .dbg_instr (dbg_instr),
@@ -58,7 +62,9 @@ module tb_cpu;
         .dmem_wdata(dmem_wdata),
         .dmem_wmask(dmem_wmask),
         .dmem_we   (dmem_we),
-        .dmem_rdata(dmem_rdata)
+        .dmem_rdata(dmem_rdata),
+        .imem_ready(imem_ready),
+        .dmem_ready(dmem_ready)
     );
 
     // Clock generation: 10ns period
@@ -69,10 +75,16 @@ module tb_cpu;
     integer instr_count = 0;
     integer cycle_count = 0;
 
-    // ECALL / EBREAK detection for program termination
-    // These are traps, so dbg_trap fires (not dbg_retired)
-    wire is_ecall  = dbg_trap && (dbg_instr == 32'h0000_0073);
-    wire is_ebreak = dbg_trap && (dbg_instr == 32'h0010_0073);
+    // Program termination detection:
+    //   1. ECALL/EBREAK trap — for tests WITHOUT trap handlers (mtvec=0).
+    //      When a trap handler is installed (mtvec!=0), ecall/ebreak are
+    //      handled by the handler and do NOT terminate the simulation.
+    //   2. Halt loop (j . = JAL x0, 0 = 0x0000006F) — universal termination
+    //      signal that works with or without trap handlers.
+    wire trap_handler_set = (cpu.csr_unit.mtvec != 32'b0);
+    wire is_ecall  = dbg_trap && (dbg_instr == 32'h0000_0073) && !trap_handler_set;
+    wire is_ebreak = dbg_trap && (dbg_instr == 32'h0010_0073) && !trap_handler_set;
+    wire is_halt   = dbg_retired && (dbg_instr == 32'h0000_006f);
 
     // VCD dump
     initial begin
@@ -110,6 +122,12 @@ module tb_cpu;
             if (is_ecall || is_ebreak) begin
                 $display("\n--- Program terminated via %s at PC=0x%08h ---",
                          is_ecall ? "ECALL" : "EBREAK", dbg_pc);
+                print_final_state();
+                $finish;
+            end
+
+            if (is_halt) begin
+                $display("\n--- Program halted (j .) at PC=0x%08h ---", dbg_pc);
                 print_final_state();
                 $finish;
             end

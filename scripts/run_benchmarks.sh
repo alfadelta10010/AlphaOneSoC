@@ -25,7 +25,7 @@ run_test() {
     local output
     if output=$(bash "${SCRIPTS_DIR}/run_asm_test.sh" "${test_file}" --quiet 2>&1); then
         # Check if test passed (a0=0 at ecall)
-        if echo "${output}" | grep -q "terminated via ECALL\|terminated via EBREAK"; then
+        if echo "${output}" | grep -q "terminated via ECALL\|terminated via EBREAK\|Program halted"; then
             # Check x10 (a0) in final state
             local a0_val
             a0_val=$(echo "${output}" | grep "x10 (a0)" | tail -1 | sed 's/.*x10 (a0) =\([0-9a-f]*\).*/\1/' || echo "unknown")
