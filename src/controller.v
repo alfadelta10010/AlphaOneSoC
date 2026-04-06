@@ -194,24 +194,23 @@ module controller(
             // ===== SYSTEM (CSR, ECALL, EBREAK, MRET) =====
             7'b1110011: begin
                 case (funct3)
-                    3'b000: begin // ECALL / EBREAK / MRET / WFI
-                        case ({funct7, /* rs2 field */ funct3})
-                            // Use the full immediate field from instruction
-                            default: begin
-                                // Distinguish by imm[11:0] which is {funct7, rs2}
-                                // We check funct7 here; rs2 is in the instruction
-                            end
-                        endcase
-                        // We use funct7 to distinguish:
-                        // ECALL:  imm=0x000 → funct7=0000000
-                        // EBREAK: imm=0x001 → funct7=0000000 (rs2=00001)
-                        // MRET:   imm=0x302 → funct7=0011000 (rs2=00010)
-                        // WFI:    imm=0x105 → funct7=0001000 (rs2=00101)
+                    3'b000: begin
+                        // SYSTEM/funct3=000 instructions are distinguished by funct7:
+                        //   ECALL:  funct7=0000000, rs2=00000 (refined in pipeline)
+                        //   EBREAK: funct7=0000000, rs2=00001 (refined in pipeline)
+                        //   MRET:   funct7=0011000, rs2=00010 (rd=0, rs1=0 checked in pipeline)
+                        //   WFI:    funct7=0001000, rs2=00101 (NOP in M-mode, legal per spec)
+                        // All other funct7 values are reserved → illegal.
+                        // Full rd/rs1/rs2 validation is done in the pipeline where those fields
+                        // are available.
                         if (funct7 == 7'b0000000)
-                            isEcall = 1'b1;  // Will be refined in pipeline using full imm
+                            isEcall = 1'b1;
                         else if (funct7 == 7'b0011000)
                             isMret = 1'b1;
-                        // EBREAK handled as ecall variant, distinguished in pipeline
+                        else if (funct7 == 7'b0001000)
+                            ;              // WFI — executed as NOP in M-mode
+                        else
+                            illegal = 1'b1;
                     end
                     3'b001: begin // CSRRW
                         regWR  = 1'b1;
