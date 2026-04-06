@@ -69,7 +69,11 @@ module memController #(
     output reg         gpo_we,         // single-cycle write-enable pulse
     output reg  [3:0]  gpo_addr,       // byte offset within GPO range
     input  wire [31:0] gpi_data,       // external input pins, directly returned on GPI read
-    input  wire [3:0]  gpi_addr_in     // byte offset within GPI range (active read)
+    input  wire [3:0]  gpi_addr_in,   // byte offset within GPI range (active read)
+
+    // Memory ready signals — pipeline stalls when not ready
+    output wire        imem_ready,    // Instruction fetch data is valid
+    output wire        dmem_ready     // Data access is complete
 );
 
     // Total byte-addressable memory size (IM + DM combined = 16 MB)
@@ -155,6 +159,10 @@ module memController #(
                 end
             end
 
+            // --- Memory ready: always ready in sim mode (combinational) ---
+            assign imem_ready = 1'b1;
+            assign dmem_ready = 1'b1;
+
             // --- QSPI signals unused in sim mode — tie off ---
             always @(posedge clk) begin
                 qspi_req   <= 1'b0;
@@ -197,6 +205,8 @@ module memController #(
             reg dread_valid;          // dread_buf holds valid load data
 
             assign imem_rdata = ifetch_buf;
+            assign imem_ready = ifetch_valid;
+            assign dmem_ready = dread_valid || (state == IDLE && !dmem_we);
 
             always @(*) begin
                 if (dread_valid)

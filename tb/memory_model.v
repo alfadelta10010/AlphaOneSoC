@@ -26,8 +26,13 @@ module memory_model #(
     input  wire [31:0] dmem_wdata,
     input  wire [3:0]  dmem_wmask,
     input  wire        dmem_we,
-    output wire [31:0] dmem_rdata
+    output wire [31:0] dmem_rdata,
+    // Memory ready signals (always 1 for combinational sim memory)
+    output wire        imem_ready,
+    output wire        dmem_ready
 );
+    assign imem_ready = 1'b1;
+    assign dmem_ready = 1'b1;
     reg [7:0] mem [0:MEM_SIZE-1];
     integer i;
 
