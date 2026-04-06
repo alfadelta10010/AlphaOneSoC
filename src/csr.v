@@ -1,8 +1,9 @@
 module csr(
     input  wire        clk,
     input  wire        rst,
-    // Read/Write port
-    input  wire [11:0] addr,
+    // Dual-port: EX reads via raddr, WB writes via waddr
+    input  wire [11:0] raddr,      // Read address (from EX stage)
+    input  wire [11:0] waddr,      // Write address (from WB stage)
     input  wire [31:0] wdata,
     input  wire [1:0]  op,       // 00=none, 01=RW, 10=RS, 11=RC
     input  wire        we,
@@ -18,7 +19,9 @@ module csr(
     // Counter increment
     input  wire        instret_inc,
     // Status bits
-    output wire        mstatus_mie
+    output wire        mstatus_mie,
+    // CSR address validity (for illegal instruction detection)
+    output wire        csr_addr_valid  // 1 if raddr is a known/supported CSR
 );
     // ===== CSR Registers =====
     // Machine Information
@@ -66,15 +69,17 @@ module csr(
             minstret <= minstret + 1;
     end
 
-    // CSR Read (combinational)
+    // CSR Read (combinational, uses EX-stage raddr)
+    reg addr_valid;
     always @(*) begin
-        case (addr)
+        addr_valid = 1'b1;
+        case (raddr)
             // Machine Information (read-only)
             12'hF11: rdata = MVENDORID;
             12'hF12: rdata = MARCHID;
             12'hF13: rdata = MIMPID;
             12'hF14: rdata = MHARTID;
-            // Machine ISA (read-only for us)
+            // Machine ISA (read-only for us, WARL — writes allowed but ignored)
             12'h301: rdata = MISA;
             // Machine Status
             12'h300: rdata = mstatus;
@@ -97,9 +102,10 @@ module csr(
             12'hC80: rdata = mcycle[63:32];
             12'hC02: rdata = minstret[31:0];
             12'hC82: rdata = minstret[63:32];
-            default: rdata = 32'b0;
+            default: begin rdata = 32'b0; addr_valid = 1'b0; end
         endcase
     end
+    assign csr_addr_valid = addr_valid;
 
     // CSR Write
     wire [31:0] csr_new = (op == 2'b01) ? wdata :           // CSRRW
@@ -129,7 +135,7 @@ module csr(
             // Return from trap: MIE=MPIE, MPIE=1, MPP=M-mode
             mstatus <= {mstatus[31:13], 2'b11, mstatus[10:8], 1'b1, mstatus[6:4], mstatus[7], mstatus[2:0]};
         end else if (we && op != 2'b00) begin
-            case (addr)
+            case (waddr)
                 12'h300: mstatus  <= csr_new & 32'h0000_1888; // Writable bits mask
                 12'h304: mie_reg  <= csr_new;
                 12'h305: mtvec    <= csr_new;

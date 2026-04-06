@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 module tb_csr;
     reg         clk, rst;
-    reg  [11:0] addr;
+    reg  [11:0] addr;   // Used as both raddr and waddr in unit tests
     reg  [31:0] wdata;
     reg  [1:0]  op;
     reg         we;
@@ -11,15 +11,17 @@ module tb_csr;
     wire [31:0] mtvec_out, mepc_out;
     reg         instret_inc;
     wire        mstatus_mie;
+    wire        csr_addr_valid;
     integer pass_count = 0, fail_count = 0;
 
     csr uut(
-        .clk(clk), .rst(rst), .addr(addr), .wdata(wdata),
+        .clk(clk), .rst(rst), .raddr(addr), .waddr(addr), .wdata(wdata),
         .op(op), .we(we), .rdata(rdata),
         .trap(trap), .mret(mret_sig), .trap_pc(trap_pc),
         .trap_cause(trap_cause), .trap_val(trap_val),
         .mtvec_out(mtvec_out), .mepc_out(mepc_out),
-        .instret_inc(instret_inc), .mstatus_mie(mstatus_mie)
+        .instret_inc(instret_inc), .mstatus_mie(mstatus_mie),
+        .csr_addr_valid(csr_addr_valid)
     );
 
     initial clk = 0;
@@ -167,6 +169,23 @@ module tb_csr;
 
         // Unknown CSR reads 0
         addr = 12'hFFF; check_read(32'h0, "Unknown CSR reads 0");
+
+        // CSR address validity checks
+        addr = 12'h300; #1;
+        if (csr_addr_valid !== 1'b1) begin fail_count=fail_count+1; $display("FAIL: mstatus should be valid"); end
+        else pass_count=pass_count+1;
+
+        addr = 12'hF14; #1;
+        if (csr_addr_valid !== 1'b1) begin fail_count=fail_count+1; $display("FAIL: mhartid should be valid"); end
+        else pass_count=pass_count+1;
+
+        addr = 12'hFFF; #1;
+        if (csr_addr_valid !== 1'b0) begin fail_count=fail_count+1; $display("FAIL: 0xFFF should be invalid"); end
+        else pass_count=pass_count+1;
+
+        addr = 12'h123; #1;
+        if (csr_addr_valid !== 1'b0) begin fail_count=fail_count+1; $display("FAIL: 0x123 should be invalid"); end
+        else pass_count=pass_count+1;
 
         $display("\n=== CSR Results: %0d passed, %0d failed ===", pass_count, fail_count);
         if (fail_count == 0) $display("ALL CSR TESTS PASSED");
