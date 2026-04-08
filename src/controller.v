@@ -32,6 +32,7 @@ module controller(
     output reg        isMret,
     output reg        isFence,
     output reg        isFenceI,
+    output reg        isMulDiv,   // 1 for all RV32M operations (routes to muldiv unit)
     output reg        illegal
 );
     always @(*) begin
@@ -58,6 +59,7 @@ module controller(
         isMret      = 1'b0;
         isFence     = 1'b0;
         isFenceI    = 1'b0;
+        isMulDiv    = 1'b0;
         illegal     = 1'b0;
 
         case (opcode)
@@ -68,8 +70,9 @@ module controller(
                 aluSrc1 = 1'b0; // rs1
                 aluSrc2 = 1'b1; // rs2
                 if (funct7 == 7'b0000001) begin
-                    // M-extension: {1, funct3}
-                    aluOp = {2'b10, funct3};
+                    // M-extension: route to muldiv unit
+                    isMulDiv = 1'b1;
+                    aluOp    = {2'b10, funct3};
                 end else if (funct7 == 7'b0000000) begin
                     aluOp = {2'b00, funct3};
                 end else if (funct7 == 7'b0100000) begin

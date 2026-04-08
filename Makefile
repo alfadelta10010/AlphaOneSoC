@@ -29,6 +29,7 @@ SRC_FILES  := $(SRC_DIR)/adder.v \
               $(SRC_DIR)/csr.v \
               $(SRC_DIR)/decoder.v \
               $(SRC_DIR)/fyracore.v \
+              $(SRC_DIR)/muldiv.v \
               $(SRC_DIR)/mux21.v \
               $(SRC_DIR)/mux31.v \
               $(SRC_DIR)/or2.v \
@@ -39,7 +40,7 @@ SRC_FILES  := $(SRC_DIR)/adder.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed asm
+        test-regfile test-csr test-compressed test-muldiv asm
 
 all: test-all
 
@@ -113,7 +114,12 @@ test-compressed: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_cdec $(SRC_DIR)/compressed_decoder.v $(TB_DIR)/tb_compressed_decoder.v
 	@cd $(BUILD_DIR) && $(VVP) tb_cdec
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed
+test-muldiv: $(BUILD_DIR)
+	@echo "=== Testing MulDiv Unit ==="
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
+	@cd $(BUILD_DIR) && $(VVP) tb_muldiv
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv
 	@echo ""
 	@echo "=== All component tests completed ==="
 

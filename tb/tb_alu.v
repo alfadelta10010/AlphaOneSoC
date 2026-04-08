@@ -113,64 +113,9 @@ module tb_alu;
         d1 = 32'hFFFFFFFF; d2 = 32'h0; check(32'h0, "AND with 0");
         d1 = 32'hFFFFFFFF; d2 = 32'hFFFFFFFF; check(32'hFFFFFFFF, "AND all 1s");
 
-        // ---- MUL (10000) ----
-        control = 5'b10000;
-        d1 = 32'd6; d2 = 32'd7; check(32'd42, "MUL 6*7");
-        d1 = 32'd0; d2 = 32'd1000; check(32'd0, "MUL 0*x");
-        d1 = 32'hFFFFFFFF; d2 = 32'hFFFFFFFF; check(32'h1, "MUL -1*-1");
-        d1 = 32'hFFFFFFFF; d2 = 32'd2; check(32'hFFFFFFFE, "MUL -1*2");
-        d1 = 32'd1; d2 = 32'd1; check(32'd1, "MUL 1*1");
-        d1 = 32'h80000000; d2 = 32'd2; check(32'h0, "MUL min*2 low");
-        d1 = 32'h10000; d2 = 32'h10000; check(32'h0, "MUL large low");
-
-        // ---- MULH (10001) ----
-        control = 5'b10001;
-        d1 = 32'd6; d2 = 32'd7; check(32'h0, "MULH small");
-        d1 = 32'hFFFFFFFF; d2 = 32'hFFFFFFFF; check(32'h0, "MULH -1*-1 hi");
-        d1 = 32'hFFFFFFFF; d2 = 32'd2; check(32'hFFFFFFFF, "MULH -1*2 hi");
-        d1 = 32'h80000000; d2 = 32'h80000000; check(32'h40000000, "MULH min*min");
-
-        // ---- MULHU (10011) ----
-        control = 5'b10011;
-        d1 = 32'hFFFFFFFF; d2 = 32'hFFFFFFFF; check(32'hFFFFFFFE, "MULHU max*max");
-        d1 = 32'd6; d2 = 32'd7; check(32'h0, "MULHU small");
-        d1 = 32'h80000000; d2 = 32'd2; check(32'h1, "MULHU 80*2 hi");
-
-        // ---- MULHSU (10010) ----
-        control = 5'b10010;
-        d1 = 32'hFFFFFFFF; d2 = 32'd2; check(32'hFFFFFFFF, "MULHSU -1*2u");
-        d1 = 32'd2; d2 = 32'hFFFFFFFF; check(32'h1, "MULHSU 2*FFu");
-        d1 = 32'd6; d2 = 32'd7; check(32'h0, "MULHSU small");
-
-        // ---- DIV (10100) ----
-        control = 5'b10100;
-        d1 = 32'd42; d2 = 32'd6; check(32'd7, "DIV 42/6");
-        d1 = 32'hFFFFFFFA; d2 = 32'd2; check(32'hFFFFFFFD, "DIV -6/2");
-        d1 = 32'd10; d2 = 32'd0; check(32'hFFFFFFFF, "DIV by 0");
-        d1 = 32'h80000000; d2 = 32'hFFFFFFFF; check(32'h80000000, "DIV overflow");
-        d1 = 32'd7; d2 = 32'd2; check(32'd3, "DIV truncate");
-        d1 = 32'hFFFFFFF9; d2 = 32'hFFFFFFFE; check(32'd3, "DIV -7/-2=3");
-
-        // ---- DIVU (10101) ----
-        control = 5'b10101;
-        d1 = 32'd42; d2 = 32'd6; check(32'd7, "DIVU 42/6");
-        d1 = 32'hFFFFFFFF; d2 = 32'd2; check(32'h7FFFFFFF, "DIVU FFu/2");
-        d1 = 32'd10; d2 = 32'd0; check(32'hFFFFFFFF, "DIVU by 0");
-        d1 = 32'd0; d2 = 32'd5; check(32'd0, "DIVU 0/5");
-
-        // ---- REM (10110) ----
-        control = 5'b10110;
-        d1 = 32'd7; d2 = 32'd2; check(32'd1, "REM 7%2");
-        d1 = 32'hFFFFFFF9; d2 = 32'd2; check(32'hFFFFFFFF, "REM -7%2=-1");
-        d1 = 32'd10; d2 = 32'd0; check(32'd10, "REM by 0");
-        d1 = 32'h80000000; d2 = 32'hFFFFFFFF; check(32'd0, "REM overflow");
-        d1 = 32'd10; d2 = 32'd10; check(32'd0, "REM exact");
-
-        // ---- REMU (10111) ----
-        control = 5'b10111;
-        d1 = 32'd7; d2 = 32'd2; check(32'd1, "REMU 7%2");
-        d1 = 32'hFFFFFFFF; d2 = 32'd2; check(32'd1, "REMU FFu%2");
-        d1 = 32'd10; d2 = 32'd0; check(32'd10, "REMU by 0");
+        // M-extension (MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU) is now handled
+        // by the muldiv.v module, not the ALU.  Those operations are covered by
+        // tb_muldiv.v.  The ALU returns 0 for op codes 5'b10xxx (default case).
 
         // ---- Default ----
         control = 5'b11111;

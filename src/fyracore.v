@@ -61,6 +61,42 @@ module fyracore(
     reg        ifex_c_illegal;  // Compressed decoder flagged illegal encoding
 
     // ================================================================
+    //  EX/WB Pipeline Register (declared here so EX-stage continuous
+    //  assignments can reference them without iverilog forward-ref errors)
+    // ================================================================
+    reg [31:0] exwb_alu_result;
+    reg [31:0] exwb_rs2_data;
+    reg [31:0] exwb_pc_next;
+    reg [4:0]  exwb_rd;
+    reg        exwb_regWR;
+    reg        exwb_memRD;
+    reg        exwb_memWR;
+    reg [1:0]  exwb_memSize;
+    reg        exwb_memUnsigned;
+    reg [1:0]  exwb_wbSel;
+    reg        exwb_valid;
+    // CSR pipeline regs
+    reg        exwb_csrWR;
+    reg [11:0] exwb_csr_addr;
+    reg [31:0] exwb_csr_wdata;
+    reg [31:0] exwb_csr_rdata;
+    // Atomics pipeline regs
+    reg        exwb_isAmo;
+    reg        exwb_isLR;
+    reg        exwb_isSC;
+    reg [4:0]  exwb_amoOp;
+    // Trap pipeline regs
+    reg        exwb_trap;
+    reg [31:0] exwb_trap_cause;
+    reg [31:0] exwb_trap_pc;
+    reg [31:0] exwb_instr;
+
+    // Forward declarations for wires assigned later in the CSR/WB section
+    // (needed to break iverilog's forward-reference restriction)
+    wire [31:0] csr_rdata_eff; // driven by assign in CSR section
+    wire        csr_addr_valid; // driven by CSR unit output
+
+    // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
     // ================================================================
 
@@ -94,6 +130,7 @@ module fyracore(
     wire [4:0]  ctrl_amoOp;
     wire        ctrl_isEcall, ctrl_isEbreak, ctrl_isMret;
     wire        ctrl_isFence, ctrl_isFenceI;
+    wire        ctrl_isMulDiv;
     wire        ctrl_illegal;
 
     controller ctrl(
@@ -122,6 +159,7 @@ module fyracore(
         .isMret     (ctrl_isMret),
         .isFence    (ctrl_isFence),
         .isFenceI   (ctrl_isFenceI),
+        .isMulDiv   (ctrl_isMulDiv),
         .illegal    (ctrl_illegal)
     );
 
@@ -161,13 +199,34 @@ module fyracore(
     wire [31:0] alu_d1 = ctrl_aluSrc1 ? ifex_pc   : ex_rs1_val;
     wire [31:0] alu_d2 = ctrl_aluSrc2 ? ex_rs2_val : ex_imm;
 
-    // ALU
+    // ALU (RV32I only — M-extension handled by muldiv below)
     wire [31:0] ex_alu_result;
     alu alu_inst(
         .d1     (alu_d1),
         .d2     (alu_d2),
         .result (ex_alu_result),
         .control(ctrl_aluOp)
+    );
+
+    // ── Multi-cycle multiply/divide unit (RV32M) ──────────────────────────────
+    // Wire declarations; stall/start logic is in the Hazard Detection section
+    // below (after all dependencies are in scope — iverilog requires this).
+    wire        muldiv_busy;
+    wire        muldiv_done;
+    wire [31:0] muldiv_result;
+    wire        muldiv_start;   // driven by assign in Hazard Detection
+    wire        muldiv_stall;   // driven by assign in Hazard Detection
+
+    muldiv muldiv_inst(
+        .clk   (clk),
+        .rst   (rst),
+        .start (muldiv_start),
+        .op    (ctrl_aluOp[2:0]),    // op encoded in lower 3 bits of aluOp
+        .a     (alu_d1),             // rs1 (aluSrc1=0 for all M-ext R-type)
+        .b     (alu_d2),             // rs2 (aluSrc2=1 for all M-ext R-type)
+        .result(muldiv_result),
+        .busy  (muldiv_busy),
+        .done  (muldiv_done)
     );
 
     // Branch evaluation
@@ -264,38 +323,25 @@ module fyracore(
     //   - WB stall: data memory not ready during active load/store
     wire if_mem_stall = !imem_ready;
     wire wb_mem_stall = exwb_valid && (exwb_memRD || exwb_memWR) && !dmem_ready;
-    wire stall = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall;
+
+    // flush is defined before stall so muldiv_start can reference it without
+    // a forward reference (iverilog processes wire assignments linearly).
     wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei;
 
-    // ================================================================
-    //  EX/WB Pipeline Register
-    // ================================================================
-    reg [31:0] exwb_alu_result;
-    reg [31:0] exwb_rs2_data;
-    reg [31:0] exwb_pc_next;
-    reg [4:0]  exwb_rd;
-    reg        exwb_regWR;
-    reg        exwb_memRD;
-    reg        exwb_memWR;
-    reg [1:0]  exwb_memSize;
-    reg        exwb_memUnsigned;
-    reg [1:0]  exwb_wbSel;
-    reg        exwb_valid;
-    // CSR
-    reg        exwb_csrWR;
-    reg [11:0] exwb_csr_addr;
-    reg [31:0] exwb_csr_wdata;
-    reg [31:0] exwb_csr_rdata;
-    // Atomics
-    reg        exwb_isAmo;
-    reg        exwb_isLR;
-    reg        exwb_isSC;
-    reg [4:0]  exwb_amoOp;
-    // Trap
-    reg        exwb_trap;
-    reg [31:0] exwb_trap_cause;
-    reg [31:0] exwb_trap_pc;
-    reg [31:0] exwb_instr;
+    // stall_other: all stall sources except muldiv (used to gate muldiv_start)
+    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall;
+
+    // muldiv stall logic (see muldiv instantiation in EX section above):
+    //   muldiv_start: pulse for one cycle to launch a new M-ext operation.
+    //   muldiv_stall: keep pipeline frozen while muldiv is working.
+    //                 When muldiv_done fires, stall drops so the pipeline advances
+    //                 and captures muldiv_result into exwb_alu_result this cycle.
+    wire muldiv_want = ifex_valid && ctrl_isMulDiv;
+    assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_done
+                          && !stall_other && !flush;
+    assign muldiv_stall = muldiv_want && (muldiv_start || muldiv_busy);
+
+    wire stall = stall_other || muldiv_stall;
 
     // ================================================================
     //  WB Stage — Memory Access + Writeback
@@ -418,7 +464,7 @@ module fyracore(
     wire        csr_mret_signal = 1'b0; // MRET handled via PC redirect in EX
     wire [31:0] csr_mtvec, csr_mepc;
     wire        csr_mstatus_mie;
-    wire        csr_addr_valid;
+    // csr_addr_valid is forward-declared at the top of EX stage; driven by CSR unit port
 
     csr csr_unit(
         .clk        (clk),
@@ -442,9 +488,10 @@ module fyracore(
     );
 
     // CSR forwarding: when WB writes the same CSR that EX reads, forward the write value
+    // csr_rdata_eff is forward-declared at the top of EX stage; assigned here.
     wire csr_fwd = exwb_valid && exwb_csrWR && !exwb_trap &&
                    (exwb_csr_addr == ex_csr_addr);
-    wire [31:0] csr_rdata_eff = csr_fwd ? exwb_csr_wdata : csr_rdata;
+    assign csr_rdata_eff = csr_fwd ? exwb_csr_wdata : csr_rdata;
 
     // ================================================================
     //  PC Update Logic
@@ -566,7 +613,8 @@ module fyracore(
                 exwb_isSC   <= 1'b0;
                 exwb_trap   <= 1'b0;
             end else begin
-                exwb_alu_result <= ex_alu_result;
+                // For M-ext ops, use the muldiv result; for all others, use the ALU result.
+                exwb_alu_result <= ctrl_isMulDiv ? muldiv_result : ex_alu_result;
                 exwb_rs2_data   <= ex_rs2_val;
                 exwb_pc_next    <= ifex_pc_next;
                 exwb_rd         <= ex_rd;
