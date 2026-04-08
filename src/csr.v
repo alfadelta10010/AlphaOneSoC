@@ -14,12 +14,14 @@ module csr(
     input  wire [31:0] trap_pc,
     input  wire [31:0] trap_cause,
     input  wire [31:0] trap_val,
+    input  wire        priv_mode,   // current privilege: 1=M, 0=U
     output wire [31:0] mtvec_out,
     output wire [31:0] mepc_out,
     // Counter increment
     input  wire        instret_inc,
     // Status bits
     output wire        mstatus_mie,
+    output wire [1:0]  mstatus_mpp, // MPP field [12:11] — used for MRET priv restore
     // CSR address validity (for illegal instruction detection)
     output wire        csr_addr_valid  // 1 if raddr is a known/supported CSR
 );
@@ -44,6 +46,7 @@ module csr(
     reg [31:0] mtval;
     reg [31:0] mie_reg;
     reg [31:0] mip_reg;
+    reg [31:0] mcounteren; // 0x306: controls U-mode counter access
 
     // Performance counters
     reg [63:0] mcycle;
@@ -51,7 +54,8 @@ module csr(
 
     assign mtvec_out    = mtvec;
     assign mepc_out     = mepc;
-    assign mstatus_mie  = mstatus[3]; // MIE bit
+    assign mstatus_mie  = mstatus[3];      // MIE bit
+    assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
 
     // Cycle counter always increments
     always @(posedge clk) begin
@@ -86,6 +90,7 @@ module csr(
             // Machine Trap Setup
             12'h304: rdata = mie_reg;
             12'h305: rdata = mtvec;
+            12'h306: rdata = mcounteren;
             // Machine Trap Handling
             12'h340: rdata = mscratch;
             12'h341: rdata = mepc;
@@ -97,11 +102,12 @@ module csr(
             12'hB80: rdata = mcycle[63:32];
             12'hB02: rdata = minstret[31:0];
             12'hB82: rdata = minstret[63:32];
-            // User-mode counter read aliases
-            12'hC00: rdata = mcycle[31:0];
-            12'hC80: rdata = mcycle[63:32];
-            12'hC02: rdata = minstret[31:0];
-            12'hC82: rdata = minstret[63:32];
+            // User-mode counter read aliases — mcounteren gates U-mode access.
+            // M-mode (priv_mode=1) always succeeds; U-mode needs the corresponding bit set.
+            12'hC00: begin rdata = mcycle[31:0];    if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
+            12'hC80: begin rdata = mcycle[63:32];   if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
+            12'hC02: begin rdata = minstret[31:0];  if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
+            12'hC82: begin rdata = minstret[63:32]; if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
             default: begin rdata = 32'b0; addr_valid = 1'b0; end
         endcase
     end
@@ -121,24 +127,26 @@ module csr(
             mepc     <= 32'b0;
             mcause   <= 32'b0;
             mtval    <= 32'b0;
-            mie_reg  <= 32'b0;
-            mip_reg  <= 32'b0;
+            mie_reg      <= 32'b0;
+            mip_reg      <= 32'b0;
+            mcounteren   <= 32'b0;
         end else if (trap) begin
-            // Enter trap
+            // Enter trap: always go to M-mode
             mepc     <= trap_pc;
             mcause   <= trap_cause;
             mtval    <= trap_val;
-            // Save MIE to MPIE, clear MIE, set MPP=M-mode
-            // Use full-word assignment to avoid iverilog bit-select NBA issues
-            mstatus <= {mstatus[31:13], 2'b11, mstatus[10:8], mstatus[3], mstatus[6:4], 1'b0, mstatus[2:0]};
+            // Save MIE to MPIE, clear MIE; save current privilege into MPP
+            // MPP = 11 when trapping from M-mode, 00 when trapping from U-mode
+            mstatus <= {mstatus[31:13], {priv_mode, priv_mode}, mstatus[10:8], mstatus[3], mstatus[6:4], 1'b0, mstatus[2:0]};
         end else if (mret) begin
-            // Return from trap: MIE=MPIE, MPIE=1, MPP=M-mode
-            mstatus <= {mstatus[31:13], 2'b11, mstatus[10:8], 1'b1, mstatus[6:4], mstatus[7], mstatus[2:0]};
+            // Return from trap: MIE=MPIE, MPIE=1, MPP=U (spec: MPP set to least priv after MRET)
+            mstatus <= {mstatus[31:13], 2'b00, mstatus[10:8], 1'b1, mstatus[6:4], mstatus[7], mstatus[2:0]};
         end else if (we && op != 2'b00) begin
             case (waddr)
                 12'h300: mstatus  <= csr_new & 32'h0000_1888; // Writable bits mask
-                12'h304: mie_reg  <= csr_new;
-                12'h305: mtvec    <= csr_new;
+                12'h304: mie_reg    <= csr_new;
+                12'h305: mtvec      <= csr_new;
+                12'h306: mcounteren <= csr_new;
                 12'h340: mscratch <= csr_new;
                 12'h341: mepc     <= {csr_new[31:1], 1'b0}; // Bit 0 always 0
                 12'h342: mcause   <= csr_new;

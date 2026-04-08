@@ -53,6 +53,9 @@ module fyracore(
 
     // ================================================================
     //  IF/EX Pipeline Register
+    // Privilege mode: 1=Machine, 0=User. Declared early so EX-stage wires can reference it.
+    reg        priv_mode;
+
     // ================================================================
     reg [31:0] ifex_pc;
     reg [31:0] ifex_instr;
@@ -281,9 +284,13 @@ module fyracore(
         ex_rs1 != 5'b0            // CSRRS/CSRRC write only if rs1/uimm != 0
     );
     wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
+    // CSR access requires privilege >= csr_addr[9:8] (00=U, 01=S, 11=M).
+    // Since we only have M(1) and U(0): any CSR with addr[9:8] != 00 requires M-mode.
+    wire ex_csr_priv_fail = !priv_mode && (ex_csr_addr[9:8] != 2'b00);
     wire ex_csr_illegal = ifex_valid && ex_csr_active && (
         !csr_addr_valid ||                     // Non-existent CSR
-        (ex_csr_writes && ex_csr_readonly)     // Write to read-only CSR
+        (ex_csr_writes && ex_csr_readonly) ||  // Write to read-only CSR
+        ex_csr_priv_fail                       // Insufficient privilege
     );
 
     // Misalignment detection on computed address (ALU result)
@@ -460,6 +467,8 @@ module fyracore(
                       !(exwb_isAmo && !amo_phase); // AMO writes rd on phase 1
     assign wb_rd    = exwb_rd;
 
+    wire [1:0]  csr_mstatus_mpp;
+
     // CSR unit
     wire        csr_trap_signal = exwb_valid && exwb_trap;
     wire        csr_mret_signal = 1'b0; // MRET handled via PC redirect in EX
@@ -481,10 +490,12 @@ module fyracore(
         .trap_pc    (exwb_trap_pc),
         .trap_cause (exwb_trap_cause),
         .trap_val   (exwb_trap_val),
+        .priv_mode  (priv_mode),
         .mtvec_out  (csr_mtvec),
         .mepc_out   (csr_mepc),
         .instret_inc(exwb_valid && !exwb_trap && !wb_busy),
         .mstatus_mie(csr_mstatus_mie),
+        .mstatus_mpp(csr_mstatus_mpp),
         .csr_addr_valid(csr_addr_valid)
     );
 
@@ -538,7 +549,8 @@ module fyracore(
     // ================================================================
     always @(posedge clk) begin
         if (rst) begin
-            pc <= 32'h0000_0000;
+            pc        <= 32'h0000_0000;
+            priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
             ifex_instr     <= 32'h0000_0013; // NOP
@@ -581,6 +593,15 @@ module fyracore(
         end else begin
             // ---- PC ----
             pc <= next_pc;
+
+            // ---- Privilege mode update ----
+            // Trap (WB stage): always enter M-mode
+            // MRET (EX stage): restore from MPP (current mstatus[12:11] before CSR write clears it)
+            // Otherwise: hold current privilege
+            if (csr_trap_signal)
+                priv_mode <= 1'b1;                              // trap → M-mode
+            else if (ex_is_mret && !stall)
+                priv_mode <= (csr_mstatus_mpp == 2'b11);       // restore from MPP
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
@@ -648,7 +669,7 @@ module fyracore(
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
                     if (ex_is_ecall) begin
-                        exwb_trap_cause <= 32'd11; // Environment call from M-mode
+                        exwb_trap_cause <= priv_mode ? 32'd11 : 32'd8; // M-mode=11, U-mode=8
                         exwb_trap_val   <= 32'b0;
                     end else if (ex_is_ebreak) begin
                         exwb_trap_cause <= 32'd3;  // Breakpoint
