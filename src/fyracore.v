@@ -487,11 +487,15 @@ module fyracore(
         .csr_addr_valid(csr_addr_valid)
     );
 
-    // CSR forwarding: when WB writes the same CSR that EX reads, forward the write value
-    // csr_rdata_eff is forward-declared at the top of EX stage; assigned here.
+    // CSR forwarding: when WB writes the same CSR that EX reads, forward the write value.
+    // Apply the same per-CSR masking that csr.v applies on write, so the forwarded value
+    // matches what will actually be read back (e.g. mepc clears bit 0).
     wire csr_fwd = exwb_valid && exwb_csrWR && !exwb_trap &&
                    (exwb_csr_addr == ex_csr_addr);
-    assign csr_rdata_eff = csr_fwd ? exwb_csr_wdata : csr_rdata;
+    wire [31:0] csr_fwd_data =
+        (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} : // mepc: bit 0 always 0
+        exwb_csr_wdata;
+    assign csr_rdata_eff = csr_fwd ? csr_fwd_data : csr_rdata;
 
     // ================================================================
     //  PC Update Logic

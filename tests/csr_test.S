@@ -1,5 +1,7 @@
 # Zicsr Extension Test — CSR read/write/set/clear
 # a0 = 0 on success, test number on failure
+# Uses halt loop (j .) instead of ecall for termination, so it works
+# regardless of whether mtvec has been set by an earlier test.
 
 .section .text.init
 .globl _start
@@ -91,16 +93,18 @@ _start:
 
     # SUCCESS
     addi  a0, zero, 0
-    ecall
+    j     _halt
 
-fail_1:  addi a0, zero, 1;  ecall
-fail_2:  addi a0, zero, 2;  ecall
-fail_3:  addi a0, zero, 3;  ecall
-fail_4:  addi a0, zero, 4;  ecall
-fail_5:  addi a0, zero, 5;  ecall
-fail_6:  addi a0, zero, 6;  ecall
-fail_7:  addi a0, zero, 7;  ecall
-fail_8:  addi a0, zero, 8;  ecall
-fail_9:  addi a0, zero, 9;  ecall
-fail_10: addi a0, zero, 10; ecall
-fail_11: addi a0, zero, 11; ecall
+fail_1:  addi a0, zero, 1;  j _halt
+fail_2:  addi a0, zero, 2;  j _halt
+fail_3:  addi a0, zero, 3;  j _halt
+fail_4:  addi a0, zero, 4;  j _halt
+fail_5:  addi a0, zero, 5;  j _halt
+fail_6:  addi a0, zero, 6;  j _halt
+fail_7:  addi a0, zero, 7;  j _halt
+fail_8:  addi a0, zero, 8;  j _halt
+fail_9:  addi a0, zero, 9;  j _halt
+fail_10: addi a0, zero, 10; j _halt
+fail_11: addi a0, zero, 11; j _halt
+
+_halt:   j _halt
