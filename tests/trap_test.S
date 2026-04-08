@@ -140,16 +140,44 @@ _start:
     csrr  t0, 0xF14        # csrr is pseudo for csrrs rd, csr, x0
     bne   s4, zero, fail_13 # Must NOT have trapped
 
+    # ===== Test 14: mtval = faulting address on misaligned load =====
+    addi  s2, zero, 4      # Expected mcause: load address misaligned
+    addi  s4, zero, 0
+    lui   t0, 0x1
+    addi  t0, t0, 1        # t0 = 0x1001 (misaligned for LW)
+    lw    t1, 0(t0)        # Should trap; mtval should = 0x1001
+    addi  t1, zero, 1
+    bne   s4, t1, fail_14  # Trap must have fired
+    bne   s3, s2, fail_14  # mcause must be 4
+    lui   t1, 0x1
+    addi  t1, t1, 1        # t1 = 0x1001 (expected faulting address)
+    bne   s5, t1, fail_14  # mtval must equal faulting address
+
+    # ===== Test 15: mtval = faulting instruction encoding on illegal insn =====
+    # Use a 32-bit encoding (bits[1:0]=11) with a reserved opcode so it is
+    # decoded as a 32-bit illegal instruction and ifex_instr = the raw encoding.
+    # 0x0000000B: bits[6:0]=0x0B (opcode=0b0001011, reserved in RV32IMAC)
+    addi  s2, zero, 2      # Expected mcause: illegal instruction
+    addi  s4, zero, 0
+    .word 0x0000000B       # 32-bit reserved opcode → illegal instruction trap
+    addi  t1, zero, 1
+    bne   s4, t1, fail_15  # Trap must have fired
+    bne   s3, s2, fail_15  # mcause must be 2
+    # mtval must equal the encoding of the illegal instruction (0x0000000B)
+    addi  t1, zero, 0xB
+    bne   s5, t1, fail_15
+
     # SUCCESS
     addi  a0, zero, 0
     j     .             # Halt loop — testbench detects and terminates
 
 # ---- Trap handler ----
-# Saves mcause to s3, sets s4=1, advances mepc past the trapping instruction,
-# then returns with mret.
+# Saves mcause to s3, mtval to s5, sets s4=1, advances mepc past the trapping
+# instruction, then returns with mret.
 .align 4
 trap_handler:
     csrr  s3, mcause       # Read cause
+    csrr  s5, mtval        # Read mtval (faulting address or instruction)
     addi  s4, zero, 1      # Flag: trap occurred
     csrr  t5, mepc
     # Determine instruction length at mepc to skip past it.
@@ -173,4 +201,6 @@ fail_10: addi a0, zero, 10; j .
 fail_11: addi a0, zero, 11; j .
 fail_12: addi a0, zero, 12; j .
 fail_13: addi a0, zero, 13; j .
+fail_14: addi a0, zero, 14; j .
+fail_15: addi a0, zero, 15; j .
 .option pop

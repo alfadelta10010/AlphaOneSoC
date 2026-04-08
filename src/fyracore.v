@@ -89,6 +89,7 @@ module fyracore(
     reg        exwb_trap;
     reg [31:0] exwb_trap_cause;
     reg [31:0] exwb_trap_pc;
+    reg [31:0] exwb_trap_val;   // mtval: faulting addr (misalign) or instr (illegal), else 0
     reg [31:0] exwb_instr;
 
     // Forward declarations for wires assigned later in the CSR/WB section
@@ -479,7 +480,7 @@ module fyracore(
         .mret       (ex_is_mret),
         .trap_pc    (exwb_trap_pc),
         .trap_cause (exwb_trap_cause),
-        .trap_val   (32'b0),
+        .trap_val   (exwb_trap_val),
         .mtvec_out  (csr_mtvec),
         .mepc_out   (csr_mepc),
         .instret_inc(exwb_valid && !exwb_trap && !wb_busy),
@@ -567,6 +568,7 @@ module fyracore(
             exwb_trap       <= 1'b0;
             exwb_trap_cause <= 32'b0;
             exwb_trap_pc    <= 32'b0;
+            exwb_trap_val   <= 32'b0;
             exwb_instr      <= 32'h0000_0013;
             // AMO
             amo_phase      <= 1'b0;
@@ -616,6 +618,7 @@ module fyracore(
                 exwb_isLR   <= 1'b0;
                 exwb_isSC   <= 1'b0;
                 exwb_trap   <= 1'b0;
+                exwb_trap_val <= 32'b0;
             end else begin
                 // For M-ext ops, use the muldiv result; for all others, use the ALU result.
                 exwb_alu_result <= ctrl_isMulDiv ? muldiv_result : ex_alu_result;
@@ -640,21 +643,29 @@ module fyracore(
                 exwb_instr      <= ifex_instr;
                 exwb_trap_pc    <= ifex_pc;
 
-                // Trap cause assignment (priority: ecall > ebreak > misalign > illegal)
+                // Trap cause and mtval assignment (priority: ecall > ebreak > misalign > illegal)
+                // mtval: faulting address for misalign, faulting encoding for illegal, 0 otherwise
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
-                    if (ex_is_ecall)
+                    if (ex_is_ecall) begin
                         exwb_trap_cause <= 32'd11; // Environment call from M-mode
-                    else if (ex_is_ebreak)
+                        exwb_trap_val   <= 32'b0;
+                    end else if (ex_is_ebreak) begin
                         exwb_trap_cause <= 32'd3;  // Breakpoint
-                    else if (ex_misaligned && !ex_misalign_is_store)
+                        exwb_trap_val   <= 32'b0;
+                    end else if (ex_misaligned && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd4;  // Load address misaligned
-                    else if (ex_misaligned && ex_misalign_is_store)
+                        exwb_trap_val   <= ex_alu_result; // faulting load address
+                    end else if (ex_misaligned && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned
-                    else
+                        exwb_trap_val   <= ex_alu_result; // faulting store address
+                    end else begin
                         exwb_trap_cause <= 32'd2;  // Illegal instruction
+                        exwb_trap_val   <= ifex_instr; // faulting instruction encoding
+                    end
                 end else begin
-                    exwb_trap <= 1'b0;
+                    exwb_trap     <= 1'b0;
+                    exwb_trap_val <= 32'b0;
                 end
 
                 // AMO: enter busy state on first cycle
