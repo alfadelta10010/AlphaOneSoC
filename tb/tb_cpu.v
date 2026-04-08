@@ -19,7 +19,7 @@ module tb_cpu;
     wire        dbg_retired, dbg_trap;
 
     // Parameters
-    parameter MEM_SIZE   = 16777216;  // 16 MB — matches hardware IM+DM range
+    parameter MEM_SIZE   = 33554432;  // 32 MB — 16 MB Flash (0x0000_0000) + 16 MB RAM (0x0100_0000)
 `ifndef MAX_CYCLES
     parameter MAX_CYCLES = 100000;
 `else

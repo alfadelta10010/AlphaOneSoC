@@ -1,9 +1,12 @@
 // Simple byte-addressable memory model for simulation
 //
-// Provides a unified flat memory covering the full 16 MB address space
-// (instruction memory 0x0000_0000–0x007F_FFFF + data memory
-//  0x0080_0000–0x00FF_FFFF) so that test programs can freely place
-// code and data anywhere within the range.
+// Unified 32 MB flat address space:
+//   0x0000_0000 – 0x00FF_FFFF : Flash (16 MB) — code and read-only data
+//   0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB) — stack, heap, .data/.bss
+//
+// Both instruction fetch and data access ports index into the same array.
+// This gives a Von Neumann view: code can execute from either region and
+// data can be read/written from either region.
 //
 // Dual-port: simultaneous instruction fetch and data access.
 // Instruction port is read-only and combinational.
@@ -13,9 +16,8 @@
 // is loaded starting at address 0 — matching the default linker origin.
 
 module memory_model #(
-    parameter MEM_SIZE  = 16777216,     // 16 MB — matches hardware IM+DM range
-                                        // (0x0000_0000 to 0x00FF_FFFF)
-    parameter INIT_FILE = "program.hex" // hex file loaded at address 0
+    parameter MEM_SIZE  = 33554432,      // 32 MB (0x0000_0000 – 0x01FF_FFFF)
+    parameter INIT_FILE = "program.hex"  // hex file loaded at address 0
 )(
     input  wire        clk,
     // Instruction port (read-only, combinational)
@@ -45,14 +47,14 @@ module memory_model #(
     end
 
     // --- Instruction read (combinational) ---
-    // Mask address to stay within array bounds.
+    // 25-bit index covers the full 32 MB range (0x0000_0000 – 0x01FF_FFFF).
     // Supports unaligned fetches for C-extension (16-bit instructions
     // can start at any 2-byte boundary).
-    wire [23:0] ia = imem_addr[23:0];
+    wire [24:0] ia = imem_addr[24:0];
     assign imem_rdata = {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]};
 
     // --- Data read (combinational) ---
-    wire [23:0] da = dmem_addr[23:0];
+    wire [24:0] da = dmem_addr[24:0];
     assign dmem_rdata = {mem[da+3], mem[da+2], mem[da+1], mem[da]};
 
     // --- Data write (synchronous, byte-lane masked) ---

@@ -8,38 +8,29 @@
 //               All memory reads/writes are forwarded to an external QSPI
 //               flash/PSRAM controller.  No internal SRAM is synthesized.
 //
-// Memory Map (calibrated to fill the target FPGA's available QSPI address space):
-//   0x0000_0000 – 0x007F_FFFF : Instruction Memory  (8 MB)
-//   0x0080_0000 – 0x00FF_FFFF : Data Memory          (8 MB)
-//   0x0100_0000 – 0x0100_0007 : GPIO Output           (8 B, memory-mapped I/O)
-//   0x0100_0008 – 0x0100_000F : GPIO Input            (8 B, memory-mapped I/O)
+// Unified Memory Map (flat Von Neumann, no hard IMEM/DMEM split):
+//   0x0000_0000 – 0x00FF_FFFF : Flash (16 MB) — XIP code, read-only data
+//   0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB) — stack, heap, .data/.bss
+//   0x0200_0000 – 0x0200_BFFF : CLINT (future)
+//   0x0300_0000 – 0x0300_000F : GPIO  (8B output + 8B input)
+//   0x0400_0000+              : Future peripherals
 //
-// Notes on address parameters:
-//   IM_START/IM_STOP  — Instruction memory address window.  The CPU's PC
-//                        must stay within this range.  Code is fetched via
-//                        the imem port; data loads/stores to this range also
-//                        work (self-modifying code, boot-time init, etc.).
-//   DM_START/DM_STOP  — Data memory address window.  Stack, heap, and .data
-//                        sections live here on hardware.  In simulation the
-//                        test linker may place everything in the IM range for
-//                        simplicity; both ranges are read/write.
-//   GPO_START/GPO_STOP — GPIO output registers.  Directly memory-mapped;
-//                         no QSPI transaction is generated.
-//   GPI_START/GPI_STOP — GPIO input registers.  Read-only memory-mapped;
-//                         returns the external gpi_data bus.
+// Both instruction fetch and data access can target either Flash or RAM.
+// In hardware, the memory controller routes by address: Flash via QSPI CS0,
+// RAM via QSPI CS1.  In simulation a single 32MB byte array covers both.
 
 module memController #(
-    parameter SIM_MODE  = 1,           // 1 = simulation (internal SRAM), 0 = hardware (QSPI)
+    parameter SIM_MODE    = 1,           // 1 = simulation (internal SRAM), 0 = hardware (QSPI)
 
-    // --- Address map (must match hardware board layout) ---
-    parameter IM_START  = 32'h0000_0000,  // Instruction memory base
-    parameter IM_STOP   = 32'h007F_FFFF,  // Instruction memory top  (8 MB)
-    parameter DM_START  = 32'h0080_0000,  // Data memory base
-    parameter DM_STOP   = 32'h00FF_FFFF,  // Data memory top         (8 MB)
-    parameter GPO_START = 32'h0100_0000,  // GPIO output base
-    parameter GPO_STOP  = 32'h0100_0007,  // GPIO output top
-    parameter GPI_START = 32'h0100_0008,  // GPIO input base
-    parameter GPI_STOP  = 32'h0100_000F   // GPIO input top
+    // --- Address map ---
+    parameter FLASH_START = 32'h0000_0000,  // Flash base (16 MB)
+    parameter FLASH_STOP  = 32'h00FF_FFFF,  // Flash top
+    parameter RAM_START   = 32'h0100_0000,  // RAM base   (16 MB)
+    parameter RAM_STOP    = 32'h01FF_FFFF,  // RAM top
+    parameter GPO_START   = 32'h0300_0000,  // GPIO output base
+    parameter GPO_STOP    = 32'h0300_0007,  // GPIO output top
+    parameter GPI_START   = 32'h0300_0008,  // GPIO input base
+    parameter GPI_STOP    = 32'h0300_000F   // GPIO input top
 )(
     input  wire        clk,
     input  wire        rst,
@@ -56,10 +47,11 @@ module memController #(
     output reg  [31:0] dmem_rdata,
 
     // QSPI controller interface (active only when SIM_MODE=0)
-    // directly drives the external QSPI flash/PSRAM controller
+    // qspi_cs selects device: 0=Flash, 1=RAM
     output reg         qspi_req,       // transaction request strobe
+    output reg         qspi_cs,        // chip select: 0=Flash, 1=RAM
     output reg         qspi_wr,        // 1 = write, 0 = read
-    output reg  [23:0] qspi_addr,      // byte address within QSPI device
+    output reg  [23:0] qspi_addr,      // byte address within selected device
     output reg  [31:0] qspi_wdata,     // write data
     input  wire [31:0] qspi_rdata,     // read data (valid when qspi_ready=1)
     input  wire        qspi_ready,     // transaction complete flag
@@ -76,28 +68,23 @@ module memController #(
     output wire        dmem_ready     // Data access is complete
 );
 
-    // Total byte-addressable memory size (IM + DM combined = 16 MB)
-    // In sim mode this is allocated as a flat byte array.
-    // MEM_BYTES must be a power of two so the address mask works.
-    localparam MEM_BYTES = (IM_STOP - IM_START + 1) + (DM_STOP - DM_START + 1); // 16 MB
+    // Total unified memory size: 32 MB (Flash 16MB + RAM 16MB)
+    localparam MEM_BYTES = 32 * 1024 * 1024;
 
     // ==================================================================
-    //  Address-range decode helpers (active on dmem_addr)
+    //  Address-range decode helpers
     // ==================================================================
-    wire in_im_range  = (dmem_addr >= IM_START)  && (dmem_addr <= IM_STOP);
-    wire in_dm_range  = (dmem_addr >= DM_START)  && (dmem_addr <= DM_STOP);
-    wire in_mem_range = in_im_range || in_dm_range;  // any SRAM/QSPI range
-    wire in_gpo_range = (dmem_addr >= GPO_START) && (dmem_addr <= GPO_STOP);
-    wire in_gpi_range = (dmem_addr >= GPI_START) && (dmem_addr <= GPI_STOP);
+    wire in_flash_range = (dmem_addr >= FLASH_START) && (dmem_addr <= FLASH_STOP);
+    wire in_ram_range   = (dmem_addr >= RAM_START)   && (dmem_addr <= RAM_STOP);
+    wire in_mem_range   = in_flash_range || in_ram_range;
+    wire in_gpo_range   = (dmem_addr >= GPO_START)   && (dmem_addr <= GPO_STOP);
+    wire in_gpi_range   = (dmem_addr >= GPI_START)   && (dmem_addr <= GPI_STOP);
 
     // ==================================================================
     //  Simulation Mode: Internal byte-addressable SRAM
     // ==================================================================
-    //  Flat 16 MB array covers both IM and DM ranges.  The address is
-    //  used directly as the index (bits [23:0] cover 0–16 MB).  Instruction
-    //  fetches use the imem port; data loads/stores use the dmem port.
-    //  Both ports can access either range, matching the Von-Neumann view
-    //  that the test programs expect (code and data in the same space).
+    //  Single 32 MB array (addr[24:0] covers 0x0000_0000 – 0x01FF_FFFF).
+    //  Both imem and dmem ports index the same array — Von Neumann view.
     // ==================================================================
     generate
         if (SIM_MODE == 1) begin : sim_mem
@@ -105,25 +92,19 @@ module memController #(
             reg [7:0] mem [0:MEM_BYTES-1];
             integer i;
 
-            // Zero-fill on startup; the testbench or $readmemh fills code
             initial begin
                 for (i = 0; i < MEM_BYTES; i = i + 1)
                     mem[i] = 8'h00;
             end
 
             // --- Instruction read (combinational, word-aligned) ---
-            // Uses low 24 bits of imem_addr as byte index into flat array
-            wire [23:0] ia = imem_addr[23:0];
+            wire [24:0] ia = imem_addr[24:0];
             assign imem_rdata = {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]};
 
             // --- Data read (combinational) ---
-            // Translate dmem_addr into a flat byte index.
-            // IM range: offset = addr - IM_START = addr[23:0] (since IM_START=0)
-            // DM range: offset = addr - DM_START + (IM_STOP - IM_START + 1)
-            //         = addr[23:0] (since DM_START = IM_STOP + 1 and the array
-            //           is laid out contiguously).  So dmem_addr[23:0] works
-            //           directly for both ranges with the current map.
-            wire [23:0] da = dmem_addr[23:0];
+            // addr[24:0] maps Flash (0x0000_0000+) and RAM (0x0100_0000+)
+            // directly into the flat array without any translation.
+            wire [24:0] da = dmem_addr[24:0];
 
             always @(*) begin
                 if (in_gpi_range)
@@ -159,13 +140,14 @@ module memController #(
                 end
             end
 
-            // --- Memory ready: always ready in sim mode (combinational) ---
+            // --- Memory ready: always ready in sim mode ---
             assign imem_ready = 1'b1;
             assign dmem_ready = 1'b1;
 
             // --- QSPI signals unused in sim mode — tie off ---
             always @(posedge clk) begin
                 qspi_req   <= 1'b0;
+                qspi_cs    <= 1'b0;
                 qspi_wr    <= 1'b0;
                 qspi_addr  <= 24'b0;
                 qspi_wdata <= 32'b0;
@@ -177,32 +159,31 @@ module memController #(
     // ==================================================================
     //  Hardware Mode: QSPI controller interface
     // ==================================================================
-    //  In hardware the memory controller does NOT instantiate any SRAM.
-    //  Instead every memory access is serialized through the QSPI
-    //  controller which talks to external flash/PSRAM.
-    //
-    //  Simple FSM prioritizes data accesses over instruction fetches to
-    //  minimise pipeline stalls on loads/stores.
-    //
-    //  GPIO writes are handled locally (no QSPI transaction).
+    //  Flash (0x0000_0000–0x00FF_FFFF) → qspi_cs=0, addr = dmem_addr[23:0]
+    //  RAM   (0x0100_0000–0x01FF_FFFF) → qspi_cs=1, addr = dmem_addr[23:0]
+    //  The lower 24 bits are the offset within each QSPI device (both are 16MB).
     // ==================================================================
     generate
         if (SIM_MODE == 0) begin : hw_mem
 
             // FSM states
-            localparam IDLE       = 3'd0;  // waiting for a request
-            localparam IFETCH     = 3'd1;  // instruction fetch request sent
-            localparam IFETCH_W   = 3'd2;  // waiting for QSPI read-back (ifetch)
-            localparam DREAD      = 3'd3;  // data read request sent
-            localparam DREAD_W    = 3'd4;  // waiting for QSPI read-back (dread)
-            localparam DWRITE     = 3'd5;  // data write request sent
-            localparam DWRITE_W   = 3'd6;  // waiting for QSPI write-ack
+            localparam IDLE       = 3'd0;
+            localparam IFETCH     = 3'd1;
+            localparam IFETCH_W   = 3'd2;
+            localparam DREAD      = 3'd3;
+            localparam DREAD_W    = 3'd4;
+            localparam DWRITE     = 3'd5;
+            localparam DWRITE_W   = 3'd6;
 
             reg [2:0] state;
-            reg [31:0] ifetch_buf;    // latched instruction word from QSPI
-            reg [31:0] dread_buf;     // latched data word from QSPI
-            reg ifetch_valid;         // ifetch_buf holds a valid instruction
-            reg dread_valid;          // dread_buf holds valid load data
+            reg [31:0] ifetch_buf;
+            reg [31:0] dread_buf;
+            reg ifetch_valid;
+            reg dread_valid;
+
+            // Chip select: 0=Flash (addr<0x01000000), 1=RAM (addr>=0x01000000)
+            wire imem_cs = imem_addr[24];   // bit 24 set → RAM
+            wire dmem_cs = dmem_addr[24];   // bit 24 set → RAM
 
             assign imem_rdata = ifetch_buf;
             assign imem_ready = ifetch_valid;
@@ -225,6 +206,7 @@ module memController #(
                     ifetch_valid <= 1'b0;
                     dread_valid  <= 1'b0;
                     qspi_req     <= 1'b0;
+                    qspi_cs      <= 1'b0;
                     qspi_wr      <= 1'b0;
                     qspi_addr    <= 24'b0;
                     qspi_wdata   <= 32'b0;
@@ -232,35 +214,31 @@ module memController #(
                     gpo_we       <= 1'b0;
                     gpo_addr     <= 4'b0;
                 end else begin
-                    gpo_we <= 1'b0;  // default: clear single-cycle pulse
+                    gpo_we <= 1'b0;
 
                     case (state)
                         IDLE: begin
-                            // Priority: data write > data read > instruction fetch
-                            // Data accesses are prioritized so the pipeline doesn't
-                            // stall longer than necessary on load/store instructions.
                             if (dmem_we && in_gpo_range) begin
-                                // GPIO write — handled locally, no QSPI needed
                                 gpo_data <= dmem_wdata;
                                 gpo_we   <= 1'b1;
                                 gpo_addr <= dmem_addr[3:0];
                             end else if (dmem_we && in_mem_range) begin
-                                // Data write via QSPI
                                 qspi_req   <= 1'b1;
+                                qspi_cs    <= dmem_cs;
                                 qspi_wr    <= 1'b1;
                                 qspi_addr  <= dmem_addr[23:0];
                                 qspi_wdata <= dmem_wdata;
                                 state      <= DWRITE;
                             end else if (!dmem_we && in_mem_range && (dmem_wmask != 4'b0)) begin
-                                // Data read via QSPI (wmask != 0 indicates an active load)
                                 qspi_req    <= 1'b1;
+                                qspi_cs     <= dmem_cs;
                                 qspi_wr     <= 1'b0;
                                 qspi_addr   <= dmem_addr[23:0];
                                 dread_valid <= 1'b0;
                                 state       <= DREAD;
                             end else begin
-                                // No data access pending — fetch next instruction
                                 qspi_req     <= 1'b1;
+                                qspi_cs      <= imem_cs;
                                 qspi_wr      <= 1'b0;
                                 qspi_addr    <= imem_addr[23:0];
                                 ifetch_valid <= 1'b0;
