@@ -610,10 +610,11 @@ module fyracore(
     //
     // PMP lock suppression: if the write targets a locked PMP address, csr.v silently
     // discards it. Don't forward in that case — let EX read the register directly.
+    // TOR locking: entry i+1 with A=TOR and L=1 also locks pmpaddr[i].
     wire pmp_fwd_blocked =
-        (exwb_csr_addr == 12'h3B0 && csr_pmpcfg0[7])  ||
-        (exwb_csr_addr == 12'h3B1 && csr_pmpcfg0[15]) ||
-        (exwb_csr_addr == 12'h3B2 && csr_pmpcfg0[23]) ||
+        (exwb_csr_addr == 12'h3B0 && (csr_pmpcfg0[7]  || (csr_pmpcfg0[12:11] == 2'b01 && csr_pmpcfg0[15]))) ||
+        (exwb_csr_addr == 12'h3B1 && (csr_pmpcfg0[15] || (csr_pmpcfg0[20:19] == 2'b01 && csr_pmpcfg0[23]))) ||
+        (exwb_csr_addr == 12'h3B2 && (csr_pmpcfg0[23] || (csr_pmpcfg0[28:27] == 2'b01 && csr_pmpcfg0[31]))) ||
         (exwb_csr_addr == 12'h3B3 && csr_pmpcfg0[31]);
     wire csr_fwd = exwb_valid && exwb_csrWR && !exwb_trap &&
                    (exwb_csr_addr == ex_csr_addr) && !pmp_fwd_blocked;

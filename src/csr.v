@@ -79,6 +79,12 @@ module csr(
     assign pmpaddr3_out = pmpaddr3;
     assign mie_out      = mie_reg;
 
+    // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
+    wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
+    wire tor_lock_addr1 = pmpcfg0[15] || (pmpcfg0[20:19] == 2'b01 && pmpcfg0[23]);
+    wire tor_lock_addr2 = pmpcfg0[23] || (pmpcfg0[28:27] == 2'b01 && pmpcfg0[31]);
+    wire tor_lock_addr3 = pmpcfg0[31];
+
     // Live mip value: MSIP(3), MTIP(7), MEIP(11) reflect external pins;
     // other bits come from the writable mip_reg.
     wire [31:0] mip_live = (mip_reg & ~32'h0000_0888) |
@@ -143,6 +149,11 @@ module csr(
             12'hC80: begin rdata = mcycle[63:32];   if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
             12'hC02: begin rdata = minstret[31:0];  if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
             12'hC82: begin rdata = minstret[63:32]; if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
+            // Unimplemented PMP registers — hardwired to zero (WARL)
+            12'h3A1, 12'h3A2, 12'h3A3: rdata = 32'b0;
+            12'h3B4, 12'h3B5, 12'h3B6, 12'h3B7,
+            12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB,
+            12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF: rdata = 32'b0;
             default: begin rdata = 32'b0; addr_valid = 1'b0; end
         endcase
     end
@@ -184,14 +195,14 @@ module csr(
         end else if (we && op != 2'b00) begin
             case (waddr)
                 12'h300: mstatus  <= csr_new & 32'h0000_1888; // Writable bits mask
-                12'h304: mie_reg    <= csr_new;
+                12'h304: mie_reg    <= csr_new & 32'h0000_0888;
                 12'h305: mtvec      <= csr_new;
-                12'h306: mcounteren <= csr_new;
+                12'h306: mcounteren <= csr_new & 32'h0000_0007;
                 12'h340: mscratch <= csr_new;
                 12'h341: mepc     <= {csr_new[31:1], 1'b0}; // Bit 0 always 0
                 12'h342: mcause   <= csr_new;
                 12'h343: mtval    <= csr_new;
-                12'h344: mip_reg  <= csr_new;
+                12'h344: mip_reg  <= csr_new & ~32'h0000_0888;
                 // Counters writable
                 12'hB00: mcycle[31:0]    <= csr_new;
                 12'hB80: mcycle[63:32]   <= csr_new;
@@ -205,11 +216,11 @@ module csr(
                     pmpcfg0[15] ? pmpcfg0[15:8]  : csr_new[15:8],
                     pmpcfg0[7]  ? pmpcfg0[7:0]   : csr_new[7:0]
                 };
-                // pmpaddr[i] is locked when pmpcfg0[i].L=1
-                12'h3B0: if (!pmpcfg0[7])  pmpaddr0 <= csr_new;
-                12'h3B1: if (!pmpcfg0[15]) pmpaddr1 <= csr_new;
-                12'h3B2: if (!pmpcfg0[23]) pmpaddr2 <= csr_new;
-                12'h3B3: if (!pmpcfg0[31]) pmpaddr3 <= csr_new;
+                // pmpaddr[i] locked by own L bit or by entry i+1 if TOR+locked
+                12'h3B0: if (!tor_lock_addr0) pmpaddr0 <= csr_new;
+                12'h3B1: if (!tor_lock_addr1) pmpaddr1 <= csr_new;
+                12'h3B2: if (!tor_lock_addr2) pmpaddr2 <= csr_new;
+                12'h3B3: if (!tor_lock_addr3) pmpaddr3 <= csr_new;
                 default: ; // Ignore writes to read-only CSRs
             endcase
         end
