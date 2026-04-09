@@ -25,6 +25,10 @@ module fyracore(
     output wire        dmem_we,
     input  wire [31:0] dmem_rdata,
     input  wire        dmem_ready,    // Data access complete
+    // External interrupt inputs (from CLINT / PLIC)
+    input  wire        timer_irq,     // Machine timer interrupt (MTIP)
+    input  wire        external_irq,  // Machine external interrupt (MEIP)
+    input  wire        sw_irq,        // Machine software interrupt (MSIP)
     // Debug / trace
     output wire [31:0] dbg_pc,
     output wire        dbg_retired,
@@ -55,6 +59,8 @@ module fyracore(
     //  IF/EX Pipeline Register
     // Privilege mode: 1=Machine, 0=User. Declared early so EX-stage wires can reference it.
     reg        priv_mode;
+    // WFI stall: set when WFI executes, cleared when any interrupt becomes pending.
+    reg        wfi_active;
 
     // ================================================================
     reg [31:0] ifex_pc;
@@ -101,6 +107,7 @@ module fyracore(
     wire        csr_addr_valid;  // driven by CSR unit output
     wire        pmp_ifetch_allow; // driven by pmp_ifetch instance
     wire        pmp_data_allow;   // driven by pmp_data instance
+    wire        irq_inject;      // driven by interrupt detection logic in CSR/WB section
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -270,6 +277,13 @@ module fyracore(
     wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok;
     wire ex_is_fencei = ifex_valid && ctrl_isFenceI;
 
+    // WFI: funct7=0001000 (not isMret, not isEcall, not isFenceI) — NOP in M-mode,
+    // but with interrupt support we stall until an interrupt fires.
+    // Encoding: opcode=1110011, funct3=000, funct7=0001000 (rs2=00101).
+    wire ex_is_wfi = ifex_valid && (ifex_instr[31:20] == 12'b000100000101) &&
+                     (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
+                     (ex_rd == 5'b0) && (ex_rs1 == 5'b0);
+
     // Bad SYSTEM encoding: controller recognized the funct7 family but the full
     // encoding doesn't match any valid instruction (wrong rd/rs1/rs2 fields)
     wire ex_bad_system = ifex_valid && (ctrl_isEcall || ctrl_isMret) &&
@@ -343,10 +357,11 @@ module fyracore(
 
     // flush is defined before stall so muldiv_start can reference it without
     // a forward reference (iverilog processes wire assignments linearly).
-    wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei;
+    wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || irq_inject;
 
     // stall_other: all stall sources except muldiv (used to gate muldiv_start)
-    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall;
+    // wfi_active stalls the pipeline until an interrupt becomes pending.
+    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
     //   muldiv_start: pulse for one cycle to launch a new M-ext operation.
@@ -484,6 +499,7 @@ module fyracore(
     wire        csr_mret_signal = 1'b0; // MRET handled via PC redirect in EX
     wire [31:0] csr_mtvec, csr_mepc;
     wire        csr_mstatus_mie;
+    wire [31:0] csr_mie;            // full mie register (for per-bit IRQ gating)
     // csr_addr_valid is forward-declared at the top of EX stage; driven by CSR unit port
 
     csr csr_unit(
@@ -511,8 +527,45 @@ module fyracore(
         .pmpaddr1_out(csr_pmpaddr1),
         .pmpaddr2_out(csr_pmpaddr2),
         .pmpaddr3_out(csr_pmpaddr3),
-        .csr_addr_valid(csr_addr_valid)
+        .csr_addr_valid(csr_addr_valid),
+        .timer_irq   (timer_irq),
+        .external_irq(external_irq),
+        .sw_irq      (sw_irq),
+        .mie_out     (csr_mie)
     );
+
+    // ── Interrupt pending detection ──────────────────────────────────────────
+    // Per-source masking: each IRQ is qualified by its mie bit and global MIE.
+    // Priority (high → low): external(11) > software(3) > timer(7).
+    wire irq_external_pend = external_irq & csr_mie[11] & csr_mstatus_mie;
+    wire irq_sw_pend       = sw_irq       & csr_mie[3]  & csr_mstatus_mie;
+    wire irq_timer_pend    = timer_irq    & csr_mie[7]  & csr_mstatus_mie;
+    wire any_irq_pend      = irq_external_pend | irq_sw_pend | irq_timer_pend;
+
+    // Select highest-priority pending IRQ cause (bit 31 = interrupt flag per spec)
+    wire [31:0] irq_cause =
+        irq_external_pend ? {1'b1, 31'd11} :  // Machine External Interrupt
+        irq_sw_pend       ? {1'b1, 31'd3}  :  // Machine Software Interrupt
+                            {1'b1, 31'd7};     // Machine Timer Interrupt
+
+    // Gate interrupt injection:
+    //   - Only when a valid instruction is in EX (gives clean mepc)
+    //   - Never mid-muldiv or mid-AMO (wb_busy)
+    //   - Never when EX already has a synchronous trap (trap takes priority)
+    //   - Never during WFI stall: WFI special-cases mepc advancement
+    assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
+                      && !muldiv_busy && !wb_busy && !wfi_active;
+
+    // WFI wake conditions (spec §3.3.3: implementation may wake on any condition):
+    //   (a) An individually-enabled interrupt source fires (regardless of MIE global bit).
+    //   (b) No interrupt sources are individually enabled in mie → WFI degenerates to NOP.
+    //       This prevents WFI from stalling forever when mie=0 (e.g. during M-mode tests
+    //       that don't set up any interrupt enables). The spec explicitly permits treating
+    //       WFI as NOP.
+    wire wfi_has_enabled_irq = csr_mie[7] | csr_mie[3] | csr_mie[11]; // MTIE|MSIE|MEIE
+    wire wfi_wake = (timer_irq & csr_mie[7]) | (sw_irq & csr_mie[3]) |
+                    (external_irq & csr_mie[11]) |
+                    !wfi_has_enabled_irq;  // NOP when no sources enabled
 
     // ── PMP checks ───────────────────────────────────────────────────────────
     // pmp_ifetch_allow and pmp_data_allow are forward-declared near top of EX stage.
@@ -584,6 +637,10 @@ module fyracore(
     always @(*) begin
         if (ex_trap)
             next_pc = trap_target;
+        else if (irq_inject)
+            // Interrupt: redirect to mtvec; mepc will hold ifex_pc so the
+            // interrupted instruction re-executes after MRET.
+            next_pc = trap_target;
         else if (ex_is_mret)
             next_pc = mret_target;
         else if (ex_branch_taken && ifex_valid && !stall)
@@ -647,6 +704,8 @@ module fyracore(
             amo_old_val    <= 32'b0;
             amo_new_val    <= 32'b0;
             wb_busy        <= 1'b0;
+            // WFI
+            wfi_active        <= 1'b0;
             // Reservation
             reservation_valid <= 1'b0;
             reservation_addr  <= 32'b0;
@@ -656,12 +715,23 @@ module fyracore(
 
             // ---- Privilege mode update ----
             // Trap (WB stage): always enter M-mode
+            // IRQ inject (EX stage): always enter M-mode
             // MRET (EX stage): restore from MPP (current mstatus[12:11] before CSR write clears it)
             // Otherwise: hold current privilege
             if (csr_trap_signal)
                 priv_mode <= 1'b1;                              // trap → M-mode
+            else if (irq_inject)
+                priv_mode <= 1'b1;                              // interrupt → M-mode
             else if (ex_is_mret && !stall)
                 priv_mode <= (csr_mstatus_mpp == 2'b11);       // restore from MPP
+
+            // ---- WFI stall management ----
+            // Set wfi_active when WFI reaches EX and is not otherwise stalled/flushed.
+            // Clear when an enabled interrupt source becomes pending (even if MIE=0).
+            if (ex_is_wfi && !ex_trap && !stall && !flush)
+                wfi_active <= 1'b1;
+            else if (wfi_wake || irq_inject)
+                wfi_active <= 1'b0;
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
@@ -688,8 +758,8 @@ module fyracore(
                     amo_new_val <= amo_computed;
                     wb_busy     <= 1'b0; // Release pipeline next cycle
                 end
-            end else if (stall) begin
-                // Insert bubble into EX/WB on load-use stall
+            end else if (stall && !irq_inject) begin
+                // Insert bubble into EX/WB on stall (but not when irq_inject overrides)
                 exwb_valid  <= 1'b0;
                 exwb_regWR  <= 1'b0;
                 exwb_memRD  <= 1'b0;
@@ -725,7 +795,7 @@ module fyracore(
                 exwb_trap_pc    <= ifex_pc;
 
                 // Trap cause and mtval assignment
-                // Priority: ecall > ebreak > ifetch-PMP > misalign > data-PMP > illegal
+                // Priority: synchronous trap > async interrupt injection
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
                     if (ex_is_ecall) begin
@@ -753,6 +823,23 @@ module fyracore(
                         exwb_trap_cause <= 32'd2;  // Illegal instruction
                         exwb_trap_val   <= ifex_instr;
                     end
+                end else if (irq_inject) begin
+                    // Asynchronous interrupt: suppress instruction effects, inject trap
+                    exwb_trap       <= 1'b1;
+                    exwb_trap_cause <= irq_cause;
+                    exwb_trap_val   <= 32'b0;
+                    // mepc: if interrupted instruction is WFI, advance past it so MRET
+                    // doesn't re-execute WFI. For all other instructions, point to the
+                    // instruction itself so it re-executes after MRET.
+                    exwb_trap_pc    <= ex_is_wfi ? ifex_pc_next : ifex_pc;
+                    exwb_valid      <= 1'b1;
+                    exwb_regWR      <= 1'b0;  // suppress writeback
+                    exwb_memRD      <= 1'b0;
+                    exwb_memWR      <= 1'b0;
+                    exwb_csrWR      <= 1'b0;
+                    exwb_isAmo      <= 1'b0;
+                    exwb_isLR       <= 1'b0;
+                    exwb_isSC       <= 1'b0;
                 end else begin
                     exwb_trap     <= 1'b0;
                     exwb_trap_val <= 32'b0;
@@ -781,8 +868,8 @@ module fyracore(
                 end
             end
 
-            // Clear reservation on trap
-            if (ex_trap)
+            // Clear reservation on trap or interrupt
+            if (ex_trap || irq_inject)
                 reservation_valid <= 1'b0;
         end
     end

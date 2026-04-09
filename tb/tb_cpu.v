@@ -18,6 +18,9 @@ module tb_cpu;
     wire [31:0] dbg_pc, dbg_instr;
     wire        dbg_retired, dbg_trap;
 
+    // Interrupt signals from CLINT
+    wire        timer_irq, sw_irq;
+
     // Parameters
     parameter MEM_SIZE   = 33554432;  // 32 MB — 16 MB Flash (0x0000_0000) + 16 MB RAM (0x0100_0000)
 `ifndef MAX_CYCLES
@@ -33,29 +36,33 @@ module tb_cpu;
 
     // Instantiate CPU
     fyracore cpu(
-        .clk       (clk),
-        .rst       (rst),
-        .imem_addr (imem_addr),
-        .imem_rdata(imem_rdata),
-        .imem_ready(imem_ready),
-        .dmem_addr (dmem_addr),
-        .dmem_wdata(dmem_wdata),
-        .dmem_wmask(dmem_wmask),
-        .dmem_we   (dmem_we),
-        .dmem_rdata(dmem_rdata),
-        .dmem_ready(dmem_ready),
-        .dbg_pc    (dbg_pc),
-        .dbg_retired(dbg_retired),
-        .dbg_instr (dbg_instr),
-        .dbg_trap  (dbg_trap)
+        .clk         (clk),
+        .rst         (rst),
+        .imem_addr   (imem_addr),
+        .imem_rdata  (imem_rdata),
+        .imem_ready  (imem_ready),
+        .dmem_addr   (dmem_addr),
+        .dmem_wdata  (dmem_wdata),
+        .dmem_wmask  (dmem_wmask),
+        .dmem_we     (dmem_we),
+        .dmem_rdata  (dmem_rdata),
+        .dmem_ready  (dmem_ready),
+        .timer_irq   (timer_irq),
+        .external_irq(1'b0),      // no external IRQ controller in simulation
+        .sw_irq      (sw_irq),
+        .dbg_pc      (dbg_pc),
+        .dbg_retired (dbg_retired),
+        .dbg_instr   (dbg_instr),
+        .dbg_trap    (dbg_trap)
     );
 
-    // Instantiate Memory
+    // Instantiate Memory (includes embedded CLINT)
     memory_model #(
         .MEM_SIZE (MEM_SIZE),
         .INIT_FILE(INIT_FILE)
     ) mem(
         .clk       (clk),
+        .rst       (rst),
         .imem_addr (imem_addr),
         .imem_rdata(imem_rdata),
         .dmem_addr (dmem_addr),
@@ -64,7 +71,9 @@ module tb_cpu;
         .dmem_we   (dmem_we),
         .dmem_rdata(dmem_rdata),
         .imem_ready(imem_ready),
-        .dmem_ready(dmem_ready)
+        .dmem_ready(dmem_ready),
+        .timer_irq (timer_irq),
+        .sw_irq    (sw_irq)
     );
 
     // Clock generation: 10ns period

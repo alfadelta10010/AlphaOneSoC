@@ -29,7 +29,13 @@ module csr(
     output wire [31:0] pmpaddr2_out,
     output wire [31:0] pmpaddr3_out,
     // CSR address validity (for illegal instruction detection)
-    output wire        csr_addr_valid  // 1 if raddr is a known/supported CSR
+    output wire        csr_addr_valid,  // 1 if raddr is a known/supported CSR
+    // External interrupt inputs — reflected live in mip reads (not stored)
+    input  wire        timer_irq,       // MTIP: timer interrupt pending (from CLINT)
+    input  wire        external_irq,    // MEIP: external interrupt pending
+    input  wire        sw_irq,          // MSIP: software interrupt pending (from CLINT)
+    // mie export — allows fyracore to gate irq_pending per-bit
+    output wire [31:0] mie_out
 );
     // ===== CSR Registers =====
     // Machine Information
@@ -71,6 +77,14 @@ module csr(
     assign pmpaddr1_out = pmpaddr1;
     assign pmpaddr2_out = pmpaddr2;
     assign pmpaddr3_out = pmpaddr3;
+    assign mie_out      = mie_reg;
+
+    // Live mip value: MSIP(3), MTIP(7), MEIP(11) reflect external pins;
+    // other bits come from the writable mip_reg.
+    wire [31:0] mip_live = (mip_reg & ~32'h0000_0888) |
+                           (sw_irq       ? 32'h0000_0008 : 32'b0) |  // MSIP bit 3
+                           (timer_irq    ? 32'h0000_0080 : 32'b0) |  // MTIP bit 7
+                           (external_irq ? 32'h0000_0800 : 32'b0);   // MEIP bit 11
 
     // Cycle counter always increments
     always @(posedge clk) begin
@@ -117,7 +131,7 @@ module csr(
             12'h341: rdata = mepc;
             12'h342: rdata = mcause;
             12'h343: rdata = mtval;
-            12'h344: rdata = mip_reg;
+            12'h344: rdata = mip_live;  // mip: MTIP/MEIP/MSIP reflect live external signals
             // Performance Counters
             12'hB00: rdata = mcycle[31:0];
             12'hB80: rdata = mcycle[63:32];
