@@ -55,7 +55,7 @@ module muldiv (
     localparam ST_DFIXUP = 3'd5;    // sign adjust + special-case handling
 
     reg [2:0] state;
-    reg [5:0] count;    // iteration counter (0 – 31)
+    reg [4:0] count;    // iteration counter (0 – 31)
 
     // ── Multiply datapath ─────────────────────────────────────────────────────
     // Shift-right accumulate: the 64-bit product lives in {mul_p, mul_n}.
@@ -118,7 +118,7 @@ module muldiv (
                 ST_IDLE: begin
                     if (start) begin
                         busy  <= 1'b1;
-                        count <= 6'd0;
+                        count <= 5'd0;
 
                         if (!op[2]) begin
                             // ── Multiply setup ─────────────────────────────
@@ -183,9 +183,9 @@ module muldiv (
                     // Carry from the addition enters mul_p at the MSB position.
                     mul_p <= {mul_sum[32], mul_sum[31:1]};
                     mul_n <= {mul_sum[0],  mul_n[31:1]};
-                    count <= count + 6'd1;
+                    count <= count + 5'd1;
 
-                    if (count == 6'd31)
+                    if (count == 5'd31)
                         state <= mul_neg ? ST_MFIXUP : ST_MOUT;
                 end
 
@@ -208,9 +208,9 @@ module muldiv (
                     div_dvd  <= {div_dvd[30:0], 1'b0};                       // shift left
                     div_rem  <= div_qbit ? div_diff[31:0] : div_trial[31:0]; // restore or subtract
                     div_quot <= {div_quot[30:0], div_qbit};                   // accumulate quotient
-                    count    <= count + 6'd1;
+                    count    <= count + 5'd1;
 
-                    if (count == 6'd31)
+                    if (count == 5'd31)
                         state <= ST_DFIXUP;
                 end
 

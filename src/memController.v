@@ -76,8 +76,8 @@ module memController #(
     // ==================================================================
     //  Address-range decode helpers
     // ==================================================================
-    wire in_flash_range = (dmem_addr >= FLASH_START) && (dmem_addr <= FLASH_STOP);
-    wire in_ram_range   = (dmem_addr >= RAM_START)   && (dmem_addr <= RAM_STOP);
+    wire in_flash_range = (dmem_addr[31:24] == 8'h00);  // 0x00xx_xxxx (16 MB)
+    wire in_ram_range   = (dmem_addr[31:24] == 8'h01);  // 0x01xx_xxxx (16 MB)
     wire in_mem_range   = in_flash_range || in_ram_range;
     wire in_gpo_range   = (dmem_addr >= GPO_START)   && (dmem_addr <= GPO_STOP);
     wire in_gpi_range   = (dmem_addr >= GPI_START)   && (dmem_addr <= GPI_STOP);

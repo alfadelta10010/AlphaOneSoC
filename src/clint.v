@@ -29,7 +29,7 @@ module clint(
     output wire        timer_irq,
     output wire        sw_irq
 );
-    reg [31:0] msip;
+    reg msip;  // only bit 0 is architecturally defined
     reg [63:0] mtimecmp;
     reg [63:0] mtime;
 
@@ -38,7 +38,7 @@ module clint(
     initial begin
         mtime    = 64'b0;
         mtimecmp = 64'hFFFF_FFFF_FFFF_FFFF; // disabled at power-on
-        msip     = 32'b0;
+        msip     = 1'b0;
     end
 
     // mtime: increment every cycle, but a write takes priority on the same edge.
@@ -64,12 +64,12 @@ module clint(
     end
 
     assign timer_irq = (mtime >= mtimecmp);
-    assign sw_irq    = msip[0];
+    assign sw_irq    = msip;
 
     // CSR Read (combinational)
     always @(*) begin
         case (addr)
-            16'h0000: rdata = msip;
+            16'h0000: rdata = {31'b0, msip};
             16'h4000: rdata = mtimecmp[31:0];
             16'h4004: rdata = mtimecmp[63:32];
             16'hBFF8: rdata = mtime[31:0];
@@ -81,16 +81,11 @@ module clint(
     // msip and mtimecmp writes (synchronous, byte-masked)
     always @(posedge clk) begin
         if (rst) begin
-            msip     <= 32'b0;
+            msip     <= 1'b0;
             mtimecmp <= 64'hFFFF_FFFF_FFFF_FFFF;
         end else if (we) begin
             case (addr)
-                16'h0000: begin
-                    if (wmask[0]) msip[7:0]   <= wdata[7:0];
-                    if (wmask[1]) msip[15:8]  <= wdata[15:8];
-                    if (wmask[2]) msip[23:16] <= wdata[23:16];
-                    if (wmask[3]) msip[31:24] <= wdata[31:24];
-                end
+                16'h0000: if (wmask[0]) msip <= wdata[0];
                 16'h4000: begin
                     if (wmask[0]) mtimecmp[7:0]   <= wdata[7:0];
                     if (wmask[1]) mtimecmp[15:8]  <= wdata[15:8];
