@@ -17,6 +17,7 @@ module tb_cpu;
     // Debug
     wire [31:0] dbg_pc, dbg_instr;
     wire        dbg_retired, dbg_trap;
+    wire        fencei_flush;   // informational in sim (memory_model has no fetch buffer)
 
     // Interrupt signals from CLINT
     wire        timer_irq, sw_irq;
@@ -47,10 +48,11 @@ module tb_cpu;
         .dmem_we     (dmem_we),
         .dmem_rdata  (dmem_rdata),
         .dmem_ready  (dmem_ready),
-        .timer_irq   (timer_irq),
-        .external_irq(1'b0),      // no external IRQ controller in simulation
-        .sw_irq      (sw_irq),
-        .dbg_pc      (dbg_pc),
+        .timer_irq    (timer_irq),
+        .external_irq (1'b0),      // no external IRQ controller in simulation
+        .sw_irq       (sw_irq),
+        .fencei_flush (fencei_flush),
+        .dbg_pc       (dbg_pc),
         .dbg_retired (dbg_retired),
         .dbg_instr   (dbg_instr),
         .dbg_trap    (dbg_trap)

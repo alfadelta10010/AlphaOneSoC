@@ -29,6 +29,11 @@ module fyracore(
     input  wire        timer_irq,     // Machine timer interrupt (MTIP)
     input  wire        external_irq,  // Machine external interrupt (MEIP)
     input  wire        sw_irq,        // Machine software interrupt (MSIP)
+    // FENCE.I flush signal — asserted for one cycle when FENCE.I executes.
+    // In hardware mode the memory controller uses this to invalidate its
+    // instruction-fetch buffer, forcing a fresh fetch after any stores to
+    // the instruction stream.  In simulation (no icache) it is informational.
+    output wire        fencei_flush,
     // Debug / trace
     output wire [31:0] dbg_pc,
     output wire        dbg_retired,
@@ -652,6 +657,13 @@ module fyracore(
         else
             next_pc = if_pc_next;
     end
+
+    // ================================================================
+    //  FENCE.I flush output
+    // ================================================================
+    // Asserted for exactly one cycle when a FENCE.I instruction completes
+    // in the EX stage (not stalled, not already flushed by something else).
+    assign fencei_flush = ex_is_fencei && !stall;
 
     // ================================================================
     //  Debug / Trace outputs

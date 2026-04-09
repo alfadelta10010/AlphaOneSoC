@@ -49,12 +49,12 @@ LINKER_SCRIPT="${PROJ_DIR}/tests/linker.ld" \
 # Step 2: Compile testbench
 echo ""
 echo "=== Compiling testbench ==="
-SRC_FILES=$(ls ${SRC_DIR}/adder.v ${SRC_DIR}/alu.v ${SRC_DIR}/and2.v \
+SRC_FILES=$(ls \
+    ${SRC_DIR}/alu.v \
     ${SRC_DIR}/branchCtrl.v ${SRC_DIR}/compressed_decoder.v \
     ${SRC_DIR}/clint.v \
     ${SRC_DIR}/controller.v ${SRC_DIR}/csr.v ${SRC_DIR}/decoder.v \
     ${SRC_DIR}/muldiv.v \
-    ${SRC_DIR}/mux21.v ${SRC_DIR}/mux31.v ${SRC_DIR}/or2.v \
     ${SRC_DIR}/pmp.v \
     ${SRC_DIR}/regFile.v ${SRC_DIR}/regs.v ${SRC_DIR}/signExt.v \
     ${SRC_DIR}/fyracore.v)

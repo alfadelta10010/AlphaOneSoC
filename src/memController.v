@@ -65,7 +65,9 @@ module memController #(
 
     // Memory ready signals — pipeline stalls when not ready
     output wire        imem_ready,    // Instruction fetch data is valid
-    output wire        dmem_ready     // Data access is complete
+    output wire        dmem_ready,    // Data access is complete
+    // FENCE.I flush — invalidates the instruction-fetch buffer in hardware mode
+    input  wire        fencei_flush   // 1-cycle pulse from CPU on FENCE.I
 );
 
     // Total unified memory size: 32 MB (Flash 16MB + RAM 16MB)
@@ -215,6 +217,11 @@ module memController #(
                     gpo_addr     <= 4'b0;
                 end else begin
                     gpo_we <= 1'b0;
+
+                    // FENCE.I: invalidate the buffered instruction word so the
+                    // next fetch goes back to QSPI rather than returning stale data.
+                    if (fencei_flush)
+                        ifetch_valid <= 1'b0;
 
                     case (state)
                         IDLE: begin
