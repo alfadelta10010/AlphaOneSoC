@@ -279,7 +279,7 @@ module fyracore(
                         (ifex_instr[24:20] == 5'b00000);
     wire ex_is_ebreak = ifex_valid && ctrl_isEcall && ex_system_fields_ok &&
                         (ifex_instr[24:20] == 5'b00001);
-    wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok;
+    wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok && priv_mode;
     wire ex_is_fencei = ifex_valid && ctrl_isFenceI;
 
     // WFI: funct7=0001000 (not isMret, not isEcall, not isFenceI) — NOP in M-mode,
@@ -540,11 +540,12 @@ module fyracore(
     );
 
     // ── Interrupt pending detection ──────────────────────────────────────────
-    // Per-source masking: each IRQ is qualified by its mie bit and global MIE.
-    // Priority (high → low): external(11) > software(3) > timer(7).
-    wire irq_external_pend = external_irq & csr_mie[11] & csr_mstatus_mie;
-    wire irq_sw_pend       = sw_irq       & csr_mie[3]  & csr_mstatus_mie;
-    wire irq_timer_pend    = timer_irq    & csr_mie[7]  & csr_mstatus_mie;
+    // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
+    // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
+    wire irq_global_en     = !priv_mode || csr_mstatus_mie;
+    wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
+    wire irq_sw_pend       = sw_irq       & csr_mie[3]  & irq_global_en;
+    wire irq_timer_pend    = timer_irq    & csr_mie[7]  & irq_global_en;
     wire any_irq_pend      = irq_external_pend | irq_sw_pend | irq_timer_pend;
 
     // Select highest-priority pending IRQ cause (bit 31 = interrupt flag per spec)
@@ -588,7 +589,9 @@ module fyracore(
     );
 
     // Data access: check ex_alu_result with R or W permission (EX stage, address ready).
-    wire [2:0] ex_pmp_access_type = ex_misalign_is_store ? 3'b010 : 3'b001;
+    wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b011 : // AMO: R+W
+                                     ex_misalign_is_store ? 3'b010 : // Store/SC: W
+                                     3'b001;                          // Load/LR: R
     pmp pmp_data(
         .pmpcfg0    (csr_pmpcfg0),
         .pmpaddr0   (csr_pmpaddr0),
@@ -622,8 +625,9 @@ module fyracore(
         csr_pmpcfg0[7]  ? csr_pmpcfg0[7:0]   : exwb_csr_wdata[7:0]
     };
     wire [31:0] csr_fwd_data =
-        (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} : // mepc: bit 0 always 0
-        (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :               // pmpcfg0: respect locks
+        (exwb_csr_addr == 12'h300) ? (exwb_csr_wdata & 32'h0000_1888) : // mstatus: writable mask
+        (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} :     // mepc: bit 0 always 0
+        (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :                   // pmpcfg0: respect locks
         exwb_csr_wdata;
     assign csr_rdata_eff = csr_fwd ? csr_fwd_data : csr_rdata;
 
@@ -731,9 +735,7 @@ module fyracore(
             // MRET (EX stage): restore from MPP (current mstatus[12:11] before CSR write clears it)
             // Otherwise: hold current privilege
             if (csr_trap_signal)
-                priv_mode <= 1'b1;                              // trap → M-mode
-            else if (irq_inject)
-                priv_mode <= 1'b1;                              // interrupt → M-mode
+                priv_mode <= 1'b1;                              // trap/interrupt → M-mode
             else if (ex_is_mret && !stall)
                 priv_mode <= (csr_mstatus_mpp == 2'b11);       // restore from MPP
 
