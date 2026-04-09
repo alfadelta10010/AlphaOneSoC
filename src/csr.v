@@ -22,6 +22,12 @@ module csr(
     // Status bits
     output wire        mstatus_mie,
     output wire [1:0]  mstatus_mpp, // MPP field [12:11] — used for MRET priv restore
+    // PMP CSR outputs (fed to pmp checker instances in fyracore)
+    output wire [31:0] pmpcfg0_out,
+    output wire [31:0] pmpaddr0_out,
+    output wire [31:0] pmpaddr1_out,
+    output wire [31:0] pmpaddr2_out,
+    output wire [31:0] pmpaddr3_out,
     // CSR address validity (for illegal instruction detection)
     output wire        csr_addr_valid  // 1 if raddr is a known/supported CSR
 );
@@ -48,6 +54,10 @@ module csr(
     reg [31:0] mip_reg;
     reg [31:0] mcounteren; // 0x306: controls U-mode counter access
 
+    // PMP registers
+    reg [31:0] pmpcfg0;                         // 0x3A0: 4 packed 8-bit config bytes
+    reg [31:0] pmpaddr0, pmpaddr1, pmpaddr2, pmpaddr3; // 0x3B0-0x3B3
+
     // Performance counters
     reg [63:0] mcycle;
     reg [63:0] minstret;
@@ -56,6 +66,11 @@ module csr(
     assign mepc_out     = mepc;
     assign mstatus_mie  = mstatus[3];      // MIE bit
     assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
+    assign pmpcfg0_out  = pmpcfg0;
+    assign pmpaddr0_out = pmpaddr0;
+    assign pmpaddr1_out = pmpaddr1;
+    assign pmpaddr2_out = pmpaddr2;
+    assign pmpaddr3_out = pmpaddr3;
 
     // Cycle counter always increments
     always @(posedge clk) begin
@@ -91,6 +106,12 @@ module csr(
             12'h304: rdata = mie_reg;
             12'h305: rdata = mtvec;
             12'h306: rdata = mcounteren;
+            // PMP configuration and addresses
+            12'h3A0: rdata = pmpcfg0;
+            12'h3B0: rdata = pmpaddr0;
+            12'h3B1: rdata = pmpaddr1;
+            12'h3B2: rdata = pmpaddr2;
+            12'h3B3: rdata = pmpaddr3;
             // Machine Trap Handling
             12'h340: rdata = mscratch;
             12'h341: rdata = mepc;
@@ -130,6 +151,11 @@ module csr(
             mie_reg      <= 32'b0;
             mip_reg      <= 32'b0;
             mcounteren   <= 32'b0;
+            pmpcfg0      <= 32'b0;
+            pmpaddr0     <= 32'b0;
+            pmpaddr1     <= 32'b0;
+            pmpaddr2     <= 32'b0;
+            pmpaddr3     <= 32'b0;
         end else if (trap) begin
             // Enter trap: always go to M-mode
             mepc     <= trap_pc;
@@ -157,6 +183,19 @@ module csr(
                 12'hB80: mcycle[63:32]   <= csr_new;
                 12'hB02: minstret[31:0]  <= csr_new;
                 12'hB82: minstret[63:32] <= csr_new;
+                // PMP: write only unlocked bytes/entries.
+                // pmpcfg0: each byte is independently locked by its own L bit.
+                12'h3A0: pmpcfg0 <= {
+                    pmpcfg0[31] ? pmpcfg0[31:24] : csr_new[31:24],
+                    pmpcfg0[23] ? pmpcfg0[23:16] : csr_new[23:16],
+                    pmpcfg0[15] ? pmpcfg0[15:8]  : csr_new[15:8],
+                    pmpcfg0[7]  ? pmpcfg0[7:0]   : csr_new[7:0]
+                };
+                // pmpaddr[i] is locked when pmpcfg0[i].L=1
+                12'h3B0: if (!pmpcfg0[7])  pmpaddr0 <= csr_new;
+                12'h3B1: if (!pmpcfg0[15]) pmpaddr1 <= csr_new;
+                12'h3B2: if (!pmpcfg0[23]) pmpaddr2 <= csr_new;
+                12'h3B3: if (!pmpcfg0[31]) pmpaddr3 <= csr_new;
                 default: ; // Ignore writes to read-only CSRs
             endcase
         end

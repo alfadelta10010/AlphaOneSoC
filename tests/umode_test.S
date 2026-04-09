@@ -27,6 +27,15 @@ _start:
     bne   s4, t0, fail_1
     bne   s3, s2, fail_1
 
+    # ===== Set up PMP before entering U-mode =====
+    # Entry 0: NAPOT covering full 4GB, RWX, unlocked.
+    # pmpaddr[29:0] = all-ones (0x1FFFFFFF) → size 2^32 (full space).
+    # pmpcfg byte 0: A=NAPOT(11), R=1, W=1, X=1, L=0 → 0x1F
+    li    t0, 0x1FFFFFFF
+    csrw  pmpaddr0, t0
+    li    t0, 0x1F
+    csrw  pmpcfg0, t0
+
     # ===== Switch to U-mode via MRET =====
     # Enable cycle counter for U-mode (mcounteren[0]=1); instret stays off (mcounteren[2]=0)
     addi  t0, zero, 1

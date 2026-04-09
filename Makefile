@@ -33,6 +33,7 @@ SRC_FILES  := $(SRC_DIR)/adder.v \
               $(SRC_DIR)/mux21.v \
               $(SRC_DIR)/mux31.v \
               $(SRC_DIR)/or2.v \
+              $(SRC_DIR)/pmp.v \
               $(SRC_DIR)/regFile.v \
               $(SRC_DIR)/regs.v \
               $(SRC_DIR)/signExt.v

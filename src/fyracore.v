@@ -97,8 +97,10 @@ module fyracore(
 
     // Forward declarations for wires assigned later in the CSR/WB section
     // (needed to break iverilog's forward-reference restriction)
-    wire [31:0] csr_rdata_eff; // driven by assign in CSR section
-    wire        csr_addr_valid; // driven by CSR unit output
+    wire [31:0] csr_rdata_eff;   // driven by assign in CSR section
+    wire        csr_addr_valid;  // driven by CSR unit output
+    wire        pmp_ifetch_allow; // driven by pmp_ifetch instance
+    wire        pmp_data_allow;   // driven by pmp_data instance
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -304,14 +306,21 @@ module fyracore(
                          (ex_misaligned_half || ex_misaligned_word);
     wire ex_misalign_is_store = ctrl_memWR || ctrl_isSC || ctrl_isAmo;
 
+    // PMP fault detection (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
+    wire ex_pmp_ifetch_fail = ifex_valid && !pmp_ifetch_allow;
+    // Data PMP: only when a memory op is present and it's not already misaligned
+    wire ex_pmp_data_fail   = ifex_valid && ex_mem_active && !ex_misaligned && !pmp_data_allow;
+
     // Trap detection
     wire ex_trap = ifex_valid && (
         ex_is_ecall || ex_is_ebreak ||
+        ex_pmp_ifetch_fail ||          // Instruction access fault (PMP)
         (ctrl_illegal && !ctrl_isFence) ||
         ifex_c_illegal ||              // Illegal compressed instruction from IF
         ex_bad_system ||               // Malformed SYSTEM encoding
         ex_csr_illegal ||              // Invalid/read-only CSR access
-        ex_misaligned                  // Misaligned memory access
+        ex_misaligned ||               // Misaligned memory access
+        ex_pmp_data_fail               // Load/store access fault (PMP)
     );
 
     // ================================================================
@@ -468,6 +477,7 @@ module fyracore(
     assign wb_rd    = exwb_rd;
 
     wire [1:0]  csr_mstatus_mpp;
+    wire [31:0] csr_pmpcfg0, csr_pmpaddr0, csr_pmpaddr1, csr_pmpaddr2, csr_pmpaddr3;
 
     // CSR unit
     wire        csr_trap_signal = exwb_valid && exwb_trap;
@@ -496,16 +506,66 @@ module fyracore(
         .instret_inc(exwb_valid && !exwb_trap && !wb_busy),
         .mstatus_mie(csr_mstatus_mie),
         .mstatus_mpp(csr_mstatus_mpp),
+        .pmpcfg0_out (csr_pmpcfg0),
+        .pmpaddr0_out(csr_pmpaddr0),
+        .pmpaddr1_out(csr_pmpaddr1),
+        .pmpaddr2_out(csr_pmpaddr2),
+        .pmpaddr3_out(csr_pmpaddr3),
         .csr_addr_valid(csr_addr_valid)
+    );
+
+    // ── PMP checks ───────────────────────────────────────────────────────────
+    // pmp_ifetch_allow and pmp_data_allow are forward-declared near top of EX stage.
+    // Instruction fetch: check ifex_pc with Execute permission (EX stage).
+    pmp pmp_ifetch(
+        .pmpcfg0    (csr_pmpcfg0),
+        .pmpaddr0   (csr_pmpaddr0),
+        .pmpaddr1   (csr_pmpaddr1),
+        .pmpaddr2   (csr_pmpaddr2),
+        .pmpaddr3   (csr_pmpaddr3),
+        .addr       (ifex_pc),
+        .access_type(3'b100),       // Execute
+        .priv_mode  (priv_mode),
+        .pmp_allow  (pmp_ifetch_allow)
+    );
+
+    // Data access: check ex_alu_result with R or W permission (EX stage, address ready).
+    wire [2:0] ex_pmp_access_type = ex_misalign_is_store ? 3'b010 : 3'b001;
+    pmp pmp_data(
+        .pmpcfg0    (csr_pmpcfg0),
+        .pmpaddr0   (csr_pmpaddr0),
+        .pmpaddr1   (csr_pmpaddr1),
+        .pmpaddr2   (csr_pmpaddr2),
+        .pmpaddr3   (csr_pmpaddr3),
+        .addr       (ex_alu_result),
+        .access_type(ex_pmp_access_type),
+        .priv_mode  (priv_mode),
+        .pmp_allow  (pmp_data_allow)
     );
 
     // CSR forwarding: when WB writes the same CSR that EX reads, forward the write value.
     // Apply the same per-CSR masking that csr.v applies on write, so the forwarded value
-    // matches what will actually be read back (e.g. mepc clears bit 0).
+    // matches what will actually be read back.
+    //
+    // PMP lock suppression: if the write targets a locked PMP address, csr.v silently
+    // discards it. Don't forward in that case — let EX read the register directly.
+    wire pmp_fwd_blocked =
+        (exwb_csr_addr == 12'h3B0 && csr_pmpcfg0[7])  ||
+        (exwb_csr_addr == 12'h3B1 && csr_pmpcfg0[15]) ||
+        (exwb_csr_addr == 12'h3B2 && csr_pmpcfg0[23]) ||
+        (exwb_csr_addr == 12'h3B3 && csr_pmpcfg0[31]);
     wire csr_fwd = exwb_valid && exwb_csrWR && !exwb_trap &&
-                   (exwb_csr_addr == ex_csr_addr);
+                   (exwb_csr_addr == ex_csr_addr) && !pmp_fwd_blocked;
+    // For pmpcfg0, locked bytes are preserved — forward the post-mask value.
+    wire [31:0] pmpcfg0_fwd_val = {
+        csr_pmpcfg0[31] ? csr_pmpcfg0[31:24] : exwb_csr_wdata[31:24],
+        csr_pmpcfg0[23] ? csr_pmpcfg0[23:16] : exwb_csr_wdata[23:16],
+        csr_pmpcfg0[15] ? csr_pmpcfg0[15:8]  : exwb_csr_wdata[15:8],
+        csr_pmpcfg0[7]  ? csr_pmpcfg0[7:0]   : exwb_csr_wdata[7:0]
+    };
     wire [31:0] csr_fwd_data =
         (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} : // mepc: bit 0 always 0
+        (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :               // pmpcfg0: respect locks
         exwb_csr_wdata;
     assign csr_rdata_eff = csr_fwd ? csr_fwd_data : csr_rdata;
 
@@ -664,8 +724,8 @@ module fyracore(
                 exwb_instr      <= ifex_instr;
                 exwb_trap_pc    <= ifex_pc;
 
-                // Trap cause and mtval assignment (priority: ecall > ebreak > misalign > illegal)
-                // mtval: faulting address for misalign, faulting encoding for illegal, 0 otherwise
+                // Trap cause and mtval assignment
+                // Priority: ecall > ebreak > ifetch-PMP > misalign > data-PMP > illegal
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
                     if (ex_is_ecall) begin
@@ -674,15 +734,24 @@ module fyracore(
                     end else if (ex_is_ebreak) begin
                         exwb_trap_cause <= 32'd3;  // Breakpoint
                         exwb_trap_val   <= 32'b0;
+                    end else if (ex_pmp_ifetch_fail) begin
+                        exwb_trap_cause <= 32'd1;  // Instruction access fault
+                        exwb_trap_val   <= ifex_pc; // faulting fetch address
                     end else if (ex_misaligned && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd4;  // Load address misaligned
-                        exwb_trap_val   <= ex_alu_result; // faulting load address
+                        exwb_trap_val   <= ex_alu_result;
                     end else if (ex_misaligned && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned
-                        exwb_trap_val   <= ex_alu_result; // faulting store address
+                        exwb_trap_val   <= ex_alu_result;
+                    end else if (ex_pmp_data_fail && !ex_misalign_is_store) begin
+                        exwb_trap_cause <= 32'd5;  // Load access fault
+                        exwb_trap_val   <= ex_alu_result;
+                    end else if (ex_pmp_data_fail && ex_misalign_is_store) begin
+                        exwb_trap_cause <= 32'd7;  // Store/AMO access fault
+                        exwb_trap_val   <= ex_alu_result;
                     end else begin
                         exwb_trap_cause <= 32'd2;  // Illegal instruction
-                        exwb_trap_val   <= ifex_instr; // faulting instruction encoding
+                        exwb_trap_val   <= ifex_instr;
                     end
                 end else begin
                     exwb_trap     <= 1'b0;
