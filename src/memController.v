@@ -67,7 +67,11 @@ module memController #(
     output wire        imem_ready,    // Instruction fetch data is valid
     output wire        dmem_ready,    // Data access is complete
     // FENCE.I flush — invalidates the instruction-fetch buffer in hardware mode
-    input  wire        fencei_flush   // 1-cycle pulse from CPU on FENCE.I
+    input  wire        fencei_flush,  // 1-cycle pulse from CPU on FENCE.I
+    // CLINT interrupt outputs (active in hardware mode; tied off in sim mode
+    // where CLINT lives in the testbench memory_model instead)
+    output wire        hw_timer_irq,
+    output wire        hw_sw_irq
 );
 
     // Total unified memory size: 32 MB (Flash 16MB + RAM 16MB)
@@ -155,6 +159,10 @@ module memController #(
                 qspi_wdata <= 32'b0;
             end
 
+            // CLINT lives in memory_model.v for simulation — tie off hw outputs
+            assign hw_timer_irq = 1'b0;
+            assign hw_sw_irq    = 1'b0;
+
         end
     endgenerate
 
@@ -187,6 +195,23 @@ module memController #(
             wire imem_cs = imem_addr[24];   // bit 24 set → RAM
             wire dmem_cs = dmem_addr[24];   // bit 24 set → RAM
 
+            // ── CLINT (on-chip, single-cycle) ─────────────────────────────
+            wire in_clint_range = (dmem_addr[31:16] == 16'h0200) &&
+                                  (dmem_addr[15:0] <= 16'hBFFF);
+            wire [31:0] clint_rdata;
+
+            clint clint_inst(
+                .clk      (clk),
+                .rst      (rst),
+                .addr     (dmem_addr[15:0]),
+                .wdata    (dmem_wdata),
+                .wmask    (dmem_wmask),
+                .we       (dmem_we && in_clint_range),
+                .rdata    (clint_rdata),
+                .timer_irq(hw_timer_irq),
+                .sw_irq   (hw_sw_irq)
+            );
+
             assign imem_rdata = ifetch_buf;
             assign imem_ready = ifetch_valid;
             assign dmem_ready = dread_valid || (state == IDLE && !dmem_we);
@@ -194,6 +219,8 @@ module memController #(
             always @(*) begin
                 if (dread_valid)
                     dmem_rdata = dread_buf;
+                else if (in_clint_range)
+                    dmem_rdata = clint_rdata;
                 else if (in_gpi_range)
                     dmem_rdata = gpi_data;
                 else
@@ -229,6 +256,9 @@ module memController #(
                                 gpo_data <= dmem_wdata;
                                 gpo_we   <= 1'b1;
                                 gpo_addr <= dmem_addr[3:0];
+                            end else if (in_clint_range) begin
+                                // CLINT reads/writes are single-cycle on-chip
+                                // (clint_inst.we is driven combinationally above)
                             end else if (dmem_we && in_mem_range) begin
                                 qspi_req   <= 1'b1;
                                 qspi_cs    <= dmem_cs;
