@@ -71,7 +71,9 @@ module memController #(
     // CLINT interrupt outputs (active in hardware mode; tied off in sim mode
     // where CLINT lives in the testbench memory_model instead)
     output wire        hw_timer_irq,
-    output wire        hw_sw_irq
+    output wire        hw_sw_irq,
+    // mtime value for CSR time/timeh reads
+    output wire [63:0] hw_mtime_out
 );
 
     // Total unified memory size: 32 MB (Flash 16MB + RAM 16MB)
@@ -162,6 +164,7 @@ module memController #(
             // CLINT lives in memory_model.v for simulation — tie off hw outputs
             assign hw_timer_irq = 1'b0;
             assign hw_sw_irq    = 1'b0;
+            assign hw_mtime_out = 64'b0;
 
         end
     endgenerate
@@ -209,7 +212,8 @@ module memController #(
                 .we       (dmem_we && in_clint_range),
                 .rdata    (clint_rdata),
                 .timer_irq(hw_timer_irq),
-                .sw_irq   (hw_sw_irq)
+                .sw_irq   (hw_sw_irq),
+                .mtime_out(hw_mtime_out)
             );
 
             assign imem_rdata = ifetch_buf;

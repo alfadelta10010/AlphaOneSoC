@@ -32,7 +32,9 @@ module memory_model #(
     output wire        dmem_ready,
     // Interrupt outputs (from embedded CLINT)
     output wire        timer_irq,
-    output wire        sw_irq
+    output wire        sw_irq,
+    // mtime value for CSR time/timeh reads
+    output wire [63:0] mtime_out
 );
     assign imem_ready = 1'b1;
     assign dmem_ready = 1'b1;
@@ -88,7 +90,8 @@ module memory_model #(
         .we       (dmem_we && in_clint),
         .rdata    (clint_rdata),
         .timer_irq(timer_irq),
-        .sw_irq   (sw_irq)
+        .sw_irq   (sw_irq),
+        .mtime_out(mtime_out)
     );
 
     // --- Data read mux: CLINT or SRAM ---

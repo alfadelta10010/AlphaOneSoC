@@ -29,6 +29,8 @@ module fyracore(
     input  wire        timer_irq,     // Machine timer interrupt (MTIP)
     input  wire        external_irq,  // Machine external interrupt (MEIP)
     input  wire        sw_irq,        // Machine software interrupt (MSIP)
+    // mtime value from CLINT (for CSR time/timeh reads)
+    input  wire [63:0] mtime_in,
     // FENCE.I flush signal — asserted for one cycle when FENCE.I executes.
     // In hardware mode the memory controller uses this to invalidate its
     // instruction-fetch buffer, forcing a fresh fetch after any stores to
@@ -550,7 +552,8 @@ module fyracore(
         .timer_irq   (timer_irq),
         .external_irq(external_irq),
         .sw_irq      (sw_irq),
-        .mie_out     (csr_mie)
+        .mie_out     (csr_mie),
+        .mtime_in    (mtime_in)
     );
 
     // ── Interrupt pending detection ──────────────────────────────────────────

@@ -35,7 +35,9 @@ module csr(
     input  wire        external_irq,    // MEIP: external interrupt pending
     input  wire        sw_irq,          // MSIP: software interrupt pending (from CLINT)
     // mie export — allows fyracore to gate irq_pending per-bit
-    output wire [31:0] mie_out
+    output wire [31:0] mie_out,
+    // mtime value from CLINT (for time/timeh CSR reads)
+    input  wire [63:0] mtime_in
 );
     // ===== CSR Registers =====
     // Machine Information
@@ -155,6 +157,8 @@ module csr(
             // M-mode (priv_mode=1) always succeeds; U-mode needs the corresponding bit set.
             12'hC00: begin rdata = mcycle[31:0];    if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
             12'hC80: begin rdata = mcycle[63:32];   if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
+            12'hC01: begin rdata = mtime_in[31:0];   if (!priv_mode && !mcounteren[1]) addr_valid = 1'b0; end
+            12'hC81: begin rdata = mtime_in[63:32];  if (!priv_mode && !mcounteren[1]) addr_valid = 1'b0; end
             12'hC02: begin rdata = minstret[31:0];  if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
             12'hC82: begin rdata = minstret[63:32]; if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
             // Unimplemented PMP registers — hardwired to zero (WARL)

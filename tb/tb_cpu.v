@@ -21,6 +21,7 @@ module tb_cpu;
 
     // Interrupt signals from CLINT
     wire        timer_irq, sw_irq;
+    wire [63:0] mtime_val;
 
     // Parameters
     parameter MEM_SIZE   = 33554432;  // 32 MB — 16 MB Flash (0x0000_0000) + 16 MB RAM (0x0100_0000)
@@ -51,6 +52,7 @@ module tb_cpu;
         .timer_irq    (timer_irq),
         .external_irq (1'b0),      // no external IRQ controller in simulation
         .sw_irq       (sw_irq),
+        .mtime_in     (mtime_val),
         .fencei_flush (fencei_flush),
         .dbg_pc       (dbg_pc),
         .dbg_retired (dbg_retired),
@@ -75,7 +77,8 @@ module tb_cpu;
         .imem_ready(imem_ready),
         .dmem_ready(dmem_ready),
         .timer_irq (timer_irq),
-        .sw_irq    (sw_irq)
+        .sw_irq    (sw_irq),
+        .mtime_out (mtime_val)
     );
 
     // Clock generation: 10ns period

@@ -27,7 +27,9 @@ module clint(
     output reg  [31:0] rdata,
     // Interrupt outputs
     output wire        timer_irq,
-    output wire        sw_irq
+    output wire        sw_irq,
+    // mtime value for CSR time/timeh reads
+    output wire [63:0] mtime_out
 );
     reg msip;  // only bit 0 is architecturally defined
     reg [63:0] mtimecmp;
@@ -65,6 +67,7 @@ module clint(
 
     assign timer_irq = (mtime >= mtimecmp);
     assign sw_irq    = msip;
+    assign mtime_out = mtime;
 
     // CSR Read (combinational)
     always @(*) begin
