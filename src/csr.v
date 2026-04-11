@@ -94,6 +94,11 @@ module csr(
                            (timer_irq    ? 32'h0000_0080 : 32'b0) |  // MTIP bit 7
                            (external_irq ? 32'h0000_0800 : 32'b0);   // MEIP bit 11
 
+    // CSR write-value computation (declared early for counter blocks)
+    // NOTE: rdata is from the combinational read block below (uses raddr, not waddr).
+    // In practice, the pipeline always sends op=01 (CSRRW) so csr_new = wdata.
+    wire [31:0] csr_new;
+
     // Cycle counter: merged auto-increment + CSR write (write takes priority)
     always @(posedge clk) begin
         if (rst)
@@ -173,10 +178,10 @@ module csr(
     assign csr_addr_valid = addr_valid;
 
     // CSR Write
-    wire [31:0] csr_new = (op == 2'b01) ? wdata :           // CSRRW
-                          (op == 2'b10) ? (rdata | wdata) :  // CSRRS
-                          (op == 2'b11) ? (rdata & ~wdata) : // CSRRC
-                          rdata;
+    assign csr_new = (op == 2'b01) ? wdata :           // CSRRW
+                     (op == 2'b10) ? (rdata | wdata) :  // CSRRS
+                     (op == 2'b11) ? (rdata & ~wdata) : // CSRRC
+                     rdata;
 
     always @(posedge clk) begin
         if (rst) begin
