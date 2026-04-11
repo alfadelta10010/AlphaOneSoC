@@ -92,18 +92,26 @@ module csr(
                            (timer_irq    ? 32'h0000_0080 : 32'b0) |  // MTIP bit 7
                            (external_irq ? 32'h0000_0800 : 32'b0);   // MEIP bit 11
 
-    // Cycle counter always increments
+    // Cycle counter: merged auto-increment + CSR write (write takes priority)
     always @(posedge clk) begin
         if (rst)
             mcycle <= 64'b0;
+        else if (we && op != 2'b00 && waddr == 12'hB00)
+            mcycle <= {mcycle[63:32], csr_new};
+        else if (we && op != 2'b00 && waddr == 12'hB80)
+            mcycle <= {csr_new, mcycle[31:0]};
         else
             mcycle <= mcycle + 1;
     end
 
-    // Instruction retired counter
+    // Instruction retired counter: merged auto-increment + CSR write
     always @(posedge clk) begin
         if (rst)
             minstret <= 64'b0;
+        else if (we && op != 2'b00 && waddr == 12'hB02)
+            minstret <= {minstret[63:32], csr_new};
+        else if (we && op != 2'b00 && waddr == 12'hB82)
+            minstret <= {csr_new, minstret[31:0]};
         else if (instret_inc)
             minstret <= minstret + 1;
     end
@@ -203,11 +211,11 @@ module csr(
                 12'h342: mcause   <= csr_new;
                 12'h343: mtval    <= csr_new;
                 12'h344: mip_reg  <= csr_new & ~32'h0000_0888;
-                // Counters writable
-                12'hB00: mcycle[31:0]    <= csr_new;
-                12'hB80: mcycle[63:32]   <= csr_new;
-                12'hB02: minstret[31:0]  <= csr_new;
-                12'hB82: minstret[63:32] <= csr_new;
+                // Counters: writes handled in dedicated always blocks above
+                12'hB00: ;
+                12'hB80: ;
+                12'hB02: ;
+                12'hB82: ;
                 // PMP: write only unlocked bytes/entries.
                 // pmpcfg0: each byte is independently locked by its own L bit.
                 12'h3A0: pmpcfg0 <= {
