@@ -19,9 +19,12 @@ module tb_csr;
         .op(op), .we(we), .rdata(rdata),
         .trap(trap), .mret(mret_sig), .trap_pc(trap_pc),
         .trap_cause(trap_cause), .trap_val(trap_val),
+        .priv_mode(1'b1),  // M-mode for unit tests
         .mtvec_out(mtvec_out), .mepc_out(mepc_out),
         .instret_inc(instret_inc), .mstatus_mie(mstatus_mie),
-        .csr_addr_valid(csr_addr_valid)
+        .csr_addr_valid(csr_addr_valid),
+        .timer_irq(1'b0), .external_irq(1'b0), .sw_irq(1'b0),
+        .mtime_in(64'h0000_0000_0000_0100)  // Fixed test value for time/timeh reads
     );
 
     initial clk = 0;

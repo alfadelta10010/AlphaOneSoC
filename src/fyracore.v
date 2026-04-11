@@ -667,7 +667,7 @@ module fyracore(
     // because the WB write hasn't committed when EX computes next_pc.
     wire mtvec_fwd = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h305);
     wire mepc_fwd  = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h341);
-    wire [31:0] trap_target = mtvec_fwd ? exwb_csr_wdata : csr_mtvec;
+    wire [31:0] trap_target = mtvec_fwd ? {exwb_csr_wdata[31:2], 2'b00} : csr_mtvec;
     wire [31:0] mret_target = mepc_fwd  ? {exwb_csr_wdata[31:1], 1'b0} : csr_mepc;
 
     reg [31:0] next_pc;
