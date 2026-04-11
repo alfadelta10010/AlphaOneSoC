@@ -798,7 +798,7 @@ module fyracore(
                 exwb_memUnsigned<= ctrl_memUnsigned;
                 exwb_wbSel      <= ctrl_wbSel;
                 exwb_valid      <= ifex_valid;
-                exwb_csrWR      <= (ctrl_csrOp != 2'b00);
+                exwb_csrWR      <= ex_csr_writes; // No write for CSRRS/CSRRC when rs1=0
                 exwb_csr_addr   <= ex_csr_addr;
                 exwb_csr_wdata  <= ex_csr_wdata;
                 exwb_csr_rdata  <= csr_rdata_eff;
