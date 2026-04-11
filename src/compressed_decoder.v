@@ -165,24 +165,30 @@ module compressed_decoder(
                     3'b100: begin // ALU operations
                         case (instr_in[11:10])
                             2'b00: begin // C.SRLI
-                                instr_out = {
-                                    7'b0000000,
-                                    instr_in[6:2],  // shamt
-                                    rs1_p,
-                                    3'b101,         // SRLI
-                                    rs1_p,          // rd = rs1'
-                                    7'b0010011
-                                };
+                                if (instr_in[12]) // shamt[5] must be 0 on RV32
+                                    illegal = 1'b1;
+                                else
+                                    instr_out = {
+                                        7'b0000000,
+                                        instr_in[6:2],  // shamt
+                                        rs1_p,
+                                        3'b101,         // SRLI
+                                        rs1_p,          // rd = rs1'
+                                        7'b0010011
+                                    };
                             end
                             2'b01: begin // C.SRAI
-                                instr_out = {
-                                    7'b0100000,
-                                    instr_in[6:2],  // shamt
-                                    rs1_p,
-                                    3'b101,         // SRAI
-                                    rs1_p,
-                                    7'b0010011
-                                };
+                                if (instr_in[12]) // shamt[5] must be 0 on RV32
+                                    illegal = 1'b1;
+                                else
+                                    instr_out = {
+                                        7'b0100000,
+                                        instr_in[6:2],  // shamt
+                                        rs1_p,
+                                        3'b101,         // SRAI
+                                        rs1_p,
+                                        7'b0010011
+                                    };
                             end
                             2'b10: begin // C.ANDI
                                 instr_out = {
@@ -268,14 +274,17 @@ module compressed_decoder(
             2'b10: begin
                 case (instr_in[15:13])
                     3'b000: begin // C.SLLI
-                        instr_out = {
-                            7'b0000000,
-                            instr_in[6:2],   // shamt
-                            rd_full,          // rs1 = rd
-                            3'b001,           // SLLI
-                            rd_full,          // rd
-                            7'b0010011
-                        };
+                        if (instr_in[12]) // shamt[5] must be 0 on RV32
+                            illegal = 1'b1;
+                        else
+                            instr_out = {
+                                7'b0000000,
+                                instr_in[6:2],   // shamt
+                                rd_full,          // rs1 = rd
+                                3'b001,           // SLLI
+                                rd_full,          // rd
+                                7'b0010011
+                            };
                     end
 
                     3'b010: begin // C.LWSP
