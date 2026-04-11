@@ -813,15 +813,15 @@ module fyracore(
                 // Priority: synchronous trap > async interrupt injection
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
-                    if (ex_is_ecall) begin
+                    if (ex_pmp_ifetch_fail) begin
+                        exwb_trap_cause <= 32'd1;  // Instruction access fault (highest priority)
+                        exwb_trap_val   <= ifex_pc; // faulting fetch address
+                    end else if (ex_is_ecall) begin
                         exwb_trap_cause <= priv_mode ? 32'd11 : 32'd8; // M-mode=11, U-mode=8
                         exwb_trap_val   <= 32'b0;
                     end else if (ex_is_ebreak) begin
                         exwb_trap_cause <= 32'd3;  // Breakpoint
                         exwb_trap_val   <= 32'b0;
-                    end else if (ex_pmp_ifetch_fail) begin
-                        exwb_trap_cause <= 32'd1;  // Instruction access fault
-                        exwb_trap_val   <= ifex_pc; // faulting fetch address
                     end else if (ex_misaligned && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd4;  // Load address misaligned
                         exwb_trap_val   <= ex_alu_result;
