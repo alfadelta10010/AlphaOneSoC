@@ -206,8 +206,10 @@ module controller(
                         // All other funct7 values are reserved → illegal.
                         // Full rd/rs1/rs2 validation is done in the pipeline where those fields
                         // are available.
-                        if (funct7 == 7'b0000000)
-                            isEcall = 1'b1;
+                        if (funct7 == 7'b0000000) begin
+                            isEcall  = 1'b1;
+                            isEbreak = 1'b1; // Both set; pipeline disambiguates via rs2 field
+                        end
                         else if (funct7 == 7'b0011000)
                             isMret = 1'b1;
                         else if (funct7 == 7'b0001000)

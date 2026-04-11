@@ -279,7 +279,7 @@ module fyracore(
     wire ex_system_fields_ok = (ex_rd == 5'b0) && (ex_rs1 == 5'b0);
     wire ex_is_ecall  = ifex_valid && ctrl_isEcall && ex_system_fields_ok &&
                         (ifex_instr[24:20] == 5'b00000);
-    wire ex_is_ebreak = ifex_valid && ctrl_isEcall && ex_system_fields_ok &&
+    wire ex_is_ebreak = ifex_valid && ctrl_isEbreak && ex_system_fields_ok &&
                         (ifex_instr[24:20] == 5'b00001);
     wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok && priv_mode;
     wire ex_is_fencei = ifex_valid && ctrl_isFenceI;
@@ -305,7 +305,7 @@ module fyracore(
 
     // Bad SYSTEM encoding: controller recognized the funct7 family but the full
     // encoding doesn't match any valid instruction (wrong rd/rs1/rs2 fields)
-    wire ex_bad_system = ifex_valid && (ctrl_isEcall || ctrl_isMret) &&
+    wire ex_bad_system = ifex_valid && (ctrl_isEcall || ctrl_isEbreak || ctrl_isMret) &&
                          !(ex_is_ecall || ex_is_ebreak || ex_is_mret);
 
     // CSR access validation (Zicsr spec):
