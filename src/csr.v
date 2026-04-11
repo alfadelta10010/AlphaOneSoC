@@ -204,7 +204,7 @@ module csr(
             case (waddr)
                 12'h300: mstatus  <= csr_new & 32'h0000_1888; // Writable bits mask
                 12'h304: mie_reg    <= csr_new & 32'h0000_0888;
-                12'h305: mtvec      <= csr_new;
+                12'h305: mtvec      <= {csr_new[31:2], 2'b00}; // Force direct mode (WARL)
                 12'h306: mcounteren <= csr_new & 32'h0000_0007;
                 12'h340: mscratch <= csr_new;
                 12'h341: mepc     <= {csr_new[31:1], 1'b0}; // Bit 0 always 0
