@@ -559,7 +559,12 @@ module fyracore(
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    wire irq_global_en     = !priv_mode || csr_mstatus_mie;
+    // Forward mstatus.MIE from WB to avoid 1-cycle window where an interrupt
+    // slips in after csrci mstatus,8 (MIE 1→0) but before the write commits.
+    wire mstatus_mie_eff = (exwb_valid && exwb_csrWR && !exwb_trap && exwb_csr_addr == 12'h300)
+        ? (exwb_csr_wdata[3] != 1'b0)  // forwarded MIE bit
+        : csr_mstatus_mie;
+    wire irq_global_en     = !priv_mode || mstatus_mie_eff;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
     wire irq_sw_pend       = sw_irq       & csr_mie[3]  & irq_global_en;
     wire irq_timer_pend    = timer_irq    & csr_mie[7]  & irq_global_en;
