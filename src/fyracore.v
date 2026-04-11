@@ -285,9 +285,21 @@ module fyracore(
     // WFI: funct7=0001000 (not isMret, not isEcall, not isFenceI) — NOP in M-mode,
     // but with interrupt support we stall until an interrupt fires.
     // Encoding: opcode=1110011, funct3=000, funct7=0001000 (rs2=00101).
+    // U-mode WFI traps as illegal instruction (spec Section 3.3.3).
     wire ex_is_wfi = ifex_valid && (ifex_instr[31:20] == 12'b000100000101) &&
                      (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
-                     (ex_rd == 5'b0) && (ex_rs1 == 5'b0);
+                     (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && priv_mode;
+
+    // U-mode WFI: trap as illegal instruction
+    wire ex_wfi_umode = ifex_valid && (ifex_instr[31:20] == 12'b000100000101) &&
+                        (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
+                        (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && !priv_mode;
+
+    // WFI with invalid rd/rs1 fields: trap as illegal instruction
+    wire ex_bad_wfi = ifex_valid && (ifex_instr[31:25] == 7'b0001000) &&
+                      (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
+                      (ifex_instr[24:20] == 5'b00101) &&
+                      !(ex_rd == 5'b0 && ex_rs1 == 5'b0);
 
     // Bad SYSTEM encoding: controller recognized the funct7 family but the full
     // encoding doesn't match any valid instruction (wrong rd/rs1/rs2 fields)
@@ -337,6 +349,8 @@ module fyracore(
         (ctrl_illegal && !ctrl_isFence) ||
         ifex_c_illegal ||              // Illegal compressed instruction from IF
         ex_bad_system ||               // Malformed SYSTEM encoding
+        ex_wfi_umode ||                // WFI from U-mode (illegal)
+        ex_bad_wfi ||                  // WFI with bad rd/rs1 fields
         ex_csr_illegal ||              // Invalid/read-only CSR access
         ex_misaligned ||               // Misaligned memory access
         ex_pmp_data_fail               // Load/store access fault (PMP)
