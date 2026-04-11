@@ -190,6 +190,8 @@ module memController #(
 
             reg [2:0] state;
             reg [31:0] ifetch_buf;
+            reg [31:0] ifetch_addr;     // Address tag for completed ifetch
+            reg [31:0] ifetch_req_addr; // Address of in-flight ifetch request
             reg [31:0] dread_buf;
             reg ifetch_valid;
             reg dread_valid;
@@ -217,7 +219,9 @@ module memController #(
             );
 
             assign imem_rdata = ifetch_buf;
-            assign imem_ready = ifetch_valid;
+            // Only report ready when buffered address matches requested address
+            wire ifetch_hit = ifetch_valid && (ifetch_addr == imem_addr);
+            assign imem_ready = ifetch_hit;
             assign dmem_ready = dread_valid || (state == IDLE && !dmem_we);
 
             always @(*) begin
@@ -235,6 +239,8 @@ module memController #(
                 if (rst) begin
                     state        <= IDLE;
                     ifetch_buf   <= 32'b0;
+                    ifetch_addr  <= 32'hFFFF_FFFF; // Invalid address
+                    ifetch_req_addr <= 32'hFFFF_FFFF;
                     dread_buf    <= 32'b0;
                     ifetch_valid <= 1'b0;
                     dread_valid  <= 1'b0;
@@ -278,12 +284,13 @@ module memController #(
                                 dread_valid <= 1'b0;
                                 state       <= DREAD;
                             end else begin
-                                qspi_req     <= 1'b1;
-                                qspi_cs      <= imem_cs;
-                                qspi_wr      <= 1'b0;
-                                qspi_addr    <= imem_addr[23:0];
-                                ifetch_valid <= 1'b0;
-                                state        <= IFETCH;
+                                qspi_req        <= 1'b1;
+                                qspi_cs         <= imem_cs;
+                                qspi_wr         <= 1'b0;
+                                qspi_addr       <= imem_addr[23:0];
+                                ifetch_req_addr <= imem_addr; // Capture requested address
+                                ifetch_valid    <= 1'b0;
+                                state           <= IFETCH;
                             end
                         end
 
@@ -296,6 +303,7 @@ module memController #(
 
                         IFETCH_W: begin
                             ifetch_buf   <= qspi_rdata;
+                            ifetch_addr  <= ifetch_req_addr; // Tag buffer with its address
                             ifetch_valid <= 1'b1;
                             state        <= IDLE;
                         end
