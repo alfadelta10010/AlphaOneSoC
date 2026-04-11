@@ -128,6 +128,7 @@ module csr(
             12'hF12: rdata = MARCHID;
             12'hF13: rdata = MIMPID;
             12'hF14: rdata = MHARTID;
+            12'hF15: rdata = 32'b0;  // mconfigptr: no config data structure
             // Machine ISA (read-only for us, WARL — writes allowed but ignored)
             12'h301: rdata = MISA;
             // Machine Status
