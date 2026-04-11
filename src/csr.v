@@ -222,12 +222,17 @@ module csr(
                 12'hB82: ;
                 // PMP: write only unlocked bytes/entries.
                 // pmpcfg0: each byte is independently locked by its own L bit.
-                12'h3A0: pmpcfg0 <= {
-                    pmpcfg0[31] ? pmpcfg0[31:24] : csr_new[31:24],
-                    pmpcfg0[23] ? pmpcfg0[23:16] : csr_new[23:16],
-                    pmpcfg0[15] ? pmpcfg0[15:8]  : csr_new[15:8],
-                    pmpcfg0[7]  ? pmpcfg0[7:0]   : csr_new[7:0]
-                };
+                // WARL: A=2'b10 is reserved — mask to 2'b00 (OFF).
+                12'h3A0: begin
+                    pmpcfg0[7:0]   <= pmpcfg0[7]  ? pmpcfg0[7:0]   :
+                        {csr_new[7:5], (csr_new[4:3] == 2'b10 ? 2'b00 : csr_new[4:3]), csr_new[2:0]};
+                    pmpcfg0[15:8]  <= pmpcfg0[15] ? pmpcfg0[15:8]  :
+                        {csr_new[15:13], (csr_new[12:11] == 2'b10 ? 2'b00 : csr_new[12:11]), csr_new[10:8]};
+                    pmpcfg0[23:16] <= pmpcfg0[23] ? pmpcfg0[23:16] :
+                        {csr_new[23:21], (csr_new[20:19] == 2'b10 ? 2'b00 : csr_new[20:19]), csr_new[18:16]};
+                    pmpcfg0[31:24] <= pmpcfg0[31] ? pmpcfg0[31:24] :
+                        {csr_new[31:29], (csr_new[28:27] == 2'b10 ? 2'b00 : csr_new[28:27]), csr_new[26:24]};
+                end
                 // pmpaddr[i] locked by own L bit or by entry i+1 if TOR+locked
                 12'h3B0: if (!tor_lock_addr0) pmpaddr0 <= csr_new;
                 12'h3B1: if (!tor_lock_addr1) pmpaddr1 <= csr_new;

@@ -636,16 +636,21 @@ module fyracore(
     wire csr_fwd = exwb_valid && exwb_csrWR && !exwb_trap &&
                    (exwb_csr_addr == ex_csr_addr) && !pmp_fwd_blocked;
     // For pmpcfg0, locked bytes are preserved — forward the post-mask value.
-    wire [31:0] pmpcfg0_fwd_val = {
-        csr_pmpcfg0[31] ? csr_pmpcfg0[31:24] : exwb_csr_wdata[31:24],
-        csr_pmpcfg0[23] ? csr_pmpcfg0[23:16] : exwb_csr_wdata[23:16],
-        csr_pmpcfg0[15] ? csr_pmpcfg0[15:8]  : exwb_csr_wdata[15:8],
-        csr_pmpcfg0[7]  ? csr_pmpcfg0[7:0]   : exwb_csr_wdata[7:0]
-    };
+    // Also mask reserved A=2'b10 to 2'b00 (WARL) to match csr.v write behavior.
+    wire [7:0] pmp_fwd_byte0 = csr_pmpcfg0[7]  ? csr_pmpcfg0[7:0]   :
+        {exwb_csr_wdata[7:5],  (exwb_csr_wdata[4:3]   == 2'b10 ? 2'b00 : exwb_csr_wdata[4:3]),   exwb_csr_wdata[2:0]};
+    wire [7:0] pmp_fwd_byte1 = csr_pmpcfg0[15] ? csr_pmpcfg0[15:8]  :
+        {exwb_csr_wdata[15:13],(exwb_csr_wdata[12:11]  == 2'b10 ? 2'b00 : exwb_csr_wdata[12:11]), exwb_csr_wdata[10:8]};
+    wire [7:0] pmp_fwd_byte2 = csr_pmpcfg0[23] ? csr_pmpcfg0[23:16] :
+        {exwb_csr_wdata[23:21],(exwb_csr_wdata[20:19]  == 2'b10 ? 2'b00 : exwb_csr_wdata[20:19]), exwb_csr_wdata[18:16]};
+    wire [7:0] pmp_fwd_byte3 = csr_pmpcfg0[31] ? csr_pmpcfg0[31:24] :
+        {exwb_csr_wdata[31:29],(exwb_csr_wdata[28:27]  == 2'b10 ? 2'b00 : exwb_csr_wdata[28:27]), exwb_csr_wdata[26:24]};
+    wire [31:0] pmpcfg0_fwd_val = {pmp_fwd_byte3, pmp_fwd_byte2, pmp_fwd_byte1, pmp_fwd_byte0};
     wire [31:0] csr_fwd_data =
         (exwb_csr_addr == 12'h300) ? (exwb_csr_wdata & 32'h0000_1888) : // mstatus: writable mask
+        (exwb_csr_addr == 12'h305) ? {exwb_csr_wdata[31:2], 2'b00} :    // mtvec: force direct mode
         (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} :     // mepc: bit 0 always 0
-        (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :                   // pmpcfg0: respect locks
+        (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :                   // pmpcfg0: respect locks + A mask
         exwb_csr_wdata;
     assign csr_rdata_eff = csr_fwd ? csr_fwd_data : csr_rdata;
 
