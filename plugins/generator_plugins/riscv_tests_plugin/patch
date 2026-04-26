@@ -23,18 +23,18 @@ index 13d46a3..04e1fc6 100644
 --- a/v/entry.S
 +++ b/v/entry.S
 @@ -25,7 +25,13 @@ nmi_vector:
- 
+
    .align 2
  trap_vector:
 -  j wtf
-+  csrr t5, mcause                                                                                  
-+  li t6, CAUSE_SUPERVISOR_ECALL                                                                    
-+  bne t5, t6, wtf                                                                                  
-+write_tohost:                                                                                      
-+  sw TESTNUM, tohost, t5                                                                           
-+  fence.i;                                                        
++  csrr t5, mcause
++  li t6, CAUSE_SUPERVISOR_ECALL
++  bne t5, t6, wtf
++write_tohost:
++  sw TESTNUM, tohost, t5
++  fence.i;
 +  me1: beqz x0, me1;
- 
+
  handle_reset:
    li x1, 0
 diff --git a/v/riscv_test.h b/v/riscv_test.h
@@ -44,7 +44,7 @@ index e39123c..261a33b 100644
 @@ -52,8 +52,15 @@ userstart:                                                              \
  // Data Section Macro
  //-----------------------------------------------------------------------
- 
+
 -#undef RVTEST_DATA_END
 -#define RVTEST_DATA_END
 +#define RVTEST_DATA_BEGIN                                               \
@@ -56,7 +56,7 @@ index e39123c..261a33b 100644
 +        .align 4; .global begin_signature; begin_signature:
 +
 +#define RVTEST_DATA_END .align 4; .global end_signature; end_signature:
- 
+
  //-----------------------------------------------------------------------
  // Supervisor mode definitions and macros
 diff --git a/v/vm.c b/v/vm.c
@@ -69,7 +69,7 @@ index 178d90b..7713549 100644
    tohost = tohost_value;
 +  asm volatile ("fence.i;");
  }
- 
+
  #define pa2kva(pa) ((void*)(pa) - DRAM_BASE - MEGAPAGE_SIZE)
 @@ -52,6 +53,7 @@ static void cputstring(const char* s)
  static void terminate(int code)
@@ -78,7 +78,7 @@ index 178d90b..7713549 100644
 +  asm volatile ("scall\n\t");
    while (1);
  }
- 
+
 @@ -277,14 +279,6 @@ void vm_boot(uintptr_t test_addr)
    // Set up PMPs if present, ignoring illegal instruction trap if not.
    uintptr_t pmpc = PMP_NAPOT | PMP_R | PMP_W | PMP_X;
