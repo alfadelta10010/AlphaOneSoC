@@ -37,7 +37,8 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv asm
+        test-regfile test-csr test-compressed test-muldiv asm \
+        rivercore-build rivercore-test
 
 all: test-all
 
@@ -60,6 +61,11 @@ help:
 	@echo "  make test-cpu          Compile full CPU (syntax check)"
 	@echo "  make asm FILE=test.S   Assemble and run any .S file"
 	@echo "  make benchmarks        Run all test programs"
+	@echo ""
+	@echo ""
+	@echo "River Core integration:"
+	@echo "  make rivercore-build          Build river_core testbench"
+	@echo "  make rivercore-test HEX=f.hex Run test with river_core dump"
 	@echo ""
 	@echo "  make test-all          Run everything"
 	@echo "  make clean             Remove build artifacts"
@@ -150,6 +156,35 @@ endif
 
 benchmarks: $(BUILD_DIR)
 	@bash $(SCRIPTS_DIR)/run_benchmarks.sh
+
+# ============================================================
+#  River Core compatible testbench
+# ============================================================
+# Build the river_core testbench simulator binary (reusable across tests)
+#   make rivercore-build
+# Run a hex file through the river_core testbench:
+#   make rivercore-test HEX=tests/rv32i_basic.hex
+#   make rivercore-test HEX=tests/rv32i_basic.hex DUMP=output.dump CYCLES=500000
+
+rivercore-build: $(BUILD_DIR)
+	@echo "=== Building river_core testbench ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/sim_rivercore \
+		-s tb_rivercore \
+		$(SRC_FILES) $(TB_DIR)/memory_model.v $(TB_DIR)/tb_rivercore.v
+	@echo "River Core testbench built: $(BUILD_DIR)/sim_rivercore"
+
+rivercore-test: $(BUILD_DIR) rivercore-build
+ifndef HEX
+	@echo "Usage: make rivercore-test HEX=<path/to/program.hex>"
+	@echo "  Options: DUMP=<output.dump> CYCLES=<N> TOHOST=<hex_addr> START_PC=<hex>"
+	@exit 1
+endif
+	@$(VVP) $(BUILD_DIR)/sim_rivercore \
+		+INIT_FILE=$(abspath $(HEX)) \
+		+DUMP_FILE=$(or $(DUMP),execution.dump) \
+		$(if $(CYCLES),+MAX_CYCLES=$(CYCLES)) \
+		$(if $(TOHOST),+TOHOST_ADDR=$(TOHOST)) \
+		$(if $(START_PC),+START_PC=$(START_PC))
 
 # ============================================================
 #  Full test suite
