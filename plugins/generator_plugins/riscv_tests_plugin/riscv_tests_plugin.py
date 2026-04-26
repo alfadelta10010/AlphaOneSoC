@@ -100,7 +100,10 @@ class riscv_tests_plugin(object):
                 (xlen,mode,isa) = re.findall(r'rv(?P<xlen>64|32)(?P<mode>m|u|s)(?P<name>.*)$',mydir)[0]
                 isa = isa.capitalize()
                 mode = mode.capitalize()
-                if int(xlen,0) == self.xlen and isa in self.ext_list and (mode == 'M' or mode in self.ext_list):
+                # p-mode tests boot in M-mode regardless of U/S support, so always
+                # accept 'u' dirs; 'm' always; 's' only when S is in ext_list.
+                # v-mode variant gating happens later via Makefrag + S check.
+                if int(xlen,0) == self.xlen and isa in self.ext_list and (mode in ('M', 'U') or mode in self.ext_list):
                     isas.append(mydir)
 
         logger.debug(f'found : {isas}')
