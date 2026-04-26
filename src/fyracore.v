@@ -11,7 +11,9 @@
 //   - Branch/jump flush (1 cycle penalty)
 //   - AMO: 2-cycle WB (stall pipeline)
 
-module fyracore(
+module fyracore #(
+    parameter [31:0] RESET_PC = 32'h0000_0000
+)(
     input  wire        clk,
     input  wire        rst,
     // Instruction memory interface (read-only, combinational)
@@ -40,6 +42,7 @@ module fyracore(
     output wire [31:0] dbg_pc,
     output wire        dbg_retired,
     output wire [31:0] dbg_instr,
+    output wire        dbg_compressed,
     output wire        dbg_trap
 );
 
@@ -72,6 +75,8 @@ module fyracore(
     // ================================================================
     reg [31:0] ifex_pc;
     reg [31:0] ifex_instr;
+    reg [31:0] ifex_raw_instr;  // Original fetched bytes (16-bit if compressed)
+    reg        ifex_compressed;
     reg [31:0] ifex_pc_next;
     reg        ifex_valid;
     reg        ifex_c_illegal;  // Compressed decoder flagged illegal encoding
@@ -107,6 +112,8 @@ module fyracore(
     reg [31:0] exwb_trap_pc;
     reg [31:0] exwb_trap_val;   // mtval: faulting addr (misalign) or instr (illegal), else 0
     reg [31:0] exwb_instr;
+    reg [31:0] exwb_raw_instr;  // Original fetched bytes for trace dump
+    reg        exwb_compressed;
 
     // Forward declarations for wires assigned later in the CSR/WB section
     // (needed to break iverilog's forward-reference restriction)
@@ -700,21 +707,24 @@ module fyracore(
     // ================================================================
     //  Debug / Trace outputs
     // ================================================================
-    assign dbg_pc      = exwb_valid ? exwb_trap_pc : 32'b0;
-    assign dbg_retired = exwb_valid && !wb_busy && !exwb_trap;
-    assign dbg_instr   = exwb_instr;
-    assign dbg_trap    = exwb_valid && exwb_trap;
+    assign dbg_pc         = exwb_valid ? exwb_trap_pc : 32'b0;
+    assign dbg_retired    = exwb_valid && !wb_busy && !exwb_trap;
+    assign dbg_instr      = exwb_raw_instr;
+    assign dbg_compressed = exwb_compressed;
+    assign dbg_trap       = exwb_valid && exwb_trap;
 
     // ================================================================
     //  Pipeline Register Updates
     // ================================================================
     always @(posedge clk) begin
         if (rst) begin
-            pc        <= 32'h0000_0000;
+            pc        <= RESET_PC;
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
             ifex_instr     <= 32'h0000_0013; // NOP
+            ifex_raw_instr <= 32'h0000_0013;
+            ifex_compressed<= 1'b0;
             ifex_pc_next   <= 32'b0;
             ifex_valid     <= 1'b0;
             ifex_c_illegal <= 1'b0;
@@ -743,6 +753,8 @@ module fyracore(
             exwb_trap_pc    <= 32'b0;
             exwb_trap_val   <= 32'b0;
             exwb_instr      <= 32'h0000_0013;
+            exwb_raw_instr  <= 32'h0000_0013;
+            exwb_compressed <= 1'b0;
             // AMO
             amo_phase      <= 1'b0;
             amo_old_val    <= 32'b0;
@@ -782,10 +794,14 @@ module fyracore(
                 // Insert bubble
                 ifex_valid     <= 1'b0;
                 ifex_instr     <= 32'h0000_0013; // NOP
+                ifex_raw_instr <= 32'h0000_0013;
+                ifex_compressed<= 1'b0;
                 ifex_c_illegal <= 1'b0;
             end else begin
                 ifex_pc        <= pc;
                 ifex_instr     <= if_instr;
+                ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
+                ifex_compressed<= if_compressed;
                 ifex_pc_next   <= if_pc_next;
                 ifex_valid     <= 1'b1;
                 ifex_c_illegal <= if_compressed && if_c_illegal;
@@ -834,6 +850,8 @@ module fyracore(
                 exwb_isSC       <= ctrl_isSC;
                 exwb_amoOp      <= ctrl_amoOp;
                 exwb_instr      <= ifex_instr;
+                exwb_raw_instr  <= ifex_raw_instr;
+                exwb_compressed <= ifex_compressed;
                 exwb_trap_pc    <= ifex_pc;
 
                 // Trap cause and mtval assignment
