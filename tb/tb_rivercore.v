@@ -165,8 +165,16 @@ module tb_rivercore;
     // ================================================================
     //  Termination flag — set on detection cycle, acted on next cycle
     //  so the dump always block can flush the last line first.
+    //
+    //  ecall/ebreak/halt: terminate immediately (one extra retire).
+    //  tohost: spike continues retiring through write_tohost's high-word
+    //  store and fence.i before halting. Drain up to 4 extra retires (or
+    //  stop on fence.i retire) so the trace matches.
     // ================================================================
-    reg terminate = 1'b0;
+    reg     terminate    = 1'b0;
+    reg     saw_tohost   = 1'b0;
+    integer post_tohost_retires = 0;
+    wire    is_fencei_retire = dbg_retired && (dbg_instr == 32'h0000_100f);
 
     always @(posedge clk) begin
         if (!rst && !terminate) begin
@@ -175,6 +183,10 @@ module tb_rivercore;
             if (is_halt)
                 terminate <= 1'b1;
             if (is_tohost)
+                saw_tohost <= 1'b1;
+            if (saw_tohost && dbg_retired)
+                post_tohost_retires <= post_tohost_retires + 1;
+            if (saw_tohost && (is_fencei_retire || post_tohost_retires >= 3))
                 terminate <= 1'b1;
         end
     end
@@ -205,10 +217,12 @@ module tb_rivercore;
         input [31:0] new_val;
         begin
             case (addr)
-                12'h300: csr_committed = new_val & 32'h0000_1888; // mstatus
+                12'h300: csr_committed = new_val; // mstatus: see mstatus_committed (needs old_val)
+                12'h301: csr_committed = 32'h4010_1101 | (new_val & 32'h0000_0004); // misa: only C(2) writable
                 12'h304: csr_committed = new_val & 32'h0000_0888; // mie
                 12'h305: csr_committed = {new_val[31:2], 2'b00};   // mtvec (direct mode)
-                12'h306: csr_committed = new_val & 32'h0000_0007; // mcounteren
+                12'h306: csr_committed = new_val & 32'h0000_0007; // mcounteren CY/TM/IR writable
+                12'h320: csr_committed = new_val & 32'h0000_0005; // mcountinhibit
                 12'h341: csr_committed = {new_val[31:1], 1'b0};    // mepc
                 12'h344: csr_committed = new_val & ~32'h0000_0888; // mip (writable bits)
                 12'h3A0: csr_committed = {                          // pmpcfg0: mask reserved A=10
@@ -221,18 +235,39 @@ module tb_rivercore;
         end
     endfunction
 
+    // mstatus WARL committed value: needs current register state to preserve
+    // old MPP when new MPP write is illegal (01/10 in M+U-only system).
+    function automatic [31:0] mstatus_committed;
+        input [31:0] new_val;
+        input [31:0] old_val;
+        reg [1:0] new_mpp;
+        begin
+            new_mpp = (new_val[12:11] == 2'b11 || new_val[12:11] == 2'b00)
+                      ? new_val[12:11] : old_val[12:11];
+            mstatus_committed = (old_val & ~32'h0000_1888)
+                              | (new_val & 32'h0000_0088)
+                              | {19'b0, new_mpp, 11'b0};
+        end
+    endfunction
+
+    // priv_mode is updated at EX stage on mret; by the time the mret retires at
+    // WB the register already holds the post-mret priv. Spike emits the priv at
+    // execution time, so override to M (3) for mret retire lines.
+    wire is_mret_retire = (dbg_instr == 32'h30200073);
+    wire [1:0] dump_priv = is_mret_retire ? 2'd3 : (cpu.priv_mode ? 2'd3 : 2'd0);
+
     always @(posedge clk) begin
         if (!rst && dbg_retired && logging_active && !terminate) begin
             // Header: core <hart>: <priv> 0x<PC> (0x<instr>)
             // Compressed instructions print as 4 hex digits to match Spike.
             if (dbg_compressed)
                 $fwrite(dump_fd, "core   0: %0d 0x%08h (0x%04h)",
-                        cpu.priv_mode ? 3 : 0,
+                        dump_priv,
                         dbg_pc,
                         dbg_instr[15:0]);
             else
                 $fwrite(dump_fd, "core   0: %0d 0x%08h (0x%08h)",
-                        cpu.priv_mode ? 3 : 0,
+                        dump_priv,
                         dbg_pc,
                         dbg_instr);
 
@@ -243,11 +278,13 @@ module tb_rivercore;
             // CSR commit (Spike format: c<addr_dec>_<name> 0x<value>)
             if (cpu.exwb_csrWR) begin
                 case (cpu.exwb_csr_addr)
-                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   csr_committed(12'h300, cpu.exwb_csr_wdata));
-                    12'h301: $fwrite(dump_fd, " c769_misa 0x%08h",      cpu.exwb_csr_wdata);
+                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   mstatus_committed(cpu.exwb_csr_wdata, cpu.csr_unit.mstatus));
+                    12'h301: if (cpu.exwb_csr_wdata[2] == 1'b1 || !cpu.exwb_trap_pc[1])
+                                  $fwrite(dump_fd, " c769_misa 0x%08h", csr_committed(12'h301, cpu.exwb_csr_wdata));
                     12'h304: $fwrite(dump_fd, " c772_mie 0x%08h",       csr_committed(12'h304, cpu.exwb_csr_wdata));
                     12'h305: $fwrite(dump_fd, " c773_mtvec 0x%08h",     csr_committed(12'h305, cpu.exwb_csr_wdata));
                     12'h306: $fwrite(dump_fd, " c774_mcounteren 0x%08h",csr_committed(12'h306, cpu.exwb_csr_wdata));
+                    12'h320: $fwrite(dump_fd, " c800_mcountinhibit 0x%08h", csr_committed(12'h320, cpu.exwb_csr_wdata));
                     12'h340: $fwrite(dump_fd, " c832_mscratch 0x%08h",  cpu.exwb_csr_wdata);
                     12'h341: $fwrite(dump_fd, " c833_mepc 0x%08h",      csr_committed(12'h341, cpu.exwb_csr_wdata));
                     12'h342: $fwrite(dump_fd, " c834_mcause 0x%08h",    cpu.exwb_csr_wdata);
@@ -266,22 +303,30 @@ module tb_rivercore;
                 endcase
             end
 
-            // MRET commit: csr.v applies MPP<-00, MPIE<-1, MIE<-MPIE on retire.
-            // Emit the post-MRET mstatus so the trace matches Spike's commit log.
-            if (dbg_instr == 32'h30200073) begin
-                $fwrite(dump_fd, " c768_mstatus 0x%08h",
-                    {cpu.csr_unit.mstatus[31:13], 2'b00,
-                     cpu.csr_unit.mstatus[10:8], 1'b1,
-                     cpu.csr_unit.mstatus[6:4], cpu.csr_unit.mstatus[7],
-                     cpu.csr_unit.mstatus[2:0]});
+            // MRET commit: csr.v applies MPP<-00, MPIE<-1, MIE<-MPIE in the EX
+            // cycle (when mret is detected). At this WB-stage retire cycle,
+            // mstatus already holds the post-MRET value, so emit it raw.
+            if (is_mret_retire) begin
+                $fwrite(dump_fd, " c768_mstatus 0x%08h", cpu.csr_unit.mstatus);
             end
 
             // Memory access marker. Spike format: loads emit "mem 0x<addr>";
-            // stores emit "mem 0x<addr> 0x<value>".
+            // stores emit "mem 0x<addr> 0x<value>". Spike logs the architectural
+            // (unaligned) effective address and the natural-width store data,
+            // so we use exwb_alu_result instead of dmem_addr and width-mask
+            // exwb_rs2_data instead of using the bus-shifted store_data.
             if (cpu.exwb_memRD)
-                $fwrite(dump_fd, " mem 0x%08h", dmem_addr);
-            else if (dmem_we)
-                $fwrite(dump_fd, " mem 0x%08h 0x%08h", dmem_addr, dmem_wdata);
+                $fwrite(dump_fd, " mem 0x%08h", cpu.exwb_alu_result);
+            else if (dmem_we) begin
+                case (cpu.exwb_memSize)
+                    2'b00: $fwrite(dump_fd, " mem 0x%08h 0x%02h",
+                                   cpu.exwb_alu_result, cpu.exwb_rs2_data[7:0]);
+                    2'b01: $fwrite(dump_fd, " mem 0x%08h 0x%04h",
+                                   cpu.exwb_alu_result, cpu.exwb_rs2_data[15:0]);
+                    default: $fwrite(dump_fd, " mem 0x%08h 0x%08h",
+                                     cpu.exwb_alu_result, cpu.exwb_rs2_data);
+                endcase
+            end
 
             $fwrite(dump_fd, "\n");
 

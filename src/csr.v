@@ -36,20 +36,31 @@ module csr(
     input  wire        sw_irq,          // MSIP: software interrupt pending (from CLINT)
     // mie export — allows fyracore to gate irq_pending per-bit
     output wire [31:0] mie_out,
+    // misa.C — gates compressed-instruction decode (WARL bit)
+    output wire        misa_c,
+    // mcounteren — gates U-mode access to performance counters
+    output wire [31:0] mcounteren_out,
+    // mcountinhibit — inhibits perf-counter increments (bit0=CY, bit2=IR)
+    output wire        inhibit_cy,
+    output wire        inhibit_ir,
     // mtime value from CLINT (for time/timeh CSR reads)
-    input  wire [63:0] mtime_in
+    input  wire [63:0] mtime_in,
+    // misa.C WARL gate: refuse to clear C if next-PC would be 2-byte aligned
+    // (Priv spec §3.1.1 — implementation may decline writes that violate
+    // alignment requirements). Set by fyracore from current WB-stage PC[1].
+    input  wire        pc_next_misaligned
 );
     // ===== CSR Registers =====
     // Machine Information
     localparam [31:0] MVENDORID = 32'h0;
-    localparam [31:0] MARCHID   = 32'h0;
-    localparam [31:0] MIMPID    = 32'h1;
+    localparam [31:0] MARCHID   = 32'd5;  // matches Spike default
+    localparam [31:0] MIMPID    = 32'h0;  // matches Spike default
     localparam [31:0] MHARTID   = 32'h0;
 
-    // Machine ISA: RV32IMAC
+    // Machine ISA: RV32IMACU
     // misa[31:30] = 01 (XLEN=32)
-    // Bits: I(8)=1, M(12)=1, A(0)=1, C(2)=1
-    localparam [31:0] MISA = {2'b01, 4'b0, 26'b00000000000001000100000101};
+    // Bits: A(0)=1, C(2)=1, I(8)=1, M(12)=1, U(20)=1
+    localparam [31:0] MISA_RESET = 32'h4010_1105;
 
     // Machine Status
     reg [31:0] mstatus;
@@ -61,6 +72,8 @@ module csr(
     reg [31:0] mie_reg;
     reg [31:0] mip_reg;
     reg [31:0] mcounteren; // 0x306: controls U-mode counter access
+    reg [31:0] mcountinhibit; // 0x320: inhibit specific perf counters
+    reg [31:0] misa_reg; // 0x301: WARL — only C bit (and U as toggle) writable
 
     // PMP registers
     reg [31:0] pmpcfg0;                         // 0x3A0: 4 packed 8-bit config bytes
@@ -71,7 +84,9 @@ module csr(
     reg [63:0] minstret;
 
     assign mtvec_out    = mtvec;
-    assign mepc_out     = mepc;
+    // Priv spec §3.1.15: when IALIGN=32 (misa.C=0), mepc[1] masked on reads.
+    wire [31:0] mepc_eff = {mepc[31:2], (misa_reg[2] ? mepc[1] : 1'b0), 1'b0};
+    assign mepc_out     = mepc_eff;
     assign mstatus_mie  = mstatus[3];      // MIE bit
     assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
     assign pmpcfg0_out  = pmpcfg0;
@@ -80,6 +95,10 @@ module csr(
     assign pmpaddr2_out = pmpaddr2;
     assign pmpaddr3_out = pmpaddr3;
     assign mie_out      = mie_reg;
+    assign misa_c       = misa_reg[2];
+    assign mcounteren_out = mcounteren;
+    assign inhibit_cy   = mcountinhibit[0];
+    assign inhibit_ir   = mcountinhibit[2];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
@@ -99,28 +118,33 @@ module csr(
     // In practice, the pipeline always sends op=01 (CSRRW) so csr_new = wdata.
     wire [31:0] csr_new;
 
-    // Cycle counter: merged auto-increment + CSR write (write takes priority)
+    // Counter update model: auto-increment happens every retire/cycle (when not
+    // inhibited), and the CSR write — if any — overwrites the *post-increment*
+    // half. This matches Spike's ordering: a write to the low half doesn't
+    // discard a 64-bit carry into the high half from this cycle's increment.
+    wire [63:0] mcycle_next   = (!mcountinhibit[0]) ? mcycle + 64'd1 : mcycle;
+    wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2]) ? minstret + 64'd1 : minstret;
+
     always @(posedge clk) begin
         if (rst)
             mcycle <= 64'b0;
         else if (we && op != 2'b00 && waddr == 12'hB00)
-            mcycle <= {mcycle[63:32], csr_new};
+            mcycle <= {mcycle_next[63:32], csr_new};
         else if (we && op != 2'b00 && waddr == 12'hB80)
-            mcycle <= {csr_new, mcycle[31:0]};
+            mcycle <= {csr_new, mcycle_next[31:0]};
         else
-            mcycle <= mcycle + 1;
+            mcycle <= mcycle_next;
     end
 
-    // Instruction retired counter: merged auto-increment + CSR write
     always @(posedge clk) begin
         if (rst)
             minstret <= 64'b0;
         else if (we && op != 2'b00 && waddr == 12'hB02)
-            minstret <= {minstret[63:32], csr_new};
+            minstret <= {minstret_next[63:32], csr_new};
         else if (we && op != 2'b00 && waddr == 12'hB82)
-            minstret <= {csr_new, minstret[31:0]};
-        else if (instret_inc)
-            minstret <= minstret + 1;
+            minstret <= {csr_new, minstret_next[31:0]};
+        else
+            minstret <= minstret_next;
     end
 
     // CSR Read (combinational, uses EX-stage raddr)
@@ -134,8 +158,10 @@ module csr(
             12'hF13: rdata = MIMPID;
             12'hF14: rdata = MHARTID;
             12'hF15: rdata = 32'b0;  // mconfigptr: no config data structure
-            // Machine ISA (read-only for us, WARL — writes allowed but ignored)
-            12'h301: rdata = MISA;
+            // Machine ISA (WARL — C bit writable, others hardwired)
+            12'h301: rdata = misa_reg;
+            // Machine counter inhibit (bits 2:0 = IR, _, CY)
+            12'h320: rdata = mcountinhibit;
             // Machine Status
             12'h300: rdata = mstatus;
             // Machine Trap Setup
@@ -150,23 +176,24 @@ module csr(
             12'h3B3: rdata = pmpaddr3;
             // Machine Trap Handling
             12'h340: rdata = mscratch;
-            12'h341: rdata = mepc;
+            12'h341: rdata = mepc_eff;
             12'h342: rdata = mcause;
             12'h343: rdata = mtval;
             12'h344: rdata = mip_live;  // mip: MTIP/MEIP/MSIP reflect live external signals
-            // Performance Counters
-            12'hB00: rdata = mcycle[31:0];
-            12'hB80: rdata = mcycle[63:32];
-            12'hB02: rdata = minstret[31:0];
-            12'hB82: rdata = minstret[63:32];
+            // Performance Counters — return the post-this-cycle value so a CSR
+            // read at EX sees increments committed in the same cycle's WB.
+            12'hB00: rdata = mcycle_next[31:0];
+            12'hB80: rdata = mcycle_next[63:32];
+            12'hB02: rdata = minstret_next[31:0];
+            12'hB82: rdata = minstret_next[63:32];
             // User-mode counter read aliases — mcounteren gates U-mode access.
             // M-mode (priv_mode=1) always succeeds; U-mode needs the corresponding bit set.
-            12'hC00: begin rdata = mcycle[31:0];    if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
-            12'hC80: begin rdata = mcycle[63:32];   if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
-            12'hC01: begin rdata = mtime_in[31:0];   if (!priv_mode && !mcounteren[1]) addr_valid = 1'b0; end
-            12'hC81: begin rdata = mtime_in[63:32];  if (!priv_mode && !mcounteren[1]) addr_valid = 1'b0; end
-            12'hC02: begin rdata = minstret[31:0];  if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
-            12'hC82: begin rdata = minstret[63:32]; if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
+            12'hC00: begin rdata = mcycle_next[31:0];    if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
+            12'hC80: begin rdata = mcycle_next[63:32];   if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end
+            12'hC01: begin rdata = mtime_in[31:0];        if (!priv_mode && !mcounteren[1]) addr_valid = 1'b0; end
+            12'hC81: begin rdata = mtime_in[63:32];       if (!priv_mode && !mcounteren[1]) addr_valid = 1'b0; end
+            12'hC02: begin rdata = minstret_next[31:0];  if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
+            12'hC82: begin rdata = minstret_next[63:32]; if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end
             // Unimplemented PMP registers — hardwired to zero (WARL)
             12'h3A1, 12'h3A2, 12'h3A3: rdata = 32'b0;
             12'h3B4, 12'h3B5, 12'h3B6, 12'h3B7,
@@ -194,6 +221,8 @@ module csr(
             mie_reg      <= 32'b0;
             mip_reg      <= 32'b0;
             mcounteren   <= 32'b0;
+            mcountinhibit<= 32'b0;
+            misa_reg     <= MISA_RESET;
             pmpcfg0      <= 32'b0;
             pmpaddr0     <= 32'b0;
             pmpaddr1     <= 32'b0;
@@ -212,10 +241,25 @@ module csr(
             mstatus <= {mstatus[31:13], 2'b00, mstatus[10:8], 1'b1, mstatus[6:4], mstatus[7], mstatus[2:0]};
         end else if (we && op != 2'b00) begin
             case (waddr)
-                12'h300: mstatus  <= csr_new & 32'h0000_1888; // Writable bits mask
+                12'h300: begin
+                    // mstatus WARL. M+U-only: MPP legal values are 00 (U) and
+                    // 11 (M). Writes of 01/10 are reserved → keep old MPP
+                    // (Priv spec §3.1.6.5: WARL reads must return legal values).
+                    mstatus[3]  <= csr_new[3];   // MIE
+                    mstatus[7]  <= csr_new[7];   // MPIE
+                    if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
+                        mstatus[12:11] <= csr_new[12:11];
+                end
+                // misa (0x301): WARL. Only C bit writable. Refuse to clear C
+                // when next-PC[1]=1 (would create immediately-misaligned fetch).
+                // Setting C to 1 always allowed.
+                12'h301: if (csr_new[2] == 1'b1 || !pc_next_misaligned)
+                             misa_reg[2] <= csr_new[2];
                 12'h304: mie_reg    <= csr_new & 32'h0000_0888;
                 12'h305: mtvec      <= {csr_new[31:2], 2'b00}; // Force direct mode (WARL)
+                // mcounteren: bits CY(0), TM(1), IR(2) writable for U-mode counter access.
                 12'h306: mcounteren <= csr_new & 32'h0000_0007;
+                12'h320: mcountinhibit <= csr_new & 32'h0000_0005; // bits IR(2), CY(0); bit 1 (TM) reserved=0
                 12'h340: mscratch <= csr_new;
                 12'h341: mepc     <= {csr_new[31:1], 1'b0}; // Bit 0 always 0
                 12'h342: mcause   <= csr_new;
