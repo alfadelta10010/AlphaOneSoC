@@ -194,12 +194,23 @@ class fyracore_iverilog_plugin(object):
                 f'1> /dev/null'
             )
 
+            # -- Post-sim: strip halt-loop retires so DUT dump aligns with
+            # the Spike reference dump. Spike stops on tohost write and the
+            # spike plugin sed-strips (0x00000063) beqz-self and (0x0000006f)
+            # jal-self from ref.dump. RISCOF RVMODEL_HALT emits `me: beqz
+            # x0, me` which our TB retires up to 3x post-tohost — drop the
+            # same opcodes here so the diff aligns.
+            strip_cmd = (
+                " && sed -i -E '/\\(0x00000063\\)$$/d;"
+                "/\\(0x0000006f\\)$$/d' dut.dump"
+            )
+
             # -- Cleanup --
             clean_cmd = ' && rm -f sim_fyracore'
 
             target_cmd = (
                 ch_cmd + compile_cmd + hex_cmd + sim_setup +
-                tohost_cmd + sim_cmd + clean_cmd
+                tohost_cmd + sim_cmd + strip_cmd + clean_cmd
             )
             make.add_target(target_cmd, test)
             self.test_names.append(test)

@@ -3,3 +3,9 @@ build/
 *.bin
 *.hex
 *.dis
+__pycache__/
+*.pyc
+plugins/failure.log
+plugins/river_core.log
+river_core.log
+river-config-0.ini
