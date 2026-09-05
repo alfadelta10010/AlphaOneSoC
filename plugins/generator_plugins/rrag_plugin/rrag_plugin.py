@@ -103,10 +103,30 @@ class rrag_plugin(object):
         self.json_dir = output_dir + '/../.json/'
         logger.debug(self.json_dir)
 
-        # rrag isa update
-        logger.info('Updating riscv-opcodes metadata')
-        code, _, _ = utils.sys_command(f'{self.rrag} isa-update')
-        assert code == 0
+        # rrag isa update.
+        #
+        # `rrag isa-update` regenerates isa_dict.py inside the installed rrag
+        # package by cloning a riscv-opcodes repository. Two problems with the
+        # stock behaviour:
+        #
+        #   * it defaults to a private InCore GitLab URL, which needs VPN;
+        #   * current upstream riscv-opcodes has drifted from the layout rrag's
+        #     parser expects and dies with IndexError in isa_update().
+        #
+        # So allow the repository to be pointed anywhere via `opcodes_url`
+        # (a file:// path to a local clone works), and skip the step entirely
+        # once isa_dict.py exists, since it is a one-time package-level
+        # regeneration rather than per-run state.
+        import rrag as _rrag_pkg
+        isa_dict = os.path.join(os.path.dirname(_rrag_pkg.__file__), 'isa_dict.py')
+        if os.path.isfile(isa_dict):
+            logger.info('riscv-opcodes metadata already present, skipping isa-update')
+        else:
+            opcodes_url = spec_config.get('opcodes_url', '').strip()
+            url_arg = f' --url={opcodes_url}' if opcodes_url else ''
+            logger.info('Updating riscv-opcodes metadata')
+            code, _, _ = utils.sys_command(f'{self.rrag} isa-update{url_arg}')
+            assert code == 0
 
         # rrag setup
         logger.info(f'Running rrag setup command')
