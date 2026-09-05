@@ -28,7 +28,7 @@ module tb_rivercore;
     wire        fencei_flush;
 
     // Interrupt signals from CLINT
-    wire        timer_irq, sw_irq;
+    wire        timer_irq, sw_irq, ext_irq;
     wire [63:0] mtime_val;
 
     // Parameters
@@ -50,7 +50,7 @@ module tb_rivercore;
         .dmem_rdata  (dmem_rdata),
         .dmem_ready  (dmem_ready),
         .timer_irq    (timer_irq),
-        .external_irq (1'b0),
+        .external_irq (ext_irq),
         .sw_irq       (sw_irq),
         .mtime_in     (mtime_val),
         .fencei_flush (fencei_flush),
@@ -87,6 +87,7 @@ module tb_rivercore;
         .dmem_ready(dmem_ready),
         .timer_irq (timer_irq),
         .sw_irq    (sw_irq),
+        .ext_irq   (ext_irq),
         .mtime_out (mtime_val)
     );
 

@@ -33,6 +33,8 @@ module memory_model #(
     // Interrupt outputs (from embedded CLINT)
     output wire        timer_irq,
     output wire        sw_irq,
+    // Machine external interrupt (MEIP), software-triggered -- see EXTIRQ below
+    output wire        ext_irq,
     // mtime value for CSR time/timeh reads
     output wire [63:0] mtime_out
 );
@@ -43,8 +45,38 @@ module memory_model #(
     localparam CLINT_BASE = 32'h0200_0000;
     localparam CLINT_TOP  = 32'h0200_BFFF;
 
-    wire in_clint = (dmem_addr >= CLINT_BASE) && (dmem_addr <= CLINT_TOP);
-    wire in_mem   = !in_clint;  // Flash + RAM; ignore GPIO for sim simplicity
+    // Software-triggered machine external interrupt.
+    //
+    // Unlike MTIP and MSIP, MEIP has no source both the DUT and the reference
+    // model agree on: timer and software interrupts are derived from mtimecmp
+    // and msip, which the program itself writes, so Spike's own CLINT computes
+    // the same values. Spike models no interrupt controller for MEIP -- it only
+    // supports MMIO plugin devices loaded via --extlib/--device.
+    //
+    // Driving ext_irq from anything testbench-local would therefore desync the
+    // DUT trace from the reference on every test. Instead expose a single
+    // register a program can write deliberately: bit 0 sets MEIP, and it stays
+    // asserted until cleared. No generated test knows this address, so it reads
+    // as inert for the whole regression, while directed tests can reach the
+    // MEIP path.
+    //
+    // NOTE: a test that uses this will NOT match Spike until a matching device
+    // plugin exists on the Spike side. It is a hook for DUT-only directed
+    // tests, not for lockstep comparison.
+    localparam EXTIRQ_ADDR = 32'h0200_C000;
+
+    wire in_extirq = (dmem_addr == EXTIRQ_ADDR);
+    wire in_clint  = (dmem_addr >= CLINT_BASE) && (dmem_addr <= CLINT_TOP);
+    wire in_mem    = !in_clint && !in_extirq;  // Flash + RAM; ignore GPIO for sim simplicity
+
+    reg extirq_reg;
+    always @(posedge clk) begin
+        if (rst)
+            extirq_reg <= 1'b0;
+        else if (dmem_we && in_extirq && dmem_wmask[0])
+            extirq_reg <= dmem_wdata[0];
+    end
+    assign ext_irq = extirq_reg;
 
     // ── SRAM array ──────────────────────────────────────────────────────────
     reg [7:0] mem [0:MEM_SIZE-1];
@@ -95,6 +127,7 @@ module memory_model #(
     );
 
     // --- Data read mux: CLINT or SRAM ---
-    assign dmem_rdata = in_clint ? clint_rdata : mem_rdata;
+    assign dmem_rdata = in_clint  ? clint_rdata :
+                        in_extirq ? {31'b0, extirq_reg} : mem_rdata;
 
 endmodule
