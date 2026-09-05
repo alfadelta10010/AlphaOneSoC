@@ -1,22 +1,22 @@
 /* Minimal boot stub for FyraCore river_core verification.
  *
- * The riscv_tests generator plugin links this as boot.bo with
- * --entry="_boot_start". It runs before the test's rvtest_entry_point.
+ * Generator plugins link this as boot.bo with --entry="_boot_start", so it runs
+ * before the test's own entry point.
  *
- * FyraCore resets at 0x00000000 — this stub lives at that address.
- * It sets up a stack pointer, clears mtvec (direct mode), and
- * jumps to the test entry point.
+ * The stack pointer is taken from _stack_top in the linker script rather than
+ * being hardcoded, so this stub works unchanged whether the image is linked at
+ * the verification base (0x8000_0000, see link.ld) or the hardware base
+ * (0x0 flash / 0x0100_0000 RAM, see link_soc.ld).
  */
 
     .section .text.init
     .globl _boot_start
 _boot_start:
-    /* Set stack pointer to top of RAM (0x01000000 + 16MB - 16) */
-    lui     sp, 0x01FFF
-    addi    sp, sp, 0x7F0       /* sp = 0x01FFF7F0 (near top of RAM) */
+    /* Stack pointer = top of RAM, as defined by the active linker script */
+    la      sp, _stack_top
 
-    /* Clear mtvec — tests set it themselves */
+    /* Clear mtvec — tests install their own handler */
     csrw    mtvec, zero
 
-    /* Jump to the riscv-tests entry point */
+    /* Jump to the test entry point */
     j       _start
