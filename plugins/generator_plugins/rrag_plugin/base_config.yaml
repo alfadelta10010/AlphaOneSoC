@@ -192,7 +192,8 @@ branch-control:
 #       recursion_depth:    Number of times the recursive function is called
 # ---------------------------------------------------------------------------------
 recursion-options:
-  recursion-enable: false
+  # Deeper call/return chains -- more branch and load/store pressure.
+  recursion-enable: true
   recursion-depth: 10
   recursion-calls: 5
 
@@ -219,7 +220,18 @@ access-sections:
 #                 (Any Combination)
 # ---------------------------------------------------------------------------------
 csr-sections:
-  sections: 0x0100:0xdff, 0x325, 0x500:0xfff
+  # Only CSRs FyraCore implements. Anything outside these ranges raises
+  # illegal-instruction, which is covered deliberately via ecause02 instead
+  # of accidentally through every random CSR access.
+  #   0x300-0x306  mstatus, misa, mie, mtvec, mcounteren
+  #   0x320        mcountinhibit
+  #   0x340-0x344  mscratch, mepc, mcause, mtval, mip
+  #   0x3a0        pmpcfg0        (pmpcfg1-3 read as zero)
+  #   0x3b0-0x3b3  pmpaddr0-3     (4 regions; pmpaddr4-15 read as zero)
+  #   0xb00-0xb82  mcycle/minstret and their high halves
+  #   0xc00-0xc82  cycle/time/instret U-mode aliases (mcounteren-gated)
+  #   0xf11-0xf15  mvendorid, marchid, mimpid, mhartid, mconfigptr
+  sections: 0x300:0x306, 0x320, 0x340:0x344, 0x3a0, 0x3b0:0x3b3, 0xb00:0xb82, 0xc00:0xc82, 0xf11:0xf15
 
 
 # ---------------------------------------------------------------------------------
@@ -241,8 +253,11 @@ user-functions:
 #                         and shifting may result in same mode)
 # ---------------------------------------------------------------------------------
 switch-priv-modes:
-  switch_modes: false
-  num_switches: 0
+  # FyraCore implements M and U (misa.U=1, mstatus.MPP legal values 00/11).
+  # Switching exercises U-mode execution, the ecall-from-U path and MRET,
+  # none of which the directed suites cover heavily.
+  switch_modes: true
+  num_switches: 20
 
 
 # ---------------------------------------------------------------------------------
@@ -264,18 +279,33 @@ d-cache:
 # Exception generation
 # ---------------------------------------------------------------------------------
 exception-generation:
+  # Weights per synchronous exception cause. Enabled where FyraCore can
+  # actually raise the cause, so the trap path gets randomised coverage:
+  #   0  instruction address misaligned -- UNREACHABLE: misa.C=1 means
+  #      IALIGN=16, and the RTL gates ex_inst_misalign on !misa_c.
+  #   1  instruction access fault  (PMP)
+  #   2  illegal instruction
+  #   3  breakpoint (EBREAK / C.EBREAK)
+  #   4  load address misaligned   (core traps, does not emulate)
+  #   5  load access fault         (PMP)
+  #   6  store address misaligned  (core traps, does not emulate)
+  #   7  store access fault        (PMP)
+  #   8  ecall from U-mode
+  #   11 ecall from M-mode
+  #   9/10   ecall from S/H  -- no S or H mode
+  #   12-15  page faults      -- no MMU
   ecause00: 0
-  ecause01: 0
-  ecause02: 0
-  ecause03: 0
-  ecause04: 0
-  ecause05: 0
-  ecause06: 0
-  ecause07: 0
-  ecause08: 0
+  ecause01: 5
+  ecause02: 10
+  ecause03: 5
+  ecause04: 10
+  ecause05: 5
+  ecause06: 10
+  ecause07: 5
+  ecause08: 5
   ecause09: 0
   ecause10: 0
-  ecause11: 0
+  ecause11: 5
   ecause12: 0
   ecause13: 0
   ecause14: 0
