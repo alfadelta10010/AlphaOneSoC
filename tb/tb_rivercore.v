@@ -328,8 +328,17 @@ module tb_rivercore;
             // (unaligned) effective address and the natural-width store data,
             // so we use exwb_alu_result instead of dmem_addr and width-mask
             // exwb_rs2_data instead of using the bus-shifted store_data.
-            if (cpu.exwb_memRD)
+            if (cpu.exwb_memRD) begin
                 $fwrite(dump_fd, " mem 0x%08h", cpu.exwb_alu_result);
+                // An AMO reads and writes in the same retire, and Spike logs
+                // both markers on one line. Emitting only the read leaves the
+                // written value uncompared: river_core's dump parser pairs the
+                // change tokens two at a time and silently drops the odd
+                // trailing one, so a wrong AMO result still compares equal.
+                if (cpu.exwb_isAmo && cpu.amo_phase)
+                    $fwrite(dump_fd, " mem 0x%08h 0x%08h",
+                            cpu.exwb_alu_result, dmem_wdata);
+            end
             else if (dmem_we) begin
                 case (cpu.exwb_memSize)
                     2'b00: $fwrite(dump_fd, " mem 0x%08h 0x%02h",
