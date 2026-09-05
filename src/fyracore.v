@@ -905,7 +905,9 @@ module fyracore #(
                         exwb_trap_val   <= 32'b0;
                     end else if (ex_is_ebreak) begin
                         exwb_trap_cause <= 32'd3;  // Breakpoint
-                        exwb_trap_val   <= 32'b0;
+                        // Priv spec §3.1.16: on a breakpoint trap mtval holds the
+                        // address of the EBREAK instruction itself.
+                        exwb_trap_val   <= ifex_pc;
                     end else if (ex_misaligned && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd4;  // Load address misaligned
                         exwb_trap_val   <= ex_alu_result;
