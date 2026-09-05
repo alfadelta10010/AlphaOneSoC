@@ -99,8 +99,12 @@ module tb_rivercore;
     // ================================================================
     integer    dump_fd;
     integer    init_i;
-    reg [1023:0] dump_file_str;
-    reg [1023:0] init_file_str;
+    // 1024 chars each. These must comfortably exceed the longest work-dir path
+    // the verification flow passes in: $value$plusargs silently truncates a
+    // path that overflows the buffer, which loads an empty memory and produces
+    // an empty dump rather than an error.
+    reg [8191:0] dump_file_str;
+    reg [8191:0] init_file_str;
     integer    max_cycles;
     reg [31:0] tohost_addr;
     reg        tohost_enabled;
@@ -137,6 +141,15 @@ module tb_rivercore;
             for (init_i = 0; init_i < MEM_SIZE; init_i = init_i + 1)
                 mem.mem[init_i] = 8'h00;
             $readmemh(init_file_str, mem.mem);
+            // A missing or truncated INIT_FILE leaves memory zero-filled, which
+            // otherwise runs to MAX_CYCLES and writes an empty dump — a silent
+            // failure the comparison stage reports as a DUT bug. Fail loudly.
+            // RESET_PC 0x80000000 aliases to mem[0] (memory_model masks [24:0]).
+            if ({mem.mem[3], mem.mem[2], mem.mem[1], mem.mem[0]} === 32'h0) begin
+                $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
+                         init_file_str);
+                $fatal(1);
+            end
         end
 
         // Optional VCD dump
