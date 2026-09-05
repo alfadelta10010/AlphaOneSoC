@@ -64,11 +64,11 @@ def sys_command(command, cwd=None, timeout=3000):
     return (process.returncode, out.decode("ascii"), err.decode("ascii"))
 
 
-def gen_cmd_list(configlist, seed, count, output_dir, module_dir):
+def gen_cmd_list(configlist, seed, count, output_dir, module_dir, java='java'):
     logger.debug(f"Now generating commands for riscv-torture {configlist}")
     pwd = os.getcwd()
     exec_dir = f"{output_dir}"
-    torture_command = f"java -Xmx1G -Xss8M -jar sbt-launch.jar"
+    torture_command = f"{java} -Xmx1G -Xss8M -jar sbt-launch.jar"
 
     run_command = []
     config_yaml = utils.load_yaml(configlist)
@@ -94,7 +94,8 @@ def pytest_generate_tests(metafunc):
                                  metafunc.config.getoption("seed"),
                                  metafunc.config.getoption("count"),
                                  metafunc.config.getoption("output_dir"),
-                                 metafunc.config.getoption("module_dir"))
+                                 metafunc.config.getoption("module_dir"),
+                                 metafunc.config.getoption("java"))
         metafunc.parametrize('test_input', test_list, ids=idfnc, indirect=True)
 
 

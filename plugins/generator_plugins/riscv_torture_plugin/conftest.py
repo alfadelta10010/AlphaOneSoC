@@ -12,3 +12,5 @@ def pytest_addoption(parser):
 
     parser.addoption("--module_dir", action="store")
 
+    parser.addoption("--java", action="store", default="java")
+

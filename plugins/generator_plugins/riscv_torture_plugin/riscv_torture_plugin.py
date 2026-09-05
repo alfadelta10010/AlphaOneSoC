@@ -28,9 +28,23 @@ class riscv_torture_plugin(object):
         self.output_dir = os.path.abspath(output_dir)
         self.name = 'riscv_torture'
 
-        if shutil.which('java') is None:
-            logger.error('Plugin requires java')
-            raise SystemExit(1)
+        # riscv-torture pins sbt 1.8.2 / Scala 2.11.12, which cannot parse
+        # class files from JDK 17 or newer -- the build dies with
+        # NoClassDefFoundError in sbt.internal.parser.SbtParser$. Allow the
+        # config to point at a JDK 8/11 install instead of whatever `java`
+        # happens to be on PATH.
+        java_home = spec_config.get('java_home', '').strip()
+        if java_home:
+            self.java = os.path.join(os.path.abspath(java_home), 'bin', 'java')
+            if not os.path.isfile(self.java):
+                logger.error(f'java_home does not contain bin/java: {java_home}')
+                raise SystemExit(1)
+        else:
+            self.java = 'java'
+            if shutil.which('java') is None:
+                logger.error('Plugin requires java')
+                raise SystemExit(1)
+        logger.info(f'riscv-torture using java: {self.java}')
 
         if (os.path.isdir(self.output_dir)):
             logger.debug('exists')
@@ -52,7 +66,7 @@ class riscv_torture_plugin(object):
             os.chdir(f'{self.output_dir}/riscv-torture/env')
             subprocess.call(shlex.split('git checkout master'))
             os.chdir(f'{self.output_dir}/riscv-torture')
-            subprocess.call(shlex.split(f"java -Xmx1G -Xss8M -jar sbt-launch.jar 'generator/run'"))
+            subprocess.call(shlex.split(f"{self.java} -Xmx1G -Xss8M -jar sbt-launch.jar 'generator/run'"))
             subprocess.call(shlex.split(f"rm -f output/*"))
             os.chdir(cwd)
 
@@ -91,7 +105,8 @@ class riscv_torture_plugin(object):
             '--report-log={0}.json'.format(report_file_name),
             '--self-contained-html', 
             '--output_dir={0}'.format(f'{self.output_dir}/riscv-torture/'),
-            '--module_dir={0}'.format(module_dir)
+            '--module_dir={0}'.format(module_dir),
+            '--java={0}'.format(self.java)
         ])
         asm_dir = self.output_dir + '/riscv-torture/output/'
         test_list = {}
