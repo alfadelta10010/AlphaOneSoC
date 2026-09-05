@@ -146,8 +146,11 @@ module compressed_decoder(
                                     5'd2,                // rd = x2
                                     7'b0010011           // OP-IMM
                                 };
-                        end else if (rd_full != 5'd0) begin // C.LUI
-                            // LUI rd, nzimm
+                        end else begin // C.LUI (rd != 2)
+                            // LUI rd, nzimm.  rd=x0 with nzimm!=0 is a HINT
+                            // (RVC HINT table) — expand it like any other C.LUI;
+                            // LUI x0 retires with no architectural effect.
+                            // nzimm=0 is reserved for every rd.
                             if ({instr_in[12], instr_in[6:2]} == 6'b0)
                                 illegal = 1'b1;
                             else
@@ -157,8 +160,6 @@ module compressed_decoder(
                                     rd_full,             // rd
                                     7'b0110111           // LUI
                                 };
-                        end else begin
-                            illegal = 1'b1;
                         end
                     end
 
