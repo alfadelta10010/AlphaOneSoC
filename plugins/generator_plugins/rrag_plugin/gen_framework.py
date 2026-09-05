@@ -15,7 +15,7 @@ from envyaml import EnvYAML
 import glob
 
 
-def gen_cmd_list(gen_config, seed, count, output_dir, module_dir):
+def gen_cmd_list(gen_config, seed, count, output_dir, module_dir, rrag='rrag'):
 
     logger.debug('Now generating commands for gen plugin')
 
@@ -50,7 +50,7 @@ def gen_cmd_list(gen_config, seed, count, output_dir, module_dir):
             testdir = '{0}/asm/{1}'.format(rrag_work_dir, test_prefix)
     
             # construct command and append
-            run_command.append('rrag gen '
+            run_command.append(f'{rrag} gen '
                                 '--config_file {0} '
                                 '--setup_dir {1} '
                                 '--output_dir {2} '
@@ -74,7 +74,8 @@ def pytest_generate_tests(metafunc : pytest.Metafunc):
                                  metafunc.config.getoption("seed"),
                                  metafunc.config.getoption("count"),
                                  metafunc.config.getoption("output_dir"),
-                                 metafunc.config.getoption("module_dir"))
+                                 metafunc.config.getoption("module_dir"),
+                                 metafunc.config.getoption("rrag"))
         metafunc.parametrize('test_input', test_list, ids=idfnc, indirect=True)
 
 

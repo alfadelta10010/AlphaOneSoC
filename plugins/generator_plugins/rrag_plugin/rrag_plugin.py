@@ -44,9 +44,22 @@ class rrag_plugin(object):
         ## initial checks
 
         # Check if rrag is there on path
-        if shutil.which('rrag') is None:
-            logger.error('Plugin requires rrag to be installed')
-            raise SystemExit
+        # rrag is not on public PyPI and may not be installed in the same
+        # environment river_core runs from. It is invoked purely as a
+        # subprocess CLI, so it does not need to share this interpreter --
+        # `rrag_path` may point at the executable in any environment.
+        rrag_path = spec_config.get('rrag_path', '').strip()
+        if rrag_path:
+            self.rrag = os.path.abspath(rrag_path)
+            if not (os.path.isfile(self.rrag) and os.access(self.rrag, os.X_OK)):
+                logger.error(f'rrag_path is not an executable file: {self.rrag}')
+                raise SystemExit(1)
+        else:
+            self.rrag = 'rrag'
+            if shutil.which('rrag') is None:
+                logger.error('Plugin requires rrag to be installed')
+                raise SystemExit
+        logger.info(f'rrag using: {self.rrag}')
 
         if shutil.which('spike') is None:
             logger.error('rrag requires spike to be installed')
@@ -92,12 +105,12 @@ class rrag_plugin(object):
 
         # rrag isa update
         logger.info('Updating riscv-opcodes metadata')
-        code, _, _ = utils.sys_command(f'rrag isa-update')
+        code, _, _ = utils.sys_command(f'{self.rrag} isa-update')
         assert code == 0
 
         # rrag setup
         logger.info(f'Running rrag setup command')
-        code, _, _ = utils.sys_command(f'rrag setup --setup_dir={output_dir}')
+        code, _, _ = utils.sys_command(f'{self.rrag} setup --setup_dir={output_dir}')
         assert code == 0
 
         if self.gen_type == gen_type_enum.CONFIG:
@@ -132,7 +145,7 @@ class rrag_plugin(object):
         # generate random configs if random configs
         if self.gen_type == gen_type_enum.RAND_CONFIG:
             logger.info(f'Generating {self.num_configs} randomized configurations')
-            code, _, _ = utils.sys_command(f'rrag randomise-configs --n={self.num_configs} \
+            code, _, _ = utils.sys_command(f'{self.rrag} randomise-configs --n={self.num_configs} \
                               --isa_string={rand_isa} \
                               --source={self.base_config_path} \
                               --destination={self.config_dir}', logging=False)
@@ -166,7 +179,8 @@ class rrag_plugin(object):
             '--html={0}/reports/rrag.html'.format(output_dir),
             '--report-log={0}.json'.format(report_file_name),
             '--self-contained-html', '--output_dir={0}'.format(output_dir),
-            '--module_dir={0}'.format(module_dir)
+            '--module_dir={0}'.format(module_dir),
+            '--rrag={0}'.format(self.rrag)
         ])
         
         # Generate Test List
