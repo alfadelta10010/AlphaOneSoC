@@ -52,6 +52,22 @@ class riscv_dv_plugin(object):
         self.mabi = mabi
         self.xlen = 64 if '64' in self.isa else 32
 
+        # Pick a toolchain that actually exists. An rv32 ISA does not imply a
+        # riscv32-* toolchain is installed -- the riscv64 multilib build
+        # compiles rv32 fine with -march/-mabi, and is what the other
+        # generator plugins use. Preferring the xlen-matching name and falling
+        # back avoids emitting a compiler that is not on the machine.
+        for cand in (f'riscv{self.xlen}-unknown-elf-gcc',
+                     'riscv64-unknown-elf-gcc',
+                     'riscv32-unknown-elf-gcc'):
+            if shutil.which(cand):
+                self.cc = cand
+                break
+        else:
+            logger.error('No riscv*-unknown-elf-gcc found in $PATH')
+            raise SystemExit(1)
+        logger.info(f'riscv-dv using compiler: {self.cc}')
+
         # pyflow is pure Python; no simulator needed. It does need pyvsc.
         try:
             import vsc  # noqa: F401
@@ -198,7 +214,7 @@ class riscv_dv_plugin(object):
             entry['asm_file'] = asm
             entry['generator'] = self.name
             entry['include'] = [include_dir]
-            entry['cc'] = f'riscv{self.xlen}-unknown-elf-gcc'
+            entry['cc'] = self.cc
             entry['cc_args'] = ('-static -std=gnu99 -O2 -mcmodel=medany '
                                 '-fvisibility=hidden -nostdlib -nostartfiles')
             entry['linker_args'] = '-lm -lgcc -T'
