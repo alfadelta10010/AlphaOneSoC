@@ -1,0 +1,29 @@
+diff --git a/pygen/pygen_src/isa/riscv_instr.py b/pygen/pygen_src/isa/riscv_instr.py
+index e67fd54..50ae28a 100644
+--- a/pygen/pygen_src/isa/riscv_instr.py
++++ b/pygen/pygen_src/isa/riscv_instr.py
+@@ -189,20 +189,20 @@ class riscv_instr:
+         cls.basic_instr = (cls.instr_category["SHIFT"] + cls.instr_category["ARITHMETIC"] +
+                            cls.instr_category["LOGICAL"] + cls.instr_category["COMPARE"])
+         if cfg.no_ebreak == 0:
+-            cls.basic_instr.append("EBREAK")
++            cls.basic_instr.append(riscv_instr_name_t.EBREAK)
+             for _ in rcs.supported_isa:
+                 if(riscv_instr_group_t.RV32C in rcs.supported_isa and
+                    not(cfg.disable_compressed_instr)):
+-                    cls.basic_instr.append("C_EBREAK")
++                    cls.basic_instr.append(riscv_instr_name_t.C_EBREAK)
+                     break
+         if cfg.no_dret == 0:
+-            cls.basic_instr.append("DRET")
++            cls.basic_instr.append(riscv_instr_name_t.DRET)
+         if cfg.no_fence == 0:
+             cls.basic_instr.append(cls.instr_category["SYNCH"])
+         if(cfg.no_csr_instr == 0 and cfg.init_privileged_mode == "MACHINE_MODE"):
+             cls.basic_instr.append(cls.instr_category["CSR"])
+         if cfg.no_wfi == 0:
+-            cls.basic_instr.append("WFI")
++            cls.basic_instr.append(riscv_instr_name_t.WFI)
+ 
+     @classmethod
+     def create_csr_filter(cls, cfg):

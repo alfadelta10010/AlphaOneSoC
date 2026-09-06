@@ -1,0 +1,100 @@
+# See LICENSE for details
+
+import os
+import yaml
+import pytest
+
+from river_core.log import logger
+import river_core.utils as utils
+
+
+def _load_testlist(testlist_path, riscv_dv_dir):
+    """Expand a riscv-dv testlist, following its <riscv_dv_root> import."""
+    entries = []
+    with open(testlist_path) as fp:
+        raw = yaml.safe_load(fp) or []
+    for entry in raw:
+        if 'import' in entry:
+            imported = entry['import'].replace('<riscv_dv_root>', riscv_dv_dir)
+            if os.path.isfile(imported):
+                with open(imported) as fp:
+                    entries.extend(yaml.safe_load(fp) or [])
+            else:
+                logger.warning(f'riscv-dv testlist import not found: {imported}')
+        else:
+            entries.append(entry)
+
+    # Later entries win, so a target testlist can override the iteration count
+    # of a test it imported from base_testlist.yaml.
+    merged = {}
+    for e in entries:
+        if 'test' in e:
+            merged[e['test']] = e
+    return [e for e in merged.values() if int(e.get('iterations', 0)) > 0]
+
+
+def gen_cmd_list(riscv_dv_dir, target, isa, mabi, output_dir, testlist, seed):
+    """One `run.py --steps gen` invocation per test, so pytest can fan out."""
+    run_commands = []
+    tests = _load_testlist(testlist, riscv_dv_dir)
+    logger.info(f'riscv-dv: {len(tests)} tests with non-zero iterations')
+
+    seed_arg = f' --seed={seed}' if seed else ''
+
+    for entry in tests:
+        name = entry['test']
+        iterations = int(entry['iterations'])
+        out = os.path.join(output_dir, name)
+        os.makedirs(out, exist_ok=True)
+
+        # --custom_target bypasses run.py's hardcoded target allowlist, which
+        # has no rv32imac. Doing so makes --isa and --mabi mandatory.
+        # No shell compound here: river_core's sys_command uses shlex.split
+        # without a shell, so `cd x && y` would try to exec "cd". run.py
+        # resolves its own directory, and pygen_src is made importable via
+        # PYTHONPATH (set in the plugin's pre_gen) rather than by cwd.
+        cmd = (
+            f'python {os.path.join(riscv_dv_dir, "run.py")}'
+            f' --simulator pyflow'
+            f' --target {target}'
+            f' --custom_target {riscv_dv_dir}/target/{target}'
+            f' --isa {isa} --mabi {mabi}'
+            f' --test {name}'
+            f' --iterations {iterations}'
+            f' --output {out}'
+            f' --steps gen'
+            f'{seed_arg}'
+        )
+        run_commands.append(cmd)
+
+    return run_commands
+
+
+def idfnc(val):
+    for token in val.split():
+        pass
+    name = val.split('--test ')[1].split()[0] if '--test ' in val else val
+    return f'Generating {name}'
+
+
+def pytest_generate_tests(metafunc):
+    if 'test_input' in metafunc.fixturenames:
+        test_list = gen_cmd_list(metafunc.config.getoption("riscv_dv_dir"),
+                                 metafunc.config.getoption("target"),
+                                 metafunc.config.getoption("isa"),
+                                 metafunc.config.getoption("mabi"),
+                                 metafunc.config.getoption("output_dir"),
+                                 metafunc.config.getoption("testlist"),
+                                 metafunc.config.getoption("seed"))
+        metafunc.parametrize('test_input', test_list, ids=idfnc, indirect=True)
+
+
+@pytest.fixture
+def test_input(request, autouse=True):
+    program = request.param
+    (ret, out, err) = utils.sys_command(program, timeout=3000)
+    return ret
+
+
+def test_eval(test_input):
+    assert test_input == 0
