@@ -39,7 +39,14 @@ def gen_cmd_list(riscv_dv_dir, target, isa, mabi, output_dir, testlist, seed):
     tests = _load_testlist(testlist, riscv_dv_dir)
     logger.info(f'riscv-dv: {len(tests)} tests with non-zero iterations')
 
-    seed_arg = f' --seed={seed}' if seed else ''
+    # --start_seed, not --seed. run.py rejects --seed outright whenever
+    # --iterations is greater than 1 ("--seed is incompatible with setting
+    # --iterations"), and SeedGen.get() asserts test_iter == 0 for a fixed
+    # seed, so the configured seed could never have reached a multi-iteration
+    # test. --start_seed is the reproducible form riscv-dv intends for a run of
+    # several programs: iteration i is generated with start_seed + i, so the
+    # whole set is repeatable and the programs still differ from each other.
+    seed_arg = f' --start_seed={seed}' if seed else ''
 
     for entry in tests:
         name = entry['test']
