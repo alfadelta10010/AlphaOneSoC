@@ -110,6 +110,10 @@ module tb_rivercore;
     reg [31:0] tohost_addr;
     reg        tohost_enabled;
     reg        have_init_file;
+    // Spin detection: see the always block below.
+    reg [31:0] spin_last_pc;
+    integer    spin_count;
+    integer    spin_limit;
     reg [31:0] start_pc;
     reg        logging_active;
 
@@ -180,36 +184,6 @@ module tb_rivercore;
         end
     end
 
-
-    // ================================================================
-    //  Counters
-    // ================================================================
-    integer instr_count = 0;
-    integer cycle_count = 0;
-
-    // ================================================================
-    //  Termination detection
-    // ================================================================
-    wire trap_handler_set = (cpu.csr_unit.mtvec != 32'b0);
-    wire is_ecall  = dbg_trap && (dbg_instr == 32'h0000_0073) && !trap_handler_set;
-    wire is_ebreak = dbg_trap && (dbg_instr == 32'h0010_0073) && !trap_handler_set;
-    wire is_halt   = dbg_retired && (dbg_instr == 32'h0000_006f);
-    wire is_tohost = tohost_enabled && dmem_we &&
-                     (dmem_addr == tohost_addr) && (dmem_wdata != 32'b0);
-
-    // ================================================================
-    //  Termination flag — set on detection cycle, acted on next cycle
-    //  so the dump always block can flush the last line first.
-    //
-    //  ecall/ebreak/halt: terminate immediately (one extra retire).
-    //  tohost: spike continues retiring through write_tohost's high-word
-    //  store and fence.i before halting. Drain up to 4 extra retires (or
-    //  stop on fence.i retire) so the trace matches.
-    // ================================================================
-    reg     terminate    = 1'b0;
-    reg     saw_tohost   = 1'b0;
-    integer post_tohost_retires = 0;
-    wire    is_fencei_retire = dbg_retired && (dbg_instr == 32'h0000_100f);
 
     // ================================================================
     //  Counters
