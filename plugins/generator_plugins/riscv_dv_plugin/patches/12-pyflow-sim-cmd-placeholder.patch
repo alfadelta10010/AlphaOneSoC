@@ -1,0 +1,21 @@
+diff --git a/run.py b/run.py
+index 4097c9f..4b2e019 100644
+--- a/run.py
++++ b/run.py
+@@ -304,9 +304,13 @@ def do_simulate(sim_cmd, simulator, test_list, cwd, sim_opts, seed_gen,
+                     else:
+                         test_cnt = iterations - i * batch_size
+                     if simulator == "pyflow":
+-                        sim_cmd = re.sub("<test_name>", test['gen_test'],
+-                                         sim_cmd)
+-                        cmd = lsf_cmd + " " + sim_cmd.rstrip() + \
++                        # Substitute into a local, not back into sim_cmd: the
++                        # placeholder is consumed on the first pass, so writing
++                        # it back makes every later test in the list run the
++                        # *first* test's generator script.
++                        test_sim_cmd = re.sub("<test_name>", test['gen_test'],
++                                              sim_cmd)
++                        cmd = lsf_cmd + " " + test_sim_cmd.rstrip() + \
+                               (" --num_of_tests={}".format(test_cnt)) + \
+                               (" --start_idx={}".format(i * batch_size)) + \
+                               (" --asm_file_name={}/asm_test/{}".format(
