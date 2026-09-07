@@ -1,0 +1,28 @@
+--- a/pygen/pygen_src/isa/riscv_instr.py
++++ b/pygen/pygen_src/isa/riscv_instr.py
+@@ -338,7 +338,24 @@
+             self.rs2.rand_mode = bool(self.has_rs2)
+             self.rd.rand_mode = bool(self.has_rd)
+             self.imm.rand_mode = bool(self.has_imm)
+-            if self.category != riscv_instr_category_t.CSR:
++            # int(), because `self.category != <enum>` on a vsc field builds a
++            # constraint *expression* rather than evaluating to a Python bool.
++            # pre_randomize() runs inside the randomize_with() scope opened by
++            # riscv_instr_stream.randomize_gpr(), so that expression was
++            # collected into the solve as a real constraint:
++            #
++            #     vsc.model.solve_failure.SolveFailure: solve failure
++            #     Problem Set: 1 constraints
++            #       (category != 11);
++            #
++            # For every non-CSR instruction the constraint happens to be true,
++            # which is why it went unnoticed. For a CSR instruction -- category
++            # 11 -- it is a flat contradiction and the solve fails, so no test
++            # containing a csrrw/csrrs/csrrc could ever be generated. Reading
++            # get_val() keeps this a plain Python branch, which is what
++            # src/isa/riscv_instr.sv:299 does. (int() does not work here --
++            # a non-rand enum_t does not implement __int__.)
++            if self.category.get_val() != riscv_instr_category_t.CSR:
+                 self.csr.rand_mode = False
+ 
+     def set_imm_len(self):
