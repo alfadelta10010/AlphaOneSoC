@@ -53,6 +53,18 @@ def gen_cmd_list(riscv_dv_dir, target, isa, mabi, output_dir, testlist, seed):
         # without a shell, so `cd x && y` would try to exec "cd". run.py
         # resolves its own directory, and pygen_src is made importable via
         # PYTHONPATH (set in the plugin's pre_gen) rather than by cwd.
+        # --batch_size 1 makes run.py generate one program per invocation.
+        # Without it, riscv_instr_base_test.run() opens a
+        # multiprocessing.Pool(processes=cfg.num_of_tests), so a test with 8
+        # iterations forks 8 generator processes at once -- on top of the
+        # pytest-xdist workers already running one such test each. With jobs=8
+        # that is up to 64 concurrent processes on this 8-core machine, each
+        # peaking around 3GB: the box swaps, every process slows by roughly the
+        # oversubscription factor, and a full 56-program run was still less
+        # than a third done after 70 minutes. Batching hands parallelism back
+        # to pytest, which is the single place it is configured, and also makes
+        # the 1200s pyflow generation timeout apply per program rather than to
+        # a whole test's iterations at once.
         cmd = (
             f'python {os.path.join(riscv_dv_dir, "run.py")}'
             f' --simulator pyflow'
@@ -61,6 +73,7 @@ def gen_cmd_list(riscv_dv_dir, target, isa, mabi, output_dir, testlist, seed):
             f' --isa {isa} --mabi {mabi}'
             f' --test {name}'
             f' --iterations {iterations}'
+            f' --batch_size 1'
             f' --output {out}'
             f' --steps gen'
             f'{seed_arg}'
