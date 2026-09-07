@@ -170,6 +170,13 @@ class riscv_dv_plugin(object):
             logger.error(f'Could not reset the riscv-dv checkout at '
                          f'{self.riscv_dv_dir}; delete it to force a fresh clone.')
             raise SystemExit(1)
+        # `git checkout` restores tracked files but leaves untracked ones, and
+        # a patch that adds a file would then fail to re-apply on the next run
+        # with "already exists". Clean those too. This runs before the target
+        # files are copied in below, so removing them here is harmless.
+        subprocess.call(
+            ['git', '-C', self.riscv_dv_dir, 'clean', '-qfd'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for patch in sorted(glob.glob(os.path.join(patch_dir, '*.patch'))):
             name = os.path.basename(patch)
             ret = subprocess.call(
