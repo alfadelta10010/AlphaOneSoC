@@ -100,22 +100,73 @@ NUM_HARTS = 1
 # Previleged CSR implementation
 # -----------------------------------------------------------------------------
 
-# Implemented previlieged CSR list
-implemented_csr = [privileged_reg_t.MVENDORID,  # Vendor ID
-                   privileged_reg_t.MARCHID,  # Architecture ID
-                   privileged_reg_t.MIMPID,  # Implementation ID
-                   privileged_reg_t.MHARTID,  # Hardware thread ID
-                   privileged_reg_t.MSTATUS,  # Machine status
-                   privileged_reg_t.MISA,  # ISA and extensions
-                   privileged_reg_t.MIE,  # Machine interrupt-enable register
-                   privileged_reg_t.MTVEC,  # Machine trap-handler base address
-                   privileged_reg_t.MCOUNTEREN,  # Machine counter enable
-                   privileged_reg_t.MSCRATCH,  # Scratch register for machine trap handlers
-                   privileged_reg_t.MEPC,  # Machine exception program counter
-                   privileged_reg_t.MCAUSE,  # Machine trap cause
-                   privileged_reg_t.MTVAL,  # Machine bad address or instruction
-                   privileged_reg_t.MIP  # Machine interrupt pending
-                   ]
+# Implemented previlieged CSR list.
+#
+# Transcribed from the read decode in src/csr.v: a CSR belongs here if reading
+# it sets addr_valid, i.e. if it does *not* raise an illegal instruction. That
+# is the property riscv-dv actually uses -- implemented_csr is the exclusion
+# list for illegal-CSR stimulus (riscv_instr.create_csr_filter), so anything
+# missing here gets generated as an "illegal" access against a CSR the core
+# implements, and the trap the stimulus expects never arrives.
+implemented_csr = [
+    # Machine information (read-only)
+    privileged_reg_t.MVENDORID,      # 0xF11 Vendor ID
+    privileged_reg_t.MARCHID,        # 0xF12 Architecture ID
+    privileged_reg_t.MIMPID,         # 0xF13 Implementation ID
+    privileged_reg_t.MHARTID,        # 0xF14 Hardware thread ID
+    privileged_reg_t.MCONFIGPTR,     # 0xF15 Config data pointer (reads 0)
+    # Machine trap setup
+    privileged_reg_t.MSTATUS,        # 0x300 Machine status
+    privileged_reg_t.MISA,           # 0x301 ISA and extensions (C bit is WARL)
+    privileged_reg_t.MIE,            # 0x304 Machine interrupt-enable
+    privileged_reg_t.MTVEC,          # 0x305 Trap-handler base (direct mode only)
+    privileged_reg_t.MCOUNTEREN,     # 0x306 Counter enable for U-mode
+    privileged_reg_t.MCOUNTINHIBIT,  # 0x320 Counter inhibit (CY, IR)
+    # Machine trap handling
+    privileged_reg_t.MSCRATCH,       # 0x340 Scratch register
+    privileged_reg_t.MEPC,           # 0x341 Exception program counter
+    privileged_reg_t.MCAUSE,         # 0x342 Trap cause
+    privileged_reg_t.MTVAL,          # 0x343 Bad address or instruction
+    privileged_reg_t.MIP,            # 0x344 Interrupt pending
+    # Physical memory protection. The core implements four regions in pmpcfg0
+    # and pmpaddr0-3; pmpcfg1-3 and pmpaddr4-15 decode as hardwired zero and
+    # ignore writes rather than trapping, which is what the spec requires of
+    # unimplemented PMP entries, so they are implemented for this purpose.
+    privileged_reg_t.PMPCFG0,        # 0x3A0
+    privileged_reg_t.PMPCFG1,        # 0x3A1 read-only zero
+    privileged_reg_t.PMPCFG2,        # 0x3A2 read-only zero
+    privileged_reg_t.PMPCFG3,        # 0x3A3 read-only zero
+    privileged_reg_t.PMPADDR0,       # 0x3B0
+    privileged_reg_t.PMPADDR1,       # 0x3B1
+    privileged_reg_t.PMPADDR2,       # 0x3B2
+    privileged_reg_t.PMPADDR3,       # 0x3B3
+    privileged_reg_t.PMPADDR4,       # 0x3B4 read-only zero
+    privileged_reg_t.PMPADDR5,       # 0x3B5 read-only zero
+    privileged_reg_t.PMPADDR6,       # 0x3B6 read-only zero
+    privileged_reg_t.PMPADDR7,       # 0x3B7 read-only zero
+    privileged_reg_t.PMPADDR8,       # 0x3B8 read-only zero
+    privileged_reg_t.PMPADDR9,       # 0x3B9 read-only zero
+    privileged_reg_t.PMPADDR10,      # 0x3BA read-only zero
+    privileged_reg_t.PMPADDR11,      # 0x3BB read-only zero
+    privileged_reg_t.PMPADDR12,      # 0x3BC read-only zero
+    privileged_reg_t.PMPADDR13,      # 0x3BD read-only zero
+    privileged_reg_t.PMPADDR14,      # 0x3BE read-only zero
+    privileged_reg_t.PMPADDR15,      # 0x3BF read-only zero
+    # Machine counters (Zicntr). Writable halves of the 64-bit counters.
+    privileged_reg_t.MCYCLE,         # 0xB00
+    privileged_reg_t.MINSTRET,       # 0xB02
+    privileged_reg_t.MCYCLEH,        # 0xB80
+    privileged_reg_t.MINSTRETH,      # 0xB82
+    # Unprivileged counter aliases (Zicntr). Readable from M-mode
+    # unconditionally, and from U-mode only when the matching mcounteren bit
+    # is set -- init_privileged_mode is MACHINE_MODE, so they never trap here.
+    privileged_reg_t.CYCLE,          # 0xC00
+    privileged_reg_t.TIME,           # 0xC01 driven from the CLINT mtime
+    privileged_reg_t.INSTRET,        # 0xC02
+    privileged_reg_t.CYCLEH,         # 0xC80
+    privileged_reg_t.TIMEH,          # 0xC81
+    privileged_reg_t.INSTRETH,       # 0xC82
+]
 
 # Implementation-specific custom CSRs
 custom_csr = []
