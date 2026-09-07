@@ -138,36 +138,53 @@ class riscv_dv_plugin(object):
         os.makedirs(self.output_dir)
 
     def _apply_patches(self):
-        """Apply local fixes to upstream riscv-dv, idempotently.
+        """Reset the checkout and apply the local fixes to upstream riscv-dv.
 
         pyflow is a partial port of the SystemVerilog generator and has real
         defects that stop most of the test list generating at all. See
         patches/README.md for what each one is. Applying them here rather than
         editing the checkout keeps them alive across a re-clone.
+
+        The tracked files are restored first and the whole series is then
+        applied in order, rather than testing each patch for "already applied"
+        individually. Several patches touch the same file within a few lines of
+        each other, and `git apply --check --reverse` on one of them fails once
+        a later patch has shifted its context -- so the old idempotency check
+        reported a spurious failure on the second run of an unchanged checkout:
+
+            Failed to apply riscv-dv patch 08-hazard-instr-stream.patch
+
+        Reset-then-apply has no such ordering hazard, and it also guarantees the
+        series is applied in numeric order every time. Only tracked files are
+        restored, so the target directories the plugin copies in are untouched.
+        This directory is created and owned by the plugin, so discarding local
+        edits to it is safe.
         """
         patch_dir = os.path.join(this, 'patches')
         if not os.path.isdir(patch_dir):
             return
+        ret = subprocess.call(
+            ['git', '-C', self.riscv_dv_dir, 'checkout', '--', '.'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if ret != 0:
+            logger.error(f'Could not reset the riscv-dv checkout at '
+                         f'{self.riscv_dv_dir}; delete it to force a fresh clone.')
+            raise SystemExit(1)
         for patch in sorted(glob.glob(os.path.join(patch_dir, '*.patch'))):
             name = os.path.basename(patch)
-            # --check first: a patch already applied is not an error.
-            already = subprocess.call(
-                ['git', '-C', self.riscv_dv_dir, 'apply', '--check', '--reverse', patch],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if already == 0:
-                logger.debug(f'riscv-dv patch already applied: {name}')
-                continue
             ret = subprocess.call(
                 ['git', '-C', self.riscv_dv_dir, 'apply', patch],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if ret == 0:
-                logger.info(f'Applied riscv-dv patch: {name}')
+                logger.debug(f'Applied riscv-dv patch: {name}')
             else:
                 logger.error(
-                    f'Failed to apply riscv-dv patch {name}. The checkout at '
-                    f'{self.riscv_dv_dir} may have drifted from what the patch '
-                    f'expects; delete it to force a fresh clone.')
+                    f'Failed to apply riscv-dv patch {name} to a freshly reset '
+                    f'checkout. The patch series is inconsistent with the '
+                    f'upstream revision at {self.riscv_dv_dir}.')
                 raise SystemExit(1)
+        logger.info(f'Applied {len(glob.glob(os.path.join(patch_dir, "*.patch")))} '
+                    f'riscv-dv patches')
 
     @gen_hookimpl
     def gen(self, module_dir, output_dir):
