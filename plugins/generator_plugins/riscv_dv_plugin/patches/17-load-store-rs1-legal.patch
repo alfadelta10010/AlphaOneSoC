@@ -1,0 +1,85 @@
+--- a/pygen/pygen_src/riscv_load_store_instr_lib.py
++++ b/pygen/pygen_src/riscv_load_store_instr_lib.py
+@@ -59,11 +59,52 @@
+         with vsc.if_then(self.use_sp_as_rs1 == 1):
+             self.rs1_reg == riscv_reg_t.SP
+ 
+-    # TODO Getting pyvsc error -- > rs1 has not been build yet
+-    '''@vsc.constraint
+-    def rs1_c(self):
+-        self.rs1_reg.not_inside(vsc.rangelist(cfg.reserved_regs,
+-                                              self.reserved_rd, riscv_reg_t.ZERO))'''
++    # src/riscv_load_store_instr_lib.sv:54-56 constrains the base register:
++    #
++    #     constraint rs1_c {
++    #       !(rs1_reg inside {cfg.reserved_regs, reserved_rd, ZERO});
++    #     }
++    #
++    # The port left it commented out ("pyvsc error --> rs1 has not been build
++    # yet"), so nothing stopped the solver picking a base register the stream
++    # must not touch. Two distinct failures follow, and both were observed in a
++    # single generated riscv_mmu_stress_test program with 496 base-register
++    # initialisations:
++    #
++    #   * rs1_reg == ZERO emits `la zero, region_1+3609`, which the assembler
++    #     rejects outright -- the whole program is lost.
++    #   * rs1_reg in cfg.reserved_regs rewrites that register with a data page
++    #     address. cfg.reserved_regs is {cfg.tp, cfg.sp, cfg.scratch_reg}
++    #     (riscv_instr_gen_config.py:472), and those three are themselves
++    #     randomized, so they are whichever registers this program picked to
++    #     hold the stack pointer, thread pointer and trap scratch value. The
++    #     program still assembles and still runs, so it is reported as a pass,
++    #     but from that point it executes on a stack pointer aimed into the
++    #     data section -- including every trap handler that pushes the GPRs to
++    #     the kernel stack. The stimulus the test claims to provide is not what
++    #     runs.
++    #
++    # Measured on one generated riscv_mmu_stress_test program with 496 base
++    # register initialisations, whose reserved set was {s9, a4, t6}: 4 used x0
++    # and 21 used one of those three. After this patch, a comparable program
++    # with 589 initialisations used neither.
++    #
++    # Enforcing this as a pyvsc constraint hits the same build-order problem the
++    # original TODO describes, so it is applied to the solved value instead:
++    # legalize_rs1() runs first thing in post_randomize(), before rs1_reg is
++    # used to emit anything.
++    def legalize_rs1(self):
++        illegal = {int(riscv_reg_t.ZERO)}
++        illegal.update(int(r) for r in cfg.reserved_regs)
++        illegal.update(int(r) for r in self.reserved_rd)
++        if int(self.rs1_reg) not in illegal:
++            return
++        allowed = [r for r in riscv_reg_t if int(r) not in illegal]
++        if not allowed:
++            logging.critical("No legal rs1 for a load/store stream: every "
++                             "register is reserved")
++            sys.exit(1)
++        self.rs1_reg = random.choice(allowed)
+ 
+     @vsc.constraint
+     def addr_c(self):
+@@ -143,13 +184,23 @@
+ 
+     def pre_randomize(self):
+         super().pre_randomize()
+-        if(riscv_reg_t.SP in [cfg.reserved_regs, self.reserved_rd]):
++        # src/riscv_load_store_instr_lib.sv:101 is
++        # `if (SP inside {cfg.reserved_regs, reserved_rd})`, i.e. is SP a member
++        # of either list. The port wrote `SP in [cfg.reserved_regs,
++        # self.reserved_rd]`, which asks whether SP *is* one of those two list
++        # objects and is therefore always False. cfg.reserved_regs always holds
++        # sp (riscv_instr_gen_config.py:472), so this guard was meant to fire
++        # every time and never did: use_sp_as_rs1 stayed live and the sp_c dist
++        # kept pulling the base register to SP.
++        if (riscv_reg_t.SP in cfg.reserved_regs or
++                riscv_reg_t.SP in self.reserved_rd):
+             self.use_sp_as_rs1 = 0
+             with vsc.raw_mode():
+                 self.use_sp_as_rs1.rand_mode = False
+             self.sp_rnd_order_c.constraint_mode(False)
+ 
+     def post_randomize(self):
++        self.legalize_rs1()
+         self.randomize_offset()
+         # rs1 cannot be modified by other instructions
+         if not(self.rs1_reg in self.reserved_rd):
