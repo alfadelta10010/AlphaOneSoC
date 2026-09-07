@@ -355,6 +355,75 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `W=1` with `R=0`, and always leave byte 0 as `0x0f` so the safe region stays
   accessible.
 
+- `19-rawmode-category-constraint.patch`
+  `riscv_instr.pre_randomize()` does, inside `vsc.raw_mode()`:
+
+      if self.category != riscv_instr_category_t.CSR:
+          self.csr.rand_mode = False
+
+  `self.category != <enum>` on a vsc field builds a constraint *expression*
+  rather than a Python bool, and `pre_randomize()` runs inside the
+  `randomize_with()` scope opened by `riscv_instr_stream.randomize_gpr()`. The
+  expression was collected into that solve as a real constraint:
+
+      vsc.model.solve_failure.SolveFailure: solve failure
+      Problem Set: 1 constraints
+        (category != 11);
+
+  True for every non-CSR instruction, which is why it went unnoticed; category
+  11 is CSR, so for a CSR instruction it is a flat contradiction. Use
+  `get_val()`. (`int()` does not work -- a non-rand `enum_t` has no `__int__`.)
+
+- `20-generate-csr-instructions.patch`
+  Zicsr was entirely unexercised. Four independent defects, each sufficient on
+  its own to prevent any CSR instruction being generated or being correct:
+
+  * `build_basic_instruction_list` compares `cfg.init_privileged_mode`, a
+    `privileged_mode_t`, against the **string** `"MACHINE_MODE"`. Always False.
+  * the same line `append()`s `instr_category["CSR"]`, a *list*, as a single
+    element (same for `"SYNCH"`); `get_rand_instr()` then indexes
+    `instr_template` with a list. Changed to `extend()`.
+  * `create_csr_filter` appends the strings `"MSCRATCH"`/`"SSCRATCH"`/
+    `"USCRATCH"` where a `privileged_reg_t` is needed -- the value goes into the
+    instruction's `csr` field -- compares against a string again, and aliases
+    `rcs.implemented_csr` instead of copying it, so its own `clear()` would
+    empty the core setting.
+  * `convert2asm` formats the address as `'0x{}'` with the value in **decimal**,
+    so mscratch (832 == 0x340) was emitted as the unrelated CSR `0x832`. Every
+    CSR address the generator produced was wrong.
+
+  `include_reg`/`exclude_reg` were also populated and read by nothing: pyflow
+  has no `riscv_csr_instr` class and its `csr_c` is an empty `pass`, so the
+  address was a uniform draw over all 4096 encodings -- a random value into
+  whichever machine CSR it happened to land on. `legalize_csr()` applies
+  `csr_addr_c` from `src/isa/riscv_csr_instr.sv` to the solved value, honouring
+  the default filter (MSCRATCH only, chosen upstream precisely so a random
+  stream cannot disturb machine state).
+
+- `21-instruction-draw-off-by-one.patch`
+  `random.randrange(0, n - 1)` yields `0..n-2`, so the last element was
+  unreachable at four call sites. The worst is `get_load_store_instr()`:
+  `gen_load_store_instr()` builds `allowed_instr` in alignment order and appends
+  the widest legal access last, so the widest access for each address was never
+  chosen -- and where only `[LB, LBU, SB]` was legal, `SB` was removed and the
+  stream could not emit a byte store at all. The same expression also raises
+  `ValueError` on a single-element list.
+
+- `22-fence-instruction-gating.patch`
+  `create_instr_list` dropped the negation from the `enable_sfence` test and the
+  `cfg.no_fence &&` guard from the FENCE/FENCE_I/SFENCE_VMA skip, so FENCE and
+  FENCE.I were struck from the instruction set unconditionally. FyraCore
+  implements Zifencei and asserts `fencei_flush` on FENCE.I; none of it was
+  reachable. Corrected together with the missing `enable_sfence` implication
+  from `src/riscv_instr_gen_config.sv:293-295`, because restoring the guard
+  alone would emit `sfence.vma` on a core with `support_sfence = 0`.
+
+- `23-no-fence-default.patch`
+  `--no_fence` defaults to 1 in the port and 0 in the SystemVerilog, so fences
+  were suppressed everywhere -- including in the streams meant to contrast with
+  `riscv_no_fence_test`. After 22 and 23, a `riscv_rand_instr_test` program
+  carries 210 fences and `riscv_no_fence_test` carries none.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
