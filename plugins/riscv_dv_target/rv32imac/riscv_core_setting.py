@@ -44,8 +44,13 @@ supported_interrupt_mode = [mtvec_mode_t.DIRECT]
 # interrupt mode is supported
 max_interrupt_vector_num = 16
 
-# Physical memory protection support
-support_pmp = 0
+# Physical memory protection support.
+# src/pmp.v implements four regions checked against pmpcfg0 and pmpaddr0-3,
+# with TOR, NA4 and NAPOT matching, and src/csr.v implements the lock bits and
+# the TOR address locking rule. With this set, riscv-dv emits a pmp_setup
+# section that programs the CSRs before entering the test, and moves the trap
+# handlers and test_done ahead of main so a PMP fault can still be handled.
+support_pmp = 1
 
 # Debug mode support
 support_debug_mode = 0
