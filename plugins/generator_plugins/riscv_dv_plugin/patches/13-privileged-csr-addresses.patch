@@ -1,0 +1,62 @@
+diff --git a/pygen/pygen_src/riscv_instr_pkg.py b/pygen/pygen_src/riscv_instr_pkg.py
+index c432657..30b3339 100644
+--- a/pygen/pygen_src/riscv_instr_pkg.py
++++ b/pygen/pygen_src/riscv_instr_pkg.py
+@@ -893,6 +893,7 @@ class privileged_reg_t(IntEnum):
+     MARCHID = 0xF12  # Architecture ID
+     MIMPID = 0xF13  # Implementation ID
+     MHARTID = 0xF14  # Hardware thread ID
++    MCONFIGPTR = 0xF15  # Pointer to configuration data structure
+     MSTATUS = 0x300  # Machine status
+     MISA = 0x301  # ISA and extensions
+     MEDELEG = 0x302  # Machine exception delegation register
+@@ -973,23 +974,23 @@ class privileged_reg_t(IntEnum):
+     MHPMCOUNTER13H = 0xB8D  # Upper 32 bits of HPMCOUNTER13, RV32I only
+     MHPMCOUNTER14H = 0xB8E  # Upper 32 bits of HPMCOUNTER14, RV32I only
+     MHPMCOUNTER15H = 0xB8F  # Upper 32 bits of HPMCOUNTER15, RV32I only
+-    MHPMCOUNTER16H = 0xB8F  # Upper 32 bits of HPMCOUNTER16, RV32I only
+-    MHPMCOUNTER17H = 0xB90  # Upper 32 bits of HPMCOUNTER17, RV32I only
+-    MHPMCOUNTER18H = 0xB91  # Upper 32 bits of HPMCOUNTER18, RV32I only
+-    MHPMCOUNTER19H = 0xB92  # Upper 32 bits of HPMCOUNTER19, RV32I only
+-    MHPMCOUNTER20H = 0xB93  # Upper 32 bits of HPMCOUNTER20, RV32I only
+-    MHPMCOUNTER21H = 0xB94  # Upper 32 bits of HPMCOUNTER21, RV32I only
+-    MHPMCOUNTER22H = 0xB95  # Upper 32 bits of HPMCOUNTER22, RV32I only
+-    MHPMCOUNTER23H = 0xB96  # Upper 32 bits of HPMCOUNTER23, RV32I only
+-    MHPMCOUNTER24H = 0xB97  # Upper 32 bits of HPMCOUNTER24, RV32I only
+-    MHPMCOUNTER25H = 0xB98  # Upper 32 bits of HPMCOUNTER25, RV32I only
+-    MHPMCOUNTER26H = 0xB99  # Upper 32 bits of HPMCOUNTER26, RV32I only
+-    MHPMCOUNTER27H = 0xB9A  # Upper 32 bits of HPMCOUNTER27, RV32I only
+-    MHPMCOUNTER28H = 0xB9B  # Upper 32 bits of HPMCOUNTER28, RV32I only
+-    MHPMCOUNTER29H = 0xB9C  # Upper 32 bits of HPMCOUNTER29, RV32I only
+-    MHPMCOUNTER30H = 0xB9D  # Upper 32 bits of HPMCOUNTER30, RV32I only
+-    MHPMCOUNTER31H = 0xB9E  # Upper 32 bits of HPMCOUNTER31, RV32I only
+-    MCOUNTINHIBIT = 0x320F  # Machine counter-inhibit register
++    MHPMCOUNTER16H = 0xB90  # Upper 32 bits of HPMCOUNTER16, RV32I only
++    MHPMCOUNTER17H = 0xB91  # Upper 32 bits of HPMCOUNTER17, RV32I only
++    MHPMCOUNTER18H = 0xB92  # Upper 32 bits of HPMCOUNTER18, RV32I only
++    MHPMCOUNTER19H = 0xB93  # Upper 32 bits of HPMCOUNTER19, RV32I only
++    MHPMCOUNTER20H = 0xB94  # Upper 32 bits of HPMCOUNTER20, RV32I only
++    MHPMCOUNTER21H = 0xB95  # Upper 32 bits of HPMCOUNTER21, RV32I only
++    MHPMCOUNTER22H = 0xB96  # Upper 32 bits of HPMCOUNTER22, RV32I only
++    MHPMCOUNTER23H = 0xB97  # Upper 32 bits of HPMCOUNTER23, RV32I only
++    MHPMCOUNTER24H = 0xB98  # Upper 32 bits of HPMCOUNTER24, RV32I only
++    MHPMCOUNTER25H = 0xB99  # Upper 32 bits of HPMCOUNTER25, RV32I only
++    MHPMCOUNTER26H = 0xB9A  # Upper 32 bits of HPMCOUNTER26, RV32I only
++    MHPMCOUNTER27H = 0xB9B  # Upper 32 bits of HPMCOUNTER27, RV32I only
++    MHPMCOUNTER28H = 0xB9C  # Upper 32 bits of HPMCOUNTER28, RV32I only
++    MHPMCOUNTER29H = 0xB9D  # Upper 32 bits of HPMCOUNTER29, RV32I only
++    MHPMCOUNTER30H = 0xB9E  # Upper 32 bits of HPMCOUNTER30, RV32I only
++    MHPMCOUNTER31H = 0xB9F  # Upper 32 bits of HPMCOUNTER31, RV32I only
++    MCOUNTINHIBIT = 0x320  # Machine counter-inhibit register
+     MHPMEVENT3 = 0x323  # Machine performance-monitoring event selector
+     MHPMEVENT4 = 0x324  # Machine performance-monitoring event selector
+     MHPMEVENT5 = 0x325  # Machine performance-monitoring event selector
+@@ -1026,7 +1027,7 @@ class privileged_reg_t(IntEnum):
+     TINFO = 0x7A4  # Debug trigger info register
+     TCONTROL = 0x7A5  # Debug trigger control register
+     MCONTEXT = 0x7A8  # Machine mode trigger context register
+-    SCONTEXT = 0x7AA  # Supervisor mode trigger context register
++    SCONTEXT = 0x5A8  # Supervisor mode trigger context register
+     DCSR = 0x7B0  # Debug control and status register
+     DPC = 0x7B1  # Debug PC
+     DSCRATCH0 = 0x7B2  # Debug scratch register
