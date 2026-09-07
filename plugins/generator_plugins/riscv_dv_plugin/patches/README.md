@@ -173,6 +173,64 @@ Each is checked with `git apply --check` first and skipped if already applied.
   After the fix, 5/5 generated `riscv_rand_instr_test` programs assemble with
   zero errors (3 errors per program before).
 
+- `11-testlist-override-dedupe.patch`
+  `process_regression_list()` (`scripts/lib.py`) appends *every* entry whose test
+  name matches, so a testlist that imports `base_testlist.yaml` and then
+  overrides an entry queues that test **twice** -- once with upstream's
+  `gen_opts` and once with the local ones. Both invocations are handed the same
+  `--asm_file_name` and the same `--log_file_name`, so the first is pure waste
+  and its output is clobbered by the second.
+
+  For this target that was fatal rather than merely wasteful. Upstream's
+  `riscv_mmu_stress_test` entry asks for `riscv_multi_page_load_store_instr_stream`
+  and `riscv_mem_region_stress_test`, and every upstream entry uses
+  `+num_of_sub_program=5`. The upstream copy ran first and ate the whole 1200s
+  pyflow generation budget, so `run.py` was killed before the local entry ever
+  started:
+
+      $ ls build/mywork/riscv_dv/*/asm_test/*.S
+      (nothing, for all 12 streams)
+
+  A zero-iteration override also did not disable the imported entry, because the
+  `entry['iterations'] > 0` guard skipped it before it could take effect -- so
+  `riscv_ebreak_debug_mode_test` and `riscv_unaligned_load_store_test` were still
+  live under `--test all` despite being explicitly zeroed in the target testlist.
+
+  The patch makes a later entry replace an earlier one with the same test name,
+  and makes a zero-iteration override remove it. After it, `riscv_ebreak_test`
+  generates in 15s instead of timing out at 1200s.
+
+- `12-pyflow-sim-cmd-placeholder.patch`
+  `do_simulate()` (`run.py`) substitutes the `<test_name>` placeholder with
+  `re.sub(..., sim_cmd)` and assigns the result **back to `sim_cmd`**. The
+  placeholder is consumed on the first iteration, so every later test in the
+  matched list re-runs the *first* test's generator script. Substituting into a
+  local leaves the template intact. Only reachable with more than one entry in
+  the list, which is why patch 11 and this one are separate defects with the same
+  trigger.
+
+- `13-privileged-csr-addresses.patch`
+  18 entries in pyflow's `privileged_reg_t` (`riscv_instr_pkg.py`) carry the wrong
+  CSR address. Checked against both `src/riscv_instr_pkg.sv` in the same tree and
+  the privileged spec:
+
+  * `MCOUNTINHIBIT = 0x320F`, should be `0x320`. That is not even a 12-bit CSR
+    address, so any instruction generated for it fails to assemble outright.
+    FyraCore implements `mcountinhibit`, so this is on the live path.
+  * `MHPMCOUNTER16H` .. `MHPMCOUNTER31H` are each one too low (`0xB8F`..`0xB9E`
+    instead of `0xB90`..`0xB9F`) -- an omitted entry shifted the whole block, so
+    each name denotes its predecessor's register.
+  * `SCONTEXT = 0x7AA`, should be `0x5A8` (the `0x7AA` encoding is from a
+    superseded debug-spec draft).
+
+  `MCONFIGPTR` (`0xF15`) was missing from the Python enum entirely though it is
+  present in the SystemVerilog one. FyraCore implements it (`src/csr.v`, `12'hF15`),
+  so it has to exist as a name before it can be listed in `implemented_csr`.
+
+  These matter beyond assembling: `implemented_csr` is used as the *exclusion*
+  list for illegal-CSR stimulus, so a CSR the enum cannot name is a CSR the
+  generator will happily target as "illegal" against a core that implements it.
+
 ## Still broken upstream (not patched)
 
 - `riscv_multi_page_load_store_instr_stream` and `riscv_mem_region_stress_test`
