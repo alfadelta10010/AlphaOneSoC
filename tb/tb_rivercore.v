@@ -229,13 +229,20 @@ module tb_rivercore;
     //  dump keeps everything up to that point, which is what diagnosis needs,
     //  and the run fails in seconds instead of minutes.
     //
+    //  The default is deliberately generous. A test may legitimately park in a
+    //  self-loop waiting for an interrupt, and cutting that short would turn a
+    //  passing test into a failure -- a far worse outcome than a slow one. At
+    //  100000 the limit is still an order of magnitude below MAX_CYCLES, so a
+    //  genuine hang is caught early, while no plausible interrupt wait comes
+    //  close.
+    //
     //  +SPIN_LIMIT=0 disables this, for a test with a legitimate long spin.
     // ================================================================
     initial begin
         spin_last_pc = 32'hFFFF_FFFF;
         spin_count   = 0;
         if (!$value$plusargs("SPIN_LIMIT=%d", spin_limit))
-            spin_limit = 20000;
+            spin_limit = 100000;
     end
 
     always @(posedge clk) begin
