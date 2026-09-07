@@ -1,0 +1,72 @@
+--- a/pygen/pygen_src/isa/riscv_instr.py
++++ b/pygen/pygen_src/isa/riscv_instr.py
+@@ -299,19 +299,20 @@
+ 
+         # TODO Randomization logic needs to be frame with PyVSC library
+         if len(disallowed_instr) == 0:
++            # random.randrange(0, n - 1) yields 0..n-2, so the last entry of
++            # each of these lists was unreachable: one instruction was silently
++            # excluded from the generator. It also raises ValueError for a
++            # single-element list -- the include_instr branch worked around
++            # that with a special case while the other two did not, and the
++            # handler below turns it into a fatal "Cannot generate random
++            # instruction" rather than the single choice that was intended.
+             try:
+                 if len(include_instr) > 0:
+-                    if len(include_instr) == 1:
+-                        idx = 0
+-                    else:
+-                        idx = random.randrange(0, len(include_instr) - 1)
+-                    name = include_instr[idx]
++                    name = include_instr[random.randrange(len(include_instr))]
+                 elif len(allowed_instr) > 0:
+-                    idx = random.randrange(0, len(allowed_instr) - 1)
+-                    name = allowed_instr[idx]
++                    name = allowed_instr[random.randrange(len(allowed_instr))]
+                 else:
+-                    idx = random.randrange(0, len(cls.instr_names) - 1)
+-                    name = cls.instr_names[idx]
++                    name = cls.instr_names[random.randrange(len(cls.instr_names))]
+             except Exception:
+                 logging.critical("[%s] Cannot generate random instruction", riscv_instr.__name__)
+                 sys.exit(1)
+@@ -355,7 +356,12 @@
+         if len(load_store_instr) == 0:
+             load_store_instr = cls.instr_category["LOAD"] + \
+                 cls.instr_category["STORE"]
+-        cls.idx = random.randrange(0, len(load_store_instr) - 1)
++        # Same off-by-one, and it bites hardest here: gen_load_store_instr()
++        # builds allowed_instr in alignment order and appends the widest legal
++        # access last, so the widest access for each address was never chosen.
++        # For an address where only [LB, LBU, SB] is legal, that removed SB and
++        # left the stream unable to emit a byte store at all.
++        cls.idx = random.randrange(len(load_store_instr))
+         name = load_store_instr[cls.idx]
+         instr_h = copy.copy(cls.instr_template[name])
+         return instr_h
+--- a/pygen/pygen_src/riscv_instr_sequence.py
++++ b/pygen/pygen_src/riscv_instr_sequence.py
+@@ -270,7 +270,9 @@
+             jump_instr.append(riscv_instr_name_t.C_JR)
+             if not (riscv_reg_t.RA in cfg.reserved_regs):
+                 jump_instr.append(riscv_instr_name_t.C_JALR)
+-        i = random.randrange(0, len(jump_instr) - 1)
++        # randrange(0, n - 1) never returns n - 1, so the last jump form added
++        # above -- C_JALR when RA is free, otherwise C_JR -- was never picked.
++        i = random.randrange(len(jump_instr))
+         if jump_instr[i] == riscv_instr_name_t.C_JALR:
+             routine_str = prefix + "c.jalr x{}".format(ra.get_val())
+         elif jump_instr[i] == riscv_instr_name_t.C_JR:
+--- a/pygen/pygen_src/riscv_callstack_gen.py
++++ b/pygen/pygen_src/riscv_callstack_gen.py
+@@ -128,7 +128,9 @@
+             # Make sure all program has a caller so that no program is obsolete.
+ 
+             for j in range(len(sub_program_id_pool)):
+-                caller_id = random.randrange(0, len(sub_program_cnt) - 1)
++                # randrange(0, n - 1) never returns n - 1, so the last
++                # program at this level could never be chosen as a caller.
++                caller_id = random.randrange(len(sub_program_cnt))
+                 sub_program_cnt[caller_id] += 1
+ 
+             for j in range(len(program_list)):
