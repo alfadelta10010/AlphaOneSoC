@@ -322,6 +322,39 @@ Each is checked with `git apply --check` first and skipped if already applied.
   original TODO describes, so it is applied to the solved value in
   `legalize_rs1()`, called first thing in `post_randomize()`.
 
+- `18-port-pmp-cfg.patch`
+  pyflow had no PMP support whatsoever. `riscv_instr_gen_config.py` carried only
+  `# pmp_cfg = riscv_pmp_cfg  # TODO`, `setup_pmp()` and `gen_pmp_csr_write()` in
+  `riscv_asm_program_gen.py` were `pass`, and none of the `--pmp_*` options
+  existed. argparse rejects any command line containing options it does not
+  know, so the test died before the generator started:
+
+      unrecognized arguments: --pmp_randomize=0 --pmp_num_regions=4
+
+  Ported from `src/riscv_pmp_cfg.sv`, deliberately not in full:
+
+  * **Deterministic path only.** `pmp_randomize=1` is rejected with a clear
+    message rather than silently generating nothing. The randomized path is ~90
+    lines of interlocking constraints over a dynamically sized array -- the
+    shape pyvsc handles worst -- and a subtly wrong region set produces access
+    faults that look like RTL bugs.
+  * **No ePMP.** `support_epmp` gates ~150 lines of `gen_pmp_instr`, all of it
+    writing `mseccfg` for Smepmp, which FyraCore does not implement.
+  * **No `gen_pmp_exception_routine`.** It exists to recover from a PMP fault by
+    widening the offending region, which only matters under randomization.
+
+  One deliberate deviation, marked in the code: `assign_default_addr_offset`
+  divides by `(num_regions - 1)`, a division by zero in the default
+  single-region case, so it is guarded to return 0.
+
+  `gen_pmp_write_test` is the part that earns its keep here. It `csrrw`s a
+  random value into every `pmpaddr` and `pmpcfg` and then restores it, so the
+  previous contents land in a GPR each time and a WARL difference between the
+  DUT and the reference shows up in the compared trace instead of being
+  absorbed. The random `pmpcfg` values never set a lock bit, never encode
+  `W=1` with `R=0`, and always leave byte 0 as `0x0f` so the safe region stays
+  accessible.
+
 ## Still broken upstream (not patched)
 
 - `riscv_multi_page_load_store_instr_stream` and `riscv_mem_region_stress_test`
