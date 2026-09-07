@@ -33,8 +33,23 @@ def _load_testlist(testlist_path, riscv_dv_dir):
     return [e for e in merged.values() if int(e.get('iterations', 0)) > 0]
 
 
+# Wall-clock budget for generating a single program, in seconds.
+#
+# pyflow's own default is 1200s, which is not enough here. A
+# riscv_mmu_stress_test program takes about 4.5 minutes to generate on an idle
+# machine, and the plugin runs `jobs` of them at once, so each is slowed by
+# roughly the contention factor. Observed: 2 of 13 streams failed a full run
+# purely on timeouts, with no error of any kind in their logs.
+GEN_TIMEOUT_PER_PROGRAM = 1800
+
+
 def gen_cmd_list(riscv_dv_dir, target, isa, mabi, output_dir, testlist, seed):
-    """One `run.py --steps gen` invocation per test, so pytest can fan out."""
+    """One `run.py --steps gen` invocation per test, so pytest can fan out.
+
+    Returns (command, timeout) pairs. --batch_size 1 makes run.py generate the
+    iterations sequentially, so the budget for the whole invocation scales with
+    the iteration count.
+    """
     run_commands = []
     tests = _load_testlist(testlist, riscv_dv_dir)
     logger.info(f'riscv-dv: {len(tests)} tests with non-zero iterations')
@@ -81,19 +96,24 @@ def gen_cmd_list(riscv_dv_dir, target, isa, mabi, output_dir, testlist, seed):
             f' --test {name}'
             f' --iterations {iterations}'
             f' --batch_size 1'
+            f' --gen_timeout {GEN_TIMEOUT_PER_PROGRAM}'
             f' --output {out}'
             f' --steps gen'
             f'{seed_arg}'
         )
-        run_commands.append(cmd)
+        # The outer budget has to cover every batch of this test, plus a little
+        # for run.py's own start-up. river_core's sys_command previously capped
+        # this at a flat 3000s, which a stream with eight iterations exceeded
+        # on its own.
+        run_commands.append(
+            (cmd, iterations * GEN_TIMEOUT_PER_PROGRAM + 300))
 
     return run_commands
 
 
 def idfnc(val):
-    for token in val.split():
-        pass
-    name = val.split('--test ')[1].split()[0] if '--test ' in val else val
+    cmd = val[0]
+    name = cmd.split('--test ')[1].split()[0] if '--test ' in cmd else cmd
     return f'Generating {name}'
 
 
@@ -111,8 +131,8 @@ def pytest_generate_tests(metafunc):
 
 @pytest.fixture
 def test_input(request, autouse=True):
-    program = request.param
-    (ret, out, err) = utils.sys_command(program, timeout=3000)
+    (program, timeout) = request.param
+    (ret, out, err) = utils.sys_command(program, timeout=timeout)
     return ret
 
 
