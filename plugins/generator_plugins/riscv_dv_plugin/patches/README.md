@@ -231,6 +231,97 @@ Each is checked with `git apply --check` first and skipped if already applied.
   list for illegal-CSR stimulus, so a CSR the enum cannot name is a CSR the
   generator will happily target as "illegal" against a core that implements it.
 
+- `14-load-store-offset-in-page.patch`
+  `randomize_offset()` must produce two things that agree: `offset`, emitted as
+  the instruction's immediate, and `addr`, which `gen_load_store_instr()`
+  consults to decide which access widths are alignment-legal. The SV solves them
+  together (`src/riscv_load_store_instr_lib.sv`):
+
+      addr_ == base + offset_;
+      addr_ inside {[0 : max_load_store_offset - 1]};
+
+  The port dropped both, drawing
+  `addr_ = random.randrange(base + offset_ - 1, base + offset_ + 1)`, which
+  returns `base + offset_ - 1` or `base + offset_` with equal probability and
+  never bounds the result. Over 800k draws against a 4096-byte page:
+
+  * 50.0% of addresses were one byte below the address the instruction really
+    forms, so the alignment decision concerned the wrong address;
+  * 12.5% were selected as 4-byte aligned when the real address is not --
+    FyraCore has `support_unaligned_load_store = 0`, so those take a misaligned
+    trap the stream never intended;
+  * 7.3% fell outside the data page, where the DUT and Spike need not agree.
+
+  Fixed by intersecting the locality range with the offsets that keep
+  `base + offset` in the page, rather than rejection-sampling; `addr_c` already
+  bounds `base`, so the interval always contains 0. The four locality bounds are
+  also made inclusive at the top, as the SV `inside {[lo:hi]}` is.
+
+- `15-hazard-per-access-draw.patch`
+  `riscv_load_store_hazard_instr_stream.randomize_offset()` hoisted the
+  per-access hazard draw out of the loop. The SV has
+
+      if ((i > 0) && ($urandom_range(0, 100) < hazard_ratio))
+
+  inside `foreach`, so each access independently repeats its predecessor's
+  address or picks a fresh one. With one draw deciding the whole stream and
+  `hazard_ratio` constrained to `[20:100]`, roughly 60% of streams collapsed to
+  every access using one identical address and the other 40% had no address
+  hazard at all -- only the two degenerate cases, never the mix the stream
+  exists to produce. Its fresh-address branch also carried the patch-14 defect.
+
+- `16-port-multi-page-streams.patch`
+  `riscv_multi_page_load_store_instr_stream` and `riscv_mem_region_stress_test`
+  (`src/riscv_load_store_instr_lib.sv:355-438`) were never ported, so
+  `riscv_utils.factory()` aborted with "Cannot Create object of ..." for any
+  testlist requesting them -- including upstream's own `riscv_rand_instr_test`
+  and `riscv_mmu_stress_test`.
+
+  The SV randomises `num_of_instr_stream`, `data_page_id[]` and `rs1_reg[]`
+  together under `unique` constraints over dynamically sized arrays, the shape
+  pyvsc handles worst (the array-subscript `KeyError` behind patch 05). The
+  selection is done in plain Python; the constraints are small and exact, so
+  nothing is lost. Each sub-stream's 5..10 bound goes through `randomize_with`
+  rather than by assigning `min_instr_cnt`/`max_instr_cnt` as the SV does --
+  those are plain ints baked into `legal_c` at build time, so a later assignment
+  would not reach the solver (the defect behind patch 07).
+
+- `17-load-store-rs1-legal.patch`
+  `rs1_c` (`src/riscv_load_store_instr_lib.sv:54-56`) constrains the base
+  register of every load/store stream:
+
+      !(rs1_reg inside {cfg.reserved_regs, reserved_rd, ZERO});
+
+  The port left it commented out with a TODO, so nothing stopped the solver
+  picking a register the stream must not touch:
+
+  * `rs1_reg == ZERO` emits `la zero, region_1+3609`, which the assembler
+    rejects -- the whole program is lost.
+  * `rs1_reg` in `cfg.reserved_regs` -- which is `{cfg.tp, cfg.sp,
+    cfg.scratch_reg}`, and those three are **themselves randomized per program**,
+    so they are whichever registers this program chose for the stack pointer,
+    thread pointer and trap scratch -- rewrites that register with a data page
+    address. It still assembles and still runs, so it is reported as a pass,
+    while everything after it executes on a stack pointer aimed into the data
+    section, trap handlers included.
+
+  Measured on a generated `riscv_mmu_stress_test` with 496 base-register
+  initialisations and a reserved set of `{s9, a4, t6}`: 4 used `x0` and 21 used
+  one of the three. A comparable program afterwards, with 589 initialisations,
+  used neither.
+
+  The companion guard in `pre_randomize` was wrong too. The SV asks
+  `if (SP inside {cfg.reserved_regs, reserved_rd})`; the port wrote
+  `SP in [cfg.reserved_regs, self.reserved_rd]`, which tests whether SP *is* one
+  of those two list objects and is therefore always False. Note that because
+  `cfg.sp` is randomized, the ABI name `sp` appearing as a load/store base in
+  generated assembly is **not** by itself a defect -- only a hit on the
+  program's actual `cfg.reserved_regs` is.
+
+  Enforcing `rs1_c` as a pyvsc constraint hits the build-order problem the
+  original TODO describes, so it is applied to the solved value in
+  `legalize_rs1()`, called first thing in `post_randomize()`.
+
 ## Still broken upstream (not patched)
 
 - `riscv_multi_page_load_store_instr_stream` and `riscv_mem_region_stress_test`
