@@ -355,21 +355,44 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `W=1` with `R=0`, and always leave byte 0 as `0x0f` so the safe region stays
   accessible.
 
-## Still broken upstream (not patched)
+## Still missing from pyflow (not patched)
 
-- `riscv_multi_page_load_store_instr_stream` and `riscv_mem_region_stress_test`
-  are also missing from pyflow. They are the two directed streams
-  `riscv_mmu_stress_test` asks for. They were not ported: both exist to stress
-  data-TLB switching, and FyraCore is `SATP_MODE = BARE` with no MMU, so the
-  stimulus has no value here. Drop those two `+directed_instr_*` options from
-  the testlist entry (or the whole entry) rather than porting them.
+- **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
+  it to `scripts/gen_csr_test.py`, which builds a *self-checking* test from a
+  YAML description of every CSR's fields, reset values and WARL legalisation
+  (`yaml/csr_template.yaml` shows the format, including `warl_legalize` Python
+  fragments). That description does not exist for FyraCore, and writing it is
+  the real work: it has to model `src/csr.v` exactly -- the `misa` C-bit rule,
+  the `mstatus` MPP legal-value set, `mtvec`'s forced direct mode, the `mie`,
+  `mcounteren` and `mcountinhibit` write masks, and the `pmpcfg`/`pmpaddr`
+  locking -- or the generated self-check fails on a *correct* core. Left at
+  `iterations: 0` deliberately rather than half-modelled.
 
-- `riscv_pmp_test` cannot work: pyflow implements none of the `--pmp_*` options,
-  so `run.py` dies at argparse with "unrecognized arguments: --pmp_randomize=0".
-  `riscv_pmp_cfg` exists only in the SystemVerilog source; the pyflow config has
-  a single `pmp_reg` field and a commented-out `riscv_pmp_cfg` TODO. This is a
-  missing feature, not a defect — leave the test at `iterations: 0` until
-  someone ports `riscv_pmp_cfg`.
+- **PMP randomization.** Patch 18 ports the directed path only; `pmp_randomize=1`
+  is rejected rather than silently doing nothing. The SystemVerilog constraint
+  block (`sanity_c`, `xwr_c`, `address_modes_c`, `grain_addr_mode_c`,
+  `addr_range_c`, `modes_before_addr_c`, `addr_legal_tor_c`,
+  `addr_napot_mode_c`, `addr_na4_mode_c`) would need porting first, and
+  `gen_pmp_exception_routine` with it -- without that routine a generated
+  region that denies access re-faults forever.
+
+- **ePMP / Smepmp.** `mseccfg` and the `support_epmp` branch of `gen_pmp_instr`.
+  FyraCore implements no `mseccfg`, so there is nothing to drive.
+
+## Note for FyraCore: NA4 is unreachable in the RTL
+
+Not a generator issue, but patch 18's stimulus will hit it. `src/pmp.v`
+implements NA4 matching (`A_NA4 = 2'b10`, with match logic for all four
+regions), but `src/csr.v` masks `A == 2'b10` to `2'b00` on every `pmpcfg0`
+write, commented as "A=2'b10 is reserved". `A=2` is **NA4**, and the privileged
+spec makes it unselectable only when the PMP granularity `G >= 1`. This core has
+`G = 0` (4-byte grain, no read-only-zero bits in `pmpaddr`), so NA4 is a legal
+mode here and the matching logic in `pmp.v` can never be reached.
+
+`gen_pmp_write_test` writes random `pmpcfg` bytes, so it will produce `A = NA4`
+and read the stored value straight back. Spike keeps NA4; FyraCore returns OFF.
+Expect that to show up as a DUT/reference mismatch on `riscv_pmp_test` -- it is
+a genuine finding, not a generator defect.
 
 ## pyvsc version
 
