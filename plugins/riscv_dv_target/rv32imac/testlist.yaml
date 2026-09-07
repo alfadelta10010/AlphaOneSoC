@@ -21,7 +21,13 @@
 
 
 # =========================================================================
-# STATUS 2026-09-06: only riscv_arithmetic_basic_test generates.
+# STATUS 2026-09-07: 12 of 13 streams generate, following the pyflow patches
+# in the plugin's patches/ directory. riscv_pmp_test remains disabled because
+# pyflow implements none of the --pmp_* options (argparse rejects them), which
+# is a missing feature rather than a defect.
+#
+# Historical note (2026-09-06): before those patches only
+# riscv_arithmetic_basic_test generated.
 #
 # Every other stream dies inside PyVSC with
 #     vsc.model.solve_failure.SolveFailure: solve failure
@@ -60,7 +66,7 @@
 # rather than ported. Same two removed from riscv_mmu_stress_test below.
 # See plugins/generator_plugins/riscv_dv_plugin/patches/README.md.
 - test: riscv_rand_instr_test
-  iterations: 0
+  iterations: 8
   gen_test: riscv_instr_base_test
   gen_opts: >
     +instr_cnt=10000 +num_of_sub_program=0
@@ -71,26 +77,26 @@
     +directed_instr_4=riscv_jal_instr,4
 
 - test: riscv_jump_stress_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_instr_base_test
   gen_opts: >
     +instr_cnt=5000 +num_of_sub_program=0 +directed_instr_1=riscv_jal_instr,20
 
 - test: riscv_loop_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_instr_base_test
   gen_opts: >
     +instr_cnt=10000 +num_of_sub_program=0 +directed_instr_1=riscv_loop_instr,20
 
 - test: riscv_rand_jump_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_instr_base_test
   gen_opts: >
     +instr_cnt=10000 +num_of_sub_program=0
     +directed_instr_0=riscv_load_store_rand_instr_stream,8
 
 - test: riscv_mmu_stress_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_instr_base_test
   gen_opts: >
     +instr_cnt=5000 +num_of_sub_program=0
@@ -98,7 +104,7 @@
     +directed_instr_1=riscv_load_store_hazard_instr_stream,40
 
 - test: riscv_no_fence_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +no_fence=1 +num_of_sub_program=0
@@ -107,7 +113,7 @@
 # Exercises cause 2. Weighted up: the RTL resolves illegal-instruction last in
 # its exception priority chain, against Table 3.7 of the privileged spec.
 - test: riscv_illegal_instr_test
-  iterations: 0
+  iterations: 6
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +illegal_instr_ratio=5 +num_of_sub_program=0
@@ -115,21 +121,21 @@
 # Cause 3, for both EBREAK and C.EBREAK. Needs the pyflow basic-instruction
 # patch (see the plugin's patches/ directory) or it dies with KeyError.
 - test: riscv_ebreak_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +instr_cnt=6000 +no_ebreak=0 +num_of_sub_program=0
 
 # FyraCore wires MTIP, MEIP and MSIP; mtvec is hardwired direct.
 - test: riscv_full_interrupt_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +enable_interrupt=1 +num_of_sub_program=0
 
 # ---- extension-specific -------------------------------------------------
 - test: riscv_non_compressed_instr_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +disable_compressed_instr=1 +num_of_sub_program=0
@@ -137,7 +143,7 @@
 # HINT encodings, including the C.LUI rd=x0 case the RVC chapter defines as a
 # HINT and which the decoder previously rejected as illegal.
 - test: riscv_hint_instr_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +hint_instr_ratio=5 +num_of_sub_program=0
