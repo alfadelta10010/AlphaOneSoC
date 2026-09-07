@@ -1,0 +1,23 @@
+diff --git a/pygen/pygen_src/riscv_load_store_instr_lib.py b/pygen/pygen_src/riscv_load_store_instr_lib.py
+index cef70c3..446ce30 100644
+--- a/pygen/pygen_src/riscv_load_store_instr_lib.py
++++ b/pygen/pygen_src/riscv_load_store_instr_lib.py
+@@ -131,8 +131,16 @@ class riscv_load_store_base_instr_stream(riscv_mem_access_stream):
+             # Assign the allowed load/store instructions based on address alignment
+             # This is done separately rather than a constraint to improve the randomization
+             # performance
+-            allowed_instr.extend(
+-                [riscv_instr_name_t.LB, riscv_instr_name_t.LBU, riscv_instr_name_t.SB])
++            # NOTE: this must be an assignment, not extend(). src/riscv_load_store_instr_lib.sv
++            # does "allowed_instr = {LB, LBU, SB};" at the top of every foreach(addr[i])
++            # iteration; the port extended a list built once before the loop, so the allowed
++            # set accumulated across addresses. An instruction whose alignment/offset
++            # precondition held for an earlier address stayed selectable for a later one that
++            # violated it, emitting encodings the assembler rejects, e.g.
++            #   Error: illegal operands `c.swsp t2,23(sp)'   (C.SWSP needs uimm 0..252, x4)
++            #   Error: illegal operands `c.swsp t2,-184(sp)'
++            allowed_instr = [riscv_instr_name_t.LB, riscv_instr_name_t.LBU,
++                             riscv_instr_name_t.SB]
+             if not cfg.enable_unaligned_load_store:
+                 if (self.addr[i] & 1) == 0:
+                     allowed_instr.extend(

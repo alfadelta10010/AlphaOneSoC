@@ -1,0 +1,24 @@
+diff --git a/pygen/pygen_src/test/riscv_rand_instr_test.py b/pygen/pygen_src/test/riscv_rand_instr_test.py
+index 2c61df2..d9c1fdd 100644
+--- a/pygen/pygen_src/test/riscv_rand_instr_test.py
++++ b/pygen/pygen_src/test/riscv_rand_instr_test.py
+@@ -24,8 +24,17 @@ class riscv_rand_instr_test(riscv_instr_base_test):
+         super().__init__()
+ 
+     def randomize_cfg(self):
+-        cfg.instr_cnt = 10000
+-        cfg.num_of_sub_program = 5
++        # Upstream hardcoded cfg.instr_cnt = 10000 and cfg.num_of_sub_program = 5
++        # here.  Both are plain Python ints referenced from the default_c
++        # constraint in riscv_instr_gen_config.py:319-323, and pyvsc elaborates
++        # that constraint with the value the attribute held when cfg was built
++        # from argv -- assigning afterwards has no effect on the solver.  The
++        # result was cfg.num_of_sub_program == 5 driving gen_sub_program()'s loop
++        # while sub_program_instr_cnt was still sized from the command-line value,
++        # so riscv_asm_program_gen.py:217 raised IndexError and every test with
++        # "gen_test: riscv_rand_instr_test" died.  The command line already
++        # carries these values (run.py always passes --instr_cnt and
++        # --num_of_sub_program, defaulting to 200 and 5), so just honour it.
+         cfg.randomize()
+         logging.info("riscv_instr_gen_config is randomized")
+         gen_config_table()
