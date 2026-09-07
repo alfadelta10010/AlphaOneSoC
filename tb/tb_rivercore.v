@@ -109,6 +109,7 @@ module tb_rivercore;
     integer    max_cycles;
     reg [31:0] tohost_addr;
     reg        tohost_enabled;
+    reg        have_init_file;
     reg [31:0] start_pc;
     reg        logging_active;
 
@@ -137,21 +138,10 @@ module tb_rivercore;
             logging_active = 1'b0;
         end
 
-        // Runtime hex file override (takes precedence over compile-time INIT_FILE)
-        if ($value$plusargs("INIT_FILE=%s", init_file_str)) begin
-            for (init_i = 0; init_i < MEM_SIZE; init_i = init_i + 1)
-                mem.mem[init_i] = 8'h00;
-            $readmemh(init_file_str, mem.mem);
-            // A missing or truncated INIT_FILE leaves memory zero-filled, which
-            // otherwise runs to MAX_CYCLES and writes an empty dump — a silent
-            // failure the comparison stage reports as a DUT bug. Fail loudly.
-            // RESET_PC 0x80000000 aliases to mem[0] (memory_model masks [24:0]).
-            if ({mem.mem[3], mem.mem[2], mem.mem[1], mem.mem[0]} === 32'h0) begin
-                $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
-                         init_file_str);
-                $fatal(1);
-            end
-        end
+        // Runtime hex file override (takes precedence over compile-time
+        // INIT_FILE). Only the plusarg is read here; the load itself happens
+        // at #1 below, see the note there.
+        have_init_file = $value$plusargs("INIT_FILE=%s", init_file_str);
 
         // Optional VCD dump
         if ($test$plusargs("VCD")) begin
@@ -159,6 +149,37 @@ module tb_rivercore;
             $dumpvars(0, tb_rivercore);
         end
     end
+
+    // Program load, deliberately at #1 rather than time 0.
+    //
+    // memory_model's own initial block zero-fills all MEM_SIZE bytes before
+    // applying its compile-time INIT_FILE. Verilog does not define the relative
+    // order of initial blocks in different modules, so loading the program at
+    // time 0 here could be undone by that fill. #1 is strictly after every
+    // time-0 initial block, and reset is held until #25, so the core has not
+    // fetched anything yet.
+    //
+    // This also drops a second 33.5M-iteration zero-fill that used to run here.
+    // Duplicating memory_model's fill cost roughly half of each simulation's
+    // startup, which across a 1000+ test regression was the single largest
+    // contributor to wall-clock time.
+    initial begin
+        #1;
+        if (have_init_file) begin
+            $readmemh(init_file_str, mem.mem);
+            // A missing or truncated INIT_FILE leaves memory zero-filled, which
+            // otherwise runs to MAX_CYCLES and writes an empty dump - a silent
+            // failure the comparison stage reports as a DUT bug. Empty dumps
+            // also compare equal to each other, so this must fail loudly.
+            // RESET_PC 0x80000000 aliases to mem[0] (memory_model masks [24:0]).
+            if ({mem.mem[3], mem.mem[2], mem.mem[1], mem.mem[0]} === 32'h0) begin
+                $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
+                         init_file_str);
+                $fatal(1);
+            end
+        end
+    end
+
 
     // ================================================================
     //  Counters
@@ -189,6 +210,77 @@ module tb_rivercore;
     reg     saw_tohost   = 1'b0;
     integer post_tohost_retires = 0;
     wire    is_fencei_retire = dbg_retired && (dbg_instr == 32'h0000_100f);
+
+    // ================================================================
+    //  Counters
+    // ================================================================
+    integer instr_count = 0;
+    integer cycle_count = 0;
+
+    // ================================================================
+    //  Termination detection
+    // ================================================================
+    wire trap_handler_set = (cpu.csr_unit.mtvec != 32'b0);
+    wire is_ecall  = dbg_trap && (dbg_instr == 32'h0000_0073) && !trap_handler_set;
+    wire is_ebreak = dbg_trap && (dbg_instr == 32'h0010_0073) && !trap_handler_set;
+    wire is_halt   = dbg_retired && (dbg_instr == 32'h0000_006f);
+    wire is_tohost = tohost_enabled && dmem_we &&
+                     (dmem_addr == tohost_addr) && (dmem_wdata != 32'b0);
+
+    // ================================================================
+    //  Termination flag — set on detection cycle, acted on next cycle
+    //  so the dump always block can flush the last line first.
+    //
+    //  ecall/ebreak/halt: terminate immediately (one extra retire).
+    //  tohost: spike continues retiring through write_tohost's high-word
+    //  store and fence.i before halting. Drain up to 4 extra retires (or
+    //  stop on fence.i retire) so the trace matches.
+    // ================================================================
+    reg     terminate    = 1'b0;
+    reg     saw_tohost   = 1'b0;
+    integer post_tohost_retires = 0;
+    wire    is_fencei_retire = dbg_retired && (dbg_instr == 32'h0000_100f);
+
+    // ================================================================
+    //  Spin detection
+    //
+    //  A core that loses its way -- e.g. a corrupted privilege/PC after a bad
+    //  trap return -- typically ends up on a branch-to-self and retires the
+    //  same PC until MAX_CYCLES. That costs a full timeout per test and writes
+    //  a dump of hundreds of thousands of identical lines, which is both slow
+    //  and useless: the reference dump for such a test is only tens of
+    //  thousands of lines, so the length mismatch is the symptom, not the bug.
+    //
+    //  Abort once the same PC has retired SPIN_LIMIT times consecutively. The
+    //  dump keeps everything up to that point, which is what diagnosis needs,
+    //  and the run fails in seconds instead of minutes.
+    //
+    //  +SPIN_LIMIT=0 disables this, for a test with a legitimate long spin.
+    // ================================================================
+    initial begin
+        spin_last_pc = 32'hFFFF_FFFF;
+        spin_count   = 0;
+        if (!$value$plusargs("SPIN_LIMIT=%d", spin_limit))
+            spin_limit = 20000;
+    end
+
+    always @(posedge clk) begin
+        if (!rst && dbg_retired && !terminate && spin_limit != 0) begin
+            if (dbg_pc == spin_last_pc) begin
+                spin_count = spin_count + 1;
+                if (spin_count >= spin_limit) begin
+                    $display("ERROR: spinning at PC 0x%08h (same PC retired %0d times), aborting",
+                             dbg_pc, spin_count);
+                    $fclose(dump_fd);
+                    $finish;
+                end
+            end else begin
+                spin_last_pc = dbg_pc;
+                spin_count   = 0;
+            end
+        end
+    end
+
 
     always @(posedge clk) begin
         if (!rst && !terminate) begin
