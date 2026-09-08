@@ -1,0 +1,70 @@
+--- a/pygen/pygen_src/riscv_load_store_instr_lib.py
++++ b/pygen/pygen_src/riscv_load_store_instr_lib.py
+@@ -277,32 +277,47 @@
+                                     (riscv_instr_group_t.RV32DC in rcs.supported_isa)):
+                                 allowed_instr.extend(
+                                     [riscv_instr_name_t.C_FLD, riscv_instr_name_t.C_FSD])
+-                else:  # unalligned load/store
+-                    allowed_instr.extend([riscv_instr_name_t.LW, riscv_instr_name_t.SW,
+-                                          riscv_instr_name_t.LH, riscv_instr_name_t.LHU,
+-                                          riscv_instr_name_t.SH])
+-                    # Compressed load/store still needs to be alligned
+-                    if (self.offset[i] in range(128) and (self.offset[i] % 4 == 0) and
+-                        (riscv_instr_group_t.RV32C in rcs.supported_isa) and
++            # NOTE: this else belongs to `if not cfg.enable_unaligned_load_store`,
++            # not to the XLEN test above it. src/riscv_load_store_instr_lib.sv:139
++            # opens `if (!cfg.enable_unaligned_load_store) begin ... end else begin`
++            # (line 187), so this branch is the *unaligned target* fallback that
++            # ignores alignment entirely.
++            #
++            # The port indented it one level deeper, binding it to
++            # `if (rcs.XLEN >= 64) and (self.addr[i] % 8 == 0)`. On RV32 that test
++            # is always false, so the fallback ran for every address on an
++            # aligned-only target and unconditionally re-added LW/SW/LH/LHU/SH --
++            # defeating the `addr % 4 == 0` and `addr & 1` gates directly above.
++            # Measured over the 60 generated programs before this fix: 66.9% of
++            # word accesses and 41.5% of half-word accesses inside directed
++            # load/store blocks were misaligned, on a core with
++            # support_unaligned_load_store = 0 that traps on them.
++            else:  # unaligned load/store -- see comment below
++                allowed_instr.extend([riscv_instr_name_t.LW, riscv_instr_name_t.SW,
++                                      riscv_instr_name_t.LH, riscv_instr_name_t.LHU,
++                                      riscv_instr_name_t.SH])
++                # Compressed load/store still needs to be alligned
++                if (self.offset[i] in range(128) and (self.offset[i] % 4 == 0) and
++                    (riscv_instr_group_t.RV32C in rcs.supported_isa) and
++                        enable_compressed_load_store):
++                    if self.rs1_reg == riscv_reg_t.SP:
++                        allowed_instr.extend(
++                            [riscv_instr_name_t.C_LWSP, riscv_instr_name_t.C_SWSP])
++                    else:
++                        allowed_instr.extend(
++                            [riscv_instr_name_t.C_LW, riscv_instr_name_t.C_SW])
++                if rcs.XLEN >= 64:
++                    allowed_instr.extend(
++                        [riscv_instr_name_t.LWU, riscv_instr_name_t.LD, riscv_instr_name_t.SD])
++                    if (self.offset[i] in range(256) and (self.offset[i] % 8 == 0) and
++                        (riscv_instr_group_t.RV64C in rcs.supported_isa) and
+                             enable_compressed_load_store):
+                         if self.rs1_reg == riscv_reg_t.SP:
+                             allowed_instr.extend(
+                                 [riscv_instr_name_t.C_LWSP, riscv_instr_name_t.C_SWSP])
+                         else:
+                             allowed_instr.extend(
+-                                [riscv_instr_name_t.C_LW, riscv_instr_name_t.C_SW])
+-                    if rcs.XLEN >= 64:
+-                        allowed_instr.extend(
+-                            [riscv_instr_name_t.LWU, riscv_instr_name_t.LD, riscv_instr_name_t.SD])
+-                        if (self.offset[i] in range(256) and (self.offset[i] % 8 == 0) and
+-                            (riscv_instr_group_t.RV64C in rcs.supported_isa) and
+-                                enable_compressed_load_store):
+-                            if self.rs1_reg == riscv_reg_t.SP:
+-                                allowed_instr.extend(
+-                                    [riscv_instr_name_t.C_LWSP, riscv_instr_name_t.C_SWSP])
+-                            else:
+-                                allowed_instr.extend(
+-                                    [riscv_instr_name_t.C_LD, riscv_instr_name_t.C_SD])
++                                [riscv_instr_name_t.C_LD, riscv_instr_name_t.C_SD])
+             instr = riscv_instr.get_load_store_instr(allowed_instr)
+             instr.has_rs1 = 0
+             instr.has_imm = 0
