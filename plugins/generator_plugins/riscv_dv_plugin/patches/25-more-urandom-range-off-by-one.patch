@@ -1,0 +1,75 @@
+--- a/pygen/pygen_src/riscv_amo_instr_lib.py
++++ b/pygen/pygen_src/riscv_amo_instr_lib.py
+@@ -71,7 +71,12 @@
+     def pre_randomize(self):
+         self.data_page = cfg.amo_region
+         max_data_page_id = len(self.data_page)
+-        self.data_page_id = random.randrange(0, max_data_page_id - 1)
++        # src/riscv_amo_instr_lib.sv:67 is $urandom_range(0, max_data_page_id - 1),
++        # which includes the upper bound. randrange excludes it, so this drew from
++        # [0, max-2] -- and cfg.amo_region holds exactly one region
++        # (riscv_instr_gen_config.py:155), making it randrange(0, 0), which raises
++        # ValueError. Every AMO stream aborted on construction.
++        self.data_page_id = random.randrange(max_data_page_id)
+         self.max_offset = self.data_page[self.data_page_id].size_in_bytes
+ 
+     # Use "la" instruction to initialize the offset regiseter
+--- a/pygen/pygen_src/riscv_instr_sequence.py
++++ b/pygen/pygen_src/riscv_instr_sequence.py
+@@ -255,7 +255,10 @@
+     def generate_return_routine(self, prefix):
+         routine_str = ''
+         jump_instr = [riscv_instr_name_t.JALR]
+-        rand_lsb = random.randrange(0, 1)
++        # src/riscv_instr_sequence.sv:295 $urandom_range(0, 1): a coin flip.
++        # randrange(0, 1) is always 0, so the odd-LSB path -- which checks that
++        # JALR ignores bit 0 of the target -- was never generated.
++        rand_lsb = random.randrange(2)
+         ra = vsc.rand_enum_t(riscv_reg_t)
+         try:
+             with vsc.randomize_with(ra):
+--- a/pygen/pygen_src/riscv_directed_instr_lib.py
++++ b/pygen/pygen_src/riscv_directed_instr_lib.py
+@@ -274,7 +274,10 @@
+ 
+             self.push_stack_instr[i + 1].process_load_store = 0
+         if allow_branch:
+-            self.enable_branch = random.randrange(0, 1)
++            # src/riscv_directed_instr_lib.sv:334 randomizes this bit.
++            # randrange(0, 1) is always 0, so the push-stack sequence never
++            # contained a branch.
++            self.enable_branch = random.randrange(2)
+         else:
+             self.enable_branch = 0
+         if self.enable_branch:
+--- a/pygen/pygen_src/riscv_data_page_gen.py
++++ b/pygen/pygen_src/riscv_data_page_gen.py
+@@ -37,7 +37,11 @@
+         data = [0] * num_of_bytes
+         for i in range(len(data)):
+             if pattern == data_pattern_t.RAND_DATA:
+-                temp_data = random.randrange(0, (2**8) - 1)
++                # src/riscv_data_page_gen.sv:43 randomizes a full bit[7:0].
++                # randrange(0, 255) never returns 255, so 0xFF never appeared in
++                # a random data page -- an all-ones byte is exactly the value a
++                # sign-extension or mask bug shows up on.
++                temp_data = random.randrange(2**8)
+                 data[i] = temp_data
+             elif pattern == data_pattern_t.INCR_VAL:
+                 data[i] = (idx + i) % 256
+--- a/pygen/pygen_src/riscv_callstack_gen.py
++++ b/pygen/pygen_src/riscv_callstack_gen.py
+@@ -111,8 +111,12 @@
+             # Randmly duplicate some sub programs in the pool to create a case that
+             # one sub program is called by multiple caller. Also it's possible to call
+             # the same sub program in one program multiple times.
++            # src/riscv_callstack_gen.sv:157 is
++            # $urandom_range(size, size + 1) -- inclusive, so it may add one
++            # duplicated sub-program. randrange excludes the upper bound and
++            # always returned size, disabling that entirely.
+             total_sub_program_cnt = random.randrange(len(next_program_list),
+-                                                     len(next_program_list) + 1)
++                                                     len(next_program_list) + 2)
+             sub_program_id_pool = [0] * total_sub_program_cnt
+             for i in range(len(sub_program_id_pool)):
+                 with sub_program_id_pool[i].randomize_with():
