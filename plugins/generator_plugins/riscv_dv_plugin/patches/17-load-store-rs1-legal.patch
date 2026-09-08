@@ -58,7 +58,7 @@
  
      @vsc.constraint
      def addr_c(self):
-@@ -143,13 +184,23 @@
+@@ -143,13 +184,28 @@
  
      def pre_randomize(self):
          super().pre_randomize()
@@ -67,10 +67,15 @@
 +        # `if (SP inside {cfg.reserved_regs, reserved_rd})`, i.e. is SP a member
 +        # of either list. The port wrote `SP in [cfg.reserved_regs,
 +        # self.reserved_rd]`, which asks whether SP *is* one of those two list
-+        # objects and is therefore always False. cfg.reserved_regs always holds
-+        # sp (riscv_instr_gen_config.py:472), so this guard was meant to fire
-+        # every time and never did: use_sp_as_rs1 stayed live and the sp_c dist
-+        # kept pulling the base register to SP.
++        # objects and is therefore always False, so use_sp_as_rs1 stayed live
++        # and the sp_c dist kept pulling the base register to SP even when SP
++        # was reserved.
++        #
++        # Note the names are misleading: this tests the architectural SP/x2,
++        # while cfg.reserved_regs holds cfg.sp (riscv_instr_gen_config.py:472),
++        # which is itself a randomized GPR and rarely x2. So the guard is meant
++        # to fire only in the small fraction of programs where the randomized
++        # sp or tp lands on x2 -- roughly 2% in practice.
 +        if (riscv_reg_t.SP in cfg.reserved_regs or
 +                riscv_reg_t.SP in self.reserved_rd):
              self.use_sp_as_rs1 = 0

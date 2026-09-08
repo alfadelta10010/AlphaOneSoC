@@ -127,45 +127,36 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `pass`, so it would have no effect.
 
 - `09-illegal-instr-retry.patch`
-  `riscv_illegal_instr`'s constraint model intermittently fails to solve — about
-  half of all draws. Measured over 10 full generations each: rv32imac 4/10,
-  rv32imac with RV32A removed 5/10. That is within noise of each other, so it is
-  **not** caused by the A extension or any other FyraCore target setting, and it
-  predates the local patches. pyvsc cannot produce an unsat core for it either:
-  `create_diagnostics()` gives up with "internal error: system should solve"
-  (`randomizer.py:443`), meaning each randset solves individually and only the
-  combination does not — a solver-ordering artifact, not a real contradiction.
+  `riscv_illegal_instr`'s constraint model does not solve under the installed
+  pyvsc. Not intermittently: an *unconstrained*
+  `riscv_illegal_instr.randomize()` fails **200/200** for this target, and 50/50
+  on the stock `rv32imc` and `rv32i` targets too, so it is a pyflow/pyvsc
+  incompatibility rather than anything about FyraCore or the A extension.
 
   `insert_illegal_hint_instr()` (`riscv_instr_sequence.py:285`) randomized once
-  with no retry, so one unlucky draw aborted the entire test. The patch retries
-  up to 20 times and skips that one injected instruction if it still fails.
-  Retrying re-draws under the identical constraint set, so anything produced is
-  still a fully constrained, valid encoding — the retry only discards draws the
-  solver gave up on, it cannot weaken the stimulus.
+  with no retry, so a failed draw aborted the entire test. The patch retries up
+  to 20 times and skips that one injected instruction if it still fails.
+  Retrying re-draws under the identical constraint set, so anything produced
+  would still be a fully constrained, valid encoding — the retry only discards
+  draws the solver gave up on, it cannot weaken the stimulus.
 
-  **CORRECTION (2026-09-08).** The original note here claimed the retry took
-  `riscv_illegal_instr_test` "from 4/10 to 8/8, with no *Could not randomize*
-  warnings". That measurement was worthless: at the time, `instr_cnt` was
-  falling back to 200, so `int(instr_cnt * ratio / 1000)` floored to **zero**
-  and the loop performed no randomizations at all. Zero attempts, therefore
-  zero warnings.
+  **What the retry does and does not buy.** It converts an abort into a skip,
+  which is worth keeping. It does not inject anything: with a real injection
+  count every draw fails, ten times over, logging
+  `Could not randomize riscv_illegal_instr in 20 attempts`. So
+  `riscv_illegal_instr_test` and `riscv_hint_instr_test` are set to
+  `iterations: 0` in the target testlist — see the note there. Watch for this
+  shape when reading the log: the injection count is announced *before* the
+  loop runs, so "Injecting 10 illegal instructions" says nothing about whether
+  any were placed. Check the generated `.S` for `.4byte`/`.2byte` instead.
 
-  With `+instr_cnt=10000` supplied the loop runs, and **every** draw fails:
-  `Could not randomize riscv_illegal_instr in 20 attempts` ×10. Measured
-  directly, an *unconstrained* `riscv_illegal_instr.randomize()` fails **200/200**
-  — and 50/50 on the stock `rv32imc` and `rv32i` targets too, so the model is
-  simply unsatisfiable under the installed pyvsc for any RV32 target, not
-  flaky and not specific to this core.
-
-  The retry is still worth keeping: it converts an abort into a skip. But it
-  cannot inject anything, so `riscv_illegal_instr_test` and
-  `riscv_hint_instr_test` are set to `iterations: 0` in the target testlist.
-
-  The constraint model is still left alone deliberately: pyvsc cannot produce an
-  unsat core for it ("internal error: system should solve"), it is 368 lines of
-  interlocking encoding constraints, and "fixing" it without a reproducible core
-  risks emitting encodings that are actually legal, which would show up as false
-  RTL failures — worse than no test.
+  The constraint model is left alone deliberately. pyvsc cannot produce an unsat
+  core for it — `create_diagnostics()` gives up with "internal error: system
+  should solve" (`randomizer.py:443`), meaning each randset solves individually
+  and only the combination does not — and it is 368 lines of interlocking
+  encoding constraints. "Fixing" it without a reproducible core risks emitting
+  encodings that are actually legal, which would surface as false RTL failures,
+  worse than no test at all.
 
 - `10-load-store-allowed-instr-reset.patch`
   `riscv_load_store_base_instr_stream.gen_load_store_instr()` builds the list of
@@ -274,6 +265,12 @@ Each is checked with `git apply --check` first and skipped if already applied.
   bounds `base`, so the interval always contains 0. The four locality bounds are
   also made inclusive at the top, as the SV `inside {[lo:hi]}` is.
 
+  This makes the *inputs* to the alignment decision correct. It is not on its
+  own enough to make the generated accesses aligned: patch 24 fixes a second
+  defect that was bypassing the alignment gates entirely. Both are needed, and
+  neither is visible to the assembler — measure alignment from the generated
+  assembly, not from a clean build.
+
 - `15-hazard-per-access-draw.patch`
   `riscv_load_store_hazard_instr_stream.randomize_offset()` hoisted the
   per-access hazard draw out of the loop. The SV has
@@ -327,22 +324,23 @@ Each is checked with `git apply --check` first and skipped if already applied.
   one of the three. A comparable program afterwards, with 589 initialisations,
   used neither.
 
-  The companion guard in `pre_randomize` was wrong too. The SV asks
+  The companion guard in `pre_randomize` is wrong too. The SV asks
   `if (SP inside {cfg.reserved_regs, reserved_rd})`; the port wrote
   `SP in [cfg.reserved_regs, self.reserved_rd]`, which tests whether SP *is* one
   of those two list objects and is therefore always False.
 
-  **CORRECTION (2026-09-08).** The in-code comment for that guard claims
-  `cfg.reserved_regs` "always holds sp, so this guard was meant to fire every
-  time and never did". That is wrong. `reserved_regs` holds **`cfg.sp`**, which
-  is itself a randomized GPR (`sp_tp_c`, and `fix_sp` defaults to 0), not the
-  architectural `SP`/x2 that the guard tests. Across the 60 generated programs
-  `cfg.sp` was never x2, so the guard was meant to fire in ~2% of programs, not
-  every one — and the corollary that `C_LWSP`/`C_SWSP` become unreachable from
-  these streams is false: the corpus contains 145 `c.lwsp` and 192 `c.swsp`.
-  The code change is right and independently verified (0 of 1996 base-register
-  initialisations use ZERO or the program's own reserved set); only the
-  rationale was.
+  Read that guard carefully, because the names are misleading. It tests the
+  architectural `SP`/x2, while `cfg.reserved_regs` holds `cfg.sp` — which is
+  *itself a randomized GPR* (`sp_tp_c`; `fix_sp` defaults to 0), rarely x2.
+  Across 60 generated programs `cfg.sp` was never x2, so the guard is meant to
+  fire in roughly 2% of programs, and `C_LWSP`/`C_SWSP` stay reachable from
+  these streams — the same corpus contains 145 `c.lwsp` and 192 `c.swsp`. The
+  same distinction applies when reading generated assembly: the ABI name `sp`
+  appearing as a load/store base is not by itself a defect, only a hit on that
+  program's actual `cfg.reserved_regs` is.
+
+  Verified after the fix: 0 of 1996 base-register initialisations use ZERO or
+  the program's own reserved set.
 
   Enforcing `rs1_c` as a pyvsc constraint hits the build-order problem the
   original TODO describes, so it is applied to the solved value in
@@ -435,6 +433,10 @@ Each is checked with `git apply --check` first and skipped if already applied.
   stream could not emit a byte store at all. The same expression also raises
   `ValueError` on a single-element list.
 
+  These four are not all of them; patch 25 covers five more of the same
+  mistranslation elsewhere in the port. Treat `$urandom_range(a, b)` — whose
+  upper bound is inclusive — as a standing grep whenever touching pyflow.
+
 - `22-fence-instruction-gating.patch`
   `create_instr_list` dropped the negation from the `enable_sfence` test and the
   `cfg.no_fence &&` guard from the FENCE/FENCE_I/SFENCE_VMA skip, so FENCE and
@@ -450,7 +452,7 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `riscv_no_fence_test`. After 22 and 23, a `riscv_rand_instr_test` program
   carries 210 fences and `riscv_no_fence_test` carries none.
 
-- `24-unaligned-fallback-binding.patch`  **(found by adversarial audit)**
+- `24-unaligned-fallback-binding.patch`
   `src/riscv_load_store_instr_lib.sv:139-188` is
 
       if (!cfg.enable_unaligned_load_store) begin
@@ -475,7 +477,7 @@ Each is checked with `git apply --check` first and skipped if already applied.
   relationship — necessary, but the gates it made accurate were being bypassed
   entirely.
 
-- `25-more-urandom-range-off-by-one.patch`  **(found by adversarial audit)**
+- `25-more-urandom-range-off-by-one.patch`
   Patch 21 fixed four `randrange(0, n-1)` sites; there were five more of the
   same `$urandom_range(a, b)` (inclusive) → `randrange(a, b)` (exclusive)
   mistranslation:
