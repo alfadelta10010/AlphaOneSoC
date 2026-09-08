@@ -143,12 +143,29 @@ Each is checked with `git apply --check` first and skipped if already applied.
   still a fully constrained, valid encoding — the retry only discards draws the
   solver gave up on, it cannot weaken the stimulus.
 
-  Result: `riscv_illegal_instr_test` went from 4/10 to 8/8, with no
-  "Could not randomize" warnings (every retry succeeded well inside the budget).
-  The underlying constraint model is left alone deliberately: it is 368 lines of
-  interlocking encoding constraints, and "fixing" it without a reproducible unsat
-  core risks emitting encodings that are actually legal, which would show up as
-  false RTL failures — worse than a flaky generator.
+  **CORRECTION (2026-09-08).** The original note here claimed the retry took
+  `riscv_illegal_instr_test` "from 4/10 to 8/8, with no *Could not randomize*
+  warnings". That measurement was worthless: at the time, `instr_cnt` was
+  falling back to 200, so `int(instr_cnt * ratio / 1000)` floored to **zero**
+  and the loop performed no randomizations at all. Zero attempts, therefore
+  zero warnings.
+
+  With `+instr_cnt=10000` supplied the loop runs, and **every** draw fails:
+  `Could not randomize riscv_illegal_instr in 20 attempts` ×10. Measured
+  directly, an *unconstrained* `riscv_illegal_instr.randomize()` fails **200/200**
+  — and 50/50 on the stock `rv32imc` and `rv32i` targets too, so the model is
+  simply unsatisfiable under the installed pyvsc for any RV32 target, not
+  flaky and not specific to this core.
+
+  The retry is still worth keeping: it converts an abort into a skip. But it
+  cannot inject anything, so `riscv_illegal_instr_test` and
+  `riscv_hint_instr_test` are set to `iterations: 0` in the target testlist.
+
+  The constraint model is still left alone deliberately: pyvsc cannot produce an
+  unsat core for it ("internal error: system should solve"), it is 368 lines of
+  interlocking encoding constraints, and "fixing" it without a reproducible core
+  risks emitting encodings that are actually legal, which would show up as false
+  RTL failures — worse than no test.
 
 - `10-load-store-allowed-instr-reset.patch`
   `riscv_load_store_base_instr_stream.gen_load_store_instr()` builds the list of
@@ -313,10 +330,19 @@ Each is checked with `git apply --check` first and skipped if already applied.
   The companion guard in `pre_randomize` was wrong too. The SV asks
   `if (SP inside {cfg.reserved_regs, reserved_rd})`; the port wrote
   `SP in [cfg.reserved_regs, self.reserved_rd]`, which tests whether SP *is* one
-  of those two list objects and is therefore always False. Note that because
-  `cfg.sp` is randomized, the ABI name `sp` appearing as a load/store base in
-  generated assembly is **not** by itself a defect -- only a hit on the
-  program's actual `cfg.reserved_regs` is.
+  of those two list objects and is therefore always False.
+
+  **CORRECTION (2026-09-08).** The in-code comment for that guard claims
+  `cfg.reserved_regs` "always holds sp, so this guard was meant to fire every
+  time and never did". That is wrong. `reserved_regs` holds **`cfg.sp`**, which
+  is itself a randomized GPR (`sp_tp_c`, and `fix_sp` defaults to 0), not the
+  architectural `SP`/x2 that the guard tests. Across the 60 generated programs
+  `cfg.sp` was never x2, so the guard was meant to fire in ~2% of programs, not
+  every one — and the corollary that `C_LWSP`/`C_SWSP` become unreachable from
+  these streams is false: the corpus contains 145 `c.lwsp` and 192 `c.swsp`.
+  The code change is right and independently verified (0 of 1996 base-register
+  initialisations use ZERO or the program's own reserved set); only the
+  rationale was.
 
   Enforcing `rs1_c` as a pyvsc constraint hits the build-order problem the
   original TODO describes, so it is applied to the solved value in
@@ -424,6 +450,50 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `riscv_no_fence_test`. After 22 and 23, a `riscv_rand_instr_test` program
   carries 210 fences and `riscv_no_fence_test` carries none.
 
+- `24-unaligned-fallback-binding.patch`  **(found by adversarial audit)**
+  `src/riscv_load_store_instr_lib.sv:139-188` is
+
+      if (!cfg.enable_unaligned_load_store) begin
+        if (addr[i][0] == 1'b0)                 ... LH, LHU, SH
+        if (addr[i] % 4 == 0)                   ... LW, SW
+        if ((XLEN >= 64) && (addr[i] % 8 == 0)) ... LWU, LD, SD
+      end else begin // unaligned load/store
+        allowed_instr = {LW, SW, LH, LHU, SH, allowed_instr};
+
+  The port indented that `else` one level deeper, binding it to the **XLEN**
+  test. On RV32 `XLEN >= 64` is always false, so the unaligned fallback ran for
+  every address on an aligned-only target and unconditionally re-added
+  LW/SW/LH/LHU/SH, bypassing the two alignment gates above it.
+
+  Measured over the 60 generated programs, counting only accesses inside a
+  self-contained directed block: **65.3% of word and 40.9% of half-word accesses
+  were misaligned**, on a core with `support_unaligned_load_store = 0`. Both DUT
+  and reference trap and jump to `test_done`, so the run still reported a pass.
+  After the fix, `riscv_rand_jump_test` (which mixes no streams) measures 0/52.
+
+  This is what patch 14 was reaching for. Patch 14 corrected the `addr`/`offset`
+  relationship — necessary, but the gates it made accurate were being bypassed
+  entirely.
+
+- `25-more-urandom-range-off-by-one.patch`  **(found by adversarial audit)**
+  Patch 21 fixed four `randrange(0, n-1)` sites; there were five more of the
+  same `$urandom_range(a, b)` (inclusive) → `randrange(a, b)` (exclusive)
+  mistranslation:
+
+  * `riscv_amo_instr_lib.py` — `randrange(0, max_data_page_id - 1)` with
+    `cfg.amo_region` holding exactly one region is `randrange(0, 0)`, which
+    **raises ValueError**. Every AMO stream aborted on construction.
+  * `riscv_instr_sequence.py` — `rand_lsb` always 0, so the odd-LSB path that
+    checks JALR ignoring bit 0 of the target was never generated.
+  * `riscv_directed_instr_lib.py` — `enable_branch` always 0; the push-stack
+    sequence never contained a branch.
+  * `riscv_callstack_gen.py` — `randrange(size, size+1)` always returns `size`,
+    disabling the "duplicate a sub-program" case. **One line above a site patch
+    21 did fix.**
+  * `riscv_data_page_gen.py` — `randrange(0, 255)` never returns `0xFF`, so an
+    all-ones byte never appeared in a random data page. That is exactly the
+    value a sign-extension or mask bug shows up on.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
@@ -444,6 +514,15 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `addr_napot_mode_c`, `addr_na4_mode_c`) would need porting first, and
   `gen_pmp_exception_routine` with it -- without that routine a generated
   region that denies access re-faults forever.
+
+- **RV32A / atomics.** `riscv_core_setting.py` declares `RV32A`, and the 60
+  generated programs contain **no** `lr.w`, `sc.w` or any `amo*`: no testlist
+  entry requests an AMO stream, and until patch 25 any that did would have died
+  in `riscv_amo_instr_lib`'s `randrange(0, 0)`. Separately,
+  `riscv_amo_base_instr_stream` still cannot be constructed under the installed
+  pyvsc — `self.avail_regs = vsc.randsz_list_t(...)` raises
+  `AttributeError: 'NoneType' object has no attribute 'size'`. So atomics remain
+  unexercised by this generator even with patch 25; that needs its own port.
 
 - **ePMP / Smepmp.** `mseccfg` and the `support_epmp` branch of `gen_pmp_instr`.
   FyraCore implements no `mseccfg`, so there is nothing to drive.
