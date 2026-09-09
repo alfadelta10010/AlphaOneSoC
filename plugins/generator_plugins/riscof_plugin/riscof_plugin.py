@@ -116,7 +116,12 @@ class riscof_plugin(object):
             test_list[key] = new_entry
 
         if 'C' not in self.isa:
-            del test_list['misalign-jal-01']
+            # RISCOF decides which tests the suite yields, so this one is not
+            # guaranteed to be present -- a narrower suite, a different
+            # riscv-arch-test version or a filtered run all drop it. An
+            # unguarded del turned that into a KeyError that aborted the whole
+            # generate stage.
+            test_list.pop('misalign-jal-01', None)
         
         return test_list
 
