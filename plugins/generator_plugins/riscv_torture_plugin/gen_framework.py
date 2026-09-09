@@ -5,6 +5,7 @@ import sys
 import pluggy
 import shutil
 import shlex
+import signal
 import subprocess
 from river_core.log import logger
 import river_core.utils as utils
