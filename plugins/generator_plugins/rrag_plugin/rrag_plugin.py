@@ -239,6 +239,14 @@ class rrag_plugin(object):
                 output_dir + '/rrag/common/crt.S'
             ]
 
+            # Spike emits 5 bootrom instructions (0x1000-0x1010, ending in
+            # the jr to --pc) before reaching the program, and the DUT starts
+            # directly at the reset PC. river_core's schema defaults
+            # ignore_lines to 4, so one bootrom instruction leaked into every
+            # comparison and shifted the whole trace by one line. Every other
+            # plugin here already sets 5; rrag never did, which failed 208 of
+            # 1000 tests that otherwise match the reference exactly.
+            test_list[base_key]['ignore_lines'] = 5
             test_list[base_key]['result'] = 'Unavailable'
 
         return test_list
