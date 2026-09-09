@@ -54,9 +54,20 @@ class riscv_tests_plugin(object):
 
         self.pmp_enabled = True if str(spec_config['pmp_regions']) != "0" else False
 
+        # The checkout is pinned. gen() parses the isa/rv32* directory names
+        # and the per-directory Makefrag to decide which tests exist, so an
+        # upstream reshuffle silently changes the test set -- and because the
+        # clone is skipped when the directory already exists, two machines can
+        # sit on different commits indefinitely and disagree about what a
+        # "full riscv_tests run" means. This is the revision the current
+        # results were produced against.
         if not os.path.isdir(f'{self.output_dir}'):
             subprocess.call(shlex.split(f'git clone --recursive \
                https://github.com/riscv/riscv-tests.git {self.output_dir}/'))
+            subprocess.call(shlex.split(
+                'git -C {0} checkout --quiet --recurse-submodules {1}'.format(
+                    self.output_dir,
+                    '2ebecad997fa58cd9e5724340ba75aa4b59bd1d0')))
 
         self.isa_dir = self.output_dir + '/isa'
 
