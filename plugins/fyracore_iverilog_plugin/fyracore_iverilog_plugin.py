@@ -254,8 +254,12 @@ class fyracore_iverilog_plugin(object):
     def post_run(self, test_dict, config):
         logger.info('FyraCore iverilog plugin: Post-Run Hook')
 
-        if str_2_bool(config.get('river_core', {}).get(
-                'space_saver', 'False')):
+        # config is a ConfigParser, whose get() signature is
+        # get(section, option), not dict.get(key, default). Passing a dict as
+        # the second argument made it the *option name* and blew up in
+        # optionxform with "'dict' object has no attribute 'lower'". Index the
+        # section first and use the SectionProxy's dict-style get.
+        if str_2_bool(config['river_core'].get('space_saver', 'False')):
             logger.debug('Removing artifacts for passed tests')
             for test, attr in test_dict.items():
                 if attr.get('result', '') == 'Passed':
