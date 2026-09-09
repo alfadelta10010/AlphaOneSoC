@@ -141,13 +141,17 @@ class riscv_torture_plugin(object):
                   f'{self.output_dir}/riscv-torture/env/v/string.c',
                   f'{self.output_dir}/riscv-torture/env/v/entry.S']
                 compile_macros = [f'ENTROPY=0x{entropy}']
-                ignore_lines = 13
+                # 5 Spike bootrom instructions + 9 v-mode setup instructions.
+                ignore_lines = 14
             else:
                 linker_file = f'{self.output_dir}/riscv-torture/env/p/link.ld'
                 include = [f'{self.output_dir}/riscv-torture/env/p/']
                 extra_compile = []
                 compile_macros = []
-                ignore_lines = 4
+                # Spike emits 5 bootrom instructions (0x1000-0x1010, ending in the
+                # jr to --pc) before reaching the program; the DUT starts at the
+                # reset PC.
+                ignore_lines = 5
                 
 
             test_list[base_key] = {}
