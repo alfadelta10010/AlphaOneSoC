@@ -147,20 +147,27 @@ class rrag_plugin(object):
         
         # edit base config if tcm is enabled
         # place access sections around _end label
+        #
+        # The derived config is written into output_dir rather than back over
+        # base_config_path. That path points at a file tracked in this repo,
+        # so rewriting it in place edited the working tree as a side effect of
+        # a generate, and the edit was not idempotent: the second run reloaded
+        # the already-rewritten file, where 'begin_signature' no longer exists,
+        # and died on KeyError.
         if self.tcm:
             with open(self.base_config_path, 'r') as fp:
                 base_yaml = yaml.load(fp)
-                if spec_config['tcm_type'] == 'split':
-                    dend = int(spec_config['dtcm_base']) + int(spec_config['dtcm_size'], 0)
-                    del base_yaml['access-sections']['begin_signature']
-                    base_yaml['access-sections'] = {'_end' : f'{hex(dend-0x10000)},{hex(dend-1)},rw'}
-                else:
-                    dend = int(spec_config['tcm_base']) + int(spec_config['tcm_size'], 0)
-                    del base_yaml['access-sections']['begin_signature']
-                    base_yaml['access-sections'] = {'_end' : f'{hex(dend-0x10000)},{hex(dend-1)},rw'}
-                
-                with open(self.base_config_path, 'w') as fp:
-                    yaml.dump(base_yaml, fp)
+            if spec_config['tcm_type'] == 'split':
+                dend = int(spec_config['dtcm_base']) + int(spec_config['dtcm_size'], 0)
+            else:
+                dend = int(spec_config['tcm_base']) + int(spec_config['tcm_size'], 0)
+            base_yaml['access-sections'] = {'_end' : f'{hex(dend-0x10000)},{hex(dend-1)},rw'}
+
+            tcm_config_path = os.path.join(output_dir, 'base_config_tcm.yaml')
+            with open(tcm_config_path, 'w') as fp:
+                yaml.dump(base_yaml, fp)
+            logger.info(f'tcm enabled: derived base config at {tcm_config_path}')
+            self.base_config_path = tcm_config_path
 
         # generate random configs if random configs
         if self.gen_type == gen_type_enum.RAND_CONFIG:
