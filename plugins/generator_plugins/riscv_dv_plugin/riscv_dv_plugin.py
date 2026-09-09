@@ -231,7 +231,15 @@ class riscv_dv_plugin(object):
         test_list = {}
         for asm in sorted(glob.glob(f'{asm_root}/**/asm_test/*.S', recursive=True)):
             key = os.path.basename(asm)[:-2]
-            work_dir = os.path.dirname(asm)
+            # Each test needs its own work_dir. river_core writes dut.dump and
+            # ref.dump into work_dir, and every iteration of a stream lands in
+            # the same asm_test/ directory -- so using dirname(asm) gave all
+            # N iterations one directory and they overwrote each other's dumps.
+            # Only the last iteration of each stream survived to be compared;
+            # with 50 programs across 11 streams, 39 were generated, built,
+            # simulated and then silently clobbered.
+            work_dir = os.path.join(os.path.dirname(asm), key)
+            os.makedirs(work_dir, exist_ok=True)
             entry = {}
             entry['isa'] = self.isa
             entry['work_dir'] = work_dir
