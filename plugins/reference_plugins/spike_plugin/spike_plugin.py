@@ -145,12 +145,16 @@ class spike_plugin(object):
                 compile_cmd += ' -I '+str(x)
             compile_cmd += ' '.join(map(' -D{0}'.format, attr['compile_macros']))
             compile_cmd += f' -o {test}.elf && '
+            # The timeout must wrap the simulator, not the compiler.  It used
+            # to prefix compile_cmd, which ends in '&&', so it bounded gcc --
+            # a second's work -- and left spike running unbounded.  A
+            # non-terminating program then ran until the disk filled.
             if self.timeout_period>=0:
-                timeout_cmd = f' timeout {str(int(self.timeout_period) + 5)} '
+                timeout_cmd = f'timeout -k 10s {int(self.timeout_period) + 5} '
             else:
-                timeout_cmd = ' '
-            target_cmd = ch_cmd + timeout_cmd + compile_cmd + self.objdump_cmd +\
-                    self.sim_cmd + ' ' + \
+                timeout_cmd = ''
+            target_cmd = ch_cmd + compile_cmd + self.objdump_cmd +\
+                    timeout_cmd + self.sim_cmd + ' ' + \
                     self.sim_args.format(spike_priv, spike_isa, f'{test}.elf')
             n_skip = attr.get('ignore_lines', 0)
             target_cmd += "([ -f ref.dump ]"
