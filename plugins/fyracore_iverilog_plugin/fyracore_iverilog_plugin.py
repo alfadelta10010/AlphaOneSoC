@@ -80,6 +80,11 @@ class fyracore_iverilog_plugin(object):
         # '--- Max cycles ... reached ---' line that says which happened.
         self.max_cycles = int(ini_config.get('max_cycles', 1000000))
 
+        # Hard ceiling on any file the simulation writes, in MiB. A core that
+        # never terminates writes dut.dump until the disk is full; the run on
+        # 2026-09-09 lost a whole regression that way. 0 disables the guard.
+        self.max_dump_mb = int(ini_config.get('max_dump_mb', 512))
+
         # ----- Paths -----
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.sim_path = self.work_dir + self.name
@@ -191,6 +196,19 @@ class fyracore_iverilog_plugin(object):
             else:
                 timeout_cmd = ''
 
+            # ulimit -f counts 512-byte blocks under /bin/sh (dash), which is
+            # the shell make runs recipes with, and 1 KiB blocks under plain
+            # bash -- so *2048 is exactly max_dump_mb under make and at most
+            # twice that if a bash ever runs it, never less. It applies to
+            # every file the subshell writes, so it must wrap only the
+            # simulation. Exceeding it kills vvp with SIGXFSZ and leaves a
+            # truncated dut.dump, which the comparison stage reports as a
+            # failure -- a bounded loss rather than a full disk.
+            if self.max_dump_mb > 0:
+                ulimit_cmd = f'ulimit -f {self.max_dump_mb * 2048}; '
+            else:
+                ulimit_cmd = ''
+
             # stdout used to go to /dev/null, which discarded every diagnostic
             # the testbench emits: '--- Max cycles ... reached ---', the
             # spin-detector abort, and the $fatal for an unloaded program that
@@ -199,12 +217,12 @@ class fyracore_iverilog_plugin(object):
             # trace divergence. Keep it next to the dump instead; it is a few
             # lines per test.
             sim_cmd = (
-                f'{timeout_cmd}vvp ./sim_fyracore '
+                f'({ulimit_cmd}{timeout_cmd}vvp ./sim_fyracore '
                 f'+INIT_FILE={work_dir}/{test}.hex '
                 f'+DUMP_FILE=dut.dump '
                 f'+TOHOST_ADDR=$$TOHOST '
                 f'+MAX_CYCLES={self.max_cycles} '
-                f'1> sim.log 2>&1'
+                f'1> sim.log 2>&1)'
             )
 
             # -- Post-sim: strip halt-loop retires so DUT dump aligns with
