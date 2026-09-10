@@ -236,12 +236,28 @@ class fyracore_iverilog_plugin(object):
                 "/\\(0x0000006f\\)$$/d' dut.dump"
             )
 
+            # -- Truncate at the tohost write --
+            # The reference side does the same (see spike_plugin.py). The DUT
+            # stops on the tohost store immediately while spike only polls
+            # HTIF every 5000 instructions, so the two dumps agree on every
+            # retire up to that store and then stop in different places.
+            # Cutting both at the store removes the difference symmetrically.
+            # TOHOST is already resolved above for the simulation itself.
+            # Kept inside a subshell ending in `|| true` so a program with no
+            # tohost symbol is a no-op rather than a failed make target, while
+            # the leading && still propagates a failed simulation.
+            trunc_cmd = (
+                " && ( [ -n \"$$TOHOST\" ] && [ -f dut.dump ] &&"
+                " awk -v p=\"mem 0x$$TOHOST\" 'index($$0,p){print; exit} {print}'"
+                " dut.dump > dut.dump.tmp && mv dut.dump.tmp dut.dump || true )"
+            )
+
             # -- Cleanup --
             clean_cmd = ' && rm -f sim_fyracore'
 
             target_cmd = (
                 ch_cmd + compile_cmd + hex_cmd + sim_setup +
-                tohost_cmd + sim_cmd + strip_cmd + clean_cmd
+                tohost_cmd + sim_cmd + strip_cmd + trunc_cmd + clean_cmd
             )
             make.add_target(target_cmd, test)
             self.test_names.append(test)

@@ -191,6 +191,30 @@ class spike_plugin(object):
                 target_cmd +=  " sed -i '$$d' ref.dump && "
                 target_cmd +=  "sed -i '$$d' ref.dump"
             target_cmd += ") || echo \"Error: ref.dump not found\")"
+            # Truncate the reference at the tohost write.
+            #
+            # riscv-dv ends every program with
+            #     write_tohost: auipc/sw 1/c.j write_tohost
+            # an intentional spin that expects the simulator to notice the
+            # store and stop. The DUT's testbench stops on it immediately;
+            # spike only polls HTIF every INTERLEAVE (5000) instructions, so
+            # it spins ~4900 more retires first. Measured on
+            # riscv_ebreak_test_0: the store is at line 202 of both dumps,
+            # dut.dump ends at 206 lines, ref.dump runs to 5121 and repeats
+            # the same store 1640 times. The traces agree on every
+            # architectural fact and disagree only about where to stop, which
+            # failed all 50 riscv_dv tests.
+            #
+            # Cutting both dumps at the first tohost store removes the spin
+            # symmetrically. The DUT side does the same in its own plugin.
+            # Keyed off the tohost *symbol*, not a '.tohost' section: riscv-dv
+            # puts tohost in .data, which is why the older section-based
+            # attempt below never fired for it.
+            target_cmd += f" ; TOHOST=$$(riscv64-unknown-elf-readelf -s {test}.elf"
+            target_cmd += " | awk '$$8==\"tohost\"{print $$2}')"
+            target_cmd += " ; [ -n \"$$TOHOST\" ] && [ -f ref.dump ] &&"
+            target_cmd += " awk -v p=\"mem 0x$$TOHOST\" 'index($$0,p){print; exit} {print}'"
+            target_cmd += " ref.dump > ref.dump.tmp && mv ref.dump.tmp ref.dump"
             # if not self.is_tcm:
             #   target_cmd += " && sed -i '$$d' ref.dump;"
             # else:
