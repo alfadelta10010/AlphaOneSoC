@@ -78,7 +78,14 @@ class fyracore_iverilog_plugin(object):
         # cut off mid-trace, which the comparison stage cannot tell apart
         # from a genuine divergence -- see sim.log for the
         # '--- Max cycles ... reached ---' line that says which happened.
-        self.max_cycles = int(ini_config.get('max_cycles', 1000000))
+        self.max_cycles = int(ini_config.get('max_cycles', 3000000))
+
+        # Retire budget. This is the bound that normally fires, and it is the
+        # one that keeps the reference comparable: the spike plugin passes
+        # --instructions = max_instr + ignore_lines so both models stop on the
+        # same retired instruction. max_cycles above is only the backstop for a
+        # hung pipeline that retires nothing.
+        self.max_instr = int(ini_config.get('max_instr', 200000))
 
         # Hard ceiling on any file the simulation writes, in MiB. A core that
         # never terminates writes dut.dump until the disk is full; the run on
@@ -222,6 +229,7 @@ class fyracore_iverilog_plugin(object):
                 f'+DUMP_FILE=dut.dump '
                 f'+TOHOST_ADDR=$$TOHOST '
                 f'+MAX_CYCLES={self.max_cycles} '
+                f'+MAX_INSTR={self.max_instr} '
                 f'1> sim.log 2>&1)'
             )
 
