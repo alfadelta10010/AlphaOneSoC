@@ -34,22 +34,46 @@ module tb_rivercore;
     // Parameters
     parameter MEM_SIZE = 33554432; // 32 MB
 
-    // Base of the RAM window. 0x80000000 matches Spike's DRAM_BASE so the
-    // verification flow can use riscv-tests' env/p/link.ld unchanged.
-    parameter MEM_BASE = 32'h8000_0000;
-
-    // Instantiate CPU
+    // ── Verification remap ──────────────────────────────────────────────
     //
-    // The core's PMA window is derived from MEM_SIZE here so the testbench
-    // stays the single source of truth for how much memory exists. It must
-    // also match the reference model: plugins/river-config.ini sets
+    // The SoC's real map -- Flash at 0x00000000, RAM at 0x01000000, CLINT at
+    // 0x02000000, GPIO at 0x03000000 -- is what src/fyracore.v and
+    // src/memController.v describe by default, and it is what the hardware
+    // will be. It cannot be used for river_core lockstep verification:
+    //
+    //   * Spike's boot ROM is fixed at DEFAULT_RSTVEC 0x1000 and cannot be
+    //     disabled (--disable-dtb removes it and Spike then hangs with an
+    //     empty dump). It would sit inside Flash.
+    //   * Spike places RAM at DRAM_BASE 0x80000000 and -m only resizes it.
+    //
+    // So the remap lives here, in the testbench, rather than in the core.
+    // The core keeps describing the machine being built; this file bends the
+    // address map to whatever the reference model can be made to agree with.
+    //
+    // MEM_BASE/MEM_SIZE must match plugins/river-config.ini:
     //   [spike] mem_flags = -m0x80000000:0x2000000
     // Change one and you must change the other, or the DUT and the reference
-    // disagree about which addresses are mapped.
+    // disagree about which addresses are mapped -- the bug the PMA check
+    // exists to catch.
+    parameter MEM_BASE = 32'h8000_0000;
+
+    // memory_model.v answers CLINT at 0x02000000-0x0200BFFF and the
+    // testbench-only MEIP hook at 0x0200C000, so IO0 covers both. It models
+    // no GPIO at all, so IO1 is switched off by making BASE > TOP, which
+    // matches nothing.
+    parameter IO0_BASE = 32'h0200_0000;
+    parameter IO0_TOP  = 32'h0200_C003;
+    parameter IO1_BASE = 32'hFFFF_FFFF;
+    parameter IO1_TOP  = 32'h0000_0000;
+
     fyracore #(
         .RESET_PC    (MEM_BASE),
         .PMA_MEM_BASE(MEM_BASE),
-        .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1)
+        .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1),
+        .PMA_IO0_BASE(IO0_BASE),
+        .PMA_IO0_TOP (IO0_TOP),
+        .PMA_IO1_BASE(IO1_BASE),
+        .PMA_IO1_TOP (IO1_TOP)
     ) cpu(
         .clk         (clk),
         .rst         (rst),

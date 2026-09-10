@@ -16,23 +16,32 @@ module fyracore #(
     // Physical memory attributes -- the implemented address map.
     //
     // Anything outside these windows has no device behind it, so an access
-    // must raise an access fault. This is not optional book-keeping: the
-    // simulation memory answers *every* address (tb/memory_model.v indexes
-    // with addr[24:0], aliasing all 4 GB into its 32 MB array), so without
-    // this check a fetch at PC 0 silently re-runs the program image instead
-    // of faulting. That one divergence caused 884 of the 887 rrag failures
-    // in the 2026-09-09 regression.
+    // must raise an access fault rather than silently succeeding.
     //
-    // These must stay in step with two things outside this file:
-    //   tb/tb_rivercore.v  MEM_SIZE
-    //   plugins/river-config.ini  [spike] mem_flags = -m<base>:<size>
-    // If the three disagree the DUT and the reference disagree about which
-    // addresses are mapped, which is the bug this exists to remove.
-    parameter [31:0] PMA_MEM_BASE = 32'h8000_0000,
-    parameter [31:0] PMA_MEM_TOP  = 32'h81FF_FFFF,  // 32 MB of RAM
-    // CLINT, plus the one-word testbench MEIP hook above it.
-    parameter [31:0] PMA_IO_BASE  = 32'h0200_0000,
-    parameter [31:0] PMA_IO_TOP   = 32'h0200_C003
+    // The defaults are the SoC's real map, matching src/memController.v and
+    // docs/FyraCore_CPU_Reference.md:
+    //
+    //   0x0000_0000 - 0x00FF_FFFF  Flash  16 MB  XIP code (QSPI CS0)
+    //   0x0100_0000 - 0x01FF_FFFF  RAM    16 MB  stack/heap/.data (QSPI CS1)
+    //   0x0200_0000 - 0x0200_BFFF  CLINT  48 KB
+    //   0x0300_0000 - 0x0300_000F  GPIO   16 B   GPO 0x00-0x07, GPI 0x08-0x0F
+    //
+    // Flash and RAM are contiguous, so one window covers both. Fetch is
+    // allowed anywhere in it and nowhere else: the design is Von Neumann, so
+    // XIP from flash and executing from RAM must both work, but fetching out
+    // of CLINT or GPIO is an instruction access fault.
+    //
+    // The verification flow cannot use this map. Spike's boot ROM is fixed at
+    // 0x1000 and cannot be disabled, so it would sit inside flash, and Spike
+    // only places RAM at DRAM_BASE 0x8000_0000. tb/tb_rivercore.v therefore
+    // overrides these to a Spike-compatible window; the remap lives in the
+    // testbench so the core keeps describing the hardware being built.
+    parameter [31:0] PMA_MEM_BASE = 32'h0000_0000,
+    parameter [31:0] PMA_MEM_TOP  = 32'h01FF_FFFF,  // Flash + RAM, 32 MB
+    parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // CLINT
+    parameter [31:0] PMA_IO0_TOP  = 32'h0200_BFFF,
+    parameter [31:0] PMA_IO1_BASE = 32'h0300_0000,  // GPIO
+    parameter [31:0] PMA_IO1_TOP  = 32'h0300_000F
 )(
     input  wire        clk,
     input  wire        rst,
@@ -377,10 +386,14 @@ module fyracore #(
     // Fetch is restricted to RAM -- executing out of the CLINT is an
     // instruction access fault, which is also what the reference model does.
     wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
+    // A window with BASE > TOP matches nothing, which is how the testbench
+    // switches off the ports the simulation does not model.
     wire ex_pma_data_ok  = ((ex_alu_result >= PMA_MEM_BASE) &&
-                            (ex_alu_result <= PMA_MEM_TOP)) ||
-                           ((ex_alu_result >= PMA_IO_BASE) &&
-                            (ex_alu_result <= PMA_IO_TOP));
+                            (ex_alu_result <= PMA_MEM_TOP))  ||
+                           ((ex_alu_result >= PMA_IO0_BASE) &&
+                            (ex_alu_result <= PMA_IO0_TOP))  ||
+                           ((ex_alu_result >= PMA_IO1_BASE) &&
+                            (ex_alu_result <= PMA_IO1_TOP));
 
     // Access-fault detection. Two independent reasons to refuse an access:
     // PMP says the permissions deny it, or the PMA says nothing is mapped
