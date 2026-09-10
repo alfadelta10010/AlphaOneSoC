@@ -130,10 +130,7 @@ def main():
 
     path = os.path.join(os.path.dirname(river_core.__file__), 'utils.py')
     src = io.open(path, encoding='utf-8').read()
-
-    if '_RIVER_MAX_LOG_BYTES' in src and 'except ProcessLookupError' in src:
-        print(f'already patched: {path}')
-        return
+    original = src
 
     edits = [
         ('sys_command ProcessLookupError guard', SYS_COMMAND_OLD, SYS_COMMAND_NEW),
@@ -144,20 +141,32 @@ def main():
          CONST_BLOCK.format(max_log=MAX_LOG_BYTES, max_rec=MAX_RECORDS) + CONST_ANCHOR),
     ]
 
+    # Each edit is checked on its own so this script stays usable when a new
+    # fix is added to an install that already carries the earlier ones.
+    applied, present = [], []
     for name, old, new in edits:
+        if new in src:
+            present.append(name)
+            continue
         n = src.count(old)
         if n != 1:
             sys.exit(f'{name}: expected exactly 1 match, found {n}. '
                      f'river-core version mismatch? Expected 1.9.7.')
         src = src.replace(old, new)
+        applied.append(name)
+
+    if not applied:
+        print(f'already patched: {path}')
+        return
 
     backup = path + '.orig'
     if not os.path.exists(backup):
-        io.open(backup, 'w', encoding='utf-8').write(
-            io.open(path, encoding='utf-8').read())
+        io.open(backup, 'w', encoding='utf-8').write(original)
     io.open(path, 'w', encoding='utf-8').write(src)
 
-    for name, _, _ in edits:
+    for name in present:
+        print(f'  already present: {name}')
+    for name in applied:
         print(f'  applied: {name}')
     print(f'patched: {path}  (original saved as {backup})')
 
