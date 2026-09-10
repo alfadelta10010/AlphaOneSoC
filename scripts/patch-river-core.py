@@ -28,6 +28,19 @@ comparison:
      The cap is verdict-preserving: `status` is only ever assigned
      'Failed' inside the walk, never back to 'Passed', so stopping once it
      is 'Failed' cannot change the result.  Only the log is shortened.
+
+  3. compare_dumps() calls change1.remove('mem') whenever the token count
+     of a commit's change field is odd.  list.remove raises ValueError if
+     'mem' is not in the list, and that escapes the Pool worker and aborts
+     every verdict in the run -- the same failure class as (1).  Guard it.
+
+     Note, deliberately NOT changed: the odd-token fix-up is applied to
+     file1 only, never to file2, so a store's change field normalises to
+     {addr: value} on one side and {'mem': addr} on the other.  In practice
+     this only reaches lines `diff -iw` already called different, where
+     'Failed' is the right answer anyway, and the 2026-09-10 audit found 0
+     of 289 passes with a dut/ref length mismatch.  Making it symmetric
+     would change verdicts, so it is left alone and recorded here.
 """
 import io
 import os
@@ -113,6 +126,19 @@ BREAK_NEW = """            if not flag_found_corr_file2:
         if not flag_found_corr_file1:
 """
 
+MEM_REMOVE_OLD = """                    change1 = file1_dat[-1].split()
+                    if len(change1) % 2:
+                        change1.remove('mem')
+"""
+
+MEM_REMOVE_NEW = """                    change1 = file1_dat[-1].split()
+                    # list.remove raises ValueError when 'mem' is absent, and
+                    # that escapes the multiprocessing.Pool worker and aborts
+                    # every verdict in the run rather than just this test.
+                    if len(change1) % 2 and 'mem' in change1:
+                        change1.remove('mem')
+"""
+
 CONST_ANCHOR = "def compare_dumps(file1, file2, start_hex=''):\n"
 CONST_BLOCK = """_RIVER_MAX_LOG_BYTES = int(os.environ.get('RIVER_CORE_MAX_LOG_BYTES', {max_log}))
 _RIVER_MAX_MISMATCH_RECORDS = int(
@@ -136,6 +162,8 @@ def main():
         ('sys_command ProcessLookupError guard', SYS_COMMAND_OLD, SYS_COMMAND_NEW),
         ('compare_dumps log cap', WALK_OLD, WALK_NEW),
         ('compare_dumps early exit', BREAK_OLD, BREAK_NEW),
+        ("compare_dumps remove('mem') ValueError guard",
+         MEM_REMOVE_OLD, MEM_REMOVE_NEW),
         ('module constants',
          CONST_ANCHOR,
          CONST_BLOCK.format(max_log=MAX_LOG_BYTES, max_rec=MAX_RECORDS) + CONST_ANCHOR),
