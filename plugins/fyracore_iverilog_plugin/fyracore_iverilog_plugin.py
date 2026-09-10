@@ -185,13 +185,20 @@ class fyracore_iverilog_plugin(object):
             else:
                 timeout_cmd = ''
 
+            # stdout used to go to /dev/null, which discarded every diagnostic
+            # the testbench emits: '--- Max cycles ... reached ---', the
+            # spin-detector abort, and the $fatal for an unloaded program that
+            # tb_rivercore.v explicitly raises so it "must fail loudly". A
+            # truncated dut.dump was therefore indistinguishable from a real
+            # trace divergence. Keep it next to the dump instead; it is a few
+            # lines per test.
             sim_cmd = (
                 f'{timeout_cmd}vvp ./sim_fyracore '
                 f'+INIT_FILE={work_dir}/{test}.hex '
                 f'+DUMP_FILE=dut.dump '
                 f'+TOHOST_ADDR=$$TOHOST '
                 f'+MAX_CYCLES=1000000 '
-                f'1> /dev/null'
+                f'1> sim.log 2>&1'
             )
 
             # -- Post-sim: strip halt-loop retires so DUT dump aligns with
