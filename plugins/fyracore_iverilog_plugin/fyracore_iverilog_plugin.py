@@ -74,6 +74,12 @@ class fyracore_iverilog_plugin(object):
         else:
             self.stop_on_failure = False
 
+        # Retire budget handed to the testbench. A test that exceeds it is
+        # cut off mid-trace, which the comparison stage cannot tell apart
+        # from a genuine divergence -- see sim.log for the
+        # '--- Max cycles ... reached ---' line that says which happened.
+        self.max_cycles = int(ini_config.get('max_cycles', 1000000))
+
         # ----- Paths -----
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.sim_path = self.work_dir + self.name
@@ -197,7 +203,7 @@ class fyracore_iverilog_plugin(object):
                 f'+INIT_FILE={work_dir}/{test}.hex '
                 f'+DUMP_FILE=dut.dump '
                 f'+TOHOST_ADDR=$$TOHOST '
-                f'+MAX_CYCLES=1000000 '
+                f'+MAX_CYCLES={self.max_cycles} '
                 f'1> sim.log 2>&1'
             )
 
