@@ -66,7 +66,15 @@ class spike_plugin(object):
         self.sim_cmd = 'spike'
         self.sim_args = f'--hartids={self.hartid} --log ref.dump --log-commits \
 --priv={{0}} {self.mem_flags} {self.dtb} --pc={self.resetpc} --isa={{1}} \
---pmpregions={self.pmp_regions} --pmpgranularity={self.pmp_granularity} {{2}};'
+--pmpregions={self.pmp_regions} --pmpgranularity={self.pmp_granularity} {{2}}'
+
+        # Hard ceiling on any file the reference run writes, in MiB. A program
+        # that never terminates under spike writes ref.dump until the disk is
+        # full: seven riscv_dv tests did exactly that on 2026-09-09 and wrote
+        # 777 GB between them. The run timeout now bounds spike, but 600 s at
+        # the observed ~1.85 GB/min is still ~18 GB per runaway, so bound the
+        # file as well. 0 disables the guard.
+        self.max_dump_mb = int(ini_config.get('max_dump_mb', 512))
 
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.test_list = load_yaml(test_list)
@@ -153,9 +161,24 @@ class spike_plugin(object):
                 timeout_cmd = f'timeout -k 10s {int(self.timeout_period) + 5} '
             else:
                 timeout_cmd = ''
+            # ulimit -f counts 512-byte blocks under /bin/sh (dash), which is
+            # the shell make runs recipes with, and 1 KiB blocks under plain
+            # bash -- so *2048 is exactly max_dump_mb under make and at most
+            # twice that if a bash ever runs it, never less. It applies to
+            # every file the subshell writes, so it must wrap only the
+            # spike invocation -- the compile above and the sed
+            # post-processing below stay outside it. Exceeding the limit
+            # kills spike with SIGXFSZ and leaves a
+            # truncated ref.dump, which the comparison stage reports as a
+            # failure: a bounded loss rather than a full disk.
+            if self.max_dump_mb > 0:
+                ulimit_cmd = f'ulimit -f {self.max_dump_mb * 2048}; '
+            else:
+                ulimit_cmd = ''
             target_cmd = ch_cmd + compile_cmd + self.objdump_cmd +\
-                    timeout_cmd + self.sim_cmd + ' ' + \
-                    self.sim_args.format(spike_priv, spike_isa, f'{test}.elf')
+                    '(' + ulimit_cmd + timeout_cmd + self.sim_cmd + ' ' + \
+                    self.sim_args.format(spike_priv, spike_isa, f'{test}.elf') +\
+                    ');'
             n_skip = attr.get('ignore_lines', 0)
             target_cmd += "([ -f ref.dump ]"
             if n_skip:
