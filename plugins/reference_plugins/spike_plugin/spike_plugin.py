@@ -66,7 +66,7 @@ class spike_plugin(object):
         self.sim_cmd = 'spike'
         self.sim_args = f'--hartids={self.hartid} --log ref.dump --log-commits \
 --priv={{0}} {self.mem_flags} {self.dtb} --pc={self.resetpc} --isa={{1}} \
---pmpregions={self.pmp_regions} --pmpgranularity={self.pmp_granularity} {{2}}'
+--pmpregions={self.pmp_regions} --pmpgranularity={self.pmp_granularity} {{3}} {{2}}'
 
         # Hard ceiling on any file the reference run writes, in MiB. A program
         # that never terminates under spike writes ref.dump until the disk is
@@ -75,6 +75,16 @@ class spike_plugin(object):
         # the observed ~1.85 GB/min is still ~18 GB per runaway, so bound the
         # file as well. 0 disables the guard.
         self.max_dump_mb = int(ini_config.get('max_dump_mb', 512))
+
+        # Retire budget, matched to the DUT's +MAX_INSTR. Spike's
+        # --instructions counts every logged instruction including the boot ROM
+        # prologue, which ignore_lines strips afterwards, so the value passed
+        # per test is max_instr + that test's ignore_lines. Without this the
+        # two models stop on different instructions -- the DUT on its retire
+        # budget, spike only when it runs out of disk quota -- and a
+        # non-terminating program produces a 200k-line dump against a 512 MB
+        # one. 0 disables the limit.
+        self.max_instr = int(ini_config.get('max_instr', 200000))
 
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.test_list = load_yaml(test_list)
@@ -175,11 +185,16 @@ class spike_plugin(object):
                 ulimit_cmd = f'ulimit -f {self.max_dump_mb * 2048}; '
             else:
                 ulimit_cmd = ''
+            n_skip = attr.get('ignore_lines', 0)
+            if self.max_instr > 0:
+                instr_flag = f'--instructions={self.max_instr + n_skip}'
+            else:
+                instr_flag = ''
             target_cmd = ch_cmd + compile_cmd + self.objdump_cmd +\
                     '(' + ulimit_cmd + timeout_cmd + self.sim_cmd + ' ' + \
-                    self.sim_args.format(spike_priv, spike_isa, f'{test}.elf') +\
+                    self.sim_args.format(spike_priv, spike_isa, f'{test}.elf',
+                                         instr_flag) +\
                     ');'
-            n_skip = attr.get('ignore_lines', 0)
             target_cmd += "([ -f ref.dump ]"
             if n_skip:
                 target_cmd += f" && sed -i '1,{n_skip}d' ref.dump"
