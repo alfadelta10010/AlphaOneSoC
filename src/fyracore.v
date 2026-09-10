@@ -12,7 +12,27 @@
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
-    parameter [31:0] RESET_PC = 32'h0000_0000
+    parameter [31:0] RESET_PC = 32'h0000_0000,
+    // Physical memory attributes -- the implemented address map.
+    //
+    // Anything outside these windows has no device behind it, so an access
+    // must raise an access fault. This is not optional book-keeping: the
+    // simulation memory answers *every* address (tb/memory_model.v indexes
+    // with addr[24:0], aliasing all 4 GB into its 32 MB array), so without
+    // this check a fetch at PC 0 silently re-runs the program image instead
+    // of faulting. That one divergence caused 884 of the 887 rrag failures
+    // in the 2026-09-09 regression.
+    //
+    // These must stay in step with two things outside this file:
+    //   tb/tb_rivercore.v  MEM_SIZE
+    //   plugins/river-config.ini  [spike] mem_flags = -m<base>:<size>
+    // If the three disagree the DUT and the reference disagree about which
+    // addresses are mapped, which is the bug this exists to remove.
+    parameter [31:0] PMA_MEM_BASE = 32'h8000_0000,
+    parameter [31:0] PMA_MEM_TOP  = 32'h81FF_FFFF,  // 32 MB of RAM
+    // CLINT, plus the one-word testbench MEIP hook above it.
+    parameter [31:0] PMA_IO_BASE  = 32'h0200_0000,
+    parameter [31:0] PMA_IO_TOP   = 32'h0200_C003
 )(
     input  wire        clk,
     input  wire        rst,
@@ -353,15 +373,29 @@ module fyracore #(
     wire ex_inst_misalign = ifex_valid && ex_branch_taken &&
                             !csr_misa_c && ex_branch_target[1];
 
-    // PMP fault detection (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
-    wire ex_pmp_ifetch_fail = ifex_valid && !pmp_ifetch_allow;
-    // Data PMP: only when a memory op is present and it's not already misaligned
-    wire ex_pmp_data_fail   = ifex_valid && ex_mem_active && !ex_misaligned && !pmp_data_allow;
+    // PMA check: is there a device at this address at all?
+    // Fetch is restricted to RAM -- executing out of the CLINT is an
+    // instruction access fault, which is also what the reference model does.
+    wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
+    wire ex_pma_data_ok  = ((ex_alu_result >= PMA_MEM_BASE) &&
+                            (ex_alu_result <= PMA_MEM_TOP)) ||
+                           ((ex_alu_result >= PMA_IO_BASE) &&
+                            (ex_alu_result <= PMA_IO_TOP));
+
+    // Access-fault detection. Two independent reasons to refuse an access:
+    // PMP says the permissions deny it, or the PMA says nothing is mapped
+    // there. Both raise the same causes (1 / 5 / 7), so they are combined
+    // here rather than at every use site.
+    // (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
+    wire ex_ifetch_fault = ifex_valid && (!pmp_ifetch_allow || !ex_pma_fetch_ok);
+    // Data side: only when a memory op is present and it's not already misaligned
+    wire ex_data_fault   = ifex_valid && ex_mem_active && !ex_misaligned &&
+                           (!pmp_data_allow || !ex_pma_data_ok);
 
     // Trap detection
     wire ex_trap = ifex_valid && (
         ex_is_ecall || ex_is_ebreak ||
-        ex_pmp_ifetch_fail ||          // Instruction access fault (PMP)
+        ex_ifetch_fault ||             // Instruction access fault (PMP or PMA)
         (ctrl_illegal && !ctrl_isFence) ||
         ifex_c_illegal ||              // Illegal compressed instruction from IF
         ex_bad_system ||               // Malformed SYSTEM encoding
@@ -369,7 +403,7 @@ module fyracore #(
         ex_bad_wfi ||                  // WFI with bad rd/rs1 fields
         ex_csr_illegal ||              // Invalid/read-only CSR access
         ex_misaligned ||               // Misaligned memory access
-        ex_pmp_data_fail ||            // Load/store access fault (PMP)
+        ex_data_fault ||               // Load/store access fault (PMP or PMA)
         ex_inst_misalign               // Instruction address misaligned (branch target)
     );
 
@@ -894,7 +928,7 @@ module fyracore #(
                 // Priority: synchronous trap > async interrupt injection
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
-                    if (ex_pmp_ifetch_fail) begin
+                    if (ex_ifetch_fault) begin
                         exwb_trap_cause <= 32'd1;  // Instruction access fault (highest priority)
                         exwb_trap_val   <= ifex_pc; // faulting fetch address
                     end else if (ex_inst_misalign) begin
@@ -914,10 +948,10 @@ module fyracore #(
                     end else if (ex_misaligned && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned
                         exwb_trap_val   <= ex_alu_result;
-                    end else if (ex_pmp_data_fail && !ex_misalign_is_store) begin
+                    end else if (ex_data_fault && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd5;  // Load access fault
                         exwb_trap_val   <= ex_alu_result;
-                    end else if (ex_pmp_data_fail && ex_misalign_is_store) begin
+                    end else if (ex_data_fault && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd7;  // Store/AMO access fault
                         exwb_trap_val   <= ex_alu_result;
                     end else begin

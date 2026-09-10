@@ -34,10 +34,23 @@ module tb_rivercore;
     // Parameters
     parameter MEM_SIZE = 33554432; // 32 MB
 
-    // Instantiate CPU
-    // RESET_PC = 0x80000000 — matches Spike's default DRAM_BASE so the
+    // Base of the RAM window. 0x80000000 matches Spike's DRAM_BASE so the
     // verification flow can use riscv-tests' env/p/link.ld unchanged.
-    fyracore #(.RESET_PC(32'h8000_0000)) cpu(
+    parameter MEM_BASE = 32'h8000_0000;
+
+    // Instantiate CPU
+    //
+    // The core's PMA window is derived from MEM_SIZE here so the testbench
+    // stays the single source of truth for how much memory exists. It must
+    // also match the reference model: plugins/river-config.ini sets
+    //   [spike] mem_flags = -m0x80000000:0x2000000
+    // Change one and you must change the other, or the DUT and the reference
+    // disagree about which addresses are mapped.
+    fyracore #(
+        .RESET_PC    (MEM_BASE),
+        .PMA_MEM_BASE(MEM_BASE),
+        .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1)
+    ) cpu(
         .clk         (clk),
         .rst         (rst),
         .imem_addr   (imem_addr),
