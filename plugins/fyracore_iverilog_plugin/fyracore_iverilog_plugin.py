@@ -90,7 +90,7 @@ class fyracore_iverilog_plugin(object):
         # Hard ceiling on any file the simulation writes, in MiB. A core that
         # never terminates writes dut.dump until the disk is full; the run on
         # 2026-09-09 lost a whole regression that way. 0 disables the guard.
-        self.max_dump_mb = int(ini_config.get('max_dump_mb', 512))
+        self.max_dump_mb = int(ini_config.get('max_dump_mb', 64))
 
         # ----- Paths -----
         self.work_dir = os.path.abspath(work_dir) + '/'

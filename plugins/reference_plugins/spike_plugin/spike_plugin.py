@@ -74,7 +74,7 @@ class spike_plugin(object):
         # 777 GB between them. The run timeout now bounds spike, but 600 s at
         # the observed ~1.85 GB/min is still ~18 GB per runaway, so bound the
         # file as well. 0 disables the guard.
-        self.max_dump_mb = int(ini_config.get('max_dump_mb', 512))
+        self.max_dump_mb = int(ini_config.get('max_dump_mb', 64))
 
         # Retire budget, matched to the DUT's +MAX_INSTR. Spike's
         # --instructions counts every logged instruction including the boot ROM
