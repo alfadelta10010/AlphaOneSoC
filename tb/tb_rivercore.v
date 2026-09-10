@@ -144,6 +144,7 @@ module tb_rivercore;
     reg [8191:0] dump_file_str;
     reg [8191:0] init_file_str;
     integer    max_cycles;
+    integer    max_instr;
     reg [31:0] tohost_addr;
     reg        tohost_enabled;
     reg        have_init_file;
@@ -165,8 +166,32 @@ module tb_rivercore;
         end
 
         // Max cycles
+        // Two independent watchdogs, because they catch different failures:
+        //
+        //   MAX_CYCLES  a hung pipeline -- a stall that never clears and
+        //               retires *nothing*. An instruction bound never fires
+        //               for that case.
+        //   MAX_INSTR   a program that loops forever while making progress.
+        //               riscv-dv generates these: a 16-instruction loop ending
+        //               in `bge x31, x31, <backward>` compares a register with
+        //               itself, so the branch is always taken and the loop can
+        //               never exit. The cycle bound only stops it after ~900k
+        //               retires and a 50 MB dump.
+        //
+        // MAX_INSTR is also what makes the reference comparable: spike is given
+        // `--instructions = MAX_INSTR + ignore_lines`, so both models stop on
+        // the same retired instruction instead of one running to a cycle limit
+        // and the other to a file-size limit.
+        //
+        // Measured over 1200 passing tests, the largest legitimate run is
+        // 85,111 retires (p99 = 78,012), so 200,000 is ~2.3x headroom. At the
+        // worst observed IPC (0.14) that needs ~1.4M cycles, hence 3,000,000
+        // for the cycle backstop -- MAX_INSTR should normally be the one that
+        // fires.
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles))
-            max_cycles = 1000000;
+            max_cycles = 3000000;
+        if (!$value$plusargs("MAX_INSTR=%d", max_instr))
+            max_instr = 200000;
 
         // tohost address (riscv-tests convention)
         tohost_enabled = $value$plusargs("TOHOST_ADDR=%h", tohost_addr);
@@ -381,7 +406,12 @@ module tb_rivercore;
     wire [1:0] dump_priv = is_mret_retire ? 2'd3 : (cpu.priv_mode ? 2'd3 : 2'd0);
 
     always @(posedge clk) begin
-        if (!rst && dbg_retired && logging_active && !terminate) begin
+        // The retire-budget test belongs here rather than only in the main
+        // loop: the loop checks after the write has already happened, which
+        // emitted max_instr+1 lines. Spike stops at exactly --instructions,
+        // so one extra line would fail every bounded test on length.
+        if (!rst && dbg_retired && logging_active && !terminate &&
+            (max_instr == 0 || instr_count < max_instr)) begin
             // Header: core <hart>: <priv> 0x<PC> (0x<instr>)
             // Compressed instructions print as 4 hex digits to match Spike.
             if (dbg_compressed)
@@ -481,10 +511,17 @@ module tb_rivercore;
         #25;
         rst = 0;
 
-        // Run until termination or max cycles
+        // Run until termination, the retire budget, or the cycle backstop
         while (cycle_count < max_cycles) begin
             @(posedge clk);
             cycle_count = cycle_count + 1;
+
+            if (max_instr != 0 && instr_count >= max_instr) begin
+                $display("--- Max instructions (%0d) reached ---", max_instr);
+                $fclose(dump_fd);
+                print_summary();
+                $finish;
+            end
 
             // terminate is set on the detection cycle; we act one cycle later
             // so the always block has time to $fwrite the last dump line.
