@@ -61,13 +61,32 @@ class riscv_tests_plugin(object):
         # sit on different commits indefinitely and disagree about what a
         # "full riscv_tests run" means. This is the revision the current
         # results were produced against.
+        # The pin is enforced on every run, not only on a fresh clone: doing it
+        # at clone time alone left every machine that already had a checkout on
+        # whatever revision it was created with, which is exactly the problem
+        # the pin is for.
+        riscv_tests_rev = '2ebecad997fa58cd9e5724340ba75aa4b59bd1d0'
         if not os.path.isdir(f'{self.output_dir}'):
-            subprocess.call(shlex.split(f'git clone --recursive \
+            ret = subprocess.call(shlex.split(f'git clone --recursive \
                https://github.com/riscv/riscv-tests.git {self.output_dir}/'))
-            subprocess.call(shlex.split(
+            if ret != 0:
+                logger.error('Failed to clone riscv-tests')
+                raise SystemExit(1)
+        head = subprocess.run(
+            shlex.split(f'git -C {self.output_dir} rev-parse HEAD'),
+            capture_output=True, text=True).stdout.strip()
+        if head != riscv_tests_rev:
+            logger.info(
+                f'Pinning riscv-tests to {riscv_tests_rev[:12]} '
+                f'(was {head[:12] or "unknown"})')
+            ret = subprocess.call(shlex.split(
                 'git -C {0} checkout --quiet --recurse-submodules {1}'.format(
-                    self.output_dir,
-                    '2ebecad997fa58cd9e5724340ba75aa4b59bd1d0')))
+                    self.output_dir, riscv_tests_rev)))
+            if ret != 0:
+                logger.error(
+                    f'Could not check out riscv-tests {riscv_tests_rev}; the '
+                    f'test set is not the one results were measured against.')
+                raise SystemExit(1)
 
         self.isa_dir = self.output_dir + '/isa'
 
