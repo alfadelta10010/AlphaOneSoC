@@ -236,8 +236,13 @@ class spike_plugin(object):
                                " > ref.dump.cut && mv ref.dump.cut ref.dump")
             # Strip CSRs Spike emits but DUT does not implement (always read 0)
             target_cmd += r" && sed -i -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2|mscratchcsw|mscratchcswl|mtinstcsw) 0x[0-9a-fA-F]+//g' ref.dump"
-            target_cmd += " && (sed -i '/(0x00000063)/d' ref.dump"
-            target_cmd += "&& sed -i '/(0x0000006f)/d' ref.dump"
+            # Anchored, matching the DUT side's strip exactly. Unanchored,
+            # this would also delete a line where those 8 hex digits happened
+            # to appear in a register or memory value, and only on the
+            # reference side -- a one-sided deletion, which is a divergence the
+            # comparison would then report against the DUT.
+            target_cmd += r" && (sed -i -E '/\(0x00000063\)$$/d' ref.dump"
+            target_cmd += r"&& sed -i -E '/\(0x0000006f\)$$/d' ref.dump"
             if self.tcm or self.mem:
                 target_cmd +=  " sed -i '$$d' ref.dump && "
                 target_cmd +=  "sed -i '$$d' ref.dump"
