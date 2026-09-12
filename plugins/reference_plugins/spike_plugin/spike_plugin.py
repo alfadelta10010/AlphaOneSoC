@@ -245,11 +245,16 @@ class spike_plugin(object):
             # Keyed off the tohost *symbol*, not a '.tohost' section: riscv-dv
             # puts tohost in .data, which is why the older section-based
             # attempt below never fired for it.
+            # The pattern is the tohost address followed by a value, i.e. a
+            # STORE. Matching the address alone would also match a load of
+            # tohost and cut both traces there, silently dropping everything
+            # after it. Wrapped so a program with no tohost symbol is a no-op
+            # rather than a failed make target.
             target_cmd += f" ; TOHOST=$$(riscv64-unknown-elf-readelf -s {test}.elf"
             target_cmd += " | awk '$$8==\"tohost\"{print $$2}')"
-            target_cmd += " ; [ -n \"$$TOHOST\" ] && [ -f ref.dump ] &&"
-            target_cmd += " awk -v p=\"mem 0x$$TOHOST\" 'index($$0,p){print; exit} {print}'"
-            target_cmd += " ref.dump > ref.dump.tmp && mv ref.dump.tmp ref.dump"
+            target_cmd += " ; ( [ -n \"$$TOHOST\" ] && [ -f ref.dump ] &&"
+            target_cmd += " awk -v p=\"mem 0x$$TOHOST 0x\" 'index($$0,p){print; exit} {print}'"
+            target_cmd += " ref.dump > ref.dump.tmp && mv ref.dump.tmp ref.dump || true )"
             # if not self.is_tcm:
             #   target_cmd += " && sed -i '$$d' ref.dump;"
             # else:

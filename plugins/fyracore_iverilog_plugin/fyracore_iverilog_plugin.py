@@ -254,9 +254,13 @@ class fyracore_iverilog_plugin(object):
             # Kept inside a subshell ending in `|| true` so a program with no
             # tohost symbol is a no-op rather than a failed make target, while
             # the leading && still propagates a failed simulation.
+            # The pattern is the tohost address followed by a value, i.e. a
+            # STORE -- matching the bare address would also match a load of
+            # tohost and cut the trace there. The reference side uses the same
+            # pattern.
             trunc_cmd = (
                 " && ( [ -n \"$$TOHOST\" ] && [ -f dut.dump ] &&"
-                " awk -v p=\"mem 0x$$TOHOST\" 'index($$0,p){print; exit} {print}'"
+                " awk -v p=\"mem 0x$$TOHOST 0x\" 'index($$0,p){print; exit} {print}'"
                 " dut.dump > dut.dump.tmp && mv dut.dump.tmp dut.dump || true )"
             )
 
