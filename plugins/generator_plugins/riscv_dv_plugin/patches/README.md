@@ -496,6 +496,47 @@ Each is checked with `git apply --check` first and skipped if already applied.
     all-ones byte never appeared in a random data page. That is exactly the
     value a sign-extension or mask bug shows up on.
 
+- `26-instr-template-deepcopy.patch`
+  **The one that made most of the suite meaningless.** `riscv_instr`'s operand
+  fields (`rs1`, `rs2`, `rd`, `imm`) are pyvsc field objects living in the
+  instance `__dict__`, so `copy.copy(cls.instr_template[name])` in
+  `get_load_store_instr()` and `get_instr()` hands every instance of a mnemonic
+  the *same* field objects as the template. `gen_load_store_instr()`'s
+  `instr.rs1 = self.rs1_reg` therefore rewrites the base register of every
+  load/store of that mnemonic already emitted, anywhere in the program.
+
+  The visible symptom: each load/store stream starts with
+  `la <regA>, region_N+<off>` to set up its base, and then its accesses use
+  `<regB>` — whichever register the *last* stream to touch that mnemonic
+  picked. Measured over the 36 regression programs that contain load/store
+  streams: **3167 of 3322 streams (95.3%)** use a base register that is not
+  their own `la`, and at instruction granularity 45,845 of 50,782 accesses
+  (90.3%). The collapse is program-wide, not per-stream: `rand_instr_test_0`
+  emits all 301 of its `lb` as `lb t1, imm(s9)` and all 287 `sb` as
+  `sb t2, imm(s9)` — only the immediate varies — and whole programs use as few
+  as **one** base register for every load and store in them. After the patch a
+  freshly generated program uses 20 distinct base registers and 38/38, 44/44
+  and 99/99 streams match their own `la`.
+
+  Traced dynamically, 31 of 34 faulting accesses used a base register whose
+  last write was in the `init:` preload block *before* `main` — never touched
+  by any `la` at all.
+
+  The consequence is not a weaker random address distribution, it is no test at
+  all. The base register holds whatever `init` randomised into it — typically
+  `0x80000000` — so accesses land in the program's own code or below the start
+  of RAM. The first one faults, and because pyflow's `mmode_exception_handler`
+  routes anything that is not ECALL or ILLEGAL straight to `test_done`
+  (see patch 27), the program then *ends normally* and writes `tohost = 1`.
+  Both models do exactly the same thing, so the traces match and the test is
+  reported as **Passed** after running about 2% of itself: measured tohost at
+  dump line 213, 234 and 370 of programs with 6k–14k instructions in `main`.
+
+  Upstream already knows: `get_rand_instr()` right above uses `deepcopy` with a
+  comment saying "rs1 rs2 values are overwriting and the last generated values
+  are getting assigned for a particular instruction". The two sibling helpers
+  never got the same treatment.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
