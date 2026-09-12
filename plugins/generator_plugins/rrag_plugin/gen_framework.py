@@ -36,7 +36,12 @@ def gen_cmd_list(gen_config, seed, count, output_dir, module_dir, rrag='rrag'):
         # get seed value
         for i in range(int(count)):
             if seed == 'random':
-                gen_seed = random.randint(0, 10000)
+                # 0..999999, not 0..10000. A full run draws 1000 seeds (20
+                # configs x count 50), and from a pool of 10001 that is ~2.4
+                # duplicate programs per run by the birthday bound -- generated
+                # twice, simulated twice, proving the same thing twice. The
+                # seed is still six digits, so the test names keep their shape.
+                gen_seed = random.randint(0, 999999)
             else:
                 gen_seed = int(seed)
         
