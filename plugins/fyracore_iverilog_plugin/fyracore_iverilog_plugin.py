@@ -264,12 +264,32 @@ class fyracore_iverilog_plugin(object):
                 " dut.dump > dut.dump.tmp && mv dut.dump.tmp dut.dump || true )"
             )
 
+            # -- Check what the test actually signalled --
+            # Nothing in the flow has ever looked at the value written to
+            # tohost. Every generator here writes 1 for success; riscv-tests
+            # writes (testnum << 1) | 1 on a failing self-check, and riscv-dv
+            # ends a program early through its trap handler. When both models
+            # fail the same way the traces match, so the comparison reports
+            # Passed for a test that reported its own failure.
+            #
+            # Append a line the reference cannot have, the same mechanism the
+            # testbench uses for an aborted run: compare_dumps cannot parse it
+            # and so returns Failed.
+            gate_cmd = (
+                " && ( TOHOST_VAL=$$(tail -n 1 dut.dump 2>/dev/null |"
+                " awk -v p=\"mem 0x$$TOHOST 0x\" 'index($$0,p){print $$NF}');"
+                " [ -z \"$$TOHOST_VAL\" ] || [ $$(( $$TOHOST_VAL )) -eq 1 ] ||"
+                " echo \"DUT-FAIL: test signalled failure, tohost=$$TOHOST_VAL\""
+                " >> dut.dump; true )"
+            )
+
             # -- Cleanup --
             clean_cmd = ' && rm -f sim_fyracore'
 
             target_cmd = (
                 ch_cmd + compile_cmd + hex_cmd + sim_setup +
-                tohost_cmd + sim_cmd + strip_cmd + trunc_cmd + clean_cmd
+                tohost_cmd + sim_cmd + strip_cmd + trunc_cmd + gate_cmd +
+                clean_cmd
             )
             make.add_target(target_cmd, test)
             self.test_names.append(test)
