@@ -40,8 +40,8 @@ Reproduce one test standalone (touches no project files):
 written, so the pass count under-reports correctness and hides the real bugs.
 **How to apply:** classify every failure by its first diff hunk before assuming an RTL defect.
 
-Caveat: this memory directory lives under
-`build/mywork/riscof/riscv-arch-test/.claude/`, which **riscof deletes and re-clones** on every
-`river_core generate`. Expect these notes to disappear; consider relocating them.
+Notes now live at the absolute path `.claude/agent-memory/riscv-design-reviewer/` in the repo
+root (relocated after an earlier loss under build/). When reproducing trap-taking tests with
+Spike, omit `--instructions` — see [[reference-spike-probed-behaviours]].
 
 Related: [[project-fyracore-overview]].

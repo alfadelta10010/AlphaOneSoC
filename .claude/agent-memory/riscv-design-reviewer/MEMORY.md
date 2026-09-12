@@ -15,13 +15,14 @@ update after each review with confirmed decisions, findings, and recurring patte
 ## This project's confirmed design decisions
 
 <!-- Fill in and keep current. The review depends on these. -->
-- ISA string actually implemented: (confirm — e.g. rv32imac_zicsr_zifencei vs rv32ima)
-- Hardware M present or trap-emulated: (confirm)
-- A extension LR/SC + AMO: (confirm present)
-- Privilege model: M-mode only, single hart (assumed)
-- Memory map / reset vector: (confirm)
-- Microarchitecture: multicycle or pipelined? (confirm)
-- Verification flow + where the testbench lives: (confirm)
+- ISA: RV32IMACU_Zicsr_Zicntr_Zifencei; misa reset 0x40101105 (U advertised since 009ad74), only C writable.
+- Hardware M: yes (multicycle muldiv). A: LR/SC + AMO, 2-cycle WB.
+- Privilege: M + U (no S), single hart. marchid=5/mimpid=0 copied from Spike (R8).
+- Memory map: fyracore PMA params default Flash+RAM 0x0-0x01FFFFFF, CLINT 0x02000000-0x0200BFFF,
+  GPIO 0x03000000-0x0300000F; RESET_PC 0. tb overrides to 0x80000000+32MB (Spike-compatible).
+  memController.v is NOT instantiated anywhere — there is no SoC top yet.
+- Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB.
+- Verification: river_core + Spike trace diff; tb/tb_rivercore.v + tb/memory_model.v (always-ready).
 
 ## Reference designs to benchmark against (proven, compact, open)
 
@@ -54,11 +55,15 @@ update after each review with confirmed decisions, findings, and recurring patte
 ## Findings log
 
 <!-- ID | severity | location | summary | status (open/fixed/accepted/wontfix) | date -->
-- (none yet)
+- 2026-09-05: WB-stall drops mem op (CRIT), MRET multicommit (CRIT), exc. priority (MAJ) — open
+- 2026-09-12 branch review: R1-R8 + V1-V4, all open — see finding_branch_review_2026-09-12.md
 
 ## Recurring patterns observed
 
-- (none yet)
+- EX-stage side effects not gated by `!stall` / `!ex_trap` (MRET is the repeat offender).
+- CSR WARL masks re-implemented in csr.v, fyracore forwarding and tb dump — every new CSR
+  forgets one copy (0x320 and mepc[1] in forwarding, 2026-09-12).
+- Comments claiming "matches Spike" are often unverified — probe Spike before trusting.
 
 ## Notes index (2026-09-05 review)
 
@@ -68,3 +73,5 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [CRITICAL: MRET multi-commits on stall](finding_mret_multicommit.md) — stalled MRET corrupts mstatus.MIE and falls to U-mode; reproduced vs Spike
 - [MAJOR: exception priority puts illegal-instruction last](finding_exception_priority.md) — illegal load/store enc. at a misaligned addr reports cause 4/6 instead of 2
 - [RTL area hotspots](rtl_area_hotspots.md) — ranked list of over-general structures (regfile reset, 3 barrel shifters, duplicated CSR WARL logic, unshared muldiv)
+- [2026-09-12 branch review findings](finding_branch_review_2026-09-12.md) — CSR write lost under MRET, misa.C stale window, MPRV/TW missing, Spike --instructions truncation
+- [Spike probed behaviours](reference_spike_probed_behaviours.md) — measured Spike device map, CSR WARL choices, mtval, and why --instructions is not a bound
