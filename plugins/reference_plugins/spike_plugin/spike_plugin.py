@@ -95,10 +95,26 @@ class spike_plugin(object):
         # Runaway guard, in spike steps -- NOT retires, see above. It exists
         # for the one case the other guards miss: a program that traps forever
         # while retiring nothing, which writes no trace, so neither the file
-        # cap nor the line cut can stop it. Set it far above any legitimate
-        # run; timeout and the ulimit -f cap handle everything that does write.
-        # 0 disables it.
-        self.step_budget = int(ini_config.get('spike_step_budget', 10000000))
+        # cap nor the line cut can stop it.
+        #
+        # Derived from max_instr rather than set to a round number, because a
+        # "comfortably large" constant just moves the cliff: at 10,000,000 the
+        # budget is 2000 windows, i.e. 1999 traps, and the densest rrag program
+        # measured takes one trap per 108.9 retires -- ~1840 traps to reach
+        # max_instr, only 9% clear. 5000 per retire is the worst case the
+        # mechanism allows (every retire followed by a trap, forfeiting a whole
+        # INTERLEAVE window), so this cannot be re-crossed at any trap density.
+        # It costs ~0.6 s on a program that traps forever and nothing at all on
+        # one that does not.
+        #
+        # An explicit value in the ini wins. Note 0 means "pass no flag": spike
+        # reads --instructions=0 as "stop immediately", so it must never be
+        # passed through.
+        configured = str(ini_config.get('spike_step_budget', '')).strip()
+        if configured:
+            self.step_budget = int(configured)
+        else:
+            self.step_budget = 5000 * self.max_instr if self.max_instr > 0 else 0
 
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.test_list = load_yaml(test_list)
