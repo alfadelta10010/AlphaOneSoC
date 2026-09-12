@@ -76,15 +76,29 @@ class spike_plugin(object):
         # file as well. 0 disables the guard.
         self.max_dump_mb = int(ini_config.get('max_dump_mb', 64))
 
-        # Retire budget, matched to the DUT's +MAX_INSTR. Spike's
-        # --instructions counts every logged instruction including the boot ROM
-        # prologue, which ignore_lines strips afterwards, so the value passed
-        # per test is max_instr + that test's ignore_lines. Without this the
-        # two models stop on different instructions -- the DUT on its retire
-        # budget, spike only when it runs out of disk quota -- and a
-        # non-terminating program produces a 200k-line dump against a 512 MB
-        # one. 0 disables the limit.
+        # Retire budget, matched to the DUT's +MAX_INSTR. It bounds the
+        # COMPARISON -- ref.dump is cut to this many commit-log lines once the
+        # boot-ROM prologue has been stripped -- so both models present the
+        # same number of retired instructions. 0 disables the cut.
+        #
+        # It is deliberately NOT passed to spike as --instructions. That flag
+        # is not a retire budget: sim_t::idle() charges a whole INTERLEAVE
+        # (5000) chunk per call while processor_t::step() returns early on
+        # every trap, so each trap forfeits the rest of its window. Measured
+        # here: a program taking 39 traps still reaches its end under
+        # --instructions=200005 and one taking 40 does not, and all 12 rrag
+        # programs sampled (81-699 traps each) stopped at ~4k lines instead of
+        # the 9k-75k they really retire. That turned passing tests into
+        # failures, which is why the bound now lives in the line count.
         self.max_instr = int(ini_config.get('max_instr', 200000))
+
+        # Runaway guard, in spike steps -- NOT retires, see above. It exists
+        # for the one case the other guards miss: a program that traps forever
+        # while retiring nothing, which writes no trace, so neither the file
+        # cap nor the line cut can stop it. Set it far above any legitimate
+        # run; timeout and the ulimit -f cap handle everything that does write.
+        # 0 disables it.
+        self.step_budget = int(ini_config.get('spike_step_budget', 10000000))
 
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.test_list = load_yaml(test_list)
@@ -186,8 +200,8 @@ class spike_plugin(object):
             else:
                 ulimit_cmd = ''
             n_skip = attr.get('ignore_lines', 0)
-            if self.max_instr > 0:
-                instr_flag = f'--instructions={self.max_instr + n_skip}'
+            if self.step_budget > 0:
+                instr_flag = f'--instructions={self.step_budget}'
             else:
                 instr_flag = ''
             target_cmd = ch_cmd + compile_cmd + self.objdump_cmd +\
@@ -198,6 +212,12 @@ class spike_plugin(object):
             target_cmd += "([ -f ref.dump ]"
             if n_skip:
                 target_cmd += f" && sed -i '1,{n_skip}d' ref.dump"
+            # Cut to the DUT's retire budget, after the boot-ROM lines are gone
+            # so both sides count the same thing. This is what actually keeps
+            # the two traces comparable on a program that does not terminate.
+            if self.max_instr > 0:
+                target_cmd += (f" && head -n {self.max_instr} ref.dump"
+                               " > ref.dump.cut && mv ref.dump.cut ref.dump")
             # Strip CSRs Spike emits but DUT does not implement (always read 0)
             target_cmd += r" && sed -i -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2|mscratchcsw|mscratchcswl|mtinstcsw) 0x[0-9a-fA-F]+//g' ref.dump"
             target_cmd += " && (sed -i '/(0x00000063)/d' ref.dump"
