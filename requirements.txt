@@ -61,4 +61,9 @@ urllib3==2.7.0
 bitstring==4.4.0
 bitarray==3.11.0
 tibs==0.5.7
-pyvsc
+# riscv-dv's pyflow generator runs on this solver, and its behaviour is
+# version-sensitive: several of the patches in
+# plugins/generator_plugins/riscv_dv_plugin/patches/ exist because of how this
+# exact release solves (or fails to solve) riscv-dv's constraints. Leaving it
+# unpinned in a file called a freeze means the stimulus can change under you.
+pyvsc==0.9.5.27214109393
