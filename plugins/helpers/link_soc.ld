@@ -1,12 +1,18 @@
-/* Linker script for FyraCore river_core verification
+/* The intended FyraCore hardware memory map. NOT used by the verification
+ * flow, which links at 0x8000_0000 with link.ld so Spike can agree about
+ * which addresses exist.
  *
- * FyraCore memory map:
- *   0x0000_0000 – 0x00FF_FFFF : Flash (16 MB) — code
- *   0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB) — data, stack
+ *   0x0000_0000 – 0x00FF_FFFF : Flash (16 MB) — code, XIP from QSPI CS0
+ *   0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB) — data, stack (QSPI CS1,
+ *                               2x8 MB PSRAM used contiguously)
  *   0x0200_0000 – 0x0200_BFFF : CLINT
  *
- * riscv-tests and most generators expect code at a fixed base address.
- * This script places code at 0x0 (FyraCore reset vector) and data in RAM.
+ * NOT yet bootable as written: .data is given a load address in flash and a
+ * virtual address in RAM, and plugins/helpers/boot.S copies neither it nor
+ * clears .bss, so a program linked with this reads uninitialised RAM. .tohost
+ * also lands in read-only flash. The map itself is provisional — there is no
+ * SoC top level yet, the interconnect may become AHB, and the peripheral set
+ * is unsettled.
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_boot_start)
