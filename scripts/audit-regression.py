@@ -15,10 +15,17 @@ the RTL was not actually verified:
 
 This audits every test three ways and reports the disagreements:
 
+  3. Both retire budgets end in `$finish` (exit status 0), so a program that
+     never terminated used to produce two equally truncated traces that
+     compared equal and were reported as passing. The testbench now appends a
+     DUT-ABORT line to the dump, and sim.log names which bound fired; this
+     script checks both.
+
   river_core : what compare_dumps says
   strict     : exact `diff -iw`, no token normalisation
-  sanity     : dump non-empty, DUT retired a plausible number of instructions,
-               and the DUT did not abort on the spin detector
+  sanity     : dump non-empty, same length as the reference, DUT retired a
+               plausible number of instructions, and the run neither spun,
+               aborted, nor ran out of its instruction or cycle budget
 
 Usage: audit-regression.py <test_list.yaml> [--csv out.csv]
 """
@@ -61,7 +68,7 @@ def audit(test_list_path):
             ['diff', '-iw', '-q', dut, ref], capture_output=True).returncode == 0 \
             else 'Failed'
 
-        # 3. did the DUT actually run?
+        # 3. did the DUT actually run, and did it finish?
         notes = []
         if nd == 0:
             notes.append('EMPTY dut.dump')
@@ -69,16 +76,42 @@ def audit(test_list_path):
             notes.append('EMPTY ref.dump')
         if 0 < nd < MIN_LINES:
             notes.append('dut retired only %d' % nd)
-        vvp = os.path.join(wd, 'vvp.log')
-        if os.path.isfile(vvp):
+        if nd and nr and nd != nr:
+            notes.append('length mismatch dut=%d ref=%d' % (nd, nr))
+
+        # The testbench writes its diagnostics to sim.log (it was vvp.log in an
+        # early draft of this script and /dev/null before that, so the checks
+        # below had never once fired).
+        for name in ('sim.log', 'vvp.log'):
+            log_path = os.path.join(wd, name)
+            if not os.path.isfile(log_path):
+                continue
             try:
-                log = open(vvp, errors='replace').read()
-                if 'spinning at PC' in log:
-                    notes.append('SPUN (hang aborted)')
-                if 'no program loaded' in log:
-                    notes.append('PROGRAM NOT LOADED')
+                log = open(log_path, errors='replace').read()
             except OSError:
-                pass
+                continue
+            if 'spinning at PC' in log:
+                notes.append('SPUN (hang aborted)')
+            if 'no program loaded' in log:
+                notes.append('PROGRAM NOT LOADED')
+            # Both bounds end in $finish, i.e. exit status 0, so nothing else
+            # in the flow distinguishes "ran out of budget" from "finished".
+            if 'Max instructions' in log:
+                notes.append('HIT max_instr (did not terminate)')
+            if 'Max cycles' in log:
+                notes.append('HIT max_cycles (pipeline made no progress)')
+            break
+
+        # Belt and braces: the testbench appends this to the dump itself, so it
+        # survives even when sim.log was not kept.
+        try:
+            with open(dut, errors='replace') as fh:
+                fh.seek(max(0, os.path.getsize(dut) - 4096))
+                if 'DUT-ABORT' in fh.read():
+                    notes.append('DUT-ABORT marker in dump')
+        except OSError:
+            pass
+
         sanity = 'Failed' if notes else 'Passed'
         rows.append((name, gen, rc_status, strict, sanity, nd, nr, '; '.join(notes)))
     return rows
