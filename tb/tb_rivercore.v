@@ -178,10 +178,15 @@ module tb_rivercore;
         //               never exit. The cycle bound only stops it after ~900k
         //               retires and a 50 MB dump.
         //
-        // MAX_INSTR is also what makes the reference comparable: spike is given
-        // `--instructions = MAX_INSTR + ignore_lines`, so both models stop on
-        // the same retired instruction instead of one running to a cycle limit
-        // and the other to a file-size limit.
+        // MAX_INSTR is also what makes the reference comparable: ref.dump is
+        // cut to MAX_INSTR commit-log lines, so both models present the same
+        // number of retired instructions instead of one running to a cycle
+        // limit and the other to a file-size limit.
+        //
+        // Either bound firing now appends a DUT-ABORT line to the dump (see
+        // emit_abort_marker), because two equally truncated traces otherwise
+        // compare equal and a program that never terminated was reported as
+        // Passed.
         //
         // Measured over 1200 passing tests, the largest legitimate run is
         // 85,111 retires (p99 = 78,012), so 200,000 is ~2.3x headroom. At the
@@ -314,6 +319,7 @@ module tb_rivercore;
                 if (spin_count >= spin_limit) begin
                     $display("ERROR: spinning at PC 0x%08h (same PC retired %0d times), aborting",
                              dbg_pc, spin_count);
+                    emit_abort_marker;
                     $fclose(dump_fd);
                     $finish;
                 end
@@ -518,6 +524,7 @@ module tb_rivercore;
 
             if (max_instr != 0 && instr_count >= max_instr) begin
                 $display("--- Max instructions (%0d) reached ---", max_instr);
+                emit_abort_marker;
                 $fclose(dump_fd);
                 print_summary();
                 $finish;
@@ -536,10 +543,35 @@ module tb_rivercore;
         end
 
         $display("--- Max cycles (%0d) reached ---", max_cycles);
+        emit_abort_marker;
         $fclose(dump_fd);
         print_summary();
         $finish;
     end
+
+    // ================================================================
+    //  Abort marker
+    //
+    //  Every abort path here ends in $finish, i.e. exit status 0, and leaves a
+    //  dut.dump that is simply short. The reference is bounded at the same
+    //  retire count, so a program that never terminates produced two equally
+    //  truncated traces that compared EQUAL and were reported as Passed --
+    //  true as far as it went (N retires matched) but not what "Passed" is
+    //  read to mean.
+    //
+    //  Write a line that cannot appear in ref.dump instead. river_core's
+    //  compare_dumps parses each differing line with its commit-log regex; a
+    //  line that does not match raises IndexError inside the walk, which it
+    //  already handles by setting the verdict to Failed. So an unterminated,
+    //  spinning or hung run now fails loudly, and sim.log says which it was.
+    // ================================================================
+    task emit_abort_marker;
+        begin
+            $fwrite(dump_fd,
+                    "DUT-ABORT: run did not reach tohost (retires %0d, cycles %0d) -- trace truncated, not a pass\n",
+                    instr_count, cycle_count);
+        end
+    endtask
 
     // ================================================================
     //  Summary statistics
