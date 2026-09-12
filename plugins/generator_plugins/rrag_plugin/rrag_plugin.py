@@ -199,7 +199,7 @@ class rrag_plugin(object):
             self.json_dir, self.name,
             datetime.datetime.now().strftime("%Y%m%d-%H%M"))
 
-        pytest.main([
+        gen_status = pytest.main([
             pytest_file, '-n={0}'.format(self.jobs), '-k={0}'.format(
                 self.filter), '--configlist={0}'.format(self.config_dir), '-v',
             '--seed={0}'.format(self.seed), '--count={0}'.format(self.count),
@@ -255,6 +255,34 @@ class rrag_plugin(object):
             # 1000 tests that otherwise match the reference exactly.
             test_list[base_key]['ignore_lines'] = 5
             test_list[base_key]['result'] = 'Unavailable'
+
+        # A config whose generation failed leaves no .S, so it vanishes from
+        # the test list and from the results -- the run looks better for having
+        # generated less. Not fatal: a partial suite is still worth running, as
+        # long as the gap is stated.
+        expected = 0
+        try:
+            if self.gen_type == gen_type_enum.RAND_CONFIG:
+                expected = int(self.num_configs) * int(self.count)
+            else:
+                expected = len(glob.glob(self.config_dir + '/*.yaml')) * \
+                    int(self.count)
+        except (TypeError, ValueError):
+            expected = 0
+        if expected and len(test_list) < expected:
+            logger.error(
+                f'rrag GENERATION GAP: {len(test_list)} programs produced, '
+                f'{expected} requested ({self.num_configs if self.gen_type == gen_type_enum.RAND_CONFIG else "?"} '
+                f'configs x {self.count}) -- {expected - len(test_list)} '
+                f'missing. Those tests are absent from the results; they are '
+                f'not counted as failures.')
+        elif gen_status not in (0, pytest.ExitCode.OK):
+            logger.error(
+                f'rrag generation reported failures (pytest exit {gen_status}) '
+                f'even though {len(test_list)} programs exist. Check '
+                f'reports/rrag.html before trusting the suite.')
+        logger.info(f'rrag produced {len(test_list)} tests '
+                    f'(expected {expected or "?"})')
 
         return test_list
 

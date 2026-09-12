@@ -9,6 +9,7 @@
 # UVM. pyflow's only real dependency is pyvsc from PyPI.
 
 import os
+import sys
 import shutil
 import glob
 import datetime
@@ -252,7 +253,7 @@ class riscv_dv_plugin(object):
             os.path.join(output_dir, '.json/'), self.name,
             datetime.datetime.now().strftime('%Y%m%d-%H%M'))
 
-        pytest.main([
+        gen_status = pytest.main([
             pytest_file,
             f'-n={self.jobs}', '-v',
             f'--riscv_dv_dir={self.riscv_dv_dir}',
@@ -311,7 +312,36 @@ class riscv_dv_plugin(object):
         if not test_list:
             logger.error('riscv-dv generated no tests')
             raise SystemExit(1)
-        logger.info(f'riscv-dv produced {len(test_list)} tests')
+
+        # A stream that fails to generate simply leaves no .S behind, so it
+        # disappears from the test list and from the final report -- the run
+        # then looks *better*, because a failing stream stops contributing
+        # failures. Say so loudly instead. Deliberately not fatal: a partial
+        # suite is still worth running, as long as nobody reads the scoreboard
+        # as complete.
+        expected = 0
+        try:
+            sys.path.insert(0, this)
+            from gen_framework import _load_testlist
+            expected = sum(int(e.get('iterations', 0))
+                           for e in _load_testlist(self.testlist,
+                                                   self.riscv_dv_dir))
+        except Exception as e:  # noqa: BLE001 - never break the run over this
+            logger.debug(f'could not compute expected riscv-dv count: {e}')
+        if expected and len(test_list) < expected:
+            logger.error(
+                f'riscv-dv GENERATION GAP: {len(test_list)} programs produced, '
+                f'{expected} requested by the testlist -- '
+                f'{expected - len(test_list)} missing. Those tests are absent '
+                f'from the results entirely; they are not counted as failures. '
+                f'Check the generator log in reports/riscv_dv.html.')
+        elif gen_status not in (0, pytest.ExitCode.OK):
+            logger.error(
+                f'riscv-dv generation reported failures (pytest exit '
+                f'{gen_status}) even though {len(test_list)} programs exist. '
+                f'Check reports/riscv_dv.html before trusting the suite.')
+        logger.info(f'riscv-dv produced {len(test_list)} tests '
+                    f'(testlist asks for {expected or "?"})')
         return test_list
 
     @gen_hookimpl
