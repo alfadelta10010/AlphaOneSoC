@@ -583,6 +583,26 @@ Each is checked with `git apply --check` first and skipped if already applied.
   trace line 15,401 and `riscv_rand_instr_test` at 8,342. Both previously ran
   until the testbench's instruction budget stopped them.
 
+- `29-ebreak-handler.patch`
+  `gen_ebreak_handler()` was a `# TODO` / `pass`, and
+  `mmode_exception_handler` had no BREAKPOINT arm, so an `ebreak` fell through
+  to `test_done` and ended the program at the first one — with `tohost = 1`,
+  i.e. reported as a pass. `riscv_ebreak_test` therefore tested one breakpoint
+  entry per program at best, and on the 2026-09-11 run it never reached an
+  `ebreak` at all (the load/store defect behind patch 26 killed those programs
+  first: no mcause 3 appears anywhere in the 50 dumps).
+
+  Ported from `src/riscv_asm_program_gen.sv:1258-1272` (handler: read mcause,
+  mepc += 4, restore GPRs, `mret`) plus the dispatch arm at
+  `src/riscv_asm_program_gen.sv:1071`. `mepc + 4` is safe for `c.ebreak`
+  because the generator always emits it followed by a `c.nop`, exactly as the
+  SV comment states, and it is the same assumption the illegal-instruction
+  handler already makes.
+
+  With patches 26-29, a generated `riscv_ebreak_test` executes 59 `ebreak`s,
+  takes 112 handler returns and runs to `tohost = 1` at trace line 13,369.
+  Before: 273 lines, zero `mret`s.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
