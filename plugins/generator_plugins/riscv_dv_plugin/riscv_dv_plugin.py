@@ -83,6 +83,13 @@ class riscv_dv_plugin(object):
             logger.error(f'custom_target directory not found: {self.custom_target}')
             raise SystemExit(1)
 
+        # The revision the patch series is written against. Every patch in
+        # patches/ applies to this commit and to no promise beyond it, so an
+        # unpinned checkout means a fresh box clones upstream master and the
+        # series either fails to apply or, worse, applies to code that has
+        # moved underneath it.
+        self.version = spec_config.get('version', '').strip()
+
         # Clone upstream riscv-dv if it is not already there. Unlike the
         # riscof plugin this does not wipe and re-clone on every run: the
         # checkout is large and nothing in it is generated per-run.
@@ -96,12 +103,14 @@ class riscv_dv_plugin(object):
             if ret != 0:
                 logger.error('Failed to clone riscv-dv')
                 raise SystemExit(1)
-            version = spec_config.get('version', '').strip()
-            if version:
-                subprocess.call(['git', '-C', self.riscv_dv_dir,
-                                 'checkout', '--quiet', version])
         else:
             logger.info(f'Reusing riscv-dv checkout at {self.riscv_dv_dir}')
+        if not self.version:
+            logger.warning(
+                'riscv_dv version is not pinned in the ini. The checkout at '
+                f'{self.riscv_dv_dir} is on whatever revision it happens to '
+                'be, so two machines can generate different stimulus from the '
+                'same config.')
 
         self._apply_patches()
 
@@ -177,6 +186,44 @@ class riscv_dv_plugin(object):
         subprocess.call(
             ['git', '-C', self.riscv_dv_dir, 'clean', '-qfd'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Enforce the pin on every run, not only on the first clone. Doing it
+        # only at clone time left an existing checkout on whatever revision it
+        # was created with, which is the failure the pin exists to prevent --
+        # and it has to happen after the reset above, or local modifications
+        # block the checkout.
+        if self.version:
+            head = subprocess.run(
+                ['git', '-C', self.riscv_dv_dir, 'rev-parse', 'HEAD'],
+                capture_output=True, text=True).stdout.strip()
+            want = subprocess.run(
+                ['git', '-C', self.riscv_dv_dir, 'rev-parse',
+                 f'{self.version}^{{commit}}'],
+                capture_output=True, text=True).stdout.strip()
+            if not want:
+                logger.info(f'Fetching riscv-dv {self.version}')
+                subprocess.call(
+                    ['git', '-C', self.riscv_dv_dir, 'fetch', '--quiet',
+                     'origin', self.version],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                want = subprocess.run(
+                    ['git', '-C', self.riscv_dv_dir, 'rev-parse',
+                     f'{self.version}^{{commit}}'],
+                    capture_output=True, text=True).stdout.strip()
+            if not want:
+                logger.error(
+                    f'riscv-dv revision {self.version} is not resolvable in '
+                    f'{self.riscv_dv_dir}; delete the checkout to re-clone.')
+                raise SystemExit(1)
+            if head != want:
+                logger.info(
+                    f'Pinning riscv-dv to {self.version} (was {head[:12]})')
+                ret = subprocess.call(
+                    ['git', '-C', self.riscv_dv_dir, 'checkout', '--quiet',
+                     '--detach', want],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if ret != 0:
+                    logger.error(f'Could not check out riscv-dv {self.version}')
+                    raise SystemExit(1)
         for patch in sorted(glob.glob(os.path.join(patch_dir, '*.patch'))):
             name = os.path.basename(patch)
             ret = subprocess.call(
