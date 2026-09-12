@@ -482,7 +482,12 @@ module tb_rivercore;
                 // written value uncompared: river_core's dump parser pairs the
                 // change tokens two at a time and silently drops the odd
                 // trailing one, so a wrong AMO result still compares equal.
-                if (cpu.exwb_isAmo && cpu.amo_phase)
+                // Gated on dmem_we, not just on the AMO phase: the marker must
+                // record a write the core actually put on the bus. Printing it
+                // from the decode alone would keep the dump matching Spike even
+                // if the store were dropped, which is exactly the failure the
+                // trace exists to catch.
+                if (cpu.exwb_isAmo && cpu.amo_phase && dmem_we)
                     $fwrite(dump_fd, " mem 0x%08h 0x%08h",
                             cpu.exwb_alu_result, dmem_wdata);
             end
