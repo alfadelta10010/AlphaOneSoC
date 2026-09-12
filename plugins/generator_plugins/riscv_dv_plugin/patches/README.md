@@ -537,6 +537,52 @@ Each is checked with `git apply --check` first and skipped if already applied.
   are getting assigned for a particular instruction". The two sibling helpers
   never got the same treatment.
 
+- `27-loop-limit-reg-collision.patch`
+  `legal_loop_regs_c` keeps `loop_cnt_reg` and `loop_limit_reg` unique within
+  themselves but drops the cross constraint
+  `src/riscv_loop_instr.sv:53-55` has:
+
+      foreach (loop_cnt_reg[i]) {
+        foreach (loop_limit_reg[j]) { loop_cnt_reg[i] != loop_limit_reg[j]; }
+      }
+
+  so the solver may hand a loop the same register as counter and limit. The
+  backward branch is then `beq a5, a5, <back>` — rs1 == rs2, always taken — and
+  the loop cannot exit. This is the `bge x31, x31` family seen in earlier runs
+  and written off as "riscv-dv generates programs that cannot terminate": it is
+  not inherent, it is this missing constraint. Applied post-solve like
+  `legalize_rs1()`, because the constraint form hits the same pyvsc
+  randset-merge crash documented on the sibling constraints. C_BEQZ/C_BNEZ are
+  skipped: `loop_c` pins their limit register to ZERO on purpose.
+
+  After the patch, 246 loops in a generated `riscv_loop_test` and 27 in a
+  `riscv_rand_instr_test` — none comparing a register with itself.
+
+- `28-mix-instr-stream-order.patch`
+  `mix_instr_stream(new_instr, contained=1)` draws an insert position per
+  injected instruction from an *inclusive* `randint(0, current_instr_cnt)`,
+  sorts them, then overwrites the last one with `current_instr_cnt - 1`. That
+  overwrite can put the last position *below* an earlier one, so the list is no
+  longer sorted and the injected stream is emitted out of order.
+
+  For a loop that is fatal. `build_loop_instr_stream()` hands over
+  `[init, init, target, update] + body + [branch]`; when the update's position
+  ends up above the branch's, the generated code is
+
+      main_63_0_t: andi ...        # loop body
+                   bne a3, s8, main_63_0_t   # branch for loop 0
+                   addi a3, a3, -8           # update loop 0 counter
+
+  — the counter is updated after the branch, i.e. never, and the loop runs
+  forever. Modelled over the generator's own `num_of_instr_in_loop` range
+  (1..25): out of order in 54% of streams at body size 2, 20% at 5, 7% at 10,
+  1.3% at 25. Re-establishing the non-decreasing invariant after the override
+  fixes it without changing how the positions are drawn.
+
+  Measured after patches 26-28 together: `riscv_loop_test` reaches tohost at
+  trace line 15,401 and `riscv_rand_instr_test` at 8,342. Both previously ran
+  until the testbench's instruction budget stopped them.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
