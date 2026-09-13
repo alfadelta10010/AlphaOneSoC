@@ -630,6 +630,59 @@ Each is checked with `git apply --check` first and skipped if already applied.
   `riscv_rand_instr_test` both run to `tohost = 1` over ~7.2-7.5k trace lines
   and pass against Spike, so the new exit is not firing spuriously.
 
+- `31-illegal-instr-fallback.patch`
+  `riscv_illegal_instr.randomize()` does not solve under the pinned pyvsc —
+  200/200 failures for this target, and 50/50 on the stock rv32imc and rv32i
+  targets, so it is a pyflow/pyvsc incompatibility, not a FyraCore
+  configuration problem. pyvsc cannot even produce an unsat core for it. Patch
+  09 stopped a failed draw from aborting the whole program, but it then
+  *skipped* the injection, and since every draw fails that meant
+  `riscv_illegal_instr_test` and `riscv_hint_instr_test` emitted none of the
+  stimulus they are named for — which is why both sat at `iterations: 0`.
+
+  **Why not just fix the solve?** Measured, block by block. Disabling almost
+  any *single* constraint block makes the model solve 6/6, and
+  `solve_fail_debug=1` reports `internal error: system should solve`, i.e.
+  pyvsc finds every randset individually satisfiable and only the merge fails.
+  So there is no one bad constraint to repair — it is pyvsc's randset merge,
+  in a package this repo pins. Disabling only `instr_bit_assignment_c` (which
+  merely stitches the solved fields into `instr_bin`, and could be done in
+  Python) does let it solve, but then only `kIllegalFunc7` is ever drawn, and
+  pinning `exception` to any other shape still fails 0/8. A real repair means
+  porting the constraint model, not tweaking it.
+
+  So draw the shapes directly in Python when the solver gives up. Each is
+  illegal on RV32IMAC by its encoding alone, so none can turn into a
+  disagreement about which CSRs or extensions a model implements:
+
+  * `kIllegalOpcode` — a major opcode RV32IMAC does not define: 0x0B, 0x2B,
+    0x5B, 0x7B (custom) and 0x6B (reserved), remaining bits random.
+  * `kIllegalFunc3` — a funct3 reserved for its opcode on RV32: the RV64-only
+    widths of LOAD and STORE, and the two unused BRANCH encodings.
+  * `kIllegalCompressedOpcode` — RVC quadrant 0 with funct3=100, reserved
+    unless Zcb is implemented, which neither model claims.
+  * `kReservedCompressedInstr` — the encodings the RVC chapter names as
+    reserved: the all-zero halfword, `c.addi4spn` with nzuimm=0, `c.lui` with
+    nzimm=0, `c.lwsp` with rd=0, `c.jr` with rs1=0.
+  * `kHintInstr` — an RVC operation whose rd is x0: `c.lui`, `c.li`,
+    `c.slli`, `c.mv`. Defined as HINTs, so both models must retire them with
+    no architectural effect — including the `C.LUI rd=x0` case the decoder
+    used to reject as illegal.
+
+  Verified on Spike before wiring it in: 60 drawn illegal encodings, spread
+  across all four illegal shapes, **all 60 trap with mcause 2 and none
+  retires**; 20 drawn HINTs **all retire and none writes a register**.
+
+  `kIllegalSystemInstr` is deliberately not drawn. Its shape is "a CSR address
+  this core does not implement", which Spike may well implement — that is a
+  difference between two correct models, and it would show up as a failing
+  test. Reaching it needs a CSR list both models agree on.
+
+  The generated assembly carries `(fallback draw)` in the comment so nobody
+  mistakes this for the SV model's full taxonomy. `kIllegalFunc7` is still
+  missing, and a proper port of the constraint model would still be worth
+  doing.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
