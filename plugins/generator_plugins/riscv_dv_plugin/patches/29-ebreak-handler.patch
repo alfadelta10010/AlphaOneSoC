@@ -1,5 +1,5 @@
 diff --git a/pygen/pygen_src/riscv_asm_program_gen.py b/pygen/pygen_src/riscv_asm_program_gen.py
-index dd54e30..be87466 100644
+index dd54e30..5d18722 100644
 --- a/pygen/pygen_src/riscv_asm_program_gen.py
 +++ b/pygen/pygen_src/riscv_asm_program_gen.py
 @@ -832,6 +832,14 @@ class riscv_asm_program_gen:
@@ -17,7 +17,7 @@ index dd54e30..be87466 100644
                        # Illegal instruction exception
                        "li x{}, {} # ILLEGAL_INSTRUCTION".format(
                        cfg.gpr[1], hex(exception_cause_t.ILLEGAL_INSTRUCTION)),
-@@ -904,8 +912,26 @@ class riscv_asm_program_gen:
+@@ -904,8 +930,26 @@ class riscv_asm_program_gen:
      # TODO: Support ebreak exception delegation
      # TODO: handshake the correct Xcause CSR based on delegation privil. mode
      def gen_ebreak_handler(self, hart):

@@ -603,6 +603,33 @@ Each is checked with `git apply --check` first and skipped if already applied.
   takes 112 handler returns and runs to `tohost = 1` at trace line 13,369.
   Before: 273 lines, zero `mret`s.
 
+- `30-unexpected-trap-fails.patch`  **(a deliberate divergence from upstream)**
+  `mmode_exception_handler`'s fall-through — every cause it cannot resume from:
+  access faults, misaligned accesses, an ecall from U — jumps to `test_done`,
+  which does `li gp, 1` and exits through the *success* path. The program
+  reports a pass having run only as far as the fault, and since both models
+  take the same path the trace comparison agrees. That is how 30 of the 41
+  "passing" riscv-dv tests on the 2026-09-11 run each verified a median of 7
+  instructions of their generated body.
+
+  Exit with `tohost = (mcause << 1) | 1` instead — the riscv-tests failure
+  convention, so the cause is readable from the value — jumping straight to
+  `write_tohost` because `test_done` would overwrite `gp` with 1. The DUT
+  plugin's tohost check then turns it into a Failed verdict.
+
+  Upstream does not do this: it treats an unexpected trap as a normal end of
+  test. That is defensible for a flow whose signature comparison covers the
+  handler, and wrong for this one, where an unexpected trap means the stimulus
+  stopped being what the stream claims. Keeping it silent is what hid the
+  defect behind patch 26 for three full regressions.
+
+  Verified in two halves: the generated handler emits the fail sequence (read
+  the `mmode_exception_handler` section of any generated `.S`), and a non-1
+  tohost value produces the `DUT-FAIL` line and a Failed verdict from
+  `compare_dumps`. With patches 26-30, a `riscv_mmu_stress_test` and a
+  `riscv_rand_instr_test` both run to `tohost = 1` over ~7.2-7.5k trace lines
+  and pass against Spike, so the new exit is not firing spuriously.
+
 ## Still missing from pyflow (not patched)
 
 - **`riscv_csr_test`.** Not an instruction-generator test at all: `run.py` hands
