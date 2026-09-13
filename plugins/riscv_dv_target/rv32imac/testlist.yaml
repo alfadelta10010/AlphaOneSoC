@@ -115,22 +115,19 @@
     +instr_cnt=10000 +no_fence=1 +num_of_sub_program=0
 
 # ---- trap path ----------------------------------------------------------
-# DISABLED. riscv_illegal_instr injects nothing: its constraint model is
-# unsatisfiable under the installed pyvsc, so insert_illegal_hint_instr()
-# discards every draw and the program contains no illegal encodings at all.
-# Measured directly -- an unconstrained riscv_illegal_instr.randomize() fails
-# 200/200, and 50/50 on the stock rv32imc and rv32i targets too, so this is a
-# pyflow/pyvsc incompatibility rather than anything about this core. pyvsc
-# cannot produce an unsat core for it either ("internal error: system should
-# solve"), and the model is 368 lines of interlocking encoding constraints:
-# guessing at a fix risks emitting encodings that are actually *legal*, which
-# would show up as false RTL failures.
+# Re-enabled by patch 31. riscv_illegal_instr's constraint model still does not
+# solve under the pinned pyvsc -- an unconstrained randomize() fails 200/200 --
+# but the draw now falls back to a hand-rolled illegal encoding instead of
+# silently injecting nothing, so this stream carries stimulus again. The
+# fallback only emits kIllegalOpcode (a 32-bit word on a custom/reserved major
+# opcode), so the func3/func7 and reserved-compressed shapes of the SV model
+# are still missing; a proper port would restore those.
 #
-# Re-enable only once riscv_illegal_instr randomizes; the intent is worth it,
-# because the RTL resolves illegal-instruction last in its exception priority
-# chain against Table 3.7 of the privileged spec.
+# 6 iterations because the RTL resolves illegal-instruction *last* in its
+# exception priority (see the open-bugs note), which is exactly what this
+# stream walks into.
 - test: riscv_illegal_instr_test
-  iterations: 0
+  iterations: 6
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +instr_cnt=10000 +illegal_instr_ratio=5 +num_of_sub_program=0
@@ -157,13 +154,12 @@
   gen_opts: >
     +instr_cnt=10000 +disable_compressed_instr=1 +num_of_sub_program=0
 
-# DISABLED for the same reason as riscv_illegal_instr_test: HINTs are drawn
-# from the same unsatisfiable riscv_illegal_instr model, so no .2byte HINT is
-# ever emitted. The C.LUI rd=x0 case the RVC chapter defines as a HINT, and
-# which the decoder previously rejected as illegal, is therefore NOT covered
-# by riscv-dv today.
+# Re-enabled by patch 31, which draws the HINT directly when the model fails
+# to solve. The fallback emits the RVC HINTs whose rd is x0 -- c.lui, c.li,
+# c.slli and c.mv -- which includes the C.LUI rd=x0 case this branch changed
+# the decoder to treat as a HINT rather than as illegal.
 - test: riscv_hint_instr_test
-  iterations: 0
+  iterations: 4
   gen_test: riscv_rand_instr_test
   gen_opts: >
     +instr_cnt=10000 +hint_instr_ratio=5 +num_of_sub_program=0
