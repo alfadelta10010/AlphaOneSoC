@@ -57,12 +57,29 @@ module tb_rivercore;
     // exists to catch.
     parameter MEM_BASE = 32'h8000_0000;
 
-    // memory_model.v answers CLINT at 0x02000000-0x0200BFFF and the
-    // testbench-only MEIP hook at 0x0200C000, so IO0 covers both. It models
-    // no GPIO at all, so IO1 is switched off by making BASE > TOP, which
-    // matches nothing.
+    // IO0 is the CLINT window, and its size is dictated by the reference
+    // model, not by the CLINT the hardware will have. Spike maps CLINT_SIZE =
+    // 0xC0000 from the CLINT base and ignores the size in its device tree, so
+    // every address in 0x02000000-0x020BFFFF answers loads and stores on
+    // spike: the register block at 0x0000/0x4000/0xBFF8 and plain zeros
+    // everywhere else. Sizing IO0 to the real CLINT's 48 KB instead made every
+    // access in between fault on the DUT and succeed on the reference.
+    //
+    // tb/memory_model.v mirrors the same shape: CLINT registers below offset
+    // 0x10000, zeros above, and the write side ignored above -- not the
+    // address aliasing a 16-bit offset decode would give.
+    //
+    // The testbench-only MEIP hook at 0x0200C000 lies inside this window and
+    // reads back 0 until a test writes it, which is what spike returns there
+    // too, so it stays invisible to lockstep comparison.
+    //
+    // IO0_BASE must match the clint@ node in
+    // plugins/helpers/spike-fyracore.dts; the base is the one thing that DTS
+    // can move.
     parameter IO0_BASE = 32'h0200_0000;
-    parameter IO0_TOP  = 32'h0200_C003;
+    parameter IO0_TOP  = 32'h020B_FFFF;
+    // No GPIO is modelled, and spike has no device there either, so IO1 is
+    // switched off by making BASE > TOP -- a window that matches nothing.
     parameter IO1_BASE = 32'hFFFF_FFFF;
     parameter IO1_TOP  = 32'h0000_0000;
 
