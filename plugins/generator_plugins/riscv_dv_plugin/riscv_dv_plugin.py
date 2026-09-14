@@ -1,12 +1,16 @@
 # See LICENSE for details
 #
-# river_core generator plugin for upstream riscv-dv (CHIPS Alliance) driven
-# through its pyflow backend.
+# river_core generator plugin for riscv-dv driven through its pyflow backend.
 #
 # pyflow is the Python + PyVSC generator, so it needs no commercial
 # SystemVerilog simulator. That matters here: the stock riscv-dv flow is
 # SV/UVM and would require VCS, Questa or Xcelium, and Verilator cannot run
 # UVM. pyflow's only real dependency is pyvsc from PyPI.
+#
+# Upstream pyflow is a partial, defective port of the SV generator. The fixes
+# live in a fork (alfadelta10010/riscv-dv-patched, branch pyflow-fixes), one
+# commit per defect with the SV it was checked against; this plugin checks out
+# a pinned revision of it. Upstream's own history is intact underneath.
 
 import os
 import sys
@@ -26,6 +30,8 @@ gen_hookimpl = pluggy.HookimplMarker("generator")
 
 this = os.path.abspath(os.path.dirname(__file__))
 
+DEFAULT_REPO = 'https://github.com/alfadelta10010/riscv-dv-patched.git'
+
 
 class riscv_dv_plugin(object):
 
@@ -35,7 +41,8 @@ class riscv_dv_plugin(object):
             Spec config fields:
               jobs            : parallel pytest workers
               riscv_dv_dir    : where the riscv-dv checkout lives (cloned if absent)
-              version         : git ref to check out after cloning
+              repo            : riscv-dv fork to clone/fetch from
+              version         : revision of that fork to check out (enforced every run)
               target          : pyflow target name (rv32imac)
               custom_target   : directory holding riscv_core_setting.py + testlist.yaml
               seed            : optional fixed seed
@@ -84,25 +91,21 @@ class riscv_dv_plugin(object):
             logger.error(f'custom_target directory not found: {self.custom_target}')
             raise SystemExit(1)
 
-        # The revision the patch series is written against. Every patch in
-        # patches/ applies to this commit and to no promise beyond it, so an
-        # unpinned checkout means a fresh box clones upstream master and the
-        # series either fails to apply or, worse, applies to code that has
-        # moved underneath it.
+        self.repo = spec_config.get('repo', '').strip() or DEFAULT_REPO
+        # The fork revision every measurement was taken on. Unpinned, a fresh
+        # box would generate from whatever the branch head happens to be.
         self.version = spec_config.get('version', '').strip()
 
-        # Clone upstream riscv-dv if it is not already there. Unlike the
-        # riscof plugin this does not wipe and re-clone on every run: the
-        # checkout is large and nothing in it is generated per-run.
+        # Clone the fork if it is not already there. Unlike the riscof plugin
+        # this does not wipe and re-clone on every run: the checkout is large
+        # and nothing in it is generated per-run.
         if not os.path.isdir(os.path.join(self.riscv_dv_dir, '.git')):
             os.makedirs(os.path.dirname(self.riscv_dv_dir), exist_ok=True)
-            logger.info(f'Cloning riscv-dv into {self.riscv_dv_dir}')
+            logger.info(f'Cloning {self.repo} into {self.riscv_dv_dir}')
             ret = subprocess.call([
-                'git', 'clone', '--quiet',
-                'https://github.com/chipsalliance/riscv-dv.git',
-                self.riscv_dv_dir])
+                'git', 'clone', '--quiet', self.repo, self.riscv_dv_dir])
             if ret != 0:
-                logger.error('Failed to clone riscv-dv')
+                logger.error(f'Failed to clone {self.repo}')
                 raise SystemExit(1)
         else:
             logger.info(f'Reusing riscv-dv checkout at {self.riscv_dv_dir}')
@@ -113,7 +116,7 @@ class riscv_dv_plugin(object):
                 'be, so two machines can generate different stimulus from the '
                 'same config.')
 
-        self._apply_patches()
+        self._checkout_pinned()
 
         # Install the FyraCore target. pyflow imports the core settings as a
         # module -- riscv_instr_gen_config.py does
@@ -147,32 +150,17 @@ class riscv_dv_plugin(object):
             shutil.rmtree(self.output_dir, ignore_errors=True)
         os.makedirs(self.output_dir)
 
-    def _apply_patches(self):
-        """Reset the checkout and apply the local fixes to upstream riscv-dv.
+    def _checkout_pinned(self):
+        """Reset the checkout and put it on the pinned fork revision.
 
-        pyflow is a partial port of the SystemVerilog generator and has real
-        defects that stop most of the test list generating at all. See
-        patches/README.md for what each one is. Applying them here rather than
-        editing the checkout keeps them alive across a re-clone.
-
-        The tracked files are restored first and the whole series is then
-        applied in order, rather than testing each patch for "already applied"
-        individually. Several patches touch the same file within a few lines of
-        each other, and `git apply --check --reverse` on one of them fails once
-        a later patch has shifted its context -- so the old idempotency check
-        reported a spurious failure on the second run of an unchanged checkout:
-
-            Failed to apply riscv-dv patch 08-hazard-instr-stream.patch
-
-        Reset-then-apply has no such ordering hazard, and it also guarantees the
-        series is applied in numeric order every time. Only tracked files are
-        restored, so the target directories the plugin copies in are untouched.
-        This directory is created and owned by the plugin, so discarding local
-        edits to it is safe.
+        The directory is created and owned by the plugin, so local edits in it
+        are discarded: tracked files are restored and untracked ones removed
+        (the target files are copied in afterwards). The pin is enforced on
+        every run, not only on the first clone, and a checkout that still
+        points at another remote -- e.g. one cloned from upstream
+        chipsalliance/riscv-dv by an earlier version of this plugin -- is
+        re-pointed at the fork so the pinned commit can be fetched.
         """
-        patch_dir = os.path.join(this, 'patches')
-        if not os.path.isdir(patch_dir):
-            return
         ret = subprocess.call(
             ['git', '-C', self.riscv_dv_dir, 'checkout', '--', '.'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -180,13 +168,22 @@ class riscv_dv_plugin(object):
             logger.error(f'Could not reset the riscv-dv checkout at '
                          f'{self.riscv_dv_dir}; delete it to force a fresh clone.')
             raise SystemExit(1)
-        # `git checkout` restores tracked files but leaves untracked ones, and
-        # a patch that adds a file would then fail to re-apply on the next run
-        # with "already exists". Clean those too. This runs before the target
-        # files are copied in below, so removing them here is harmless.
+        # `git checkout` restores tracked files but leaves untracked ones
+        # (generated files, stale target copies). Clean those too. This runs
+        # before the target files are copied in, so removing them is harmless.
         subprocess.call(
             ['git', '-C', self.riscv_dv_dir, 'clean', '-qfd'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        origin = subprocess.run(
+            ['git', '-C', self.riscv_dv_dir, 'remote', 'get-url', 'origin'],
+            capture_output=True, text=True).stdout.strip()
+        if origin != self.repo:
+            logger.info(f'Re-pointing riscv-dv checkout origin from '
+                        f'{origin or "(none)"} to {self.repo}')
+            subprocess.call(
+                ['git', '-C', self.riscv_dv_dir, 'remote',
+                 'set-url' if origin else 'add', 'origin', self.repo],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Enforce the pin on every run, not only on the first clone. Doing it
         # only at clone time left an existing checkout on whatever revision it
         # was created with, which is the failure the pin exists to prevent --
@@ -196,8 +193,11 @@ class riscv_dv_plugin(object):
             head = subprocess.run(
                 ['git', '-C', self.riscv_dv_dir, 'rev-parse', 'HEAD'],
                 capture_output=True, text=True).stdout.strip()
+            # --verify --quiet: without them rev-parse echoes an unresolvable
+            # argument to stdout, which reads as a resolved revision and
+            # skips the fetch below.
             want = subprocess.run(
-                ['git', '-C', self.riscv_dv_dir, 'rev-parse',
+                ['git', '-C', self.riscv_dv_dir, 'rev-parse', '--verify', '--quiet',
                  f'{self.version}^{{commit}}'],
                 capture_output=True, text=True).stdout.strip()
             if not want:
@@ -207,7 +207,7 @@ class riscv_dv_plugin(object):
                      'origin', self.version],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 want = subprocess.run(
-                    ['git', '-C', self.riscv_dv_dir, 'rev-parse',
+                    ['git', '-C', self.riscv_dv_dir, 'rev-parse', '--verify', '--quiet',
                      f'{self.version}^{{commit}}'],
                     capture_output=True, text=True).stdout.strip()
             if not want:
@@ -225,21 +225,10 @@ class riscv_dv_plugin(object):
                 if ret != 0:
                     logger.error(f'Could not check out riscv-dv {self.version}')
                     raise SystemExit(1)
-        for patch in sorted(glob.glob(os.path.join(patch_dir, '*.patch'))):
-            name = os.path.basename(patch)
-            ret = subprocess.call(
-                ['git', '-C', self.riscv_dv_dir, 'apply', patch],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if ret == 0:
-                logger.debug(f'Applied riscv-dv patch: {name}')
-            else:
-                logger.error(
-                    f'Failed to apply riscv-dv patch {name} to a freshly reset '
-                    f'checkout. The patch series is inconsistent with the '
-                    f'upstream revision at {self.riscv_dv_dir}.')
-                raise SystemExit(1)
-        logger.info(f'Applied {len(glob.glob(os.path.join(patch_dir, "*.patch")))} '
-                    f'riscv-dv patches')
+        head = subprocess.run(
+            ['git', '-C', self.riscv_dv_dir, 'rev-parse', 'HEAD'],
+            capture_output=True, text=True).stdout.strip()
+        logger.info(f'riscv-dv checkout at {head[:12]} from {self.repo}')
 
     @gen_hookimpl
     def gen(self, module_dir, output_dir):
