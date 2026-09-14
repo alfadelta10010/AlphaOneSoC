@@ -222,11 +222,13 @@
 # fetch of main faults and the routine ends the test through test_done -- the
 # semantics of ibex's riscv_pmp_disable_all_regions_test. R/W stay granted:
 # denying them would lock the trap handler out of its own kernel stack.
+# Boots M: a U-mode fetch faults on an unlocked X=0 entry just the same, so a
+# U-boot seed never shows that the lock binds M-mode.
 - test: riscv_pmp_locked_exec_test
   iterations: 2
   gen_test: riscv_instr_base_test
   gen_opts: >
-    +instr_cnt=10000 +num_of_sub_program=5
+    +instr_cnt=10000 +num_of_sub_program=5 +boot_mode=m
     +pmp_num_regions=4 +pmp_granularity=0
     +pmp_region_1=L:1,A:TOR,X:0,W:1,R:1
 
