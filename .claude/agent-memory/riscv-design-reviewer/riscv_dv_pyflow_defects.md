@@ -27,6 +27,14 @@ pin on every run; there is no patch series any more.
 - Unexpected traps end the test with `tohost = (mcause << 1) | 1`, so a program
   that faults no longer reports a pass.
 
+**Known gaps in that stimulus (open generator defects, listed in the fork's
+`docs/pyflow/README.md`):** M-mode boot skips its mstatus/mie setup and mret;
+about half of the injected illegal/HINT words are placed where they never
+execute; the numeric-corner stream never produces all-ones or INT_MIN; jump
+streams never emit compressed jumps; several solves are skewed (rd x0/a3, loops
+that never iterate, sub-programs pinned at 10 instructions). A passing riscv-dv
+test can exercise less than its name says.
+
 ## Traps that still apply when reading results
 
 - **Passed is not proof.** Check the trace ran the body: tohost line vs. the
