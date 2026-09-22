@@ -488,7 +488,7 @@ module fyracore #(
     // `flush` and next_pc deliberately keep using the ungated ex_is_mret: the
     // IF/EX bubble arm is only reached when !stall, and the redirect is
     // idempotent, so neither can commit twice.
-    wire ex_mret_commit = ex_is_mret && !stall;
+    wire ex_mret_commit = ex_is_mret && !stall && !ex_trap;
 
     // ================================================================
     //  WB Stage — Memory Access + Writeback
