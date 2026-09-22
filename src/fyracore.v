@@ -13,6 +13,9 @@
 
 module fyracore #(
     parameter [31:0] RESET_PC = 32'h0000_0000,
+    // See csr.v: 0 means "no registered architecture ID". The testbench
+    // overrides this to 5 so the Spike lockstep trace matches.
+    parameter [31:0] MARCHID  = 32'h0000_0000,
     // Physical memory attributes -- the implemented address map.
     //
     // Anything outside these windows has no device behind it, so an access
@@ -622,7 +625,7 @@ module fyracore #(
     // csr_misa_c forward-declared at top of EX stage; driven by CSR unit port
     // csr_addr_valid is forward-declared at the top of EX stage; driven by CSR unit port
 
-    csr csr_unit(
+    csr #(.MARCHID_VAL(MARCHID)) csr_unit(
         .clk        (clk),
         .rst        (rst),
         .raddr      (ex_csr_addr),        // EX reads its own CSR address

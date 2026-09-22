@@ -85,6 +85,8 @@ module tb_rivercore;
 
     fyracore #(
         .RESET_PC    (MEM_BASE),
+        // Match the reference model's marchid so the lockstep dump agrees.
+        .MARCHID     (32'd5),
         .PMA_MEM_BASE(MEM_BASE),
         .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1),
         .PMA_IO0_BASE(IO0_BASE),

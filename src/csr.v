@@ -1,4 +1,9 @@
-module csr(
+module csr #(
+    // marchid 5 is Spike's registered architecture ID, allocated by RISC-V
+    // International. Silicon must not claim it, so this defaults to 0
+    // (unimplemented); the testbench overrides it to 5 for lockstep.
+    parameter [31:0] MARCHID_VAL = 32'h0
+)(
     input  wire        clk,
     input  wire        rst,
     // Dual-port: EX reads via raddr, WB writes via waddr
@@ -48,7 +53,7 @@ module csr(
     // ===== CSR Registers =====
     // Machine Information
     localparam [31:0] MVENDORID = 32'h0;
-    localparam [31:0] MARCHID   = 32'd5;  // matches Spike default
+    localparam [31:0] MARCHID   = MARCHID_VAL;
     localparam [31:0] MIMPID    = 32'h0;  // matches Spike default
     localparam [31:0] MHARTID   = 32'h0;
 
