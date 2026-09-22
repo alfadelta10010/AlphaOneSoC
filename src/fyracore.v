@@ -405,16 +405,23 @@ module fyracore #(
     wire ex_data_fault   = ifex_valid && ex_mem_active && !ex_misaligned &&
                            (!pmp_data_allow || !ex_pma_data_ok);
 
-    // Trap detection
-    wire ex_trap = ifex_valid && (
-        ex_is_ecall || ex_is_ebreak ||
-        ex_ifetch_fault ||             // Instruction access fault (PMP or PMA)
+    // Illegal instruction (cause 2). Collected into one signal so the trap
+    // cause chain can test it in its spec-mandated priority position rather
+    // than reaching it as the fallthrough case.
+    wire ex_illegal_insn = ifex_valid && (
         (ctrl_illegal && !ctrl_isFence) ||
         ifex_c_illegal ||              // Illegal compressed instruction from IF
         ex_bad_system ||               // Malformed SYSTEM encoding
         ex_wfi_umode ||                // WFI from U-mode (illegal)
         ex_bad_wfi ||                  // WFI with bad rd/rs1 fields
-        ex_csr_illegal ||              // Invalid/read-only CSR access
+        ex_csr_illegal                 // Invalid/read-only CSR access
+    );
+
+    // Trap detection
+    wire ex_trap = ifex_valid && (
+        ex_is_ecall || ex_is_ebreak ||
+        ex_ifetch_fault ||             // Instruction access fault (PMP or PMA)
+        ex_illegal_insn ||             // Illegal instruction
         ex_misaligned ||               // Misaligned memory access
         ex_data_fault ||               // Load/store access fault (PMP or PMA)
         ex_inst_misalign               // Instruction address misaligned (branch target)
@@ -983,6 +990,12 @@ module fyracore #(
                     if (ex_ifetch_fault) begin
                         exwb_trap_cause <= 32'd1;  // Instruction access fault (highest priority)
                         exwb_trap_val   <= ifex_pc; // faulting fetch address
+                    end else if (ex_illegal_insn) begin
+                        // Priv spec v1.12 Table 3.7: illegal instruction ranks
+                        // directly below instruction access fault, above the
+                        // address-misaligned and access-fault causes.
+                        exwb_trap_cause <= 32'd2;  // Illegal instruction
+                        exwb_trap_val   <= 32'b0;
                     end else if (ex_inst_misalign) begin
                         exwb_trap_cause <= 32'd0;  // Instruction address misaligned
                         exwb_trap_val   <= ex_branch_target;
@@ -1003,12 +1016,10 @@ module fyracore #(
                     end else if (ex_data_fault && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd5;  // Load access fault
                         exwb_trap_val   <= ex_alu_result;
-                    end else if (ex_data_fault && ex_misalign_is_store) begin
+                    end else begin
+                        // Only ex_data_fault on a store is left in ex_trap.
                         exwb_trap_cause <= 32'd7;  // Store/AMO access fault
                         exwb_trap_val   <= ex_alu_result;
-                    end else begin
-                        exwb_trap_cause <= 32'd2;  // Illegal instruction
-                        exwb_trap_val   <= 32'b0;  // Spike reports mtval=0 here (priv 1.11 allows 0 or instr)
                     end
                 end else if (irq_inject) begin
                     // Asynchronous interrupt: suppress instruction effects, inject trap
