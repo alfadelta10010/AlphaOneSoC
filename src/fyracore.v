@@ -464,6 +464,25 @@ module fyracore #(
 
     wire stall = stall_other || muldiv_stall;
 
+    // MRET commit point.
+    //
+    // ex_is_mret is a combinational EX decode with no stall qualifier, and
+    // csr.v applies the entire MRET mstatus update on every cycle its `mret`
+    // input is high. Across a two-cycle stall that runs twice: the first pass
+    // sets MPIE=1, the second reloads MIE from that freshly-set MPIE, so MIE
+    // ends up 1 where it should be 0. priv_mode meanwhile was already
+    // !stall-gated, so it sampled an MPP csr.v had forced to 00 on the first
+    // pass and the hart dropped to U-mode.
+    //
+    // Gating the commit the way fencei_flush already is makes it one-shot, and
+    // because priv_mode now samples csr_mstatus_mpp on the same edge csr.v
+    // updates mstatus, it sees the pre-update MPP.
+    //
+    // `flush` and next_pc deliberately keep using the ungated ex_is_mret: the
+    // IF/EX bubble arm is only reached when !stall, and the redirect is
+    // idempotent, so neither can commit twice.
+    wire ex_mret_commit = ex_is_mret && !stall;
+
     // ================================================================
     //  WB Stage — Memory Access + Writeback
     // ================================================================
@@ -609,7 +628,7 @@ module fyracore #(
         .we         (exwb_valid && exwb_csrWR && !exwb_trap),
         .rdata      (csr_rdata),
         .trap       (csr_trap_signal),
-        .mret       (ex_is_mret),
+        .mret       (ex_mret_commit),
         .trap_pc    (exwb_trap_pc),
         .trap_cause (exwb_trap_cause),
         .trap_val   (exwb_trap_val),
@@ -864,11 +883,12 @@ module fyracore #(
             // ---- Privilege mode update ----
             // Trap (WB stage): always enter M-mode
             // IRQ inject (EX stage): always enter M-mode
-            // MRET (EX stage): restore from MPP (current mstatus[12:11] before CSR write clears it)
+            // MRET (EX stage): restore from MPP, sampled on the same edge csr.v
+            //   applies its update, so this is the pre-update MPP
             // Otherwise: hold current privilege
             if (csr_trap_signal)
                 priv_mode <= 1'b1;                              // trap/interrupt → M-mode
-            else if (ex_is_mret && !stall)
+            else if (ex_mret_commit)
                 priv_mode <= (csr_mstatus_mpp == 2'b11);       // restore from MPP
 
             // ---- WFI stall management ----
