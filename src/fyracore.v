@@ -995,7 +995,11 @@ module fyracore #(
                         // directly below instruction access fault, above the
                         // address-misaligned and access-fault causes.
                         exwb_trap_cause <= 32'd2;  // Illegal instruction
-                        exwb_trap_val   <= 32'b0;
+                        // Priv spec §3.1.16 permits 0 or the faulting encoding;
+                        // report the encoding, which is what the reference
+                        // model does. ifex_raw_instr is the 16-bit halfword for
+                        // a compressed instruction and the full word otherwise.
+                        exwb_trap_val   <= ifex_raw_instr;
                     end else if (ex_inst_misalign) begin
                         exwb_trap_cause <= 32'd0;  // Instruction address misaligned
                         exwb_trap_val   <= ex_branch_target;
