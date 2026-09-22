@@ -620,9 +620,6 @@ module fyracore #(
     wire        csr_mstatus_mie;
     wire [31:0] csr_mie;            // full mie register (for per-bit IRQ gating)
     // csr_misa_c forward-declared at top of EX stage; driven by CSR unit port
-    wire [31:0] csr_mcounteren;     // U-mode counter access mask
-    wire        csr_inhibit_cy;     // mcountinhibit.CY
-    wire        csr_inhibit_ir;     // mcountinhibit.IR
     // csr_addr_valid is forward-declared at the top of EX stage; driven by CSR unit port
 
     csr csr_unit(
@@ -656,9 +653,6 @@ module fyracore #(
         .sw_irq      (sw_irq),
         .mie_out     (csr_mie),
         .misa_c        (csr_misa_c),
-        .mcounteren_out(csr_mcounteren),
-        .inhibit_cy    (csr_inhibit_cy),
-        .inhibit_ir    (csr_inhibit_ir),
         .mtime_in    (mtime_in),
         // misa.C WARL gate: refuse C clear if next-PC[1]=1. csrrci/csrrw to
         // misa is always 32-bit (system opcode), so post-PC[1] = exwb_trap_pc[1].

@@ -38,11 +38,6 @@ module csr(
     output wire [31:0] mie_out,
     // misa.C — gates compressed-instruction decode (WARL bit)
     output wire        misa_c,
-    // mcounteren — gates U-mode access to performance counters
-    output wire [31:0] mcounteren_out,
-    // mcountinhibit — inhibits perf-counter increments (bit0=CY, bit2=IR)
-    output wire        inhibit_cy,
-    output wire        inhibit_ir,
     // mtime value from CLINT (for time/timeh CSR reads)
     input  wire [63:0] mtime_in,
     // misa.C WARL gate: refuse to clear C if next-PC would be 2-byte aligned
@@ -96,9 +91,6 @@ module csr(
     assign pmpaddr3_out = pmpaddr3;
     assign mie_out      = mie_reg;
     assign misa_c       = misa_reg[2];
-    assign mcounteren_out = mcounteren;
-    assign inhibit_cy   = mcountinhibit[0];
-    assign inhibit_ir   = mcountinhibit[2];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
