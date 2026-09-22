@@ -395,12 +395,18 @@ module fyracore #(
     wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
     // A window with BASE > TOP matches nothing, which is how the testbench
     // switches off the ports the simulation does not model.
-    wire ex_pma_data_ok  = ((ex_alu_result >= PMA_MEM_BASE) &&
-                            (ex_alu_result <= PMA_MEM_TOP))  ||
-                           ((ex_alu_result >= PMA_IO0_BASE) &&
-                            (ex_alu_result <= PMA_IO0_TOP))  ||
-                           ((ex_alu_result >= PMA_IO1_BASE) &&
-                            (ex_alu_result <= PMA_IO1_TOP));
+    wire ex_pma_in_mem = (ex_alu_result >= PMA_MEM_BASE) &&
+                         (ex_alu_result <= PMA_MEM_TOP);
+    wire ex_pma_in_io  = ((ex_alu_result >= PMA_IO0_BASE) &&
+                          (ex_alu_result <= PMA_IO0_TOP))  ||
+                         ((ex_alu_result >= PMA_IO1_BASE) &&
+                          (ex_alu_result <= PMA_IO1_TOP));
+    // LR/SC need a reservation set, which only main memory can provide -- an
+    // IO window is not idempotent and has no reservation set to track. The
+    // reference model agrees: its reservable() covers memory only, so lr.w and
+    // sc.w on the CLINT fault while amoadd.w there succeeds.
+    wire ex_pma_data_ok  = ex_pma_in_mem ||
+                           (ex_pma_in_io && !ctrl_isLR && !ctrl_isSC);
 
     // Access-fault detection. Two independent reasons to refuse an access:
     // PMP says the permissions deny it, or the PMA says nothing is mapped
