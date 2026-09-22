@@ -687,11 +687,25 @@ module fyracore #(
 
     // Gate interrupt injection:
     //   - Only when a valid instruction is in EX (gives clean mepc)
-    //   - Never mid-muldiv or mid-AMO (wb_busy)
+    //   - Never mid-muldiv (muldiv_busy)
     //   - Never when EX already has a synchronous trap (trap takes priority)
-    //   - Never during WFI stall: WFI special-cases mepc advancement
+    //   - Never while the pipeline is stalled
+    //
+    // stall_other subsumes the old wb_busy and wfi_active terms and adds
+    // load_use_hazard, if_mem_stall and wb_mem_stall. Without those, an
+    // interrupt arriving during a memory stall was injected on every cycle of
+    // it: the second injection latched MPIE from the MIE the first had already
+    // cleared, so the following MRET restored MIE=0 and the hart never took
+    // another interrupt. It also tore down an in-flight memory access, because
+    // the injection path overrides the EX/WB hold.
+    //
+    // muldiv_stall is deliberately NOT used here. It feeds muldiv_start, which
+    // is gated on flush, which contains irq_inject -- taking `stall` would
+    // close a combinational loop. muldiv_busy covers every cycle of a multiply
+    // except the first, and on that first cycle muldiv_start is itself
+    // suppressed by flush, so the operation never starts.
     assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
-                      && !muldiv_busy && !wb_busy && !wfi_active;
+                      && !muldiv_busy && !stall_other;
 
     // WFI wake conditions (spec §3.3.3: implementation may wake on any condition):
     //   (a) An individually-enabled interrupt source fires (regardless of MIE global bit).
