@@ -478,9 +478,26 @@ module fyracore #(
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
     wire muldiv_want = ifex_valid && ctrl_isMulDiv;
-    assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_done
+
+    // Sticky completion. muldiv_done is a one-cycle pulse; holding it here
+    // means the pipeline can take the result on whatever later cycle it is
+    // able to, instead of losing it if that one cycle happened to be stalled.
+    reg  muldiv_ready;
+    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
+    wire muldiv_capture = muldiv_want && muldiv_ready && !wb_busy
                           && !stall_other && !flush;
-    assign muldiv_stall = muldiv_want && (muldiv_start || muldiv_busy);
+
+    assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_ready
+                          && !stall_other && !flush;
+    assign muldiv_stall = muldiv_want && !muldiv_ready;
+
+    always @(posedge clk) begin
+        // flush first: the operation's instruction is being discarded, so the
+        // result must not survive to be captured by its own re-execution.
+        if (rst || flush)        muldiv_ready <= 1'b0;
+        else if (muldiv_done)    muldiv_ready <= 1'b1;
+        else if (muldiv_capture) muldiv_ready <= 1'b0;
+    end
 
     wire stall = stall_other || muldiv_stall;
 
@@ -712,7 +729,7 @@ module fyracore #(
     // except the first, and on that first cycle muldiv_start is itself
     // suppressed by flush, so the operation never starts.
     assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
-                      && !muldiv_busy && !stall_other;
+                      && !muldiv_want && !stall_other;
 
     // WFI wake conditions (spec §3.3.3: implementation may wake on any condition):
     //   (a) An individually-enabled interrupt source fires (regardless of MIE global bit).
