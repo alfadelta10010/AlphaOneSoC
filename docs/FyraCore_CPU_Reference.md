@@ -499,7 +499,10 @@ Atomic Memory Operations (2-cycle AMO via pipeline stall):
 
 AMO execution: Phase 0 (read, wb_busy=1) -> Phase 1 (compute + write, wb_busy=0). rd receives the original memory value.
 
-Reservation is invalidated on: SC execution, store to reservation address, trap, or interrupt.
+Reservation is invalidated on: SC execution (success or failure), any local
+store or AMO overlapping the reservation address, trap, interrupt, or reset.
+No external-agent invalidation is implemented: this SoC has a single hart and
+no other bus master.
 
 ### 9.4 C Extension (Compressed)
 

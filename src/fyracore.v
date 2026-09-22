@@ -1110,14 +1110,37 @@ module fyracore #(
                     reservation_addr  <= exwb_alu_result;
                 end else if (exwb_isSC) begin
                     reservation_valid <= 1'b0;
-                end else if (exwb_memWR && !exwb_isAmo) begin
-                    // Any store to reservation address invalidates it
+                end else if (exwb_memWR) begin
+                    // Any local write overlapping the reservation invalidates
+                    // it -- a plain store and an AMO alike. The `!exwb_isAmo`
+                    // that used to be here made a store clear the reservation
+                    // while an AMO to the same address did not, so two paths
+                    // independently decided the same semantics and disagreed.
+                    //
+                    // Clearing on a same-hart write is not required (the
+                    // must-fail list covers other harts and devices, not this
+                    // one) but is explicitly permitted, and it cannot threaten
+                    // the forward-progress guarantee: a constrained LR/SC
+                    // sequence may not contain loads or stores between the LR
+                    // and the SC, and an AMO is not in the base I set, so
+                    // neither clear is reachable inside a constrained loop.
                     if (reservation_valid && reservation_addr == exwb_alu_result)
                         reservation_valid <= 1'b0;
                 end
             end
 
-            // Clear reservation on trap or interrupt
+            // Clear reservation on trap or interrupt. Not required by the
+            // spec -- "H traps" is a listed satisfying event of the
+            // eventuality guarantee, and a handler's loads, stores and SYSTEM
+            // instructions take the sequence outside the constrained set,
+            // where an implementation may fail an SC unconditionally. Kept as
+            // defence in depth for bare-metal and bootloader code; Linux
+            // additionally clears it in software with a dummy SC on every
+            // exception return.
+            //
+            // There is deliberately no external-agent term: this SoC has a
+            // single hart and no other bus master. Revisit if a debug module
+            // with system-bus access is ever added.
             if (ex_trap || irq_inject)
                 reservation_valid <= 1'b0;
         end
