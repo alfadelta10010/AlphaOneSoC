@@ -155,6 +155,7 @@ module fyracore #(
     wire        pmp_data_allow;   // driven by pmp_data instance
     wire        irq_inject;      // driven by interrupt detection logic in CSR/WB section
     wire        csr_misa_c;      // driven by CSR unit output (misa.C bit)
+    wire        csr_mstatus_tw;  // driven by CSR unit output (mstatus.TW bit)
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -332,10 +333,13 @@ module fyracore #(
                      (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
                      (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && priv_mode;
 
-    // U-mode WFI: trap as illegal instruction
+    // U-mode WFI traps as illegal only when mstatus.TW is set. With no S-mode
+    // and TW=0 the spec permits WFI in U-mode; it then decodes as a NOP, which
+    // the spec also permits.
     wire ex_wfi_umode = ifex_valid && (ifex_instr[31:20] == 12'b000100000101) &&
                         (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
-                        (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && !priv_mode;
+                        (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && !priv_mode &&
+                        csr_mstatus_tw;
 
     // WFI with invalid rd/rs1 fields: trap as illegal instruction
     wire ex_bad_wfi = ifex_valid && (ifex_instr[31:25] == 7'b0001000) &&
@@ -683,6 +687,7 @@ module fyracore #(
         .sw_irq      (sw_irq),
         .mie_out     (csr_mie),
         .misa_c        (csr_misa_c),
+        .mstatus_tw    (csr_mstatus_tw),
         .mtime_in    (mtime_in),
         // misa.C WARL gate: refuse C clear if next-PC[1]=1. csrrci/csrrw to
         // misa is always 32-bit (system opcode), so post-PC[1] = exwb_trap_pc[1].
@@ -803,8 +808,8 @@ module fyracore #(
         (exwb_csr_wdata[12:11] == 2'b11 || exwb_csr_wdata[12:11] == 2'b00)
             ? exwb_csr_wdata[12:11] : csr_unit.mstatus[12:11];
     wire [31:0] mstatus_fwd_val =
-        (csr_unit.mstatus & ~32'h0000_1888)
-        | (exwb_csr_wdata & 32'h0000_0088)
+        (csr_unit.mstatus & ~32'h0020_1888)
+        | (exwb_csr_wdata & 32'h0020_0088)
         | {19'b0, mstatus_fwd_mpp, 11'b0};
     // misa forward: only C(2) writable; refused when clearing C and post-PC misaligned.
     wire misa_clear_refused = !exwb_csr_wdata[2] && exwb_trap_pc[1];

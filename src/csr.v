@@ -43,6 +43,9 @@ module csr #(
     output wire [31:0] mie_out,
     // misa.C — gates compressed-instruction decode (WARL bit)
     output wire        misa_c,
+    // mstatus.TW — traps WFI in U-mode (Priv spec: must be writable when a
+    // less-privileged mode exists, which misa.U says it does)
+    output wire        mstatus_tw,
     // mtime value from CLINT (for time/timeh CSR reads)
     input  wire [63:0] mtime_in,
     // misa.C WARL gate: refuse to clear C if next-PC would be 2-byte aligned
@@ -95,6 +98,7 @@ module csr #(
     assign pmpaddr3_out = pmpaddr3;
     assign mie_out      = mie_reg;
     assign misa_c       = misa_reg[2];
+    assign mstatus_tw   = mstatus[21];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
@@ -129,8 +133,9 @@ module csr #(
     always @(*) begin
         mstatus_after_we = mstatus;
         if (we && op != 2'b00 && waddr == 12'h300) begin
-            mstatus_after_we[3] = csr_new[3];   // MIE
-            mstatus_after_we[7] = csr_new[7];   // MPIE
+            mstatus_after_we[3]  = csr_new[3];   // MIE
+            mstatus_after_we[7]  = csr_new[7];   // MPIE
+            mstatus_after_we[21] = csr_new[21];  // TW
             if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
                 mstatus_after_we[12:11] = csr_new[12:11];
         end
@@ -258,6 +263,7 @@ module csr #(
                     // (Priv spec §3.1.6.5: WARL reads must return legal values).
                     mstatus[3]  <= csr_new[3];   // MIE
                     mstatus[7]  <= csr_new[7];   // MPIE
+                    mstatus[21] <= csr_new[21];  // TW
                     if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
                         mstatus[12:11] <= csr_new[12:11];
                 end
