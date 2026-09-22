@@ -46,6 +46,9 @@ module csr #(
     // mstatus.TW — traps WFI in U-mode (Priv spec: must be writable when a
     // less-privileged mode exists, which misa.U says it does)
     output wire        mstatus_tw,
+    // mstatus.MPRV — data accesses use MPP's privilege instead of the current
+    // one (Priv spec: must be writable when U-mode is supported)
+    output wire        mstatus_mprv,
     // mtime value from CLINT (for time/timeh CSR reads)
     input  wire [63:0] mtime_in,
     // misa.C WARL gate: refuse to clear C if next-PC would be 2-byte aligned
@@ -99,6 +102,7 @@ module csr #(
     assign mie_out      = mie_reg;
     assign misa_c       = misa_reg[2];
     assign mstatus_tw   = mstatus[21];
+    assign mstatus_mprv = mstatus[17];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
@@ -135,6 +139,7 @@ module csr #(
         if (we && op != 2'b00 && waddr == 12'h300) begin
             mstatus_after_we[3]  = csr_new[3];   // MIE
             mstatus_after_we[7]  = csr_new[7];   // MPIE
+            mstatus_after_we[17] = csr_new[17];  // MPRV
             mstatus_after_we[21] = csr_new[21];  // TW
             if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
                 mstatus_after_we[12:11] = csr_new[12:11];
@@ -263,6 +268,7 @@ module csr #(
                     // (Priv spec §3.1.6.5: WARL reads must return legal values).
                     mstatus[3]  <= csr_new[3];   // MIE
                     mstatus[7]  <= csr_new[7];   // MPIE
+                    mstatus[17] <= csr_new[17];  // MPRV
                     mstatus[21] <= csr_new[21];  // TW
                     if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
                         mstatus[12:11] <= csr_new[12:11];
@@ -321,9 +327,13 @@ module csr #(
                 mstatus <= {mstatus_after_we[31:13], {priv_mode, priv_mode}, mstatus_after_we[10:8],
                             mstatus_after_we[3], mstatus_after_we[6:4], 1'b0, mstatus_after_we[2:0]};
             end else if (mret) begin
-                // Return from trap: MIE=MPIE, MPIE=1, MPP=U (spec: MPP set to least priv after MRET)
+                // Return from trap: MIE=MPIE, MPIE=1, MPP=U (spec: MPP set to least priv after MRET).
+                // MPRV is also cleared whenever the return is to a mode less
+                // privileged than M.
                 mstatus <= {mstatus_after_we[31:13], 2'b00, mstatus_after_we[10:8],
-                            1'b1, mstatus_after_we[6:4], mstatus_after_we[7], mstatus_after_we[2:0]};
+                            1'b1, mstatus_after_we[6:4], mstatus_after_we[7], mstatus_after_we[2:0]}
+                           & ((mstatus_after_we[12:11] == 2'b11) ? 32'hFFFF_FFFF
+                                                                 : ~32'h0002_0000);
             end
         end
     end

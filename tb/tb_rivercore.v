@@ -418,8 +418,8 @@ module tb_rivercore;
         begin
             new_mpp = (new_val[12:11] == 2'b11 || new_val[12:11] == 2'b00)
                       ? new_val[12:11] : old_val[12:11];
-            mstatus_committed = (old_val & ~32'h0020_1888)
-                              | (new_val & 32'h0020_0088)
+            mstatus_committed = (old_val & ~32'h0022_1888)
+                              | (new_val & 32'h0022_0088)
                               | {19'b0, new_mpp, 11'b0};
         end
     endfunction

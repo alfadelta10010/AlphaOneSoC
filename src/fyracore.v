@@ -156,6 +156,7 @@ module fyracore #(
     wire        irq_inject;      // driven by interrupt detection logic in CSR/WB section
     wire        csr_misa_c;      // driven by CSR unit output (misa.C bit)
     wire        csr_mstatus_tw;  // driven by CSR unit output (mstatus.TW bit)
+    wire        csr_mstatus_mprv;// driven by CSR unit output (mstatus.MPRV bit)
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -688,6 +689,7 @@ module fyracore #(
         .mie_out     (csr_mie),
         .misa_c        (csr_misa_c),
         .mstatus_tw    (csr_mstatus_tw),
+        .mstatus_mprv  (csr_mstatus_mprv),
         .mtime_in    (mtime_in),
         // misa.C WARL gate: refuse C clear if next-PC[1]=1. csrrci/csrrw to
         // misa is always 32-bit (system opcode), so post-PC[1] = exwb_trap_pc[1].
@@ -766,6 +768,24 @@ module fyracore #(
     wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b011 : // AMO: R+W
                                      ex_misalign_is_store ? 3'b010 : // Store/SC: W
                                      3'b001;                          // Load/LR: R
+    // MPRV=1 makes loads and stores check as though the hart were in MPP.
+    // Instruction fetch is excluded by the spec, so pmp_ifetch keeps priv_mode.
+    //
+    // These are consumed here in EX, but a csrw to mstatus does not commit
+    // until WB, so without forwarding the load or store in the instruction
+    // immediately after `csrw mstatus` would be checked against the stale
+    // MPRV/MPP. Zicsr requires the write's effects to be observable by the
+    // very next instruction, so forward the pending write the same way
+    // csr_fwd_data already does for CSR reads.
+    wire mstatus_wb_wr = exwb_valid && exwb_csrWR && !exwb_trap &&
+                         (exwb_csr_addr == 12'h300);
+    wire [1:0] mstatus_wb_mpp =
+        (exwb_csr_wdata[12:11] == 2'b11 || exwb_csr_wdata[12:11] == 2'b00)
+            ? exwb_csr_wdata[12:11] : csr_mstatus_mpp;
+    wire       eff_mprv = mstatus_wb_wr ? exwb_csr_wdata[17] : csr_mstatus_mprv;
+    wire [1:0] eff_mpp  = mstatus_wb_wr ? mstatus_wb_mpp     : csr_mstatus_mpp;
+    wire data_priv_mode = eff_mprv ? (eff_mpp == 2'b11) : priv_mode;
+
     pmp pmp_data(
         .pmpcfg0    (csr_pmpcfg0),
         .pmpaddr0   (csr_pmpaddr0),
@@ -774,7 +794,7 @@ module fyracore #(
         .pmpaddr3   (csr_pmpaddr3),
         .addr       (ex_alu_result),
         .access_type(ex_pmp_access_type),
-        .priv_mode  (priv_mode),
+        .priv_mode  (data_priv_mode),
         .pmp_allow  (pmp_data_allow)
     );
 
@@ -808,8 +828,8 @@ module fyracore #(
         (exwb_csr_wdata[12:11] == 2'b11 || exwb_csr_wdata[12:11] == 2'b00)
             ? exwb_csr_wdata[12:11] : csr_unit.mstatus[12:11];
     wire [31:0] mstatus_fwd_val =
-        (csr_unit.mstatus & ~32'h0020_1888)
-        | (exwb_csr_wdata & 32'h0020_0088)
+        (csr_unit.mstatus & ~32'h0022_1888)
+        | (exwb_csr_wdata & 32'h0022_0088)
         | {19'b0, mstatus_fwd_mpp, 11'b0};
     // misa forward: only C(2) writable; refused when clearing C and post-PC misaligned.
     wire misa_clear_refused = !exwb_csr_wdata[2] && exwb_trap_pc[1];
