@@ -73,7 +73,7 @@ module csr #(
     reg [31:0] mip_reg;
     reg [31:0] mcounteren; // 0x306: controls U-mode counter access
     reg [31:0] mcountinhibit; // 0x320: inhibit specific perf counters
-    reg [31:0] misa_reg; // 0x301: WARL — only C bit (and U as toggle) writable
+    reg [31:0] misa_reg; // 0x301: WARL — only the C bit is writable
 
     // PMP registers
     reg [31:0] pmpcfg0;                         // 0x3A0: 4 packed 8-bit config bytes

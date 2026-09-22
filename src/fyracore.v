@@ -381,13 +381,17 @@ module fyracore #(
 
     // Instruction-address-misaligned: branch/jump target must be 4-byte aligned
     // when misa.C=0. When C enabled, target[0]==0 is enforced by encoding.
-    // (Priv spec §3.1.15: exception is reported on the branch/jump, not target.)
+    // (Unprivileged spec, RV32I control transfer: the exception is reported on
+    // the branch/jump, not on the target instruction.)
     wire ex_inst_misalign = ifex_valid && ex_branch_taken &&
                             !csr_misa_c && ex_branch_target[1];
 
     // PMA check: is there a device at this address at all?
     // Fetch is restricted to RAM -- executing out of the CLINT is an
-    // instruction access fault, which is also what the reference model does.
+    // instruction access fault here. The reference model does NOT do this: it
+    // reads the device and reports an illegal instruction (cause 2) with the
+    // fetched bits in mtval. Cause 1 is the defensible hardware behaviour, so
+    // this is a deliberate divergence, not an oversight.
     wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
     // A window with BASE > TOP matches nothing, which is how the testbench
     // switches off the ports the simulation does not model.
