@@ -74,6 +74,24 @@ class fyracore_iverilog_plugin(object):
         else:
             self.stop_on_failure = False
 
+        # Retire budget handed to the testbench. A test that exceeds it is
+        # cut off mid-trace, which the comparison stage cannot tell apart
+        # from a genuine divergence -- see sim.log for the
+        # '--- Max cycles ... reached ---' line that says which happened.
+        self.max_cycles = int(ini_config.get('max_cycles', 3000000))
+
+        # Retire budget. This is the bound that normally fires, and it is the
+        # one that keeps the reference comparable: the spike plugin passes
+        # --instructions = max_instr + ignore_lines so both models stop on the
+        # same retired instruction. max_cycles above is only the backstop for a
+        # hung pipeline that retires nothing.
+        self.max_instr = int(ini_config.get('max_instr', 200000))
+
+        # Hard ceiling on any file the simulation writes, in MiB. A core that
+        # never terminates writes dut.dump until the disk is full; the run on
+        # 2026-09-09 lost a whole regression that way. 0 disables the guard.
+        self.max_dump_mb = int(ini_config.get('max_dump_mb', 64))
+
         # ----- Paths -----
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.sim_path = self.work_dir + self.name
@@ -185,13 +203,84 @@ class fyracore_iverilog_plugin(object):
             else:
                 timeout_cmd = ''
 
+            # ulimit -f counts 512-byte blocks under /bin/sh (dash), which is
+            # the shell make runs recipes with, and 1 KiB blocks under plain
+            # bash -- so *2048 is exactly max_dump_mb under make and at most
+            # twice that if a bash ever runs it, never less. It applies to
+            # every file the subshell writes, so it must wrap only the
+            # simulation. Exceeding it kills vvp with SIGXFSZ and leaves a
+            # truncated dut.dump, which the comparison stage reports as a
+            # failure -- a bounded loss rather than a full disk.
+            if self.max_dump_mb > 0:
+                ulimit_cmd = f'ulimit -f {self.max_dump_mb * 2048}; '
+            else:
+                ulimit_cmd = ''
+
+            # stdout used to go to /dev/null, which discarded every diagnostic
+            # the testbench emits: '--- Max cycles ... reached ---', the
+            # spin-detector abort, and the $fatal for an unloaded program that
+            # tb_rivercore.v explicitly raises so it "must fail loudly". A
+            # truncated dut.dump was therefore indistinguishable from a real
+            # trace divergence. Keep it next to the dump instead; it is a few
+            # lines per test.
             sim_cmd = (
-                f'{timeout_cmd}vvp ./sim_fyracore '
+                f'({ulimit_cmd}{timeout_cmd}vvp ./sim_fyracore '
                 f'+INIT_FILE={work_dir}/{test}.hex '
                 f'+DUMP_FILE=dut.dump '
                 f'+TOHOST_ADDR=$$TOHOST '
-                f'+MAX_CYCLES=1000000 '
-                f'1> /dev/null'
+                f'+MAX_CYCLES={self.max_cycles} '
+                f'+MAX_INSTR={self.max_instr} '
+                f'1> sim.log 2>&1)'
+            )
+
+            # -- Post-sim: strip halt-loop retires so DUT dump aligns with
+            # the Spike reference dump. Spike stops on tohost write and the
+            # spike plugin sed-strips (0x00000063) beqz-self and (0x0000006f)
+            # jal-self from ref.dump. RISCOF RVMODEL_HALT emits `me: beqz
+            # x0, me` which our TB retires up to 3x post-tohost — drop the
+            # same opcodes here so the diff aligns.
+            strip_cmd = (
+                " && sed -i -E '/\\(0x00000063\\)$$/d;"
+                "/\\(0x0000006f\\)$$/d' dut.dump"
+            )
+
+            # -- Truncate at the tohost write --
+            # The reference side does the same (see spike_plugin.py). The DUT
+            # stops on the tohost store immediately while spike only polls
+            # HTIF every 5000 instructions, so the two dumps agree on every
+            # retire up to that store and then stop in different places.
+            # Cutting both at the store removes the difference symmetrically.
+            # TOHOST is already resolved above for the simulation itself.
+            # Kept inside a subshell ending in `|| true` so a program with no
+            # tohost symbol is a no-op rather than a failed make target, while
+            # the leading && still propagates a failed simulation.
+            # The pattern is the tohost address followed by a value, i.e. a
+            # STORE -- matching the bare address would also match a load of
+            # tohost and cut the trace there. The reference side uses the same
+            # pattern.
+            trunc_cmd = (
+                " && ( [ -n \"$$TOHOST\" ] && [ -f dut.dump ] &&"
+                " awk -v p=\"mem 0x$$TOHOST 0x\" 'index($$0,p){print; exit} {print}'"
+                " dut.dump > dut.dump.tmp && mv dut.dump.tmp dut.dump || true )"
+            )
+
+            # -- Check what the test actually signalled --
+            # Nothing in the flow has ever looked at the value written to
+            # tohost. Every generator here writes 1 for success; riscv-tests
+            # writes (testnum << 1) | 1 on a failing self-check, and riscv-dv
+            # ends a program early through its trap handler. When both models
+            # fail the same way the traces match, so the comparison reports
+            # Passed for a test that reported its own failure.
+            #
+            # Append a line the reference cannot have, the same mechanism the
+            # testbench uses for an aborted run: compare_dumps cannot parse it
+            # and so returns Failed.
+            gate_cmd = (
+                " && ( TOHOST_VAL=$$(tail -n 1 dut.dump 2>/dev/null |"
+                " awk -v p=\"mem 0x$$TOHOST 0x\" 'index($$0,p){print $$NF}');"
+                " [ -z \"$$TOHOST_VAL\" ] || [ $$(( $$TOHOST_VAL )) -eq 1 ] ||"
+                " echo \"DUT-FAIL: test signalled failure, tohost=$$TOHOST_VAL\""
+                " >> dut.dump; true )"
             )
 
             # -- Cleanup --
@@ -199,7 +288,8 @@ class fyracore_iverilog_plugin(object):
 
             target_cmd = (
                 ch_cmd + compile_cmd + hex_cmd + sim_setup +
-                tohost_cmd + sim_cmd + clean_cmd
+                tohost_cmd + sim_cmd + strip_cmd + trunc_cmd + gate_cmd +
+                clean_cmd
             )
             make.add_target(target_cmd, test)
             self.test_names.append(test)
@@ -243,8 +333,12 @@ class fyracore_iverilog_plugin(object):
     def post_run(self, test_dict, config):
         logger.info('FyraCore iverilog plugin: Post-Run Hook')
 
-        if str_2_bool(config.get('river_core', {}).get(
-                'space_saver', 'False')):
+        # config is a ConfigParser, whose get() signature is
+        # get(section, option), not dict.get(key, default). Passing a dict as
+        # the second argument made it the *option name* and blew up in
+        # optionxform with "'dict' object has no attribute 'lower'". Index the
+        # section first and use the SectionProxy's dict-style get.
+        if str_2_bool(config['river_core'].get('space_saver', 'False')):
             logger.debug('Removing artifacts for passed tests')
             for test, attr in test_dict.items():
                 if attr.get('result', '') == 'Passed':

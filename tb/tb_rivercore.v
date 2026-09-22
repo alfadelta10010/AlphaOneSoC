@@ -28,16 +28,70 @@ module tb_rivercore;
     wire        fencei_flush;
 
     // Interrupt signals from CLINT
-    wire        timer_irq, sw_irq;
+    wire        timer_irq, sw_irq, ext_irq;
     wire [63:0] mtime_val;
 
     // Parameters
     parameter MEM_SIZE = 33554432; // 32 MB
 
-    // Instantiate CPU
-    // RESET_PC = 0x80000000 — matches Spike's default DRAM_BASE so the
-    // verification flow can use riscv-tests' env/p/link.ld unchanged.
-    fyracore #(.RESET_PC(32'h8000_0000)) cpu(
+    // ── Verification remap ──────────────────────────────────────────────
+    //
+    // The SoC's real map -- Flash at 0x00000000, RAM at 0x01000000, CLINT at
+    // 0x02000000, GPIO at 0x03000000 -- is what src/fyracore.v and
+    // src/memController.v describe by default, and it is what the hardware
+    // will be. It cannot be used for river_core lockstep verification:
+    //
+    //   * Spike's boot ROM is fixed at DEFAULT_RSTVEC 0x1000 and cannot be
+    //     disabled (--disable-dtb removes it and Spike then hangs with an
+    //     empty dump). It would sit inside Flash.
+    //   * Spike places RAM at DRAM_BASE 0x80000000 and -m only resizes it.
+    //
+    // So the remap lives here, in the testbench, rather than in the core.
+    // The core keeps describing the machine being built; this file bends the
+    // address map to whatever the reference model can be made to agree with.
+    //
+    // MEM_BASE/MEM_SIZE must match plugins/river-config.ini:
+    //   [spike] mem_flags = -m0x80000000:0x2000000
+    // Change one and you must change the other, or the DUT and the reference
+    // disagree about which addresses are mapped -- the bug the PMA check
+    // exists to catch.
+    parameter MEM_BASE = 32'h8000_0000;
+
+    // IO0 is the CLINT window, and its size is dictated by the reference
+    // model, not by the CLINT the hardware will have. Spike maps CLINT_SIZE =
+    // 0xC0000 from the CLINT base and ignores the size in its device tree, so
+    // every address in 0x02000000-0x020BFFFF answers loads and stores on
+    // spike: the register block at 0x0000/0x4000/0xBFF8 and plain zeros
+    // everywhere else. Sizing IO0 to the real CLINT's 48 KB instead made every
+    // access in between fault on the DUT and succeed on the reference.
+    //
+    // tb/memory_model.v mirrors the same shape: CLINT registers below offset
+    // 0x10000, zeros above, and the write side ignored above -- not the
+    // address aliasing a 16-bit offset decode would give.
+    //
+    // The testbench-only MEIP hook at 0x0200C000 lies inside this window and
+    // reads back 0 until a test writes it, which is what spike returns there
+    // too, so it stays invisible to lockstep comparison.
+    //
+    // IO0_BASE must match the clint@ node in
+    // plugins/helpers/spike-fyracore.dts; the base is the one thing that DTS
+    // can move.
+    parameter IO0_BASE = 32'h0200_0000;
+    parameter IO0_TOP  = 32'h020B_FFFF;
+    // No GPIO is modelled, and spike has no device there either, so IO1 is
+    // switched off by making BASE > TOP -- a window that matches nothing.
+    parameter IO1_BASE = 32'hFFFF_FFFF;
+    parameter IO1_TOP  = 32'h0000_0000;
+
+    fyracore #(
+        .RESET_PC    (MEM_BASE),
+        .PMA_MEM_BASE(MEM_BASE),
+        .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1),
+        .PMA_IO0_BASE(IO0_BASE),
+        .PMA_IO0_TOP (IO0_TOP),
+        .PMA_IO1_BASE(IO1_BASE),
+        .PMA_IO1_TOP (IO1_TOP)
+    ) cpu(
         .clk         (clk),
         .rst         (rst),
         .imem_addr   (imem_addr),
@@ -50,7 +104,7 @@ module tb_rivercore;
         .dmem_rdata  (dmem_rdata),
         .dmem_ready  (dmem_ready),
         .timer_irq    (timer_irq),
-        .external_irq (1'b0),
+        .external_irq (ext_irq),
         .sw_irq       (sw_irq),
         .mtime_in     (mtime_val),
         .fencei_flush (fencei_flush),
@@ -87,6 +141,7 @@ module tb_rivercore;
         .dmem_ready(dmem_ready),
         .timer_irq (timer_irq),
         .sw_irq    (sw_irq),
+        .ext_irq   (ext_irq),
         .mtime_out (mtime_val)
     );
 
@@ -99,11 +154,21 @@ module tb_rivercore;
     // ================================================================
     integer    dump_fd;
     integer    init_i;
-    reg [1023:0] dump_file_str;
-    reg [1023:0] init_file_str;
+    // 1024 chars each. These must comfortably exceed the longest work-dir path
+    // the verification flow passes in: $value$plusargs silently truncates a
+    // path that overflows the buffer, which loads an empty memory and produces
+    // an empty dump rather than an error.
+    reg [8191:0] dump_file_str;
+    reg [8191:0] init_file_str;
     integer    max_cycles;
+    integer    max_instr;
     reg [31:0] tohost_addr;
     reg        tohost_enabled;
+    reg        have_init_file;
+    // Spin detection: see the always block below.
+    reg [31:0] spin_last_pc;
+    integer    spin_count;
+    integer    spin_limit;
     reg [31:0] start_pc;
     reg        logging_active;
 
@@ -118,8 +183,37 @@ module tb_rivercore;
         end
 
         // Max cycles
+        // Two independent watchdogs, because they catch different failures:
+        //
+        //   MAX_CYCLES  a hung pipeline -- a stall that never clears and
+        //               retires *nothing*. An instruction bound never fires
+        //               for that case.
+        //   MAX_INSTR   a program that loops forever while making progress.
+        //               riscv-dv generates these: a 16-instruction loop ending
+        //               in `bge x31, x31, <backward>` compares a register with
+        //               itself, so the branch is always taken and the loop can
+        //               never exit. The cycle bound only stops it after ~900k
+        //               retires and a 50 MB dump.
+        //
+        // MAX_INSTR is also what makes the reference comparable: ref.dump is
+        // cut to MAX_INSTR commit-log lines, so both models present the same
+        // number of retired instructions instead of one running to a cycle
+        // limit and the other to a file-size limit.
+        //
+        // Either bound firing now appends a DUT-ABORT line to the dump (see
+        // emit_abort_marker), because two equally truncated traces otherwise
+        // compare equal and a program that never terminated was reported as
+        // Passed.
+        //
+        // Measured over 1200 passing tests, the largest legitimate run is
+        // 85,111 retires (p99 = 78,012), so 200,000 is ~2.3x headroom. At the
+        // worst observed IPC (0.14) that needs ~1.4M cycles, hence 3,000,000
+        // for the cycle backstop -- MAX_INSTR should normally be the one that
+        // fires.
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles))
-            max_cycles = 1000000;
+            max_cycles = 3000000;
+        if (!$value$plusargs("MAX_INSTR=%d", max_instr))
+            max_instr = 200000;
 
         // tohost address (riscv-tests convention)
         tohost_enabled = $value$plusargs("TOHOST_ADDR=%h", tohost_addr);
@@ -132,12 +226,10 @@ module tb_rivercore;
             logging_active = 1'b0;
         end
 
-        // Runtime hex file override (takes precedence over compile-time INIT_FILE)
-        if ($value$plusargs("INIT_FILE=%s", init_file_str)) begin
-            for (init_i = 0; init_i < MEM_SIZE; init_i = init_i + 1)
-                mem.mem[init_i] = 8'h00;
-            $readmemh(init_file_str, mem.mem);
-        end
+        // Runtime hex file override (takes precedence over compile-time
+        // INIT_FILE). Only the plusarg is read here; the load itself happens
+        // at #1 below, see the note there.
+        have_init_file = $value$plusargs("INIT_FILE=%s", init_file_str);
 
         // Optional VCD dump
         if ($test$plusargs("VCD")) begin
@@ -145,6 +237,37 @@ module tb_rivercore;
             $dumpvars(0, tb_rivercore);
         end
     end
+
+    // Program load, deliberately at #1 rather than time 0.
+    //
+    // memory_model's own initial block zero-fills all MEM_SIZE bytes before
+    // applying its compile-time INIT_FILE. Verilog does not define the relative
+    // order of initial blocks in different modules, so loading the program at
+    // time 0 here could be undone by that fill. #1 is strictly after every
+    // time-0 initial block, and reset is held until #25, so the core has not
+    // fetched anything yet.
+    //
+    // This also drops a second 33.5M-iteration zero-fill that used to run here.
+    // Duplicating memory_model's fill cost roughly half of each simulation's
+    // startup, which across a 1000+ test regression was the single largest
+    // contributor to wall-clock time.
+    initial begin
+        #1;
+        if (have_init_file) begin
+            $readmemh(init_file_str, mem.mem);
+            // A missing or truncated INIT_FILE leaves memory zero-filled, which
+            // otherwise runs to MAX_CYCLES and writes an empty dump - a silent
+            // failure the comparison stage reports as a DUT bug. Empty dumps
+            // also compare equal to each other, so this must fail loudly.
+            // RESET_PC 0x80000000 aliases to mem[0] (memory_model masks [24:0]).
+            if ({mem.mem[3], mem.mem[2], mem.mem[1], mem.mem[0]} === 32'h0) begin
+                $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
+                         init_file_str);
+                $fatal(1);
+            end
+        end
+    end
+
 
     // ================================================================
     //  Counters
@@ -165,8 +288,65 @@ module tb_rivercore;
     // ================================================================
     //  Termination flag — set on detection cycle, acted on next cycle
     //  so the dump always block can flush the last line first.
+    //
+    //  ecall/ebreak/halt: terminate immediately (one extra retire).
+    //  tohost: spike continues retiring through write_tohost's high-word
+    //  store and fence.i before halting. Drain up to 4 extra retires (or
+    //  stop on fence.i retire) so the trace matches.
     // ================================================================
-    reg terminate = 1'b0;
+    reg     terminate    = 1'b0;
+    reg     saw_tohost   = 1'b0;
+    integer post_tohost_retires = 0;
+    wire    is_fencei_retire = dbg_retired && (dbg_instr == 32'h0000_100f);
+
+    // ================================================================
+    //  Spin detection
+    //
+    //  A core that loses its way -- e.g. a corrupted privilege/PC after a bad
+    //  trap return -- typically ends up on a branch-to-self and retires the
+    //  same PC until MAX_CYCLES. That costs a full timeout per test and writes
+    //  a dump of hundreds of thousands of identical lines, which is both slow
+    //  and useless: the reference dump for such a test is only tens of
+    //  thousands of lines, so the length mismatch is the symptom, not the bug.
+    //
+    //  Abort once the same PC has retired SPIN_LIMIT times consecutively. The
+    //  dump keeps everything up to that point, which is what diagnosis needs,
+    //  and the run fails in seconds instead of minutes.
+    //
+    //  The default is deliberately generous. A test may legitimately park in a
+    //  self-loop waiting for an interrupt, and cutting that short would turn a
+    //  passing test into a failure -- a far worse outcome than a slow one. At
+    //  100000 the limit is still an order of magnitude below MAX_CYCLES, so a
+    //  genuine hang is caught early, while no plausible interrupt wait comes
+    //  close.
+    //
+    //  +SPIN_LIMIT=0 disables this, for a test with a legitimate long spin.
+    // ================================================================
+    initial begin
+        spin_last_pc = 32'hFFFF_FFFF;
+        spin_count   = 0;
+        if (!$value$plusargs("SPIN_LIMIT=%d", spin_limit))
+            spin_limit = 100000;
+    end
+
+    always @(posedge clk) begin
+        if (!rst && dbg_retired && !terminate && spin_limit != 0) begin
+            if (dbg_pc == spin_last_pc) begin
+                spin_count = spin_count + 1;
+                if (spin_count >= spin_limit) begin
+                    $display("ERROR: spinning at PC 0x%08h (same PC retired %0d times), aborting",
+                             dbg_pc, spin_count);
+                    emit_abort_marker;
+                    $fclose(dump_fd);
+                    $finish;
+                end
+            end else begin
+                spin_last_pc = dbg_pc;
+                spin_count   = 0;
+            end
+        end
+    end
+
 
     always @(posedge clk) begin
         if (!rst && !terminate) begin
@@ -175,6 +355,10 @@ module tb_rivercore;
             if (is_halt)
                 terminate <= 1'b1;
             if (is_tohost)
+                saw_tohost <= 1'b1;
+            if (saw_tohost && dbg_retired)
+                post_tohost_retires <= post_tohost_retires + 1;
+            if (saw_tohost && (is_fencei_retire || post_tohost_retires >= 3))
                 terminate <= 1'b1;
         end
     end
@@ -205,10 +389,12 @@ module tb_rivercore;
         input [31:0] new_val;
         begin
             case (addr)
-                12'h300: csr_committed = new_val & 32'h0000_1888; // mstatus
+                12'h300: csr_committed = new_val; // mstatus: see mstatus_committed (needs old_val)
+                12'h301: csr_committed = 32'h4010_1101 | (new_val & 32'h0000_0004); // misa: only C(2) writable
                 12'h304: csr_committed = new_val & 32'h0000_0888; // mie
                 12'h305: csr_committed = {new_val[31:2], 2'b00};   // mtvec (direct mode)
-                12'h306: csr_committed = new_val & 32'h0000_0007; // mcounteren
+                12'h306: csr_committed = new_val & 32'h0000_0007; // mcounteren CY/TM/IR writable
+                12'h320: csr_committed = new_val & 32'h0000_0005; // mcountinhibit
                 12'h341: csr_committed = {new_val[31:1], 1'b0};    // mepc
                 12'h344: csr_committed = new_val & ~32'h0000_0888; // mip (writable bits)
                 12'h3A0: csr_committed = {                          // pmpcfg0: mask reserved A=10
@@ -221,18 +407,44 @@ module tb_rivercore;
         end
     endfunction
 
+    // mstatus WARL committed value: needs current register state to preserve
+    // old MPP when new MPP write is illegal (01/10 in M+U-only system).
+    function automatic [31:0] mstatus_committed;
+        input [31:0] new_val;
+        input [31:0] old_val;
+        reg [1:0] new_mpp;
+        begin
+            new_mpp = (new_val[12:11] == 2'b11 || new_val[12:11] == 2'b00)
+                      ? new_val[12:11] : old_val[12:11];
+            mstatus_committed = (old_val & ~32'h0000_1888)
+                              | (new_val & 32'h0000_0088)
+                              | {19'b0, new_mpp, 11'b0};
+        end
+    endfunction
+
+    // priv_mode is updated at EX stage on mret; by the time the mret retires at
+    // WB the register already holds the post-mret priv. Spike emits the priv at
+    // execution time, so override to M (3) for mret retire lines.
+    wire is_mret_retire = (dbg_instr == 32'h30200073);
+    wire [1:0] dump_priv = is_mret_retire ? 2'd3 : (cpu.priv_mode ? 2'd3 : 2'd0);
+
     always @(posedge clk) begin
-        if (!rst && dbg_retired && logging_active && !terminate) begin
+        // The retire-budget test belongs here rather than only in the main
+        // loop: the loop checks after the write has already happened, which
+        // emitted max_instr+1 lines. Spike stops at exactly --instructions,
+        // so one extra line would fail every bounded test on length.
+        if (!rst && dbg_retired && logging_active && !terminate &&
+            (max_instr == 0 || instr_count < max_instr)) begin
             // Header: core <hart>: <priv> 0x<PC> (0x<instr>)
             // Compressed instructions print as 4 hex digits to match Spike.
             if (dbg_compressed)
                 $fwrite(dump_fd, "core   0: %0d 0x%08h (0x%04h)",
-                        cpu.priv_mode ? 3 : 0,
+                        dump_priv,
                         dbg_pc,
                         dbg_instr[15:0]);
             else
                 $fwrite(dump_fd, "core   0: %0d 0x%08h (0x%08h)",
-                        cpu.priv_mode ? 3 : 0,
+                        dump_priv,
                         dbg_pc,
                         dbg_instr);
 
@@ -243,11 +455,13 @@ module tb_rivercore;
             // CSR commit (Spike format: c<addr_dec>_<name> 0x<value>)
             if (cpu.exwb_csrWR) begin
                 case (cpu.exwb_csr_addr)
-                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   csr_committed(12'h300, cpu.exwb_csr_wdata));
-                    12'h301: $fwrite(dump_fd, " c769_misa 0x%08h",      cpu.exwb_csr_wdata);
+                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   mstatus_committed(cpu.exwb_csr_wdata, cpu.csr_unit.mstatus));
+                    12'h301: if (cpu.exwb_csr_wdata[2] == 1'b1 || !cpu.exwb_trap_pc[1])
+                                  $fwrite(dump_fd, " c769_misa 0x%08h", csr_committed(12'h301, cpu.exwb_csr_wdata));
                     12'h304: $fwrite(dump_fd, " c772_mie 0x%08h",       csr_committed(12'h304, cpu.exwb_csr_wdata));
                     12'h305: $fwrite(dump_fd, " c773_mtvec 0x%08h",     csr_committed(12'h305, cpu.exwb_csr_wdata));
                     12'h306: $fwrite(dump_fd, " c774_mcounteren 0x%08h",csr_committed(12'h306, cpu.exwb_csr_wdata));
+                    12'h320: $fwrite(dump_fd, " c800_mcountinhibit 0x%08h", csr_committed(12'h320, cpu.exwb_csr_wdata));
                     12'h340: $fwrite(dump_fd, " c832_mscratch 0x%08h",  cpu.exwb_csr_wdata);
                     12'h341: $fwrite(dump_fd, " c833_mepc 0x%08h",      csr_committed(12'h341, cpu.exwb_csr_wdata));
                     12'h342: $fwrite(dump_fd, " c834_mcause 0x%08h",    cpu.exwb_csr_wdata);
@@ -266,22 +480,44 @@ module tb_rivercore;
                 endcase
             end
 
-            // MRET commit: csr.v applies MPP<-00, MPIE<-1, MIE<-MPIE on retire.
-            // Emit the post-MRET mstatus so the trace matches Spike's commit log.
-            if (dbg_instr == 32'h30200073) begin
-                $fwrite(dump_fd, " c768_mstatus 0x%08h",
-                    {cpu.csr_unit.mstatus[31:13], 2'b00,
-                     cpu.csr_unit.mstatus[10:8], 1'b1,
-                     cpu.csr_unit.mstatus[6:4], cpu.csr_unit.mstatus[7],
-                     cpu.csr_unit.mstatus[2:0]});
+            // MRET commit: csr.v applies MPP<-00, MPIE<-1, MIE<-MPIE in the EX
+            // cycle (when mret is detected). At this WB-stage retire cycle,
+            // mstatus already holds the post-MRET value, so emit it raw.
+            if (is_mret_retire) begin
+                $fwrite(dump_fd, " c768_mstatus 0x%08h", cpu.csr_unit.mstatus);
             end
 
             // Memory access marker. Spike format: loads emit "mem 0x<addr>";
-            // stores emit "mem 0x<addr> 0x<value>".
-            if (cpu.exwb_memRD)
-                $fwrite(dump_fd, " mem 0x%08h", dmem_addr);
-            else if (dmem_we)
-                $fwrite(dump_fd, " mem 0x%08h 0x%08h", dmem_addr, dmem_wdata);
+            // stores emit "mem 0x<addr> 0x<value>". Spike logs the architectural
+            // (unaligned) effective address and the natural-width store data,
+            // so we use exwb_alu_result instead of dmem_addr and width-mask
+            // exwb_rs2_data instead of using the bus-shifted store_data.
+            if (cpu.exwb_memRD) begin
+                $fwrite(dump_fd, " mem 0x%08h", cpu.exwb_alu_result);
+                // An AMO reads and writes in the same retire, and Spike logs
+                // both markers on one line. Emitting only the read leaves the
+                // written value uncompared: river_core's dump parser pairs the
+                // change tokens two at a time and silently drops the odd
+                // trailing one, so a wrong AMO result still compares equal.
+                // Gated on dmem_we, not just on the AMO phase: the marker must
+                // record a write the core actually put on the bus. Printing it
+                // from the decode alone would keep the dump matching Spike even
+                // if the store were dropped, which is exactly the failure the
+                // trace exists to catch.
+                if (cpu.exwb_isAmo && cpu.amo_phase && dmem_we)
+                    $fwrite(dump_fd, " mem 0x%08h 0x%08h",
+                            cpu.exwb_alu_result, dmem_wdata);
+            end
+            else if (dmem_we) begin
+                case (cpu.exwb_memSize)
+                    2'b00: $fwrite(dump_fd, " mem 0x%08h 0x%02h",
+                                   cpu.exwb_alu_result, cpu.exwb_rs2_data[7:0]);
+                    2'b01: $fwrite(dump_fd, " mem 0x%08h 0x%04h",
+                                   cpu.exwb_alu_result, cpu.exwb_rs2_data[15:0]);
+                    default: $fwrite(dump_fd, " mem 0x%08h 0x%08h",
+                                     cpu.exwb_alu_result, cpu.exwb_rs2_data);
+                endcase
+            end
 
             $fwrite(dump_fd, "\n");
 
@@ -303,10 +539,18 @@ module tb_rivercore;
         #25;
         rst = 0;
 
-        // Run until termination or max cycles
+        // Run until termination, the retire budget, or the cycle backstop
         while (cycle_count < max_cycles) begin
             @(posedge clk);
             cycle_count = cycle_count + 1;
+
+            if (max_instr != 0 && instr_count >= max_instr) begin
+                $display("--- Max instructions (%0d) reached ---", max_instr);
+                emit_abort_marker;
+                $fclose(dump_fd);
+                print_summary();
+                $finish;
+            end
 
             // terminate is set on the detection cycle; we act one cycle later
             // so the always block has time to $fwrite the last dump line.
@@ -321,10 +565,35 @@ module tb_rivercore;
         end
 
         $display("--- Max cycles (%0d) reached ---", max_cycles);
+        emit_abort_marker;
         $fclose(dump_fd);
         print_summary();
         $finish;
     end
+
+    // ================================================================
+    //  Abort marker
+    //
+    //  Every abort path here ends in $finish, i.e. exit status 0, and leaves a
+    //  dut.dump that is simply short. The reference is bounded at the same
+    //  retire count, so a program that never terminates produced two equally
+    //  truncated traces that compared EQUAL and were reported as Passed --
+    //  true as far as it went (N retires matched) but not what "Passed" is
+    //  read to mean.
+    //
+    //  Write a line that cannot appear in ref.dump instead. river_core's
+    //  compare_dumps parses each differing line with its commit-log regex; a
+    //  line that does not match raises IndexError inside the walk, which it
+    //  already handles by setting the verdict to Failed. So an unterminated,
+    //  spinning or hung run now fails loudly, and sim.log says which it was.
+    // ================================================================
+    task emit_abort_marker;
+        begin
+            $fwrite(dump_fd,
+                    "DUT-ABORT: run did not reach tohost (retires %0d, cycles %0d) -- trace truncated, not a pass\n",
+                    instr_count, cycle_count);
+        end
+    endtask
 
     // ================================================================
     //  Summary statistics

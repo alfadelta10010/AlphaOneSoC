@@ -129,10 +129,11 @@ module tb_compressed_decoder;
             begin fail_count=fail_count+1; $display("FAIL: C.LUI nzimm=0 not illegal"); end
         else pass_count=pass_count+1;
 
-        // C.LUI with rd=0: illegal
+        // C.LUI with rd=0 and nzimm!=0: HINT, not illegal — expands to LUI x0
         instr_in = 16'b011_0_00000_00001_01;
-        #1; if (illegal !== 1'b1)
-            begin fail_count=fail_count+1; $display("FAIL: C.LUI rd=0 not illegal"); end
+        #1; if (illegal !== 1'b0 || instr_out !== 32'h00001037)
+            begin fail_count=fail_count+1;
+                  $display("FAIL: C.LUI rd=0 | op=%08h ill=%b", instr_out, illegal); end
         else pass_count=pass_count+1;
 
         // C.SRLI: SRLI rd', rd', shamt

@@ -1,0 +1,84 @@
+/*
+ * Device tree handed to Spike with --dtb= for FyraCore lockstep verification.
+ *
+ * Spike builds its bus from this tree: every device node it recognises becomes
+ * an MMIO device, and a device that is not named here does not exist. The
+ * stock auto-generated tree (spike --dump-dts) adds three devices the DUT does
+ * not model --
+ *
+ *   PLIC    @ 0x0C000000  word loads/stores succeed on Spike, fault on the DUT
+ *   ns16550 @ 0x10000000  byte loads/stores succeed on Spike (and a byte store
+ *                         prints to stdout), fault on the DUT
+ *
+ * -- so a generated test that touches either address diverges for a reason
+ * that has nothing to do with the core. Dropping both nodes makes Spike fault
+ * there exactly as the DUT's PMA check does.
+ *
+ * What this file CANNOT change, measured on spike 1.1.1-dev:
+ *   * the CLINT's size. The reg size below is ignored; Spike always maps
+ *     CLINT_SIZE = 0xC0000 from the base. tb_rivercore.v's PMA_IO0 window is
+ *     sized to match that, not to match this node.
+ *   * the boot ROM at 0x1000. It is added at the hardcoded DEFAULT_RSTVEC
+ *     after this tree is parsed, and it holds the reset vector, so it cannot
+ *     be removed (see --disable-dtb) or relocated.
+ * The CLINT's *base* can be moved by editing the node name and reg below;
+ * tb_rivercore.v's IO0_BASE must move with it.
+ *
+ * Rebuild with `make spike-fyracore.dtb` in this directory after editing.
+ */
+/dts-v1/;
+
+/ {
+  #address-cells = <2>;
+  #size-cells = <2>;
+  compatible = "ucbbar,spike-bare-dev";
+  model = "ucbbar,spike-bare";
+  chosen {
+    bootargs = "console=ttyS0 earlycon";
+  };
+  cpus {
+    #address-cells = <1>;
+    #size-cells = <0>;
+    timebase-frequency = <10000000>;
+    CPU0: cpu@0 {
+      device_type = "cpu";
+      reg = <0>;
+      status = "okay";
+      compatible = "riscv";
+      riscv,isa = "rv32imac_zicsr_zicntr_zifencei";
+      mmu-type = "riscv,sv32";
+      riscv,pmpregions = <4>;
+      riscv,pmpgranularity = <4>;
+      clock-frequency = <1000000000>;
+      CPU0_intc: interrupt-controller {
+        #address-cells = <2>;
+        #interrupt-cells = <1>;
+        interrupt-controller;
+        compatible = "riscv,cpu-intc";
+      };
+    };
+  };
+
+  /* Must agree with [spike] mem_flags and tb_rivercore.v MEM_BASE/MEM_SIZE.
+   * -m is what actually creates the memory; this node is documentation. */
+  memory@80000000 {
+    device_type = "memory";
+    reg = <0x0 0x80000000 0x0 0x2000000>;
+  };
+
+  soc {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    compatible = "ucbbar,spike-bare-soc", "simple-bus";
+    ranges;
+    clint@2000000 {
+      compatible = "riscv,clint0";
+      interrupts-extended = <&CPU0_intc 3 &CPU0_intc 7 >;
+      reg = <0x0 0x2000000 0x0 0xc0000>;
+    };
+  };
+
+  htif {
+    compatible = "ucb,htif0";
+  };
+};

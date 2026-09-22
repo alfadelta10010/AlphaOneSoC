@@ -66,7 +66,55 @@ class spike_plugin(object):
         self.sim_cmd = 'spike'
         self.sim_args = f'--hartids={self.hartid} --log ref.dump --log-commits \
 --priv={{0}} {self.mem_flags} {self.dtb} --pc={self.resetpc} --isa={{1}} \
---pmpregions={self.pmp_regions} --pmpgranularity={self.pmp_granularity} {{2}};'
+--pmpregions={self.pmp_regions} --pmpgranularity={self.pmp_granularity} {{3}} {{2}}'
+
+        # Hard ceiling on any file the reference run writes, in MiB. A program
+        # that never terminates under spike writes ref.dump until the disk is
+        # full: seven riscv_dv tests did exactly that on 2026-09-09 and wrote
+        # 777 GB between them. The run timeout now bounds spike, but 600 s at
+        # the observed ~1.85 GB/min is still ~18 GB per runaway, so bound the
+        # file as well. 0 disables the guard.
+        self.max_dump_mb = int(ini_config.get('max_dump_mb', 64))
+
+        # Retire budget, matched to the DUT's +MAX_INSTR. It bounds the
+        # COMPARISON -- ref.dump is cut to this many commit-log lines once the
+        # boot-ROM prologue has been stripped -- so both models present the
+        # same number of retired instructions. 0 disables the cut.
+        #
+        # It is deliberately NOT passed to spike as --instructions. That flag
+        # is not a retire budget: sim_t::idle() charges a whole INTERLEAVE
+        # (5000) chunk per call while processor_t::step() returns early on
+        # every trap, so each trap forfeits the rest of its window. Measured
+        # here: a program taking 39 traps still reaches its end under
+        # --instructions=200005 and one taking 40 does not, and all 12 rrag
+        # programs sampled (81-699 traps each) stopped at ~4k lines instead of
+        # the 9k-75k they really retire. That turned passing tests into
+        # failures, which is why the bound now lives in the line count.
+        self.max_instr = int(ini_config.get('max_instr', 200000))
+
+        # Runaway guard, in spike steps -- NOT retires, see above. It exists
+        # for the one case the other guards miss: a program that traps forever
+        # while retiring nothing, which writes no trace, so neither the file
+        # cap nor the line cut can stop it.
+        #
+        # Derived from max_instr rather than set to a round number, because a
+        # "comfortably large" constant just moves the cliff: at 10,000,000 the
+        # budget is 2000 windows, i.e. 1999 traps, and the densest rrag program
+        # measured takes one trap per 108.9 retires -- ~1840 traps to reach
+        # max_instr, only 9% clear. 5000 per retire is the worst case the
+        # mechanism allows (every retire followed by a trap, forfeiting a whole
+        # INTERLEAVE window), so this cannot be re-crossed at any trap density.
+        # It costs ~0.6 s on a program that traps forever and nothing at all on
+        # one that does not.
+        #
+        # An explicit value in the ini wins. Note 0 means "pass no flag": spike
+        # reads --instructions=0 as "stop immediately", so it must never be
+        # passed through.
+        configured = str(ini_config.get('spike_step_budget', '')).strip()
+        if configured:
+            self.step_budget = int(configured)
+        else:
+            self.step_budget = 5000 * self.max_instr if self.max_instr > 0 else 0
 
         self.work_dir = os.path.abspath(work_dir) + '/'
         self.test_list = load_yaml(test_list)
@@ -145,25 +193,89 @@ class spike_plugin(object):
                 compile_cmd += ' -I '+str(x)
             compile_cmd += ' '.join(map(' -D{0}'.format, attr['compile_macros']))
             compile_cmd += f' -o {test}.elf && '
+            # The timeout must wrap the simulator, not the compiler.  It used
+            # to prefix compile_cmd, which ends in '&&', so it bounded gcc --
+            # a second's work -- and left spike running unbounded.  A
+            # non-terminating program then ran until the disk filled.
             if self.timeout_period>=0:
-                timeout_cmd = f' timeout {str(int(self.timeout_period) + 5)} '
+                timeout_cmd = f'timeout -k 10s {int(self.timeout_period) + 5} '
             else:
-                timeout_cmd = ' '
-            target_cmd = ch_cmd + timeout_cmd + compile_cmd + self.objdump_cmd +\
-                    self.sim_cmd + ' ' + \
-                    self.sim_args.format(spike_priv, spike_isa, f'{test}.elf')
+                timeout_cmd = ''
+            # ulimit -f counts 512-byte blocks under /bin/sh (dash), which is
+            # the shell make runs recipes with, and 1 KiB blocks under plain
+            # bash -- so *2048 is exactly max_dump_mb under make and at most
+            # twice that if a bash ever runs it, never less. It applies to
+            # every file the subshell writes, so it must wrap only the
+            # spike invocation -- the compile above and the sed
+            # post-processing below stay outside it. Exceeding the limit
+            # kills spike with SIGXFSZ and leaves a
+            # truncated ref.dump, which the comparison stage reports as a
+            # failure: a bounded loss rather than a full disk.
+            if self.max_dump_mb > 0:
+                ulimit_cmd = f'ulimit -f {self.max_dump_mb * 2048}; '
+            else:
+                ulimit_cmd = ''
             n_skip = attr.get('ignore_lines', 0)
+            if self.step_budget > 0:
+                instr_flag = f'--instructions={self.step_budget}'
+            else:
+                instr_flag = ''
+            target_cmd = ch_cmd + compile_cmd + self.objdump_cmd +\
+                    '(' + ulimit_cmd + timeout_cmd + self.sim_cmd + ' ' + \
+                    self.sim_args.format(spike_priv, spike_isa, f'{test}.elf',
+                                         instr_flag) +\
+                    ');'
             target_cmd += "([ -f ref.dump ]"
             if n_skip:
                 target_cmd += f" && sed -i '1,{n_skip}d' ref.dump"
+            # Cut to the DUT's retire budget, after the boot-ROM lines are gone
+            # so both sides count the same thing. This is what actually keeps
+            # the two traces comparable on a program that does not terminate.
+            if self.max_instr > 0:
+                target_cmd += (f" && head -n {self.max_instr} ref.dump"
+                               " > ref.dump.cut && mv ref.dump.cut ref.dump")
             # Strip CSRs Spike emits but DUT does not implement (always read 0)
             target_cmd += r" && sed -i -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2|mscratchcsw|mscratchcswl|mtinstcsw) 0x[0-9a-fA-F]+//g' ref.dump"
-            target_cmd += " && (sed -i '/(0x00000063)/d' ref.dump"
-            target_cmd += "&& sed -i '/(0x0000006f)/d' ref.dump"
+            # Anchored, matching the DUT side's strip exactly. Unanchored,
+            # this would also delete a line where those 8 hex digits happened
+            # to appear in a register or memory value, and only on the
+            # reference side -- a one-sided deletion, which is a divergence the
+            # comparison would then report against the DUT.
+            target_cmd += r" && (sed -i -E '/\(0x00000063\)$$/d' ref.dump"
+            target_cmd += r"&& sed -i -E '/\(0x0000006f\)$$/d' ref.dump"
             if self.tcm or self.mem:
                 target_cmd +=  " sed -i '$$d' ref.dump && "
                 target_cmd +=  "sed -i '$$d' ref.dump"
             target_cmd += ") || echo \"Error: ref.dump not found\")"
+            # Truncate the reference at the tohost write.
+            #
+            # riscv-dv ends every program with
+            #     write_tohost: auipc/sw 1/c.j write_tohost
+            # an intentional spin that expects the simulator to notice the
+            # store and stop. The DUT's testbench stops on it immediately;
+            # spike only polls HTIF every INTERLEAVE (5000) instructions, so
+            # it spins ~4900 more retires first. Measured on
+            # riscv_ebreak_test_0: the store is at line 202 of both dumps,
+            # dut.dump ends at 206 lines, ref.dump runs to 5121 and repeats
+            # the same store 1640 times. The traces agree on every
+            # architectural fact and disagree only about where to stop, which
+            # failed all 50 riscv_dv tests.
+            #
+            # Cutting both dumps at the first tohost store removes the spin
+            # symmetrically. The DUT side does the same in its own plugin.
+            # Keyed off the tohost *symbol*, not a '.tohost' section: riscv-dv
+            # puts tohost in .data, which is why the older section-based
+            # attempt below never fired for it.
+            # The pattern is the tohost address followed by a value, i.e. a
+            # STORE. Matching the address alone would also match a load of
+            # tohost and cut both traces there, silently dropping everything
+            # after it. Wrapped so a program with no tohost symbol is a no-op
+            # rather than a failed make target.
+            target_cmd += f" ; TOHOST=$$(riscv64-unknown-elf-readelf -s {test}.elf"
+            target_cmd += " | awk '$$8==\"tohost\"{print $$2}')"
+            target_cmd += " ; ( [ -n \"$$TOHOST\" ] && [ -f ref.dump ] &&"
+            target_cmd += " awk -v p=\"mem 0x$$TOHOST 0x\" 'index($$0,p){print; exit} {print}'"
+            target_cmd += " ref.dump > ref.dump.tmp && mv ref.dump.tmp ref.dump || true )"
             # if not self.is_tcm:
             #   target_cmd += " && sed -i '$$d' ref.dump;"
             # else:

@@ -1,0 +1,355 @@
+# Sample config.yaml file to generate a random program
+# using rrag (Random RISC-V Assembly Generator)
+
+# Each section commands a behaviour of rrag
+# and inline comments in each section will explain the
+# usage
+# ---------------------------------------------------------------------------------
+# Privlege mode that instruction are executed in
+# Options:
+#       mode: m/s/u
+# Note: If the privlege mode is either s or u, then the test_entry_macro
+# will be defined accordingly
+# ---------------------------------------------------------------------------------
+priv-mode:
+  mode: m
+# ---------------------------------------------------------------------------------
+# General directives to rrag
+# Options:
+#       total_instructions: Approximate number of instructions to be generated
+#                           by rrag. Actual may vary.
+#       regs_not_use:       Comma separated list of RISC-V registers to not use for
+#                           reading/writing in the random generated instructions
+#                           
+# ---------------------------------------------------------------------------------
+general:
+  total_instructions: 100000
+  regs_not_use: x1,x2
+  custom_trap_handler: true
+  code_start_address: 0x80000000
+  default_program_exit: true
+  # FyraCore is an M+U hart with no S-mode, so medeleg/mideleg are not
+  # implemented and writing them traps illegal. Delegate nothing.
+  delegation: 0x0
+
+# ---------------------------------------------------------------------------------
+# Distribution of instructions according to ISA extensions
+# Specify the relative frequency of each set 
+# E.g. : A relative frequency of 1 each means each instruction will be 
+# generated equal number of times in the total instructions. Specify 0 to disable.
+# ---------------------------------------------------------------------------------
+isa-instruction-distribution:
+  rel_rv.d.zfh: 0
+  rel_rv.q.zfh: 0
+  rel_rv64.zkne: 0
+  rel_rv.zcmp: 0
+  rel_rv64.zcb: 0
+  rel_rv64.q: 0
+  rel_rv32.zknh: 0
+  rel_rv64.zbkb: 0
+  rel_rv32.zknd: 0
+  rel_rv64.zkn: 0
+  rel_rv32.zks: 0
+  rel_rv.zvknha: 0
+  rel_rv.v: 0
+  rel_rv.zvbb: 0
+  rel_rv.zkn: 0
+  rel_rv.zvksed: 0
+  rel_rv.zcmt: 0
+  rel_rv.zbkb: 0
+  rel_rv64.zbs: 0
+  rel_rv.zvkg: 0
+  rel_rv.zksed: 0
+  rel_rv.zcb: 0
+  rel_rv.zbkx: 0
+  rel_rv.zknh: 0
+  rel_rv.zfh: 0
+  rel_rv.zvks: 0
+  rel_rv.zawrs: 0
+  rel_rv64.zfh: 0
+  rel_rv32.zbb: 0
+  rel_rv64.h: 0
+  rel_rv32.zkne: 0
+  rel_rv64.zk: 0
+  rel_rv64.zknd: 0
+  rel_rv32.zbs: 0
+  rel_rv.zacas: 0
+  rel_rv.zvksh: 0
+  rel_rv64.zacas: 0
+  rel_rv64.zknh: 0
+  rel_rv.zicbo: 0
+  rel_rv.h: 0
+  rel_rv32.zk: 0
+  rel_rv.zbkc: 0
+  rel_rv32.zbkb: 0
+  rel_rv.zksh: 0
+  rel_rv.zks: 0
+  rel_rv.svinval: 0
+  rel_rv64.zbb: 0
+  rel_rv.zvknhb: 0
+  rel_rv32.zkn: 0
+  rel_rv.q: 0
+  rel_rv.zk: 0
+  rel_rv.v.aliases: 0
+  rel_rv64.zks: 0
+  rel_rv.zvkned: 0
+  rel_rv.zvkn: 0
+  rel_rv.zpsf: 0
+  rel_rv.zpn: 0
+  rel_rv.zfbfmin: 0
+  rel_rv.smrnmi: 0
+  rel_rv32.zpsf: 0
+  rel_rv128.i: 0
+  rel_rv.zicfilp: 0
+  rel_rv64.b: 0
+  rel_rv.zalasr: 0
+  rel_rv.zvbc: 0
+  rel_rv64.zbpbo: 0
+  rel_rv64.zbp: 0
+  rel_rv.zicfiss: 0
+  rel_rv.f.zfa: 0
+  rel_rv32.zbpbo: 0
+  rel_rv32.zpn: 0
+  rel_rv.c.zicfiss: 0
+  rel_rv.zcmop: 0
+  rel_rv.b: 0
+  rel_rv64.zpn: 0
+  rel_rv.zvfbfwma: 0
+  rel_rv.zfh.zfa: 0
+  rel_rv64.q.zfa: 0
+  rel_rv.q.zfa: 0
+  rel_rv.zicond: 0
+  rel_rv.d.zfa: 0
+  rel_rv.zihintntl: 0
+  rel_rv32.d.zfa: 0
+  rel_rv.zimop: 0
+  rel_rv128.c: 0
+  rel_rv64.zbt: 0
+  rel_rv.zabha: 0
+  rel_rv32.zbp: 0
+  rel_rv.zbpbo: 0
+  rel_rv.c.zihintntl: 0
+  rel_rv.zvfbfmin: 0
+  rel_rv32i.fence: 0
+  rel_rv64d: 0
+  rel_sys: 0
+  rel_rv32i.zbs: 0
+  rel_rv32i.zba: 0
+  rel_rv32c.compute: 0
+  rel_rv32c.ctrl: 0
+  rel_rv64i.zba: 0
+  rel_rv64i.compute: 0
+  rel_rv64i.data: 0
+  rel_rv64m: 0
+  rel_rv32i.ctrl: 0
+  rel_rv32i.compute: 1
+  rel_rv32i.data: 0
+  rel_rv32i.zbb: 0
+  rel_rv64f: 0
+  rel_rv64fr: 0
+  rel_rv32d: 0
+  rel_rvc.ctrl: 0
+  rel_rvc.compute: 0
+  rel_rvc.sp: 0
+  rel_rvc.data: 0
+  rel_rv32f: 0
+  rel_rv32fr: 0
+  rel_sys.csr: 0
+  rel_rv32m: 0
+  rel_rv32i.zbc: 0
+  rel_rv32a: 0
+  rel_rv64a: 0
+  rel_rv64i.zbb: 0
+  rel_rv32c.f.data: 0
+  rel_rv64c.compute: 0
+  rel_rv64c.data: 0
+  rel_rv64i.zbm: 0
+  rel_rv32i.zbf: 0
+  rel_rv32i.zbt: 0
+  rel_rv64i.zbe: 0
+  rel_rv32i.zbe: 0
+  rel_rv64i.zbp: 0
+  rel_rv32i.zbp: 0
+  rel_rv32i.zbr: 0
+  rel_rv64i.zbr: 0
+  rel_rv64i.zbf: 0
+  rel_rv64i.zbt: 0
+float-rounding:
+  rne: 10
+  rtz: 10
+  rdn: 10
+  rup: 10
+  rmm: 10
+
+branch-control:
+  backward-probability: 0.5
+  block-size: 7
+
+# ---------------------------------------------------------------------------------
+# Recursion options
+# Options:
+#       recursion_enable:   Generate the template for recursion or not
+#       recursion_depth:    Number of times the recursive function is called
+# ---------------------------------------------------------------------------------
+recursion-options:
+  # Deeper call/return chains -- more branch and load/store pressure.
+  recursion-enable: true
+  recursion-depth: 10
+  recursion-calls: 5
+
+# ---------------------------------------------------------------------------------
+# Data access sections
+# Specify which regions of memory will be accessed by the random program
+# Options:
+#       enable:         Force all memory accesses instructions to only load/store
+#                       to the specified list of address sections
+#                       
+# Section Template: Specify legal access zones using the following template
+#       section_name:  section_low,section_high (HEX)     
+# ---------------------------------------------------------------------------------
+access-sections:
+  begin_signature: 0x80091000,0x80095000,rw
+
+
+# ---------------------------------------------------------------------------------
+# CSR sections
+# Specify which CSRs will be accessed by the random program
+# Options:              
+#       sections:
+#                 start-value1:end-value1, value2, start-value3:end-value3 (HEX)
+#                 (Any Combination)
+# ---------------------------------------------------------------------------------
+csr-sections:
+  # Only CSRs FyraCore implements. Anything outside these ranges raises
+  # illegal-instruction, which is covered deliberately via ecause02 instead
+  # of accidentally through every random CSR access.
+  #   0x300-0x306  mstatus, misa, mie, mtvec, mcounteren
+  #   0x320        mcountinhibit
+  #   0x340-0x344  mscratch, mepc, mcause, mtval, mip
+  #   0x3a0        pmpcfg0        (pmpcfg1-3 read as zero)
+  #   0x3b0-0x3b3  pmpaddr0-3     (4 regions; pmpaddr4-15 read as zero)
+  #   0xb00-0xb82  mcycle/minstret and their high halves
+  #   0xc00-0xc82  cycle/time/instret U-mode aliases (mcounteren-gated)
+  #   0xf11-0xf15  mvendorid, marchid, mimpid, mhartid, mconfigptr
+  sections: 0x300:0x306, 0x320, 0x340:0x344, 0x3a0, 0x3b0:0x3b3, 0xb00:0xb82, 0xc00:0xc82, 0xf11:0xf15
+
+
+# ---------------------------------------------------------------------------------
+# User template sections
+# Allows users to specify call to a custom function with number of times to call
+# User should ensure that function does not modify 
+#                       
+# Section Template: Specify user template function calls with the number of times
+#       function_name: '{number_of_times:"function_body"}'
+# ---------------------------------------------------------------------------------
+user-functions:
+  func1: '{0:"add x0,x0,x0"}'
+
+# ---------------------------------------------------------------------------------
+# Switching Privledge modes in rrag
+#       switching_modes:  true/false (Do not provide any user defined functions when
+#                         shifting mdoes is true)
+#       num_switches:     # of times privlege modes has to shift (This is randomised 
+#                         and shifting may result in same mode)
+# ---------------------------------------------------------------------------------
+switch-priv-modes:
+  # FyraCore implements M and U (misa.U=1, mstatus.MPP legal values 00/11).
+  # Switching exercises U-mode execution, the ecall-from-U path and MRET,
+  # none of which the directed suites cover heavily.
+  switch_modes: true
+  num_switches: 20
+
+
+# ---------------------------------------------------------------------------------
+# Instruction Cache and Data-Cache Thrashing
+# ---------------------------------------------------------------------------------
+i-cache:
+  num_calls: 0
+  num_bytes_per_block: 16
+  num_blocks: 8
+  num_cycles: 10
+
+d-cache:
+  num_calls: 0
+  num_bytes_per_block: 16
+  num_blocks: 8
+  num_cycles: 10
+
+# ---------------------------------------------------------------------------------
+# Exception generation
+# ---------------------------------------------------------------------------------
+exception-generation:
+  # Weights per synchronous exception cause. Enabled where FyraCore can
+  # actually raise the cause, so the trap path gets randomised coverage:
+  #   0  instruction address misaligned -- UNREACHABLE: misa.C=1 means
+  #      IALIGN=16, and the RTL gates ex_inst_misalign on !misa_c.
+  #   1  instruction access fault  (PMP)
+  #   2  illegal instruction
+  #   3  breakpoint (EBREAK / C.EBREAK)
+  #   4  load address misaligned   (core traps, does not emulate)
+  #   5  load access fault         (PMP)
+  #   6  store address misaligned  (core traps, does not emulate)
+  #   7  store access fault        (PMP)
+  #   8  ecall from U-mode
+  #   11 ecall from M-mode
+  #   9/10   ecall from S/H  -- no S or H mode
+  #   12-15  page faults      -- no MMU
+  ecause00: 0
+  ecause01: 5
+  ecause02: 10
+  ecause03: 5
+  ecause04: 10
+  ecause05: 5
+  ecause06: 10
+  ecause07: 5
+  ecause08: 5
+  ecause09: 0
+  ecause10: 0
+  ecause11: 5
+  ecause12: 0
+  ecause13: 0
+  ecause14: 0
+
+# ---------------------------------------------------------------------------------
+# Data Hazards
+# ---------------------------------------------------------------------------------
+data-hazards:
+  raw_prob: 0.5
+  war_prob: 0.5
+  waw_prob: 0.5
+  num_regs_lookbehind: 3
+
+program-macro:
+  pre_program_macro: "add x0,x0,x0"
+  post_program_macro: "add x0,x0,x0"
+  pre_branch_macro: "add x0,x0,x0"
+  post_branch_macro: "add x0,x0,x0"
+  ecause00: "random"
+  ecause01: "random"
+  ecause02: "random"
+  ecause03: "random"
+  ecause04: "random"
+  ecause05: "random"
+  ecause06: "random"
+  ecause07: "random"
+  ecause08: "random"
+  ecause09: "random"
+  ecause10: "random"
+  ecause11: "random"
+  ecause12: "random"
+  ecause13: "random"
+  ecause14: "random"
+
+# ---------------------------------------------------------------------------------
+# Self Checking 
+# If self_checking flag is enabled during the gen command, the below section is used
+# Options:              
+#       rate: The interval at which checksums are added to the test. 
+#             If rate = 10, checksums will be added every 10 instructions
+# ---------------------------------------------------------------------------------
+
+self-checking:
+  rate: 100
+  test_pass_macro: "la      sp, begin_signature; addi    sp, sp, 2*REGBYTES; li  \
+    \    t1, 0xfffff; SREG    t1, 0*REGBYTES(sp)"
+  test_fail_macro: "add x0,x0,x0"

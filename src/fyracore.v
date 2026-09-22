@@ -12,7 +12,36 @@
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
-    parameter [31:0] RESET_PC = 32'h0000_0000
+    parameter [31:0] RESET_PC = 32'h0000_0000,
+    // Physical memory attributes -- the implemented address map.
+    //
+    // Anything outside these windows has no device behind it, so an access
+    // must raise an access fault rather than silently succeeding.
+    //
+    // The defaults are the SoC's real map, matching src/memController.v and
+    // docs/FyraCore_CPU_Reference.md:
+    //
+    //   0x0000_0000 - 0x00FF_FFFF  Flash  16 MB  XIP code (QSPI CS0)
+    //   0x0100_0000 - 0x01FF_FFFF  RAM    16 MB  stack/heap/.data (QSPI CS1)
+    //   0x0200_0000 - 0x0200_BFFF  CLINT  48 KB
+    //   0x0300_0000 - 0x0300_000F  GPIO   16 B   GPO 0x00-0x07, GPI 0x08-0x0F
+    //
+    // Flash and RAM are contiguous, so one window covers both. Fetch is
+    // allowed anywhere in it and nowhere else: the design is Von Neumann, so
+    // XIP from flash and executing from RAM must both work, but fetching out
+    // of CLINT or GPIO is an instruction access fault.
+    //
+    // The verification flow cannot use this map. Spike's boot ROM is fixed at
+    // 0x1000 and cannot be disabled, so it would sit inside flash, and Spike
+    // only places RAM at DRAM_BASE 0x8000_0000. tb/tb_rivercore.v therefore
+    // overrides these to a Spike-compatible window; the remap lives in the
+    // testbench so the core keeps describing the hardware being built.
+    parameter [31:0] PMA_MEM_BASE = 32'h0000_0000,
+    parameter [31:0] PMA_MEM_TOP  = 32'h01FF_FFFF,  // Flash + RAM, 32 MB
+    parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // CLINT
+    parameter [31:0] PMA_IO0_TOP  = 32'h0200_BFFF,
+    parameter [31:0] PMA_IO1_BASE = 32'h0300_0000,  // GPIO
+    parameter [31:0] PMA_IO1_TOP  = 32'h0300_000F
 )(
     input  wire        clk,
     input  wire        rst,
@@ -122,6 +151,7 @@ module fyracore #(
     wire        pmp_ifetch_allow; // driven by pmp_ifetch instance
     wire        pmp_data_allow;   // driven by pmp_data instance
     wire        irq_inject;      // driven by interrupt detection logic in CSR/WB section
+    wire        csr_misa_c;      // driven by CSR unit output (misa.C bit)
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -346,15 +376,39 @@ module fyracore #(
                          (ex_misaligned_half || ex_misaligned_word);
     wire ex_misalign_is_store = ctrl_memWR || ctrl_isSC || ctrl_isAmo;
 
-    // PMP fault detection (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
-    wire ex_pmp_ifetch_fail = ifex_valid && !pmp_ifetch_allow;
-    // Data PMP: only when a memory op is present and it's not already misaligned
-    wire ex_pmp_data_fail   = ifex_valid && ex_mem_active && !ex_misaligned && !pmp_data_allow;
+    // Instruction-address-misaligned: branch/jump target must be 4-byte aligned
+    // when misa.C=0. When C enabled, target[0]==0 is enforced by encoding.
+    // (Priv spec §3.1.15: exception is reported on the branch/jump, not target.)
+    wire ex_inst_misalign = ifex_valid && ex_branch_taken &&
+                            !csr_misa_c && ex_branch_target[1];
+
+    // PMA check: is there a device at this address at all?
+    // Fetch is restricted to RAM -- executing out of the CLINT is an
+    // instruction access fault, which is also what the reference model does.
+    wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
+    // A window with BASE > TOP matches nothing, which is how the testbench
+    // switches off the ports the simulation does not model.
+    wire ex_pma_data_ok  = ((ex_alu_result >= PMA_MEM_BASE) &&
+                            (ex_alu_result <= PMA_MEM_TOP))  ||
+                           ((ex_alu_result >= PMA_IO0_BASE) &&
+                            (ex_alu_result <= PMA_IO0_TOP))  ||
+                           ((ex_alu_result >= PMA_IO1_BASE) &&
+                            (ex_alu_result <= PMA_IO1_TOP));
+
+    // Access-fault detection. Two independent reasons to refuse an access:
+    // PMP says the permissions deny it, or the PMA says nothing is mapped
+    // there. Both raise the same causes (1 / 5 / 7), so they are combined
+    // here rather than at every use site.
+    // (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
+    wire ex_ifetch_fault = ifex_valid && (!pmp_ifetch_allow || !ex_pma_fetch_ok);
+    // Data side: only when a memory op is present and it's not already misaligned
+    wire ex_data_fault   = ifex_valid && ex_mem_active && !ex_misaligned &&
+                           (!pmp_data_allow || !ex_pma_data_ok);
 
     // Trap detection
     wire ex_trap = ifex_valid && (
         ex_is_ecall || ex_is_ebreak ||
-        ex_pmp_ifetch_fail ||          // Instruction access fault (PMP)
+        ex_ifetch_fault ||             // Instruction access fault (PMP or PMA)
         (ctrl_illegal && !ctrl_isFence) ||
         ifex_c_illegal ||              // Illegal compressed instruction from IF
         ex_bad_system ||               // Malformed SYSTEM encoding
@@ -362,7 +416,8 @@ module fyracore #(
         ex_bad_wfi ||                  // WFI with bad rd/rs1 fields
         ex_csr_illegal ||              // Invalid/read-only CSR access
         ex_misaligned ||               // Misaligned memory access
-        ex_pmp_data_fail               // Load/store access fault (PMP)
+        ex_data_fault ||               // Load/store access fault (PMP or PMA)
+        ex_inst_misalign               // Instruction address misaligned (branch target)
     );
 
     // ================================================================
@@ -528,6 +583,10 @@ module fyracore #(
     wire [31:0] csr_mtvec, csr_mepc;
     wire        csr_mstatus_mie;
     wire [31:0] csr_mie;            // full mie register (for per-bit IRQ gating)
+    // csr_misa_c forward-declared at top of EX stage; driven by CSR unit port
+    wire [31:0] csr_mcounteren;     // U-mode counter access mask
+    wire        csr_inhibit_cy;     // mcountinhibit.CY
+    wire        csr_inhibit_ir;     // mcountinhibit.IR
     // csr_addr_valid is forward-declared at the top of EX stage; driven by CSR unit port
 
     csr csr_unit(
@@ -560,7 +619,14 @@ module fyracore #(
         .external_irq(external_irq),
         .sw_irq      (sw_irq),
         .mie_out     (csr_mie),
-        .mtime_in    (mtime_in)
+        .misa_c        (csr_misa_c),
+        .mcounteren_out(csr_mcounteren),
+        .inhibit_cy    (csr_inhibit_cy),
+        .inhibit_ir    (csr_inhibit_ir),
+        .mtime_in    (mtime_in),
+        // misa.C WARL gate: refuse C clear if next-PC[1]=1. csrrci/csrrw to
+        // misa is always 32-bit (system opcode), so post-PC[1] = exwb_trap_pc[1].
+        .pc_next_misaligned (exwb_trap_pc[1])
     );
 
     // ── Interrupt pending detection ──────────────────────────────────────────
@@ -658,8 +724,21 @@ module fyracore #(
     wire [7:0] pmp_fwd_byte3 = csr_pmpcfg0[31] ? csr_pmpcfg0[31:24] :
         {exwb_csr_wdata[31:29],(exwb_csr_wdata[28:27]  == 2'b10 ? 2'b00 : exwb_csr_wdata[28:27]), exwb_csr_wdata[26:24]};
     wire [31:0] pmpcfg0_fwd_val = {pmp_fwd_byte3, pmp_fwd_byte2, pmp_fwd_byte1, pmp_fwd_byte0};
+    // mstatus WARL forward: MPP coercion preserves old [12:11] when new is illegal.
+    wire [1:0] mstatus_fwd_mpp =
+        (exwb_csr_wdata[12:11] == 2'b11 || exwb_csr_wdata[12:11] == 2'b00)
+            ? exwb_csr_wdata[12:11] : csr_unit.mstatus[12:11];
+    wire [31:0] mstatus_fwd_val =
+        (csr_unit.mstatus & ~32'h0000_1888)
+        | (exwb_csr_wdata & 32'h0000_0088)
+        | {19'b0, mstatus_fwd_mpp, 11'b0};
+    // misa forward: only C(2) writable; refused when clearing C and post-PC misaligned.
+    wire misa_clear_refused = !exwb_csr_wdata[2] && exwb_trap_pc[1];
+    wire misa_eff_c         = misa_clear_refused ? 1'b1 : exwb_csr_wdata[2];
+    wire [31:0] misa_fwd_val = 32'h4010_1101 | {29'b0, misa_eff_c, 2'b00};
     wire [31:0] csr_fwd_data =
-        (exwb_csr_addr == 12'h300) ? (exwb_csr_wdata & 32'h0000_1888) : // mstatus: writable mask
+        (exwb_csr_addr == 12'h300) ? mstatus_fwd_val :
+        (exwb_csr_addr == 12'h301) ? misa_fwd_val :
         (exwb_csr_addr == 12'h305) ? {exwb_csr_wdata[31:2], 2'b00} :    // mtvec: force direct mode
         (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} :     // mepc: bit 0 always 0
         (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :                   // pmpcfg0: respect locks + A mask
@@ -675,7 +754,10 @@ module fyracore #(
     wire mtvec_fwd = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h305);
     wire mepc_fwd  = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h341);
     wire [31:0] trap_target = mtvec_fwd ? {exwb_csr_wdata[31:2], 2'b00} : csr_mtvec;
-    wire [31:0] mret_target = mepc_fwd  ? {exwb_csr_wdata[31:1], 1'b0} : csr_mepc;
+    // Priv spec §3.1.15: mepc[1] masks to 0 on reads when IALIGN=32 (misa.C=0).
+    wire [31:0] mret_target = mepc_fwd  ?
+        {exwb_csr_wdata[31:2], (csr_misa_c ? exwb_csr_wdata[1] : 1'b0), 1'b0} :
+        csr_mepc;
 
     reg [31:0] next_pc;
     always @(*) begin
@@ -804,7 +886,8 @@ module fyracore #(
                 ifex_compressed<= if_compressed;
                 ifex_pc_next   <= if_pc_next;
                 ifex_valid     <= 1'b1;
-                ifex_c_illegal <= if_compressed && if_c_illegal;
+                // Compressed encoding while misa.C=0 → illegal-instruction trap.
+                ifex_c_illegal <= if_compressed && (if_c_illegal || !csr_misa_c);
             end
 
             // ---- EX/WB Pipeline Register ----
@@ -858,30 +941,35 @@ module fyracore #(
                 // Priority: synchronous trap > async interrupt injection
                 if (ex_trap) begin
                     exwb_trap <= 1'b1;
-                    if (ex_pmp_ifetch_fail) begin
+                    if (ex_ifetch_fault) begin
                         exwb_trap_cause <= 32'd1;  // Instruction access fault (highest priority)
                         exwb_trap_val   <= ifex_pc; // faulting fetch address
+                    end else if (ex_inst_misalign) begin
+                        exwb_trap_cause <= 32'd0;  // Instruction address misaligned
+                        exwb_trap_val   <= ex_branch_target;
                     end else if (ex_is_ecall) begin
                         exwb_trap_cause <= priv_mode ? 32'd11 : 32'd8; // M-mode=11, U-mode=8
                         exwb_trap_val   <= 32'b0;
                     end else if (ex_is_ebreak) begin
                         exwb_trap_cause <= 32'd3;  // Breakpoint
-                        exwb_trap_val   <= 32'b0;
+                        // Priv spec §3.1.16: on a breakpoint trap mtval holds the
+                        // address of the EBREAK instruction itself.
+                        exwb_trap_val   <= ifex_pc;
                     end else if (ex_misaligned && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd4;  // Load address misaligned
                         exwb_trap_val   <= ex_alu_result;
                     end else if (ex_misaligned && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned
                         exwb_trap_val   <= ex_alu_result;
-                    end else if (ex_pmp_data_fail && !ex_misalign_is_store) begin
+                    end else if (ex_data_fault && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd5;  // Load access fault
                         exwb_trap_val   <= ex_alu_result;
-                    end else if (ex_pmp_data_fail && ex_misalign_is_store) begin
+                    end else if (ex_data_fault && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd7;  // Store/AMO access fault
                         exwb_trap_val   <= ex_alu_result;
                     end else begin
                         exwb_trap_cause <= 32'd2;  // Illegal instruction
-                        exwb_trap_val   <= ifex_instr;
+                        exwb_trap_val   <= 32'b0;  // Spike reports mtval=0 here (priv 1.11 allows 0 or instr)
                     end
                 end else if (irq_inject) begin
                     // Asynchronous interrupt: suppress instruction effects, inject trap

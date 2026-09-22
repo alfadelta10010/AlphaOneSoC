@@ -3,3 +3,13 @@ build/
 *.bin
 *.hex
 *.dis
+__pycache__/
+*.pyc
+plugins/failure.log
+plugins/river_core.log
+river_core.log
+river-config-0.ini
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+localFiles/
