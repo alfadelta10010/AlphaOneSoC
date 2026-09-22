@@ -88,7 +88,6 @@ module csr #(
     wire [31:0] mepc_eff = {mepc[31:2], (misa_reg[2] ? mepc[1] : 1'b0), 1'b0};
     assign mepc_out     = mepc_eff;
     assign mstatus_mie  = mstatus[3];      // MIE bit
-    assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
     assign pmpcfg0_out  = pmpcfg0;
     assign pmpaddr0_out = pmpaddr0;
     assign pmpaddr1_out = pmpaddr1;
@@ -121,6 +120,26 @@ module csr #(
     // discard a 64-bit carry into the high half from this cycle's increment.
     wire [63:0] mcycle_next   = (!mcountinhibit[0]) ? mcycle + 64'd1 : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2]) ? minstret + 64'd1 : minstret;
+
+    // mstatus as it will stand after a CSR write in WB commits this cycle.
+    // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
+    // the older instruction, so its value is what they must transform. Mirrors
+    // the 12'h300 arm of the write case below -- keep the two in step.
+    reg [31:0] mstatus_after_we;
+    always @(*) begin
+        mstatus_after_we = mstatus;
+        if (we && op != 2'b00 && waddr == 12'h300) begin
+            mstatus_after_we[3] = csr_new[3];   // MIE
+            mstatus_after_we[7] = csr_new[7];   // MPIE
+            if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
+                mstatus_after_we[12:11] = csr_new[12:11];
+        end
+    end
+
+    // MPP as it will stand after a WB CSR write commits. The MRET privilege
+    // restore consumes this, so a `csrw mstatus, <MPP=M>; mret` pair returns to
+    // M-mode rather than to the MPP that was there before the write.
+    assign mstatus_mpp  = mstatus_after_we[12:11];  // MPP field (11=M, 00=U)
 
     always @(posedge clk) begin
         if (rst)
@@ -225,18 +244,13 @@ module csr #(
             pmpaddr1     <= 32'b0;
             pmpaddr2     <= 32'b0;
             pmpaddr3     <= 32'b0;
-        end else if (trap) begin
-            // Enter trap: always go to M-mode
-            mepc     <= trap_pc;
-            mcause   <= trap_cause;
-            mtval    <= trap_val;
-            // Save MIE to MPIE, clear MIE; save current privilege into MPP
-            // MPP = 11 when trapping from M-mode, 00 when trapping from U-mode
-            mstatus <= {mstatus[31:13], {priv_mode, priv_mode}, mstatus[10:8], mstatus[3], mstatus[6:4], 1'b0, mstatus[2:0]};
-        end else if (mret) begin
-            // Return from trap: MIE=MPIE, MPIE=1, MPP=U (spec: MPP set to least priv after MRET)
-            mstatus <= {mstatus[31:13], 2'b00, mstatus[10:8], 1'b1, mstatus[6:4], mstatus[7], mstatus[2:0]};
-        end else if (we && op != 2'b00) begin
+        end else begin
+            // ---- 1. Commit the WB-stage CSR write ----------------------
+            // This runs BEFORE the trap/MRET transform below, because the csrw
+            // is the older instruction. The trap/MRET arms reassign mstatus
+            // afterwards and so still take priority over a write to mstatus
+            // itself, but a write to any other CSR now survives.
+            if (we && op != 2'b00) begin
             case (waddr)
                 12'h300: begin
                     // mstatus WARL. M+U-only: MPP legal values are 00 (U) and
@@ -286,6 +300,25 @@ module csr #(
                 12'h3B3: if (!tor_lock_addr3) pmpaddr3 <= csr_new;
                 default: ; // Ignore writes to read-only CSRs
             endcase
+            end
+
+            // ---- 2. Trap / MRET, applied on top of the write -----------
+            // Both transform mstatus_after_we, not mstatus, so a
+            // `csrw mstatus, X; mret` pair returns using X.
+            if (trap) begin
+                // Enter trap: always go to M-mode
+                mepc     <= trap_pc;
+                mcause   <= trap_cause;
+                mtval    <= trap_val;
+                // Save MIE to MPIE, clear MIE; save current privilege into MPP
+                // MPP = 11 when trapping from M-mode, 00 when trapping from U-mode
+                mstatus <= {mstatus_after_we[31:13], {priv_mode, priv_mode}, mstatus_after_we[10:8],
+                            mstatus_after_we[3], mstatus_after_we[6:4], 1'b0, mstatus_after_we[2:0]};
+            end else if (mret) begin
+                // Return from trap: MIE=MPIE, MPIE=1, MPP=U (spec: MPP set to least priv after MRET)
+                mstatus <= {mstatus_after_we[31:13], 2'b00, mstatus_after_we[10:8],
+                            1'b1, mstatus_after_we[6:4], mstatus_after_we[7], mstatus_after_we[2:0]};
+            end
         end
     end
 endmodule
