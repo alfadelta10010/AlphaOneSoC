@@ -436,7 +436,13 @@ module fyracore #(
     //   - IF stall: instruction memory not ready (multi-cycle fetch)
     //   - WB stall: data memory not ready during active load/store
     wire if_mem_stall = !imem_ready;
-    wire wb_mem_stall = exwb_valid && (exwb_memRD || exwb_memWR) && !dmem_ready;
+    // !exwb_trap: a trapping load/store never reaches the bus, so there is no
+    // handshake to wait for and the EX/WB hold below must not engage.
+    // A failing SC is included — it stalls without accessing memory, which
+    // costs cycles but is harmless; the core has no request strobe the memory
+    // could use to tell the two apart.
+    wire wb_mem_stall = exwb_valid && !exwb_trap &&
+                        (exwb_memRD || exwb_memWR) && !dmem_ready;
 
     // flush is defined before stall so muldiv_start can reference it without
     // a forward reference (iverilog processes wire assignments linearly).
@@ -570,8 +576,12 @@ module fyracore #(
                      (exwb_wbSel == 2'b10) ? exwb_pc_next :
                      exwb_csr_rdata; // 2'b11
 
+    // !wb_mem_stall: with EX/WB now held across a memory stall, writeback would
+    // otherwise fire on every cycle of it, and a load would latch dmem_rdata
+    // before the handshake completes.
     assign wb_regWR = exwb_valid && exwb_regWR && !exwb_trap &&
-                      !(exwb_isAmo && !amo_phase); // AMO writes rd on phase 1
+                      !(exwb_isAmo && !amo_phase) && // AMO writes rd on phase 1
+                      !wb_mem_stall;
     assign wb_rd    = exwb_rd;
 
     wire [1:0]  csr_mstatus_mpp;
@@ -606,7 +616,7 @@ module fyracore #(
         .priv_mode  (priv_mode),
         .mtvec_out  (csr_mtvec),
         .mepc_out   (csr_mepc),
-        .instret_inc(exwb_valid && !exwb_trap && !wb_busy),
+        .instret_inc(exwb_valid && !exwb_trap && !wb_busy && !wb_mem_stall),
         .mstatus_mie(csr_mstatus_mie),
         .mstatus_mpp(csr_mstatus_mpp),
         .pmpcfg0_out (csr_pmpcfg0),
@@ -790,7 +800,7 @@ module fyracore #(
     //  Debug / Trace outputs
     // ================================================================
     assign dbg_pc         = exwb_valid ? exwb_trap_pc : 32'b0;
-    assign dbg_retired    = exwb_valid && !wb_busy && !exwb_trap;
+    assign dbg_retired    = exwb_valid && !wb_busy && !exwb_trap && !wb_mem_stall;
     assign dbg_instr      = exwb_raw_instr;
     assign dbg_compressed = exwb_compressed;
     assign dbg_trap       = exwb_valid && exwb_trap;
@@ -893,12 +903,21 @@ module fyracore #(
             // ---- EX/WB Pipeline Register ----
             if (wb_busy) begin
                 // AMO phase transition: read → write
-                if (exwb_isAmo && !amo_phase) begin
+                if (exwb_isAmo && !amo_phase && dmem_ready) begin
                     amo_phase   <= 1'b1;
                     amo_old_val <= load_data;
                     amo_new_val <= amo_computed;
                     wb_busy     <= 1'b0; // Release pipeline next cycle
                 end
+            end else if (wb_mem_stall && !irq_inject) begin
+                // Hold EX/WB while the data-memory access is still on the bus.
+                // Bubbling here would drop exwb_memRD/exwb_memWR and so
+                // withdraw dmem_addr/dmem_we before dmem_ready — the
+                // transaction is lost, and because wb_mem_stall is derived
+                // from those same bits the stall self-clears and nothing
+                // retries it. Every other stall source still bubbles: by then
+                // the WB instruction has committed, and holding it would
+                // commit it a second time.
             end else if (stall && !irq_inject) begin
                 // Insert bubble into EX/WB on stall (but not when irq_inject overrides)
                 exwb_valid  <= 1'b0;
@@ -1003,7 +1022,9 @@ module fyracore #(
             end
 
             // ---- LR/SC Reservation Management ----
-            if (exwb_valid && !exwb_trap) begin
+            // !wb_mem_stall: the reservation follows the memory access, so it
+            // must not be set or cleared until that access completes.
+            if (exwb_valid && !exwb_trap && !wb_mem_stall) begin
                 if (exwb_isLR) begin
                     reservation_valid <= 1'b1;
                     reservation_addr  <= exwb_alu_result;
