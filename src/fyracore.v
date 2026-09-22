@@ -789,8 +789,15 @@ module fyracore #(
     wire [31:0] csr_fwd_data =
         (exwb_csr_addr == 12'h300) ? mstatus_fwd_val :
         (exwb_csr_addr == 12'h301) ? misa_fwd_val :
+        (exwb_csr_addr == 12'h304) ? (exwb_csr_wdata & 32'h0000_0888) : // mie
         (exwb_csr_addr == 12'h305) ? {exwb_csr_wdata[31:2], 2'b00} :    // mtvec: force direct mode
-        (exwb_csr_addr == 12'h341) ? {exwb_csr_wdata[31:1], 1'b0} :     // mepc: bit 0 always 0
+        (exwb_csr_addr == 12'h306) ? (exwb_csr_wdata & 32'h0000_0007) : // mcounteren: CY/TM/IR
+        (exwb_csr_addr == 12'h320) ? (exwb_csr_wdata & 32'h0000_0005) : // mcountinhibit: TM reserved
+        (exwb_csr_addr == 12'h344) ? (exwb_csr_wdata & ~32'h0000_0888) : // mip: writable bits
+        // mepc: bit 0 always 0, and bit 1 reads 0 while IALIGN=32 (misa.C=0),
+        // which is the same masking csr.v applies on the read port.
+        (exwb_csr_addr == 12'h341) ?
+            {exwb_csr_wdata[31:2], (csr_misa_c ? exwb_csr_wdata[1] : 1'b0), 1'b0} :
         (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :                   // pmpcfg0: respect locks + A mask
         exwb_csr_wdata;
     assign csr_rdata_eff = csr_fwd ? csr_fwd_data : csr_rdata;
