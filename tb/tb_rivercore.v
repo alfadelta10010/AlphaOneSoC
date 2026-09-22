@@ -397,11 +397,11 @@ module tb_rivercore;
                 12'h320: csr_committed = new_val & 32'h0000_0005; // mcountinhibit
                 12'h341: csr_committed = {new_val[31:1], 1'b0};    // mepc
                 12'h344: csr_committed = new_val & ~32'h0000_0888; // mip (writable bits)
-                12'h3A0: csr_committed = {                          // pmpcfg0: mask reserved A=10
-                    new_val[31:29], (new_val[28:27]==2'b10 ? 2'b00 : new_val[28:27]), new_val[26:24],
-                    new_val[23:21], (new_val[20:19]==2'b10 ? 2'b00 : new_val[20:19]), new_val[18:16],
-                    new_val[15:13], (new_val[12:11]==2'b10 ? 2'b00 : new_val[12:11]), new_val[10:8],
-                    new_val[7:5],   (new_val[4:3]  ==2'b10 ? 2'b00 : new_val[4:3]),   new_val[2:0]};
+                12'h3A0: csr_committed = {              // pmpcfg0: reserved [6:5] read 0
+                    new_val[31], 2'b00, new_val[28:24],
+                    new_val[23], 2'b00, new_val[20:16],
+                    new_val[15], 2'b00, new_val[12:8],
+                    new_val[7],  2'b00, new_val[4:0]};
                 default: csr_committed = new_val;
             endcase
         end

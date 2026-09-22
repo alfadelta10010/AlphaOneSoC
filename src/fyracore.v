@@ -766,13 +766,13 @@ module fyracore #(
     // For pmpcfg0, locked bytes are preserved — forward the post-mask value.
     // Also mask reserved A=2'b10 to 2'b00 (WARL) to match csr.v write behavior.
     wire [7:0] pmp_fwd_byte0 = csr_pmpcfg0[7]  ? csr_pmpcfg0[7:0]   :
-        {exwb_csr_wdata[7:5],  (exwb_csr_wdata[4:3]   == 2'b10 ? 2'b00 : exwb_csr_wdata[4:3]),   exwb_csr_wdata[2:0]};
-    wire [7:0] pmp_fwd_byte1 = csr_pmpcfg0[15] ? csr_pmpcfg0[15:8]  :
-        {exwb_csr_wdata[15:13],(exwb_csr_wdata[12:11]  == 2'b10 ? 2'b00 : exwb_csr_wdata[12:11]), exwb_csr_wdata[10:8]};
+        {exwb_csr_wdata[7], 2'b00, exwb_csr_wdata[4:0]};
+    wire [7:0] pmp_fwd_byte1 = csr_pmpcfg0[15] ? csr_pmpcfg0[15:8]   :
+        {exwb_csr_wdata[15], 2'b00, exwb_csr_wdata[12:8]};
     wire [7:0] pmp_fwd_byte2 = csr_pmpcfg0[23] ? csr_pmpcfg0[23:16] :
-        {exwb_csr_wdata[23:21],(exwb_csr_wdata[20:19]  == 2'b10 ? 2'b00 : exwb_csr_wdata[20:19]), exwb_csr_wdata[18:16]};
+        {exwb_csr_wdata[23], 2'b00, exwb_csr_wdata[20:16]};
     wire [7:0] pmp_fwd_byte3 = csr_pmpcfg0[31] ? csr_pmpcfg0[31:24] :
-        {exwb_csr_wdata[31:29],(exwb_csr_wdata[28:27]  == 2'b10 ? 2'b00 : exwb_csr_wdata[28:27]), exwb_csr_wdata[26:24]};
+        {exwb_csr_wdata[31], 2'b00, exwb_csr_wdata[28:24]};
     wire [31:0] pmpcfg0_fwd_val = {pmp_fwd_byte3, pmp_fwd_byte2, pmp_fwd_byte1, pmp_fwd_byte0};
     // mstatus WARL forward: MPP coercion preserves old [12:11] when new is illegal.
     wire [1:0] mstatus_fwd_mpp =
