@@ -36,6 +36,17 @@
 //   * read data is driven to X while ready is low, so a core that samples
 //     rdata before the handshake completes propagates X instead of silently
 //     getting the right answer from the combinational array.
+//
+// X is not enough on its own, though. iverilog evaluates `if (X)` as false,
+// so a control decision made from not-yet-valid data (an address computed
+// from a load still on the bus, say) silently takes the harmless branch in
+// simulation. Real buses return zeros or whatever was last on the wires, and
+// there the same decision can go the other way. NOTREADY_DATA (+NOTREADY_DATA)
+// selects what rdata carries while ready is low:
+//
+//   0  X (default)
+//   1  all zeros
+//   2  LFSR garbage, different every cycle
 
 module memory_model #(
     parameter MEM_SIZE    = 33554432,      // 32 MB (0x0000_0000 – 0x01FF_FFFF)
@@ -44,7 +55,8 @@ module memory_model #(
     parameter DMEM_WAIT   = 0,             // data-port wait states
     parameter IMEM_RANDOM = 0,             // randomise instruction-port ready
     parameter DMEM_RANDOM = 0,             // randomise data-port ready
-    parameter MEM_SEED    = 32'h1234_5678  // LFSR seed for the random modes
+    parameter MEM_SEED    = 32'h1234_5678, // LFSR seed for the random modes
+    parameter NOTREADY_DATA = 0            // rdata while !ready: 0=X 1=zero 2=garbage
 )(
     input  wire        clk,
     input  wire        rst,
@@ -70,6 +82,7 @@ module memory_model #(
 );
     // ── Wait-state generation ───────────────────────────────────────────────
     integer imem_wait_n, dmem_wait_n, imem_random, dmem_random, mem_seed;
+    integer notready_data;
 
     initial begin
         imem_wait_n = IMEM_WAIT;
@@ -77,11 +90,13 @@ module memory_model #(
         imem_random = IMEM_RANDOM;
         dmem_random = DMEM_RANDOM;
         mem_seed    = MEM_SEED;
+        notready_data = NOTREADY_DATA;
         if ($value$plusargs("IMEM_WAIT=%d",   imem_wait_n)) ;
         if ($value$plusargs("DMEM_WAIT=%d",   dmem_wait_n)) ;
         if ($value$plusargs("IMEM_RANDOM=%d", imem_random)) ;
         if ($value$plusargs("DMEM_RANDOM=%d", dmem_random)) ;
         if ($value$plusargs("MEM_SEED=%d",    mem_seed))    ;
+        if ($value$plusargs("NOTREADY_DATA=%d", notready_data)) ;
         if (imem_wait_n < 0) imem_wait_n = 0;
         if (dmem_wait_n < 0) dmem_wait_n = 0;
         if (mem_seed   == 0) mem_seed    = 32'h1234_5678; // an all-zero LFSR is stuck
@@ -196,9 +211,13 @@ module memory_model #(
     // 25-bit index covers the full 32 MB range (0x0000_0000 – 0x01FF_FFFF).
     wire [24:0] ia = imem_addr[24:0];
     wire [31:0] imem_word = {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]};
-    // Undriven until the handshake completes: a core that captures the fetch
-    // while imem_ready is low latches X rather than the right instruction.
-    assign imem_rdata = imem_ready ? imem_word : 32'hxxxx_xxxx;
+    // Not valid until the handshake completes: a core that captures the fetch
+    // while imem_ready is low latches junk rather than the right instruction.
+    // See NOTREADY_DATA in the header for why X alone is not enough.
+    wire [31:0] notready_word = (notready_data == 1) ? 32'h0000_0000 :
+                                (notready_data == 2) ? {lfsr[15:0], lfsr[31:16]} :
+                                                       32'hxxxx_xxxx;
+    assign imem_rdata = imem_ready ? imem_word : notready_word;
 
     // --- Data read (combinational) ---
     wire [24:0] da = dmem_addr[24:0];
@@ -239,6 +258,9 @@ module memory_model #(
     wire [31:0] dmem_word = in_extirq    ? {31'b0, extirq_reg} :
                             in_clint_reg ? clint_rdata :
                             in_clint     ? 32'h0000_0000 : mem_rdata;
-    assign dmem_rdata = dmem_ready ? dmem_word : 32'hxxxx_xxxx;
+    wire [31:0] notready_dword = (notready_data == 1) ? 32'h0000_0000 :
+                                 (notready_data == 2) ? ~lfsr :
+                                                        32'hxxxx_xxxx;
+    assign dmem_rdata = dmem_ready ? dmem_word : notready_dword;
 
 endmodule
