@@ -1187,7 +1187,16 @@ module fyracore #(
             // There is deliberately no external-agent term: this SoC has a
             // single hart and no other bus master. Revisit if a debug module
             // with system-bus access is ever added.
-            if (ex_trap || irq_inject)
+            //
+            // Cleared when the trap commits in WB, not when it is detected in
+            // EX. An EX-stage clear could land while an older SC was still in
+            // WB waiting for dmem_ready: sc_success dropped mid-handshake,
+            // dmem_we was withdrawn, and rd read 1 while a bus that had
+            // already latched the request performed the store anyway -- so
+            // software retried an atomic update that had happened. An EX
+            // clear could also fire on a trap that was never taken (EX
+            // briefly sees not-yet-valid forwarded data during a stall).
+            if (csr_trap_signal)
                 reservation_valid <= 1'b0;
         end
     end
