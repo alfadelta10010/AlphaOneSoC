@@ -79,7 +79,6 @@ module csr #(
     reg [31:0] mcause;
     reg [31:0] mtval;
     reg [31:0] mie_reg;
-    reg [31:0] mip_reg;
     reg [31:0] mcounteren; // 0x306: controls U-mode counter access
     reg [31:0] mcountinhibit; // 0x320: inhibit specific perf counters
     reg [31:0] misa_reg; // 0x301: WARL — only the C bit is writable
@@ -109,10 +108,11 @@ module csr #(
     wire tor_lock_addr2 = pmpcfg0[23] || (pmpcfg0[28:27] == 2'b01 && pmpcfg0[31]);
     wire tor_lock_addr3 = pmpcfg0[31];
 
-    // Live mip value: MSIP(3), MTIP(7), MEIP(11) reflect external pins;
-    // other bits come from the writable mip_reg.
-    wire [31:0] mip_live = (mip_reg & ~32'h0000_0888) |
-                           (sw_irq       ? 32'h0000_0008 : 32'b0) |  // MSIP bit 3
+    // mip: MSIP(3), MTIP(7), MEIP(11) are the live interrupt wires, and
+    // nothing else exists. With no S-mode, SSIP/STIP/SEIP are read-only zero
+    // (Priv §3.1.9), and LCOFIP is read-only zero without Sscofpmf, so mip
+    // has no writable bits at all: a write is accepted and ignored.
+    wire [31:0] mip_live = (sw_irq       ? 32'h0000_0008 : 32'b0) |  // MSIP bit 3
                            (timer_irq    ? 32'h0000_0080 : 32'b0) |  // MTIP bit 7
                            (external_irq ? 32'h0000_0800 : 32'b0);   // MEIP bit 11
 
@@ -193,8 +193,7 @@ module csr #(
             12'h341: wval = {csr_new[31:2], (misa_reg[2] ? csr_new[1] : 1'b0), 1'b0};
             12'h342: wval = csr_new;                         // mcause
             12'h343: wval = csr_new;                         // mtval
-            // mip: MSIP/MTIP/MEIP are live wires, never the written value.
-            12'h344: wval = (csr_new & ~32'h0000_0888) | (mip_live & 32'h0000_0888);
+            12'h344: wval = mip_live;                        // mip: no writable bits
             // pmpcfg0: a locked byte keeps its value; otherwise bits [6:5]
             // are reserved and read 0. A = 2'b10 (NA4) is legal at G=0 and
             // pmp.v implements it, so it is stored as written.
@@ -311,7 +310,6 @@ module csr #(
             mcause   <= 32'b0;
             mtval    <= 32'b0;
             mie_reg      <= 32'b0;
-            mip_reg      <= 32'b0;
             mcounteren   <= 32'b0;
             mcountinhibit<= 32'b0;
             misa_reg     <= MISA_RESET;
@@ -327,7 +325,8 @@ module csr #(
             // afterwards and so still take priority over a write to mstatus
             // itself, but a write to any other CSR now survives.
             // The stored value is `wval` (the WARL rules live there), except
-            // where noted. Counters are written in their own blocks above.
+            // where noted. Counters are written in their own blocks above;
+            // mip has nothing to store.
             if (we && op != 2'b00) begin
             case (waddr)
                 12'h300: mstatus       <= wval;
@@ -342,7 +341,6 @@ module csr #(
                 12'h341: mepc          <= {csr_new[31:1], 1'b0};
                 12'h342: mcause        <= wval;
                 12'h343: mtval         <= wval;
-                12'h344: mip_reg       <= csr_new & ~32'h0000_0888;
                 12'h3A0: pmpcfg0       <= wval;
                 12'h3B0: pmpaddr0      <= wval;
                 12'h3B1: pmpaddr1      <= wval;
