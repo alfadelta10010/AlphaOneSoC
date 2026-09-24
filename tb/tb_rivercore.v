@@ -17,6 +17,7 @@ module tb_rivercore;
     // Memory interface
     wire [31:0] imem_addr, imem_rdata;
     wire        imem_ready;
+    wire        imem_req, dmem_req;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire [3:0]  dmem_wmask;
     wire        dmem_we;
@@ -97,8 +98,10 @@ module tb_rivercore;
         .clk         (clk),
         .rst         (rst),
         .imem_addr   (imem_addr),
+        .imem_req    (imem_req),
         .imem_rdata  (imem_rdata),
         .imem_ready  (imem_ready),
+        .dmem_req    (dmem_req),
         .dmem_addr   (dmem_addr),
         .dmem_wdata  (dmem_wdata),
         .dmem_wmask  (dmem_wmask),
@@ -132,8 +135,10 @@ module tb_rivercore;
     ) mem(
         .clk       (clk),
         .rst       (rst),
+        .imem_req  (imem_req),
         .imem_addr (imem_addr),
         .imem_rdata(imem_rdata),
+        .dmem_req  (dmem_req),
         .dmem_addr (dmem_addr),
         .dmem_wdata(dmem_wdata),
         .dmem_wmask(dmem_wmask),

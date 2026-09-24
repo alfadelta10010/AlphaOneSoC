@@ -48,11 +48,24 @@ module fyracore #(
 )(
     input  wire        clk,
     input  wire        rst,
-    // Instruction memory interface (read-only, combinational)
+    // Memory interfaces: request/ready handshake.
+    //
+    // A request is outstanding on every cycle its *_req is high. From the
+    // cycle it is raised until the cycle *_ready is sampled high with it,
+    // the core holds the request's address (and for data: we, wmask and
+    // wdata) stable; that ready cycle completes the transfer, and read data
+    // is taken on it. The next request may start on the following cycle.
+    // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
+    //
+    // Instruction memory interface (read-only). The core always wants the
+    // next instruction, so imem_req stays high; when the pipeline is stalled
+    // with a fetch already completed, the same address is requested again.
     output wire [31:0] imem_addr,
+    output wire        imem_req,      // Fetch request
     input  wire [31:0] imem_rdata,
     input  wire        imem_ready,    // Instruction fetch data is valid
     // Data memory interface
+    output wire        dmem_req,      // Load/store/AMO request (see dmem_we)
     output wire [31:0] dmem_addr,
     output wire [31:0] dmem_wdata,
     output wire [3:0]  dmem_wmask,
@@ -90,6 +103,7 @@ module fyracore #(
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
 
     assign imem_addr = pc;
+    assign imem_req  = 1'b1;
 
     compressed_decoder cdec(
         .instr_in (if_fetched[15:0]),
@@ -507,13 +521,13 @@ module fyracore #(
     //   - IF stall: instruction memory not ready (multi-cycle fetch)
     //   - WB stall: data memory not ready during active load/store
     wire if_mem_stall = !imem_ready;
-    // !exwb_trap: a trapping load/store never reaches the bus, so there is no
-    // handshake to wait for and the EX/WB hold below must not engage.
-    // A failing SC is included — it stalls without accessing memory, which
-    // costs cycles but is harmless; the core has no request strobe the memory
-    // could use to tell the two apart.
-    wire wb_mem_stall = exwb_valid && !exwb_trap &&
-                        (exwb_memRD || exwb_memWR) && !dmem_ready;
+    // The WB stall is exactly "a data request is outstanding and not yet
+    // answered". dmem_req (assigned with the rest of the data interface
+    // below) excludes a trapping access, which never reaches the bus, and a
+    // failing SC, which writes nothing: it retires without a transaction.
+    // It used to wait for dmem_ready anyway, which on a request/ready bus
+    // never arrives for a request that was never made.
+    wire wb_mem_stall = dmem_req && !dmem_ready;
 
     // flush is defined before stall so muldiv_start can reference it without
     // a forward reference (iverilog processes wire assignments linearly).
@@ -581,9 +595,10 @@ module fyracore #(
     // because priv_mode now samples csr_mstatus_mpp on the same edge csr.v
     // updates mstatus, it sees the pre-update MPP.
     //
-    // `flush` and next_pc deliberately keep using the ungated ex_is_mret: the
-    // IF/EX bubble arm is only reached when !stall, and the redirect is
-    // idempotent, so neither can commit twice.
+    // `flush` deliberately keeps using the ungated ex_is_mret: the IF/EX
+    // bubble arm is only reached when !stall, so it cannot commit twice. The
+    // next_pc redirect is gated on !stall so the fetch address stays put
+    // while a fetch is outstanding.
     //
     // !irq_inject: an interrupt taken at an MRET is taken *instead of* it,
     // exactly as for every other instruction -- irq_inject suppresses the EX
@@ -659,6 +674,8 @@ module fyracore #(
     assign dmem_wdata = (exwb_isAmo && amo_phase) ? amo_new_val : store_data_shifted;
     assign dmem_wmask = wb_mem_write ? ((exwb_isAmo && amo_phase) ? 4'b1111 : store_wmask) : 4'b0;
     assign dmem_we    = wb_mem_write;
+    assign dmem_req   = exwb_valid && !exwb_trap && (exwb_memRD || exwb_memWR) &&
+                        !(exwb_isSC && !sc_success);
 
     // Load data extraction and sign extension
     wire [31:0] raw_load = dmem_rdata;
@@ -905,14 +922,18 @@ module fyracore #(
         // or ex_data_fault for a cycle. Redirecting then sent fetch to mtvec
         // while IF/EX held the instruction; when the data arrived the trap
         // vanished, the instruction retired normally, and the handler ran
-        // with no trap taken. Every other redirect below is already gated.
+        // with no trap taken.
+        //
+        // Every redirect is taken only on a !stall cycle, and !stall implies
+        // imem_ready, so pc -- imem_addr -- only changes on the cycle a fetch
+        // completes: the address of an outstanding fetch is never withdrawn.
         if (ex_trap && !stall)
             next_pc = trap_target;
         else if (irq_inject)
             // Interrupt: redirect to mtvec; mepc will hold ifex_pc so the
             // interrupted instruction re-executes after MRET.
             next_pc = trap_target;
-        else if (ex_is_mret)
+        else if (ex_is_mret && !stall)
             next_pc = mret_target;
         else if (ex_branch_taken && ifex_valid && !stall)
             next_pc = ex_branch_target;

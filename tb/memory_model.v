@@ -61,9 +61,11 @@ module memory_model #(
     input  wire        clk,
     input  wire        rst,
     // Instruction port (read-only, combinational)
+    input  wire        imem_req,
     input  wire [31:0] imem_addr,
     output wire [31:0] imem_rdata,
     // Data port (read/write)
+    input  wire        dmem_req,
     input  wire [31:0] dmem_addr,
     input  wire [31:0] dmem_wdata,
     input  wire [3:0]  dmem_wmask,
@@ -118,11 +120,10 @@ module memory_model #(
             d_cnt <= dmem_wait_n[15:0];
             lfsr  <= mem_seed[31:0];
         end else begin
-            // Free-running down-counters: ready for one cycle in every WAIT+1.
-            // The core has no request strobe on either port, so the model
-            // cannot time the wait states from the start of an access; a
-            // free-running pattern still guarantees that every access sees
-            // between 0 and WAIT wait states.
+            // Free-running down-counters: ready for one cycle in every WAIT+1,
+            // not timed from the start of each request. Every access still
+            // sees between 0 and WAIT wait states, and a fixed period against
+            // a fixed-latency core is exactly what exposes phase-lock bugs.
             i_cnt <= (i_cnt == 16'd0) ? imem_wait_n[15:0] : i_cnt - 16'd1;
             d_cnt <= (d_cnt == 16'd0) ? dmem_wait_n[15:0] : d_cnt - 16'd1;
             lfsr  <= {lfsr[30:0], lfsr[31] ^ lfsr[21] ^ lfsr[1] ^ lfsr[0]};
@@ -190,7 +191,7 @@ module memory_model #(
     always @(posedge clk) begin
         if (rst)
             extirq_reg <= 1'b0;
-        else if (dmem_we && dmem_ready && in_extirq && dmem_wmask[0])
+        else if (dmem_req && dmem_we && dmem_ready && in_extirq && dmem_wmask[0])
             extirq_reg <= dmem_wdata[0];
     end
     assign ext_irq = extirq_reg;
@@ -227,7 +228,7 @@ module memory_model #(
     // The write commits only on the cycle the handshake completes, so a store
     // whose request is withdrawn before dmem_ready never reaches the array.
     always @(posedge clk) begin
-        if (dmem_we && dmem_ready && in_mem) begin
+        if (dmem_req && dmem_we && dmem_ready && in_mem) begin
             if (dmem_wmask[0]) mem[da]   <= dmem_wdata[7:0];
             if (dmem_wmask[1]) mem[da+1] <= dmem_wdata[15:8];
             if (dmem_wmask[2]) mem[da+2] <= dmem_wdata[23:16];
@@ -245,7 +246,7 @@ module memory_model #(
         .addr     (clint_offset),
         .wdata    (dmem_wdata),
         .wmask    (dmem_wmask),
-        .we       (dmem_we && dmem_ready && in_clint_reg),
+        .we       (dmem_req && dmem_we && dmem_ready && in_clint_reg),
         .rdata    (clint_rdata),
         .timer_irq(timer_irq),
         .sw_irq   (sw_irq),
@@ -262,5 +263,42 @@ module memory_model #(
                                  (notready_data == 2) ? ~lfsr :
                                                         32'hxxxx_xxxx;
     assign dmem_rdata = dmem_ready ? dmem_word : notready_dword;
+
+    // ── Handshake checker ───────────────────────────────────────────────────
+    // The core's side of the contract (see src/fyracore.v): once a request
+    // is raised it stays raised, with the same address -- and for data the
+    // same we/wmask/wdata -- until the cycle ready is seen with it. A core
+    // that withdraws or changes a request mid-wait would lose or corrupt the
+    // transfer on a real request/ready bus, even where this model's
+    // combinational array happens to hide it. Any violation stops the run.
+    reg        i_pend, d_pend;
+    reg [31:0] i_addr_q, d_addr_q, d_wdata_q;
+    reg [3:0]  d_wmask_q;
+    reg        d_we_q;
+    always @(posedge clk) begin
+        if (rst) begin
+            i_pend <= 1'b0;
+            d_pend <= 1'b0;
+        end else begin
+            if (i_pend && (!imem_req || imem_addr !== i_addr_q)) begin
+                $display("ERROR: imem request changed before ready (addr %08h -> %08h, req %b)",
+                         i_addr_q, imem_addr, imem_req);
+                $fatal(1);
+            end
+            if (d_pend && (!dmem_req || dmem_addr !== d_addr_q || dmem_we !== d_we_q ||
+                           (d_we_q && (dmem_wmask !== d_wmask_q || dmem_wdata !== d_wdata_q)))) begin
+                $display("ERROR: dmem request changed before ready (addr %08h -> %08h, we %b -> %b, req %b)",
+                         d_addr_q, dmem_addr, d_we_q, dmem_we, dmem_req);
+                $fatal(1);
+            end
+            i_pend    <= imem_req && !imem_ready;
+            d_pend    <= dmem_req && !dmem_ready;
+            i_addr_q  <= imem_addr;
+            d_addr_q  <= dmem_addr;
+            d_we_q    <= dmem_we;
+            d_wmask_q <= dmem_wmask;
+            d_wdata_q <= dmem_wdata;
+        end
+    end
 
 endmodule
