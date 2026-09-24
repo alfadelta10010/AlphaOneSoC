@@ -482,7 +482,12 @@ module fyracore #(
     //   muldiv_stall: keep pipeline frozen while muldiv is working.
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
-    wire muldiv_want = ifex_valid && ctrl_isMulDiv;
+    // !ex_trap: a trapping M instruction (a fetch fault whose garbage word
+    // decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
+    // flush, which contains ex_trap -- so without this muldiv_stall would
+    // wait for a result that never comes and the trap would never commit.
+    // ex_trap depends on neither stall nor flush, so this closes no loop.
+    wire muldiv_want = ifex_valid && ctrl_isMulDiv && !ex_trap;
 
     // Sticky completion. muldiv_done is a one-cycle pulse; holding it here
     // means the pipeline can take the result on whatever later cycle it is
