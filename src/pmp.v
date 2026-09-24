@@ -55,14 +55,21 @@ module pmp(
     wire [31:0] waddr = {2'b00, addr[31:2]};
 
     // ── NAPOT match ──────────────────────────────────────────────────────────
-    // For t trailing ones in pmpaddr: size = 2^(t+3) bytes.
-    // mask = ~(pa | (pa+1))  — bits that must match between waddr and pmpaddr.
+    // pmpaddr = y...y0 1...1 with t trailing ones encodes a naturally aligned
+    // region of 2^(t+3) bytes; only the y bits above the trailing ones and
+    // their terminating zero have to match. pa ^ (pa+1) is exactly those low
+    // t+1 bits, so its complement is the compare mask. (All ones gives
+    // pa+1 = 0 and a zero mask: the whole address space, as the spec says.)
+    //
+    // The mask used to be ~(pa | (pa+1)), which also drops every y bit that
+    // is 1 -- so a region matched any address with arbitrary values in those
+    // positions, e.g. NAPOT 0x81000000/4K also matched 0x80000044.
     function automatic napot_match;
         input [31:0] pa;
         input [31:0] wa;
         reg [31:0] mask;
         begin
-            mask = ~(pa | (pa + 1'b1));
+            mask = ~(pa ^ (pa + 1'b1));
             napot_match = ((wa ^ pa) & mask) == 32'b0;
         end
     endfunction
