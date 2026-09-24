@@ -364,6 +364,14 @@ module fyracore #(
         ex_rs1 != 5'b0            // CSRRS/CSRRC write only if rs1/uimm != 0
     );
     wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
+    // A write to pmpcfg0 or pmpaddr0-3 changes the checks that the next
+    // instruction's fetch and data access undergo, and both checks run in EX
+    // while the write commits one stage later in WB. Rather than forward
+    // 160 bits of PMP state into both checkers, the write refetches the
+    // next instruction the way FENCE.I does, so that instruction reaches EX
+    // only after the write has committed. One cycle per PMP write.
+    wire ex_pmp_csr_wr = ifex_valid && ex_csr_writes &&
+                         (ex_csr_addr == 12'h3A0 || ex_csr_addr[11:2] == 10'b0011_1011_00);
     // CSR access requires privilege >= csr_addr[9:8] (00=U, 01=S, 11=M).
     // Since we only have M(1) and U(0): any CSR with addr[9:8] != 00 requires M-mode.
     wire ex_csr_priv_fail = !priv_mode && (ex_csr_addr[9:8] != 2'b00);
@@ -476,7 +484,8 @@ module fyracore #(
 
     // flush is defined before stall so muldiv_start can reference it without
     // a forward reference (iverilog processes wire assignments linearly).
-    wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || irq_inject;
+    wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr ||
+                 irq_inject;
 
     // stall_other: all stall sources except muldiv (used to gate muldiv_start)
     // wfi_active stalls the pipeline until an interrupt becomes pending.
@@ -865,8 +874,8 @@ module fyracore #(
             next_pc = mret_target;
         else if (ex_branch_taken && ifex_valid && !stall)
             next_pc = ex_branch_target;
-        else if (ex_is_fencei && ifex_valid && !stall)
-            next_pc = ifex_pc_next; // Re-fetch instruction after FENCE.I
+        else if ((ex_is_fencei || ex_pmp_csr_wr) && ifex_valid && !stall)
+            next_pc = ifex_pc_next; // Re-fetch after FENCE.I or a PMP CSR write
         else if (stall)
             next_pc = pc;
         else
