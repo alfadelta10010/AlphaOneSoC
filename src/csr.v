@@ -101,7 +101,6 @@ module csr #(
     assign pmpaddr1_out = pmpaddr1;
     assign pmpaddr2_out = pmpaddr2;
     assign pmpaddr3_out = pmpaddr3;
-    assign mie_out      = mie_reg;
     assign misa_c       = misa_reg[2];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
@@ -157,6 +156,13 @@ module csr #(
     assign mstatus_mpp  = mstatus_after_we[12:11];  // MPP field (11=M, 00=U)
     assign mstatus_mprv = mstatus_after_we[17];
     assign mstatus_tw   = mstatus_after_we[21];
+
+    // mie likewise: interrupt gating sits in EX, and Priv §3.1.9 requires the
+    // interrupt conditions to be re-evaluated immediately after an explicit
+    // write to mie, so the instruction right after `csrs mie` is already
+    // interruptible and the one right after `csrc mie` is not.
+    assign mie_out = (we && op != 2'b00 && waddr == 12'h304) ? (csr_new & 32'h0000_0888)
+                                                             : mie_reg;
 
     // misa as it will stand after a WB write: only C is writable, and a
     // clear is refused when it would leave the next PC misaligned.
