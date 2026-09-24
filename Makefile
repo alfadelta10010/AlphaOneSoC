@@ -73,6 +73,11 @@ help:
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
+# Run a unit testbench and fail the target if it reported a failure. The
+# testbenches print FAIL/TIMEOUT lines and then $finish, which exits 0, so
+# without this check `make test-all` reported success over failing tests.
+run_tb = cd $(BUILD_DIR) && $(VVP) $(1) | tee $(1).log && ! grep -qE '^(FAIL|TIMEOUT)' $(1).log
+
 # ============================================================
 #  Component Testbenches
 # ============================================================
@@ -80,47 +85,47 @@ $(BUILD_DIR):
 test-alu: $(BUILD_DIR)
 	@echo "=== Testing ALU ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_alu $(SRC_DIR)/alu.v $(TB_DIR)/tb_alu.v
-	@cd $(BUILD_DIR) && $(VVP) tb_alu
+	@$(call run_tb,tb_alu)
 
 test-branchctrl: $(BUILD_DIR)
 	@echo "=== Testing Branch Controller ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_branchCtrl $(SRC_DIR)/branchCtrl.v $(TB_DIR)/tb_branchCtrl.v
-	@cd $(BUILD_DIR) && $(VVP) tb_branchCtrl
+	@$(call run_tb,tb_branchCtrl)
 
 test-decoder: $(BUILD_DIR)
 	@echo "=== Testing Decoder ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_decoder $(SRC_DIR)/decoder.v $(TB_DIR)/tb_decoder.v
-	@cd $(BUILD_DIR) && $(VVP) tb_decoder
+	@$(call run_tb,tb_decoder)
 
 test-signext: $(BUILD_DIR)
 	@echo "=== Testing Sign Extension ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_signExt $(SRC_DIR)/signExt.v $(TB_DIR)/tb_signExt.v
-	@cd $(BUILD_DIR) && $(VVP) tb_signExt
+	@$(call run_tb,tb_signExt)
 
 test-controller: $(BUILD_DIR)
 	@echo "=== Testing Controller ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_controller $(SRC_DIR)/controller.v $(TB_DIR)/tb_controller.v
-	@cd $(BUILD_DIR) && $(VVP) tb_controller
+	@$(call run_tb,tb_controller)
 
 test-regfile: $(BUILD_DIR)
 	@echo "=== Testing Register File ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_regFile $(SRC_DIR)/regFile.v $(TB_DIR)/tb_regFile.v
-	@cd $(BUILD_DIR) && $(VVP) tb_regFile
+	@$(call run_tb,tb_regFile)
 
 test-csr: $(BUILD_DIR)
 	@echo "=== Testing CSR ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_csr $(SRC_DIR)/csr.v $(TB_DIR)/tb_csr.v
-	@cd $(BUILD_DIR) && $(VVP) tb_csr
+	@$(call run_tb,tb_csr)
 
 test-compressed: $(BUILD_DIR)
 	@echo "=== Testing Compressed Decoder ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_cdec $(SRC_DIR)/compressed_decoder.v $(TB_DIR)/tb_compressed_decoder.v
-	@cd $(BUILD_DIR) && $(VVP) tb_cdec
+	@$(call run_tb,tb_cdec)
 
 test-muldiv: $(BUILD_DIR)
 	@echo "=== Testing MulDiv Unit ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
-	@cd $(BUILD_DIR) && $(VVP) tb_muldiv
+	@$(call run_tb,tb_muldiv)
 
 test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv
 	@echo ""
