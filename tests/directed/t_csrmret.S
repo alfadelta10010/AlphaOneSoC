@@ -36,6 +36,10 @@ after3:
   csrr s2, mepc            # expect address of after3
 
   # --- control: nop between ---
+  # (case 3's MRET left MPP=U; return to M so the control case does not
+  # fetch in U-mode with no PMP entry, which faults by design)
+  li   t4, 0x1800
+  csrw mstatus, t4
   li   t1, 0x33334444
   la   t3, after4
   csrw mepc, t3

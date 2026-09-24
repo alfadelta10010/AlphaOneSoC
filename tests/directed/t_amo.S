@@ -25,10 +25,9 @@ rvtest_entry_point:
   lw    s4, 0(a0)
   # sc without lr -> fail
   sc.w  s5, s2, (a0)           # s5 = 1
-  # lr, store to same addr, sc
-  lr.w  s6, (a0)
-  sw    s6, 0(a0)
-  sc.w  s7, s2, (a0)
+  # (lr; store to the same word; sc is a spec-legal divergence -- the core
+  # fails the SC, Spike does not -- and is checked by lr_sb_sc instead)
+  li    s7, 0
   lw    s8, 0(a0)
   # sub-word stores under wait states
   li    a1, 0x80100010

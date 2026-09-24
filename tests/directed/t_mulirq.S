@@ -10,7 +10,10 @@ rvtest_entry_point:
   li   t1, 0xBFF8
   add  s6, s8, t1            # mtime
   sw   x0, 4(s7)
-  # PERIOD from a constant patched per run
+  # Timer period in mtime ticks; override with -DPERIOD=n to sweep it.
+#ifndef PERIOD
+#define PERIOD 50
+#endif
   li   s5, PERIOD
   lw   t2, 0(s6)
   add  t2, t2, s5

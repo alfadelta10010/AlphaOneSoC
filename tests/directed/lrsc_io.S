@@ -1,5 +1,7 @@
 # LR/SC and AMO aimed at the CLINT. A reservation needs a reservation set,
 # which an IO window has none of: expect cause 5 then 7, AMO succeeding.
+# The target is msip, which both models reset to 0 (mtimecmp's reset value
+# differs between them, so reading it made the trace diverge for no reason).
 .section .text.init
 .option norvc
 .globl rvtest_entry_point
@@ -7,7 +9,7 @@ rvtest_entry_point:
     la   t6, handler
     csrw mtvec, t6
     li   s0, 0
-    li   a0, 0x02004000
+    li   a0, 0x02000000
     li   a1, 0
     li   a2, 0
     li   a3, 0

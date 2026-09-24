@@ -18,6 +18,9 @@ rvtest_entry_point:
   nop
   csrr s1, mepc            # with C back on: DUT should show bit1 retained
   # --- pmpcfg0 lock: second write must be ignored ---
+  # pmpaddr0 is programmed first: its reset value differs between the two
+  # models (0 here per spec, all ones on Spike), and the lock freezes it.
+  csrw pmpaddr0, zero
   li   t3, 0x0000009f      # byte0: L=1, A=NAPOT(11), X=1,W=1,R=1  -> 0x9f
   csrw pmpcfg0, t3
   nop

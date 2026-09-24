@@ -9,6 +9,15 @@ rvtest_entry_point:
     la   t6, handler
     csrw mtvec, t6
     li   s0, 0                 # cause log
+    # An explicit unlocked entry with no permissions over everything: M-mode
+    # bypasses it, U-mode is denied. This is what the spec's PMP reset gives
+    # the core anyway, but Spike resets permissive (pmpcfg0 0x1f, pmpaddr0
+    # ~0), so without it the two models disagree for a reason unrelated to
+    # MPRV.
+    li   t0, -1
+    csrw pmpaddr0, t0
+    li   t0, 0x18              # A=NAPOT, RWX=000, L=0
+    csrw pmpcfg0, t0
     li   a0, 0x81000000
     sw   x0, 0(a0)
 
