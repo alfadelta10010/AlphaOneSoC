@@ -1,3 +1,18 @@
+# LR/SC increment loop under a periodic timer interrupt (ATOMIC=1), or the
+# same loop with a plain lw/sw (ATOMIC=0) as a control. A trap clears the
+# reservation, so a period that phase-locks with the loop can starve the SC
+# forever -- measured at PERIOD 6-12 ticks. Linux never programs a timer
+# delta below 100 ticks (timer-clint.c), so the default is 100: the loop must
+# complete. Sweep with -DPERIOD=n -DITERS=n -DATOMIC=0|1.
+#ifndef PERIOD
+#define PERIOD 100
+#endif
+#ifndef ITERS
+#define ITERS 100
+#endif
+#ifndef ATOMIC
+#define ATOMIC 1
+#endif
   .option norvc
   .section .text.init
   .globl rvtest_entry_point
