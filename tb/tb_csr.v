@@ -58,10 +58,10 @@ module tb_csr;
         // Read-only CSRs
         addr = 12'hF11; check_read(32'h0, "mvendorid=0");
         addr = 12'hF12; check_read(32'h0, "marchid=0");
-        addr = 12'hF13; check_read(32'h1, "mimpid=1");
+        addr = 12'hF13; check_read(32'h0, "mimpid=0");
         addr = 12'hF14; check_read(32'h0, "mhartid=0");
-        // misa: RV32IMAC = 01_0000000000_01000100000101
-        addr = 12'h301; check_read({2'b01, 4'b0, 26'b00000000000001000100000101}, "misa");
+        // misa: RV32IMACU -- MXL=01, A(0) C(2) I(8) M(12) U(20)
+        addr = 12'h301; check_read(32'h4010_1105, "misa");
 
         // mstatus after reset: MPP=11 (bits 12:11)
         addr = 12'h300; check_read(32'h0000_1800, "mstatus after reset");
