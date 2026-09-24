@@ -817,8 +817,16 @@ module fyracore #(
     // legalisation, locked PMP entries, reserved bits, the mepc IALIGN mask,
     // mip's live bits). The rules live only in csr.v; do not re-derive them
     // here.
+    //
+    // The user-level counter aliases read the same registers as their M-level
+    // names -- cycle/instret (0xC00/0xC02) and their high halves (0xC80/0xC82)
+    // are mcycle/minstret (0xB00/0xB02, 0xB80/0xB82) -- so a read of the alias
+    // right after a write to the M-level name must be forwarded too.
     wire csr_wb_writing = exwb_valid && exwb_csrWR && !exwb_trap;
-    wire csr_fwd = csr_wb_writing && (exwb_csr_addr == ex_csr_addr);
+    wire csr_fwd_alias  = (ex_csr_addr[11:8] == 4'hC) && (exwb_csr_addr[11:8] == 4'hB) &&
+                          (ex_csr_addr[7:0] == exwb_csr_addr[7:0]) &&
+                          (ex_csr_addr[6:2] == 5'b0) && !ex_csr_addr[0];   // x00, x02, x80, x82
+    wire csr_fwd = csr_wb_writing && ((exwb_csr_addr == ex_csr_addr) || csr_fwd_alias);
     assign csr_rdata_eff = csr_fwd ? csr_wval : csr_rdata;
 
     // ================================================================
