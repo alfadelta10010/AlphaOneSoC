@@ -105,15 +105,18 @@ module tb_controller;
         funct3 = 3'b010; check_signals(1,1,0,0,0,0,2'b01, "L: LW");
         funct3 = 3'b100; check_signals(1,1,0,0,0,0,2'b01, "L: LBU");
         funct3 = 3'b101; check_signals(1,1,0,0,0,0,2'b01, "L: LHU");
-        funct3 = 3'b011; check_signals(1,1,0,0,0,1,2'b01, "L: illegal f3");
-        funct3 = 3'b110; check_signals(1,1,0,0,0,1,2'b01, "L: illegal f3");
+        // An illegal encoding must request no side effects -- no rd write and
+        // no memory access, so it cannot raise an address exception that
+        // would outrank the illegal-instruction trap.
+        funct3 = 3'b011; check_signals(0,0,0,0,0,1,2'b01, "L: illegal f3");
+        funct3 = 3'b110; check_signals(0,0,0,0,0,1,2'b01, "L: illegal f3");
 
         // ===== Store (0100011) =====
         opcode = 7'b0100011; funct7 = 7'b0;
         funct3 = 3'b000; check_signals(0,0,1,0,0,0,2'b00, "S: SB");
         funct3 = 3'b001; check_signals(0,0,1,0,0,0,2'b00, "S: SH");
         funct3 = 3'b010; check_signals(0,0,1,0,0,0,2'b00, "S: SW");
-        funct3 = 3'b011; check_signals(0,0,1,0,0,1,2'b00, "S: illegal f3");
+        funct3 = 3'b011; check_signals(0,0,0,0,0,1,2'b00, "S: illegal f3");
 
         // ===== Branch (1100011) =====
         opcode = 7'b1100011; funct7 = 7'b0;
@@ -144,7 +147,7 @@ module tb_controller;
         opcode = 7'b1100111; funct3 = 3'b000;
         check_signals(1,0,0,0,1,0,2'b10, "I: JALR");
         funct3 = 3'b001;
-        check_signals(1,0,0,0,1,1,2'b10, "I: JALR bad f3");
+        check_signals(0,0,0,0,0,1,2'b10, "I: JALR bad f3");  // no link, no jump
 
         // ===== SYSTEM CSR (1110011) =====
         opcode = 7'b1110011;
