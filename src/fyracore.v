@@ -536,7 +536,16 @@ module fyracore #(
     // `flush` and next_pc deliberately keep using the ungated ex_is_mret: the
     // IF/EX bubble arm is only reached when !stall, and the redirect is
     // idempotent, so neither can commit twice.
-    wire ex_mret_commit = ex_is_mret && !stall && !ex_trap;
+    //
+    // !irq_inject: an interrupt taken at an MRET is taken *instead of* it,
+    // exactly as for every other instruction -- irq_inject suppresses the EX
+    // instruction's effects and records its PC as mepc, and next_pc already
+    // prefers the interrupt. Letting the MRET commit as well applied both:
+    // the handler entered with MPP=U (the MRET's restore) and mepc pointing
+    // at the MRET, so its own MRET re-executed that MRET from U-mode and
+    // took an illegal-instruction trap. irq_inject does not depend on
+    // ex_mret_commit, so this closes no loop.
+    wire ex_mret_commit = ex_is_mret && !stall && !ex_trap && !irq_inject;
 
     // ================================================================
     //  WB Stage — Memory Access + Writeback
