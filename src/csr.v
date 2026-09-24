@@ -54,7 +54,10 @@ module csr #(
     // misa.C WARL gate: refuse to clear C if next-PC would be 2-byte aligned
     // (Priv spec §3.1.1 — implementation may decline writes that violate
     // alignment requirements). Set by fyracore from current WB-stage PC[1].
-    input  wire        pc_next_misaligned
+    input  wire        pc_next_misaligned,
+    // The value the CSR at waddr reads back once this cycle's write has
+    // committed -- see `wval` below. fyracore forwards it to EX.
+    output wire [31:0] wval_out
 );
     // ===== CSR Registers =====
     // Machine Information
@@ -93,7 +96,6 @@ module csr #(
     // Priv spec §3.1.15: when IALIGN=32 (misa.C=0), mepc[1] masked on reads.
     wire [31:0] mepc_eff = {mepc[31:2], (misa_reg[2] ? mepc[1] : 1'b0), 1'b0};
     assign mepc_out     = mepc_eff;
-    assign mstatus_mie  = mstatus[3];      // MIE bit
     assign pmpcfg0_out  = pmpcfg0;
     assign pmpaddr0_out = pmpaddr0;
     assign pmpaddr1_out = pmpaddr1;
@@ -101,8 +103,6 @@ module csr #(
     assign pmpaddr3_out = pmpaddr3;
     assign mie_out      = mie_reg;
     assign misa_c       = misa_reg[2];
-    assign mstatus_tw   = mstatus[21];
-    assign mstatus_mprv = mstatus[17];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
@@ -131,8 +131,9 @@ module csr #(
 
     // mstatus as it will stand after a CSR write in WB commits this cycle.
     // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
-    // the older instruction, so its value is what they must transform. Mirrors
-    // the 12'h300 arm of the write case below -- keep the two in step.
+    // the older instruction, so its value is what they must transform.
+    // M+U only: MPP's legal values are 00 (U) and 11 (M); a write of 01/10
+    // keeps the old MPP (WARL). MPRV and TW exist because U-mode does.
     reg [31:0] mstatus_after_we;
     always @(*) begin
         mstatus_after_we = mstatus;
@@ -146,10 +147,69 @@ module csr #(
         end
     end
 
-    // MPP as it will stand after a WB CSR write commits. The MRET privilege
-    // restore consumes this, so a `csrw mstatus, <MPP=M>; mret` pair returns to
-    // M-mode rather than to the MPP that was there before the write.
+    // The mstatus fields fyracore consumes are exported as they stand after
+    // a WB CSR write commits, because their consumers sit in EX, one stage
+    // ahead of the write: the MRET privilege restore (MPP), interrupt gating
+    // (MIE), the data PMP check (MPRV, MPP) and the U-mode WFI check (TW).
+    // Zicsr requires a write's effects to be visible to the very next
+    // instruction, so e.g. `csrw mstatus, <MPP=M>; mret` returns to M-mode.
+    assign mstatus_mie  = mstatus_after_we[3];
     assign mstatus_mpp  = mstatus_after_we[12:11];  // MPP field (11=M, 00=U)
+    assign mstatus_mprv = mstatus_after_we[17];
+    assign mstatus_tw   = mstatus_after_we[21];
+
+    // misa as it will stand after a WB write: only C is writable, and a
+    // clear is refused when it would leave the next PC misaligned.
+    wire        misa_we_ok    = we && op != 2'b00 && waddr == 12'h301 &&
+                                (csr_new[2] || !pc_next_misaligned);
+    wire [31:0] misa_after_we = misa_we_ok ? {misa_reg[31:3], csr_new[2], misa_reg[1:0]}
+                                           : misa_reg;
+
+    // ===== Post-write value ======================================================
+    // What a read of waddr returns once this cycle's write has committed:
+    // every WARL rule in one place. The write case below stores this value
+    // (mepc and mip store a little more than they read back, noted there),
+    // and fyracore forwards it to an EX-stage read of the same CSR and to the
+    // trap/MRET targets, so the rules cannot drift between copies. Only
+    // meaningful while a write is in WB.
+    reg [31:0] wval;
+    always @(*) begin
+        case (waddr)
+            12'h300: wval = mstatus_after_we;
+            12'h301: wval = misa_after_we;
+            12'h304: wval = csr_new & 32'h0000_0888;         // mie: MSIE/MTIE/MEIE
+            12'h305: wval = {csr_new[31:2], 2'b00};          // mtvec: direct mode only
+            12'h306: wval = csr_new & 32'h0000_0007;         // mcounteren: CY/TM/IR
+            12'h320: wval = csr_new & 32'h0000_0005;         // mcountinhibit: TM reserved
+            12'h340: wval = csr_new;                         // mscratch
+            // mepc: bit 0 is always 0; bit 1 is stored but reads 0 while
+            // IALIGN=32 (misa.C=0).
+            12'h341: wval = {csr_new[31:2], (misa_reg[2] ? csr_new[1] : 1'b0), 1'b0};
+            12'h342: wval = csr_new;                         // mcause
+            12'h343: wval = csr_new;                         // mtval
+            // mip: MSIP/MTIP/MEIP are live wires, never the written value.
+            12'h344: wval = (csr_new & ~32'h0000_0888) | (mip_live & 32'h0000_0888);
+            // pmpcfg0: a locked byte keeps its value; otherwise bits [6:5]
+            // are reserved and read 0. A = 2'b10 (NA4) is legal at G=0 and
+            // pmp.v implements it, so it is stored as written.
+            12'h3A0: wval = {pmpcfg0[31] ? pmpcfg0[31:24] : {csr_new[31], 2'b00, csr_new[28:24]},
+                             pmpcfg0[23] ? pmpcfg0[23:16] : {csr_new[23], 2'b00, csr_new[20:16]},
+                             pmpcfg0[15] ? pmpcfg0[15:8]  : {csr_new[15], 2'b00, csr_new[12:8]},
+                             pmpcfg0[7]  ? pmpcfg0[7:0]   : {csr_new[7],  2'b00, csr_new[4:0]}};
+            // pmpaddr[i]: locked by its own L bit, or by entry i+1 when that
+            // entry is TOR and locked.
+            12'h3B0: wval = tor_lock_addr0 ? pmpaddr0 : csr_new;
+            12'h3B1: wval = tor_lock_addr1 ? pmpaddr1 : csr_new;
+            12'h3B2: wval = tor_lock_addr2 ? pmpaddr2 : csr_new;
+            12'h3B3: wval = tor_lock_addr3 ? pmpaddr3 : csr_new;
+            // Counters: the written half takes the value outright.
+            12'hB00, 12'hB80, 12'hB02, 12'hB82: wval = csr_new;
+            // Everything else that can be written without trapping reads 0
+            // (the unimplemented pmpcfg/pmpaddr registers).
+            default: wval = 32'b0;
+        endcase
+    end
+    assign wval_out = wval;
 
     always @(posedge clk) begin
         if (rst)
@@ -260,57 +320,29 @@ module csr #(
             // is the older instruction. The trap/MRET arms reassign mstatus
             // afterwards and so still take priority over a write to mstatus
             // itself, but a write to any other CSR now survives.
+            // The stored value is `wval` (the WARL rules live there), except
+            // where noted. Counters are written in their own blocks above.
             if (we && op != 2'b00) begin
             case (waddr)
-                12'h300: begin
-                    // mstatus WARL. M+U-only: MPP legal values are 00 (U) and
-                    // 11 (M). Writes of 01/10 are reserved → keep old MPP
-                    // (Priv spec §3.1.6.5: WARL reads must return legal values).
-                    mstatus[3]  <= csr_new[3];   // MIE
-                    mstatus[7]  <= csr_new[7];   // MPIE
-                    mstatus[17] <= csr_new[17];  // MPRV
-                    mstatus[21] <= csr_new[21];  // TW
-                    if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
-                        mstatus[12:11] <= csr_new[12:11];
-                end
-                // misa (0x301): WARL. Only C bit writable. Refuse to clear C
-                // when next-PC[1]=1 (would create immediately-misaligned fetch).
-                // Setting C to 1 always allowed.
-                12'h301: if (csr_new[2] == 1'b1 || !pc_next_misaligned)
-                             misa_reg[2] <= csr_new[2];
-                12'h304: mie_reg    <= csr_new & 32'h0000_0888;
-                12'h305: mtvec      <= {csr_new[31:2], 2'b00}; // Force direct mode (WARL)
-                // mcounteren: bits CY(0), TM(1), IR(2) writable for U-mode counter access.
-                12'h306: mcounteren <= csr_new & 32'h0000_0007;
-                12'h320: mcountinhibit <= csr_new & 32'h0000_0005; // bits IR(2), CY(0); bit 1 (TM) reserved=0
-                12'h340: mscratch <= csr_new;
-                12'h341: mepc     <= {csr_new[31:1], 1'b0}; // Bit 0 always 0
-                12'h342: mcause   <= csr_new;
-                12'h343: mtval    <= csr_new;
-                12'h344: mip_reg  <= csr_new & ~32'h0000_0888;
-                // Counters: writes handled in dedicated always blocks above
-                12'hB00: ;
-                12'hB80: ;
-                12'hB02: ;
-                12'hB82: ;
-                // PMP: write only unlocked bytes/entries.
-                // pmpcfg0: each byte is independently locked by its own L bit.
-                // WARL: bits [6:5] of every byte are reserved and read as
-                // zero. A = 2'b10 (NA4) is legal at granularity G=0, pmp.v
-                // implements it and the reference model keeps it, so it is
-                // stored as written.
-                12'h3A0: begin
-                    pmpcfg0[7:0]   <= pmpcfg0[7]  ? pmpcfg0[7:0]   : {csr_new[7],  2'b00, csr_new[4:0]};
-                    pmpcfg0[15:8]  <= pmpcfg0[15] ? pmpcfg0[15:8]  : {csr_new[15], 2'b00, csr_new[12:8]};
-                    pmpcfg0[23:16] <= pmpcfg0[23] ? pmpcfg0[23:16] : {csr_new[23], 2'b00, csr_new[20:16]};
-                    pmpcfg0[31:24] <= pmpcfg0[31] ? pmpcfg0[31:24] : {csr_new[31], 2'b00, csr_new[28:24]};
-                end
-                // pmpaddr[i] locked by own L bit or by entry i+1 if TOR+locked
-                12'h3B0: if (!tor_lock_addr0) pmpaddr0 <= csr_new;
-                12'h3B1: if (!tor_lock_addr1) pmpaddr1 <= csr_new;
-                12'h3B2: if (!tor_lock_addr2) pmpaddr2 <= csr_new;
-                12'h3B3: if (!tor_lock_addr3) pmpaddr3 <= csr_new;
-                default: ; // Ignore writes to read-only CSRs
+                12'h300: mstatus       <= wval;
+                12'h301: misa_reg      <= wval;
+                12'h304: mie_reg       <= wval;
+                12'h305: mtvec         <= wval;
+                12'h306: mcounteren    <= wval;
+                12'h320: mcountinhibit <= wval;
+                12'h340: mscratch      <= wval;
+                // mepc keeps bit 1 even while IALIGN=32 hides it on reads, so
+                // it reappears if C is re-enabled.
+                12'h341: mepc          <= {csr_new[31:1], 1'b0};
+                12'h342: mcause        <= wval;
+                12'h343: mtval         <= wval;
+                12'h344: mip_reg       <= csr_new & ~32'h0000_0888;
+                12'h3A0: pmpcfg0       <= wval;
+                12'h3B0: pmpaddr0      <= wval;
+                12'h3B1: pmpaddr1      <= wval;
+                12'h3B2: pmpaddr2      <= wval;
+                12'h3B3: pmpaddr3      <= wval;
+                default: ;
             endcase
             end
 

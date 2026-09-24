@@ -679,6 +679,7 @@ module fyracore #(
     wire        csr_trap_signal = exwb_valid && exwb_trap;
     wire        csr_mret_signal = 1'b0; // MRET handled via PC redirect in EX
     wire [31:0] csr_mtvec, csr_mepc;
+    wire [31:0] csr_wval;           // post-write value of the CSR WB is writing
     wire        csr_mstatus_mie;
     wire [31:0] csr_mie;            // full mie register (for per-bit IRQ gating)
     // csr_misa_c forward-declared at top of EX stage; driven by CSR unit port
@@ -720,18 +721,16 @@ module fyracore #(
         .mtime_in    (mtime_in),
         // misa.C WARL gate: refuse C clear if next-PC[1]=1. csrrci/csrrw to
         // misa is always 32-bit (system opcode), so post-PC[1] = exwb_trap_pc[1].
-        .pc_next_misaligned (exwb_trap_pc[1])
+        .pc_next_misaligned (exwb_trap_pc[1]),
+        .wval_out    (csr_wval)
     );
 
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    // Forward mstatus.MIE from WB to avoid 1-cycle window where an interrupt
-    // slips in after csrci mstatus,8 (MIE 1→0) but before the write commits.
-    wire mstatus_mie_eff = (exwb_valid && exwb_csrWR && !exwb_trap && exwb_csr_addr == 12'h300)
-        ? (exwb_csr_wdata[3] != 1'b0)  // forwarded MIE bit
-        : csr_mstatus_mie;
-    wire irq_global_en     = !priv_mode || mstatus_mie_eff;
+    // csr_mstatus_mie is the post-write value, so there is no window where an
+    // interrupt slips in after csrci mstatus,8 but before the write commits.
+    wire irq_global_en     = !priv_mode || csr_mstatus_mie;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
     wire irq_sw_pend       = sw_irq       & csr_mie[3]  & irq_global_en;
     wire irq_timer_pend    = timer_irq    & csr_mie[7]  & irq_global_en;
@@ -797,21 +796,9 @@ module fyracore #(
                                      3'b001;                          // Load/LR: R
     // MPRV=1 makes loads and stores check as though the hart were in MPP.
     // Instruction fetch is excluded by the spec, so pmp_ifetch keeps priv_mode.
-    //
-    // These are consumed here in EX, but a csrw to mstatus does not commit
-    // until WB, so without forwarding the load or store in the instruction
-    // immediately after `csrw mstatus` would be checked against the stale
-    // MPRV/MPP. Zicsr requires the write's effects to be observable by the
-    // very next instruction, so forward the pending write the same way
-    // csr_fwd_data already does for CSR reads.
-    wire mstatus_wb_wr = exwb_valid && exwb_csrWR && !exwb_trap &&
-                         (exwb_csr_addr == 12'h300);
-    wire [1:0] mstatus_wb_mpp =
-        (exwb_csr_wdata[12:11] == 2'b11 || exwb_csr_wdata[12:11] == 2'b00)
-            ? exwb_csr_wdata[12:11] : csr_mstatus_mpp;
-    wire       eff_mprv = mstatus_wb_wr ? exwb_csr_wdata[17] : csr_mstatus_mprv;
-    wire [1:0] eff_mpp  = mstatus_wb_wr ? mstatus_wb_mpp     : csr_mstatus_mpp;
-    wire data_priv_mode = eff_mprv ? (eff_mpp == 2'b11) : priv_mode;
+    // csr.v exports both as they stand after a pending WB write, so the load
+    // or store right after `csrw mstatus` is checked against the new values.
+    wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;
 
     pmp pmp_data(
         .pmpcfg0    (csr_pmpcfg0),
@@ -825,72 +812,25 @@ module fyracore #(
         .pmp_allow  (pmp_data_allow)
     );
 
-    // CSR forwarding: when WB writes the same CSR that EX reads, forward the write value.
-    // Apply the same per-CSR masking that csr.v applies on write, so the forwarded value
-    // matches what will actually be read back.
-    //
-    // PMP lock suppression: if the write targets a locked PMP address, csr.v silently
-    // discards it. Don't forward in that case — let EX read the register directly.
-    // TOR locking: entry i+1 with A=TOR and L=1 also locks pmpaddr[i].
-    wire pmp_fwd_blocked =
-        (exwb_csr_addr == 12'h3B0 && (csr_pmpcfg0[7]  || (csr_pmpcfg0[12:11] == 2'b01 && csr_pmpcfg0[15]))) ||
-        (exwb_csr_addr == 12'h3B1 && (csr_pmpcfg0[15] || (csr_pmpcfg0[20:19] == 2'b01 && csr_pmpcfg0[23]))) ||
-        (exwb_csr_addr == 12'h3B2 && (csr_pmpcfg0[23] || (csr_pmpcfg0[28:27] == 2'b01 && csr_pmpcfg0[31]))) ||
-        (exwb_csr_addr == 12'h3B3 && csr_pmpcfg0[31]);
-    wire csr_fwd = exwb_valid && exwb_csrWR && !exwb_trap &&
-                   (exwb_csr_addr == ex_csr_addr) && !pmp_fwd_blocked;
-    // For pmpcfg0, locked bytes are preserved — forward the post-mask value.
-    // Also mask reserved A=2'b10 to 2'b00 (WARL) to match csr.v write behavior.
-    wire [7:0] pmp_fwd_byte0 = csr_pmpcfg0[7]  ? csr_pmpcfg0[7:0]   :
-        {exwb_csr_wdata[7], 2'b00, exwb_csr_wdata[4:0]};
-    wire [7:0] pmp_fwd_byte1 = csr_pmpcfg0[15] ? csr_pmpcfg0[15:8]   :
-        {exwb_csr_wdata[15], 2'b00, exwb_csr_wdata[12:8]};
-    wire [7:0] pmp_fwd_byte2 = csr_pmpcfg0[23] ? csr_pmpcfg0[23:16] :
-        {exwb_csr_wdata[23], 2'b00, exwb_csr_wdata[20:16]};
-    wire [7:0] pmp_fwd_byte3 = csr_pmpcfg0[31] ? csr_pmpcfg0[31:24] :
-        {exwb_csr_wdata[31], 2'b00, exwb_csr_wdata[28:24]};
-    wire [31:0] pmpcfg0_fwd_val = {pmp_fwd_byte3, pmp_fwd_byte2, pmp_fwd_byte1, pmp_fwd_byte0};
-    // mstatus WARL forward: MPP coercion preserves old [12:11] when new is illegal.
-    wire [1:0] mstatus_fwd_mpp =
-        (exwb_csr_wdata[12:11] == 2'b11 || exwb_csr_wdata[12:11] == 2'b00)
-            ? exwb_csr_wdata[12:11] : csr_unit.mstatus[12:11];
-    wire [31:0] mstatus_fwd_val =
-        (csr_unit.mstatus & ~32'h0022_1888)
-        | (exwb_csr_wdata & 32'h0022_0088)
-        | {19'b0, mstatus_fwd_mpp, 11'b0};
-    // misa forward: only C(2) writable; refused when clearing C and post-PC misaligned.
-    wire misa_clear_refused = !exwb_csr_wdata[2] && exwb_trap_pc[1];
-    wire misa_eff_c         = misa_clear_refused ? 1'b1 : exwb_csr_wdata[2];
-    wire [31:0] misa_fwd_val = 32'h4010_1101 | {29'b0, misa_eff_c, 2'b00};
-    wire [31:0] csr_fwd_data =
-        (exwb_csr_addr == 12'h300) ? mstatus_fwd_val :
-        (exwb_csr_addr == 12'h301) ? misa_fwd_val :
-        (exwb_csr_addr == 12'h304) ? (exwb_csr_wdata & 32'h0000_0888) : // mie
-        (exwb_csr_addr == 12'h305) ? {exwb_csr_wdata[31:2], 2'b00} :    // mtvec: force direct mode
-        (exwb_csr_addr == 12'h306) ? (exwb_csr_wdata & 32'h0000_0007) : // mcounteren: CY/TM/IR
-        (exwb_csr_addr == 12'h320) ? (exwb_csr_wdata & 32'h0000_0005) : // mcountinhibit: TM reserved
-        (exwb_csr_addr == 12'h344) ? (exwb_csr_wdata & ~32'h0000_0888) : // mip: writable bits
-        // mepc: bit 0 always 0, and bit 1 reads 0 while IALIGN=32 (misa.C=0),
-        // which is the same masking csr.v applies on the read port.
-        (exwb_csr_addr == 12'h341) ?
-            {exwb_csr_wdata[31:2], (csr_misa_c ? exwb_csr_wdata[1] : 1'b0), 1'b0} :
-        (exwb_csr_addr == 12'h3A0) ? pmpcfg0_fwd_val :                   // pmpcfg0: respect locks + A mask
-        exwb_csr_wdata;
-    assign csr_rdata_eff = csr_fwd ? csr_fwd_data : csr_rdata;
+    // CSR forwarding: when WB writes the CSR that EX reads, EX gets csr.v's
+    // post-write value, which already applies every WARL rule (MPP
+    // legalisation, locked PMP entries, reserved bits, the mepc IALIGN mask,
+    // mip's live bits). The rules live only in csr.v; do not re-derive them
+    // here.
+    wire csr_wb_writing = exwb_valid && exwb_csrWR && !exwb_trap;
+    wire csr_fwd = csr_wb_writing && (exwb_csr_addr == ex_csr_addr);
+    assign csr_rdata_eff = csr_fwd ? csr_wval : csr_rdata;
 
     // ================================================================
     //  PC Update Logic
     // ================================================================
-    // Forward mtvec/mepc from WB CSR write to avoid stale redirect targets.
+    // Forward mtvec/mepc from a WB CSR write to avoid stale redirect targets.
     // Without this, sequences like "csrw mepc, t5; mret" read the old mepc
     // because the WB write hasn't committed when EX computes next_pc.
-    wire mtvec_fwd = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h305);
-    wire mepc_fwd  = exwb_valid && exwb_csrWR && !exwb_trap && (exwb_csr_addr == 12'h341);
-    wire [31:0] trap_target = mtvec_fwd ? {exwb_csr_wdata[31:2], 2'b00} : csr_mtvec;
-    // Priv spec §3.1.15: mepc[1] masks to 0 on reads when IALIGN=32 (misa.C=0).
-    wire [31:0] mret_target = mepc_fwd  ?
-        {exwb_csr_wdata[31:2], (csr_misa_c ? exwb_csr_wdata[1] : 1'b0), 1'b0} :
-        csr_mepc;
+    wire mtvec_fwd = csr_wb_writing && (exwb_csr_addr == 12'h305);
+    wire mepc_fwd  = csr_wb_writing && (exwb_csr_addr == 12'h341);
+    wire [31:0] trap_target = mtvec_fwd ? csr_wval : csr_mtvec;
+    wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 
     reg [31:0] next_pc;
     always @(*) begin
