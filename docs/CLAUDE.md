@@ -87,19 +87,21 @@ Test programs are RISC-V assembly in `tests/*.S`. The build pipeline: `.S` → `
 - **EX**: Decode (`decoder`), control signals (`controller`), register read (`regFile`) with WB→EX forwarding, ALU execute, branch resolve, PMP checks, trap detection, interrupt injection.
 - **WB**: Memory access, CSR commit (`csr`), AMO phase 2, register writeback, trap entry.
 
-The pipeline top-level is `src/fyracore.v` (~920 lines). It instantiates all other modules.
+The pipeline top-level is `src/fyracore.v` (~1100 lines). It instantiates all other modules.
 
 ### Key Architectural Patterns
 
 **CSR write pre-computation:** EX computes the full read-modify-write CSR value and stores it in `exwb_csr_wdata`. The CSR unit always receives `op=CSRRW` — it never does CSRRS/CSRRC itself. This simplifies the write path and forwarding.
 
-**CSR forwarding with WARL masks:** When WB writes a CSR that EX reads in the same cycle, forwarding applies the same bit masks as `csr.v` (e.g., mstatus masked with `0x1888`, mtvec `[1:0]` forced to `00`, pmpcfg0 per-byte lock and A-field masking). Any new writable CSR needs a forwarding entry in `csr_fwd_data` in `fyracore.v`.
+**CSR forwarding with WARL masks:** When WB writes a CSR that EX reads in the same cycle, forwarding applies the same bit masks as `csr.v` (mstatus masked with `0x221888` since MPRV and TW exist, mtvec `[1:0]` forced to `00`, mepc bit 1 masked when misa.C=0, pmpcfg0 per-byte lock, plus mie/mcounteren/mcountinhibit/mip). Any new writable CSR needs a forwarding entry in `csr_fwd_data` in `fyracore.v` — four CSRs were missing one and silently returned raw write data (`7babc48`).
+
+**The same hazard applies to mstatus fields read outside `csr.v`.** MPRV and MPP are consumed by the data PMP check in EX, but a `csrw mstatus` does not commit until WB, so they need the same forward (`7cd1eb6`). This EX-consumes/WB-commits family has bitten three times; `misa.C` is still open. A test only catches it if the write and the dependent access are adjacent.
 
 **Trap/MRET target forwarding:** `trap_target` and `mret_target` forward from WB CSR writes to avoid stale redirect targets. Both apply WARL masks.
 
 **mstatus MIE forwarding for interrupt gating:** `mstatus_mie_eff` forwards MIE from WB to prevent a 1-cycle interrupt window after `csrci mstatus,8`.
 
-**Multi-cycle operations stall the pipeline:** MulDiv (33-34 cycles) and AMO (2 cycles via `wb_busy`) hold the stall signal. Interrupts are never injected mid-multicycle.
+**Multi-cycle operations stall the pipeline:** MulDiv (33-34 cycles) and AMO (2 cycles via `wb_busy`) hold the stall signal. Interrupts are never injected mid-multicycle — `irq_inject` excludes `muldiv_want` and `stall_other`. MulDiv completion is **sticky** (`muldiv_ready`), not a one-cycle pulse: the pulse version livelocked forever at every `IMEM_WAIT >= 2` because the result was dropped whenever the done cycle coincided with a fetch stall (`2e6718b`).
 
 **Dual PMP instances:** `pmp_ifetch` checks ifex_pc with X permission; `pmp_data` checks ex_alu_result with R/W/R+W. AMO uses access_type `3'b011` (R+W).
 
@@ -116,13 +118,13 @@ Both instruction fetch and data access can target any address. The `memControlle
 
 ## Critical Invariants
 
-- **Trap cause priority** must match RISC-V spec Table 3.7 (PMP ifetch > illegal > ecall/ebreak > misaligned > PMP data). See the if-else chain in `fyracore.v` around line 841.
+- **Trap cause priority** must match RISC-V spec Table 3.7: ifetch access fault (1) > illegal (2) > inst addr misaligned (0) > ecall (11/8) > ebreak (3) > misaligned (4/6) > data access fault (5/7). Locate the if-else chain by the `exwb_trap_cause` assignments, not by line number. Cause 2 is tested via `ex_illegal_insn`, which `ex_trap` also consumes so the two lists cannot drift; the fallthrough arm is cause 7, and it is reachable for exactly one condition. Reordered in `11384f8`.
 - **Counter CSRs** (mcycle, minstret) have merged always blocks — auto-increment and CSR write live in the same block to avoid dual-driver synthesis failures. Never split them.
 - **CSRRS/CSRRC with rs1=0** must NOT write. The pipeline uses `ex_csr_writes` (not `ex_csr_active`) to gate `exwb_csrWR`.
 - **mtvec is direct-mode only** — `[1:0]` forced to `2'b00` on write (WARL). Both the CSR write path and trap_target forwarding must apply this mask.
 - **IRQ MPP save:** `priv_mode` must NOT be set to M on `irq_inject` directly — it's updated via the `csr_trap_signal` path one cycle later so the CSR unit captures the correct old privilege for MPP.
 - **PMP locked entries:** TOR lock propagates downward (entry i with TOR+L locks pmpaddr[i-1]). Both `csr.v` writes and `fyracore.v` forwarding must check these conditions.
-- **pmpcfg A=2'b10 is reserved** — masked to 2'b00 (OFF) on write. Both `csr.v` and the forwarding path in `fyracore.v` enforce this.
+- **pmpcfg A=2'b10 (NA4) is LEGAL and is stored as written.** It used to be masked to 2'b00 (OFF) on the grounds that it was reserved; it is not. NA4 is legal at granularity G=0, `src/pmp.v` implements it, and the reference model keeps it. What *is* masked is bits [6:5] of each byte, which are reserved and must read 0. All three copies of this masking must agree: `csr.v`, `csr_fwd_data` in `fyracore.v`, and `csr_committed` in `tb/tb_rivercore.v`. Fixed in `b7c5805`.
 
 ## Verilog Conventions
 
