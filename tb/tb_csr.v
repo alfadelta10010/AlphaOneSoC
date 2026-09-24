@@ -63,8 +63,8 @@ module tb_csr;
         // misa: RV32IMACU -- MXL=01, A(0) C(2) I(8) M(12) U(20)
         addr = 12'h301; check_read(32'h4010_1105, "misa");
 
-        // mstatus after reset: MPP=11 (bits 12:11)
-        addr = 12'h300; check_read(32'h0000_1800, "mstatus after reset");
+        // mstatus after reset: all zero (MIE=MPRV=0, MPP=U)
+        addr = 12'h300; check_read(32'h0000_0000, "mstatus after reset");
 
         // CSRRW: write mtvec
         @(posedge clk);

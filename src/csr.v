@@ -325,7 +325,10 @@ module csr #(
 
     always @(posedge clk) begin
         if (rst) begin
-            mstatus  <= 32'h0000_1800; // MPP=11 (M-mode)
+            // Priv §3.4: MIE and MPRV reset to 0; MPP's reset value is left
+            // to the implementation. 0 (U) matches the reference model, so
+            // no trace diverges on it before software first writes mstatus.
+            mstatus  <= 32'h0000_0000;
             mtvec    <= 32'h0000_0000;
             mscratch <= 32'b0;
             mepc     <= 32'b0;
