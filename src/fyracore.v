@@ -659,10 +659,6 @@ module fyracore #(
         endcase
     end
 
-    // AMO write data (during amo_phase=1)
-    wire [31:0] amo_write_data = amo_phase ? amo_new_val : store_data_shifted;
-    wire [3:0]  amo_write_mask = amo_phase ? 4'b1111 : store_wmask;
-
     // Memory interface signals
     wire wb_mem_write = exwb_valid && !exwb_trap && (
         (exwb_memWR && !exwb_isAmo && !exwb_isSC) ||
@@ -742,7 +738,6 @@ module fyracore #(
 
     // CSR unit
     wire        csr_trap_signal = exwb_valid && exwb_trap;
-    wire        csr_mret_signal = 1'b0; // MRET handled via PC redirect in EX
     wire [31:0] csr_mtvec, csr_mepc;
     wire [31:0] csr_wval;           // post-write value of the CSR WB is writing
     wire        csr_mstatus_mie;
