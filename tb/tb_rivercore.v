@@ -457,9 +457,17 @@ module tb_rivercore;
                     12'hB02: $fwrite(dump_fd, " c2818_minstret 0x%08h", cpu.csr_wval);
                     12'hB80: $fwrite(dump_fd, " c2944_mcycleh 0x%08h",  cpu.csr_wval);
                     12'hB82: $fwrite(dump_fd, " c2946_minstreth 0x%08h",cpu.csr_wval);
+                    // Read-only-zero CSRs Spike does log a write to.
+                    12'h30A: $fwrite(dump_fd, " c778_menvcfg 0x%08h",   cpu.csr_wval);
+                    12'h31A: $fwrite(dump_fd, " c794_menvcfgh 0x%08h",  cpu.csr_wval);
                     // Writes Spike accepts without logging: the
-                    // unimplemented pmpcfg1-3 and pmpaddr4-15, which read 0.
-                    default: ;
+                    // unimplemented pmpcfg1-3 and pmpaddr4-15, mstatush and
+                    // mhpmcounter3-31(h), all of which read 0.
+                    default:
+                        if (cpu.exwb_csr_addr[11:5] == 7'b0011_001 &&
+                            cpu.exwb_csr_addr[4:0] >= 5'd3)    // mhpmevent3-31
+                            $fwrite(dump_fd, " c%0d_mhpmevent%0d 0x%08h",
+                                    cpu.exwb_csr_addr, cpu.exwb_csr_addr[4:0], cpu.csr_wval);
                 endcase
             end
 

@@ -210,7 +210,7 @@ module csr #(
             // Counters: the written half takes the value outright.
             12'hB00, 12'hB80, 12'hB02, 12'hB82: wval = csr_new;
             // Everything else that can be written without trapping reads 0
-            // (the unimplemented pmpcfg/pmpaddr registers).
+            // (the unimplemented pmpcfg/pmpaddr registers and csr_read_zero).
             default: wval = 32'b0;
         endcase
     end
@@ -237,6 +237,21 @@ module csr #(
         else
             minstret <= minstret_next;
     end
+
+    // CSRs that must exist on this core but hold nothing: they read 0 and
+    // ignore writes (wval's default arm is 0, and nothing stores them).
+    //   mhpmcounter3-31, mhpmcounter3h-31h, mhpmevent3-31: "All counters
+    //     should be implemented, but a legal implementation is to make both
+    //     the counter and its corresponding event selector be read-only 0."
+    //   mstatush (0x310): mandatory on RV32; MBE/SBE are 0 (little-endian).
+    //   menvcfg/menvcfgh (0x30A/0x31A): exist whenever U-mode does; with no
+    //     S-mode FIOM may be read-only zero, and no other field applies.
+    // The user-level hpmcounter3-31 aliases stay unimplemented (Zihpm).
+    wire csr_read_zero =
+        (raddr[11:5] == 7'b1011_000 && raddr[4:0] >= 5'd3) ||   // mhpmcounter3-31
+        (raddr[11:5] == 7'b1011_100 && raddr[4:0] >= 5'd3) ||   // mhpmcounter3h-31h
+        (raddr[11:5] == 7'b0011_001 && raddr[4:0] >= 5'd3) ||   // mhpmevent3-31
+        raddr == 12'h310 || raddr == 12'h30A || raddr == 12'h31A;
 
     // CSR Read (combinational, uses EX-stage raddr)
     reg addr_valid;
@@ -290,7 +305,7 @@ module csr #(
             12'h3B4, 12'h3B5, 12'h3B6, 12'h3B7,
             12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB,
             12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF: rdata = 32'b0;
-            default: begin rdata = 32'b0; addr_valid = 1'b0; end
+            default: begin rdata = 32'b0; addr_valid = csr_read_zero; end
         endcase
     end
     assign csr_addr_valid = addr_valid;
