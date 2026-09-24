@@ -547,10 +547,15 @@ module fyracore #(
     reg [31:0] amo_old_val;
     reg [31:0] amo_new_val;
 
-    // LR/SC reservation
+    // LR/SC reservation. The reservation set is the naturally aligned word
+    // holding the LR's address -- the smallest set the spec allows -- so only
+    // the word address is kept. LR.W/SC.W are always word-aligned (anything
+    // else traps as misaligned), and a byte or halfword store anywhere in the
+    // word overlaps the set and must be seen as such.
     reg        reservation_valid;
-    reg [31:0] reservation_addr;
-    wire       sc_success = reservation_valid && (reservation_addr == exwb_alu_result);
+    reg [29:0] reservation_addr;
+    wire       sc_success = reservation_valid &&
+                            (reservation_addr == exwb_alu_result[31:2]);
 
     // Memory address and alignment
     wire [31:0] mem_addr_aligned = {exwb_alu_result[31:2], 2'b00};
@@ -973,7 +978,7 @@ module fyracore #(
             wfi_active        <= 1'b0;
             // Reservation
             reservation_valid <= 1'b0;
-            reservation_addr  <= 32'b0;
+            reservation_addr  <= 30'b0;
         end else begin
             // ---- PC ----
             pc <= next_pc;
@@ -1153,7 +1158,7 @@ module fyracore #(
             if (exwb_valid && !exwb_trap && !wb_mem_stall) begin
                 if (exwb_isLR) begin
                     reservation_valid <= 1'b1;
-                    reservation_addr  <= exwb_alu_result;
+                    reservation_addr  <= exwb_alu_result[31:2];
                 end else if (exwb_isSC) begin
                     reservation_valid <= 1'b0;
                 end else if (exwb_memWR) begin
@@ -1170,7 +1175,8 @@ module fyracore #(
                     // sequence may not contain loads or stores between the LR
                     // and the SC, and an AMO is not in the base I set, so
                     // neither clear is reachable inside a constrained loop.
-                    if (reservation_valid && reservation_addr == exwb_alu_result)
+                    if (reservation_valid &&
+                        reservation_addr == exwb_alu_result[31:2])
                         reservation_valid <= 1'b0;
                 end
             end
