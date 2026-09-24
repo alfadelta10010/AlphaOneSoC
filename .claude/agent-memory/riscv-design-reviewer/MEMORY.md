@@ -46,7 +46,8 @@ update after each review with confirmed decisions, findings, and recurring patte
 - **64-bit mtime/mtimecmp on a 32-bit datapath** — high/low read rollover race.
 - **DIV/REM edge cases** — divide-by-zero and INT_MIN/-1 signed overflow return values.
 - **FENCE.I** — must flush instruction fetch so the bootloader/loader sees written code.
-- **LR/SC reservation** invalidation across traps/interrupts even on one hart.
+- **LR/SC reservation**: SC-always-clears is load-bearing (Linux's ret_from_exception dummy
+  SC relies on it); the trap clear is optional. See finding_lrsc_policy_2026-09-22.md.
 - **Misaligned access** — precise, re-executable trap (or correct hardware support).
 - **Interrupt taken mid-multicycle op** — sampled only at safe boundaries; mepc correct.
 - **PSRAM variable latency** — bus wait-state handling, no dropped/duplicated transfers.
@@ -56,7 +57,11 @@ update after each review with confirmed decisions, findings, and recurring patte
 
 <!-- ID | severity | location | summary | status (open/fixed/accepted/wontfix) | date -->
 - 2026-09-05: WB-stall drops mem op (CRIT), MRET multicommit (CRIT), exc. priority (MAJ) — open
-- 2026-09-12 branch review: R1-R8 + V1-V4, all open — see finding_branch_review_2026-09-12.md
+- 2026-09-12 branch review: R1-R8 + V1-V4 — see finding_branch_review_2026-09-12.md
+- 2026-09-22 rtl-fix branch review: 2167485/fce59af/760a524/f2e42b5/11384f8/6c564b3/b7c5805
+  VERIFIED FIXED. NEW CRIT: muldiv livelock at IMEM_WAIT>=2 (C1); `csrw X; mret` loses the
+  write (C2 = old R1, unfixed). R3/R4/R5 + WARL third-copy still open. See
+  finding_branch_review_2026-09-22.md
 
 ## Recurring patterns observed
 
@@ -64,6 +69,13 @@ update after each review with confirmed decisions, findings, and recurring patte
 - CSR WARL masks re-implemented in csr.v, fyracore forwarding and tb dump — every new CSR
   forgets one copy (0x320 and mepc[1] in forwarding, 2026-09-12).
 - Comments claiming "matches Spike" are often unverified — probe Spike before trusting.
+- One-shot completion pulses dropped when the pipeline cannot advance (muldiv_done, 2026-09-22)
+  — the mirror image of the level-signal-committed-twice pattern. Check both directions.
+- Livelocks here are phase/congruence effects, not thresholds: a period that locks can be
+  safe one wait-state setting later. Sweep contiguously and compare against a non-atomic
+  control loop before calling it a defect.
+- Deterministic vs randomised wait states expose DIFFERENT bugs: randomised found the
+  interrupt-vs-stall overlap, deterministic found the muldiv phase-lock livelock. Run both.
 
 ## Notes index (2026-09-05 review)
 
@@ -75,3 +87,6 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [RTL area hotspots](rtl_area_hotspots.md) — ranked list of over-general structures (regfile reset, 3 barrel shifters, duplicated CSR WARL logic, unshared muldiv)
 - [2026-09-12 branch review findings](finding_branch_review_2026-09-12.md) — CSR write lost under MRET, misa.C stale window, MPRV/TW missing, Spike --instructions truncation
 - [Spike probed behaviours](reference_spike_probed_behaviours.md) — measured Spike device map, CSR WARL choices, mtval, and why --instructions is not a bound
+- [2026-09-22 rtl-fix branch review](finding_branch_review_2026-09-22.md) — what the 14 commits actually fixed, the muldiv livelock, csrw+mret write loss, and the reset-state probe
+- [LR/SC policy decision](finding_lrsc_policy_2026-09-22.md) — spec citations, why the trap clear is optional, the phase-locked interrupt livelock (real, not critical), recommended signal list
+- [KianV memory map](reference_kianv_memory_map.md) — the DT that actually boots NOMMU Linux on this class of silicon: RAM at 0x80000000, no PLIC, 10 kHz timebase
