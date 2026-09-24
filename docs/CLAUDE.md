@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-FyraCore is a 3-stage pipelined RV32IMAC+Zicsr+Zifencei RISC-V processor targeting Skywater 180nm fabrication. It supports M-mode and U-mode privilege levels with PMP. The goal is to boot no-MMU Linux (uClinux). Area is the #1 priority, speed is #2.
+FyraCore is a 3-stage pipelined RV32IMAC+Zicsr+Zifencei RISC-V processor targeting SkyWater 130nm (sky130, TinyTapeout). It supports M-mode and U-mode privilege levels with PMP. The goal is to boot no-MMU Linux (uClinux). Area is the #1 priority, speed is #2.
 
 A comprehensive reference document lives at `docs/FyraCore_CPU_Reference.md` — read it before making non-trivial changes.
 
@@ -38,6 +38,18 @@ make test-regfile
 # Clean build artifacts
 make clean
 ```
+
+`make test-all` fails if any unit testbench prints a FAIL or TIMEOUT line.
+
+The directed regression against Spike lives in `tests/directed/` (full-trace comparison, every test listed in its `MANIFEST`):
+
+```bash
+cd tests/directed && ./run.sh build && ./run.sh      # all runs
+./run.sh one <name> +DMEM_WAIT=3                      # one test, any plusargs
+./run.sh refs                                         # regenerate Spike references
+```
+
+Memory-timing plusargs: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2` (read data while not ready: X, zeros, garbage). Deterministic waits, random waits, zero waits and garbage data each expose different bugs; sweep them independently. A pipeline change is not verified until the directed suite and the relevant riscv-arch-test tests pass.
 
 If you need script-level options not exposed by the Makefile (e.g., `--vcd`, `--max-cycles`), fall back to the script directly:
 
@@ -87,23 +99,23 @@ Test programs are RISC-V assembly in `tests/*.S`. The build pipeline: `.S` → `
 - **EX**: Decode (`decoder`), control signals (`controller`), register read (`regFile`) with WB→EX forwarding, ALU execute, branch resolve, PMP checks, trap detection, interrupt injection.
 - **WB**: Memory access, CSR commit (`csr`), AMO phase 2, register writeback, trap entry.
 
-The pipeline top-level is `src/fyracore.v` (~1100 lines). It instantiates all other modules.
+The pipeline top-level is `src/fyracore.v` (~1250 lines). It instantiates all other modules.
 
 ### Key Architectural Patterns
 
 **CSR write pre-computation:** EX computes the full read-modify-write CSR value and stores it in `exwb_csr_wdata`. The CSR unit always receives `op=CSRRW` — it never does CSRRS/CSRRC itself. This simplifies the write path and forwarding.
 
-**CSR forwarding with WARL masks:** When WB writes a CSR that EX reads in the same cycle, forwarding applies the same bit masks as `csr.v` (mstatus masked with `0x221888` since MPRV and TW exist, mtvec `[1:0]` forced to `00`, mepc bit 1 masked when misa.C=0, pmpcfg0 per-byte lock, plus mie/mcounteren/mcountinhibit/mip). Any new writable CSR needs a forwarding entry in `csr_fwd_data` in `fyracore.v` — four CSRs were missing one and silently returned raw write data (`7babc48`).
+**CSR state seen by EX:** CSR writes commit in WB, one stage behind the EX consumers, and Zicsr requires a write's effects to be visible to the very next instruction. `csr.v` therefore computes `wval` — the value the CSR being written reads back after the write — and every WARL rule lives there and only there. fyracore forwards it (`csr_wval`) to an EX read of the same CSR or its U-mode counter alias and to `trap_target`/`mret_target`; the testbench trace prints it. The mstatus fields (MIE, MPP, MPRV, TW), `mie` and `misa.C` are exported post-write for the same reason. PMP registers are not forwarded: a write to `pmpcfg0`/`pmpaddr0-3` refetches the next instruction (`ex_pmp_csr_wr`). **A new CSR is added in `csr.v` only: the read case and `wval`.** Anything new read from CSR state in EX needs a post-write export or a refetch — this EX-consumes/WB-commits family has produced six bugs (misa.C, mstatus MPP, MPRV, mie, the counter aliases, PMP).
 
-**The same hazard applies to mstatus fields read outside `csr.v`.** MPRV and MPP are consumed by the data PMP check in EX, but a `csrw mstatus` does not commit until WB, so they need the same forward (`7cd1eb6`). This EX-consumes/WB-commits family has bitten three times; `misa.C` is still open. A test only catches it if the write and the dependent access are adjacent.
+**Redirects only on a non-stalled cycle.** Every `next_pc` arm is gated on `!stall`. During a stall EX may be looking at forwarded load data that is not valid yet (C3), and the fetch address must not move while a fetch is outstanding.
 
-**Trap/MRET target forwarding:** `trap_target` and `mret_target` forward from WB CSR writes to avoid stale redirect targets. Both apply WARL masks.
+**Memory handshake:** both ports use request/ready. A request is outstanding while `*_req` is high; its address (and for data we/wmask/wdata) is held until the cycle `*_ready` is seen with it. `imem_req` is always high; `dmem_req` excludes trapping accesses and a failing SC. `tb/memory_model.v` checks this every cycle and stops the run on a violation.
 
-**mstatus MIE forwarding for interrupt gating:** `mstatus_mie_eff` forwards MIE from WB to prevent a 1-cycle interrupt window after `csrci mstatus,8`.
+**Multi-cycle operations stall the pipeline:** MulDiv (33-34 cycles) and AMO (2 phases via `wb_busy`). `muldiv_have = muldiv_ready | muldiv_done` gates start, stall and capture: the result is taken on the done cycle if the pipeline can take it and held otherwise, and the unit is never restarted on its own done cycle (`2e6718b` did that, and every M instruction after the first returned the previous result). `muldiv_want` excludes a trapping instruction, or a fetch fault on an M-op word deadlocks. Interrupts are never injected while an M instruction is in EX or during any stall.
 
-**Multi-cycle operations stall the pipeline:** MulDiv (33-34 cycles) and AMO (2 cycles via `wb_busy`) hold the stall signal. Interrupts are never injected mid-multicycle — `irq_inject` excludes `muldiv_want` and `stall_other`. MulDiv completion is **sticky** (`muldiv_ready`), not a one-cycle pulse: the pulse version livelocked forever at every `IMEM_WAIT >= 2` because the result was dropped whenever the done cycle coincided with a fetch stall (`2e6718b`).
+**PMP:** `pmp_ifetch` checks `ifex_pc` (X), plus the upper half of a straddling 32-bit instruction during one extra EX cycle when PMP could deny it; `pmp_data` checks `ex_alu_result` with R/W/R+W (AMO R+W), at MPP's privilege when MPRV=1. Compares are on PA[33:2] (pmpaddr holds 34-bit addresses on RV32).
 
-**Dual PMP instances:** `pmp_ifetch` checks ifex_pc with X permission; `pmp_data` checks ex_alu_result with R/W/R+W. AMO uses access_type `3'b011` (R+W).
+**LR/SC:** the reservation set is the aligned word. Set on LR retire; cleared on any SC retire, a local store/AMO to the word, a trap/interrupt commit in WB, and reset. No external-agent clear (one hart, no other master).
 
 ### Memory Map (unified Von Neumann)
 
@@ -114,17 +126,19 @@ The pipeline top-level is `src/fyracore.v` (~1100 lines). It instantiates all ot
 0x0300_0000 – 0x0300_000F : GPIO
 ```
 
-Both instruction fetch and data access can target any address. The `memController` has two modes: `SIM_MODE=1` (flat 32MB array, always-ready) and `SIM_MODE=0` (QSPI FSM with address-tagged ifetch buffer). In simulation, CLINT lives in `tb/memory_model.v`; in hardware, it's inside `memController.v`.
+Provisional. The core only knows the map through its PMA parameters (`PMA_MEM_*` fetch+data, `PMA_IO0/1_*` data only; anything else faults). In simulation the CLINT lives in `tb/memory_model.v`. `memController.v` is not instantiated and predates the request/ready contract.
 
 ## Critical Invariants
 
 - **Trap cause priority** must match RISC-V spec Table 3.7: ifetch access fault (1) > illegal (2) > inst addr misaligned (0) > ecall (11/8) > ebreak (3) > misaligned (4/6) > data access fault (5/7). Locate the if-else chain by the `exwb_trap_cause` assignments, not by line number. Cause 2 is tested via `ex_illegal_insn`, which `ex_trap` also consumes so the two lists cannot drift; the fallthrough arm is cause 7, and it is reachable for exactly one condition. Reordered in `11384f8`.
 - **Counter CSRs** (mcycle, minstret) have merged always blocks — auto-increment and CSR write live in the same block to avoid dual-driver synthesis failures. Never split them.
 - **CSRRS/CSRRC with rs1=0** must NOT write. The pipeline uses `ex_csr_writes` (not `ex_csr_active`) to gate `exwb_csrWR`.
-- **mtvec is direct-mode only** — `[1:0]` forced to `2'b00` on write (WARL). Both the CSR write path and trap_target forwarding must apply this mask.
+- **mtvec is direct-mode only** — `[1:0]` forced to `2'b00` on write (WARL), in `wval`.
 - **IRQ MPP save:** `priv_mode` must NOT be set to M on `irq_inject` directly — it's updated via the `csr_trap_signal` path one cycle later so the CSR unit captures the correct old privilege for MPP.
-- **PMP locked entries:** TOR lock propagates downward (entry i with TOR+L locks pmpaddr[i-1]). Both `csr.v` writes and `fyracore.v` forwarding must check these conditions.
-- **pmpcfg A=2'b10 (NA4) is LEGAL and is stored as written.** It used to be masked to 2'b00 (OFF) on the grounds that it was reserved; it is not. NA4 is legal at granularity G=0, `src/pmp.v` implements it, and the reference model keeps it. What *is* masked is bits [6:5] of each byte, which are reserved and must read 0. All three copies of this masking must agree: `csr.v`, `csr_fwd_data` in `fyracore.v`, and `csr_committed` in `tb/tb_rivercore.v`. Fixed in `b7c5805`.
+- **PMP locked entries:** TOR lock propagates downward (entry i with TOR+L locks pmpaddr[i-1]). Implemented once, in `wval`.
+- **pmpcfg A=2'b10 (NA4) is LEGAL and is stored as written.** Bits [6:5] of each byte are reserved and read 0.
+- **mstatus:** resets to 0 (MPP=U, matching Spike); a write of MPP=01/10 is legalised to U.
+- **mip has no writable bits** on this M+U core; it reads the live MSIP/MTIP/MEIP wires.
 
 ## Verilog Conventions
 
