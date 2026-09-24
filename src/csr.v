@@ -127,8 +127,11 @@ module csr #(
     // mstatus as it will stand after a CSR write in WB commits this cycle.
     // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
     // the older instruction, so its value is what they must transform.
-    // M+U only: MPP's legal values are 00 (U) and 11 (M); a write of 01/10
-    // keeps the old MPP (WARL). MPRV and TW exist because U-mode does.
+    // M+U only: MPP's legal values are 00 (U) and 11 (M). A write of 01 (S,
+    // absent) or 10 (reserved) is legalised to U, the least-privileged
+    // mode -- one AND gate, and what the reference model does. (Keeping the
+    // old MPP is equally legal WARL behaviour, but diverged from Spike on
+    // every such write.) MPRV and TW exist because U-mode does.
     reg [31:0] mstatus_after_we;
     always @(*) begin
         mstatus_after_we = mstatus;
@@ -137,8 +140,7 @@ module csr #(
             mstatus_after_we[7]  = csr_new[7];   // MPIE
             mstatus_after_we[17] = csr_new[17];  // MPRV
             mstatus_after_we[21] = csr_new[21];  // TW
-            if (csr_new[12:11] == 2'b11 || csr_new[12:11] == 2'b00)
-                mstatus_after_we[12:11] = csr_new[12:11];
+            mstatus_after_we[12:11] = {2{csr_new[12] & csr_new[11]}};
         end
     end
 
