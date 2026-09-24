@@ -384,45 +384,12 @@ module tb_rivercore;
     //   dmem_we       — store indicator (top-level port)
     //   dmem_addr     — memory address (top-level port)
     //   cpu.priv_mode — privilege: 1=M, 0=U (non-blocking update, reads OLD value)
-    // Apply WARL masks to a CSR write so the dumped commit value matches
-    // what gets stored in csr.v (Spike emits the post-WARL value).
-    function automatic [31:0] csr_committed;
-        input [11:0] addr;
-        input [31:0] new_val;
-        begin
-            case (addr)
-                12'h300: csr_committed = new_val; // mstatus: see mstatus_committed (needs old_val)
-                12'h301: csr_committed = 32'h4010_1101 | (new_val & 32'h0000_0004); // misa: only C(2) writable
-                12'h304: csr_committed = new_val & 32'h0000_0888; // mie
-                12'h305: csr_committed = {new_val[31:2], 2'b00};   // mtvec (direct mode)
-                12'h306: csr_committed = new_val & 32'h0000_0007; // mcounteren CY/TM/IR writable
-                12'h320: csr_committed = new_val & 32'h0000_0005; // mcountinhibit
-                12'h341: csr_committed = {new_val[31:1], 1'b0};    // mepc
-                12'h344: csr_committed = new_val & ~32'h0000_0888; // mip (writable bits)
-                12'h3A0: csr_committed = {              // pmpcfg0: reserved [6:5] read 0
-                    new_val[31], 2'b00, new_val[28:24],
-                    new_val[23], 2'b00, new_val[20:16],
-                    new_val[15], 2'b00, new_val[12:8],
-                    new_val[7],  2'b00, new_val[4:0]};
-                default: csr_committed = new_val;
-            endcase
-        end
-    endfunction
-
-    // mstatus WARL committed value: needs current register state to preserve
-    // old MPP when new MPP write is illegal (01/10 in M+U-only system).
-    function automatic [31:0] mstatus_committed;
-        input [31:0] new_val;
-        input [31:0] old_val;
-        reg [1:0] new_mpp;
-        begin
-            new_mpp = (new_val[12:11] == 2'b11 || new_val[12:11] == 2'b00)
-                      ? new_val[12:11] : old_val[12:11];
-            mstatus_committed = (old_val & ~32'h0022_1888)
-                              | (new_val & 32'h0022_0088)
-                              | {19'b0, new_mpp, 11'b0};
-        end
-    endfunction
+    // CSR commit values are printed from cpu.csr_wval: csr.v's own post-write
+    // value, i.e. exactly what the register holds once the write commits
+    // (Spike logs the post-WARL value). This used to be a fourth copy of the
+    // WARL rules, recomputed here, and it drifted -- it printed mepc without
+    // the IALIGN mask and ignored locked PMP entries, so the trace claimed
+    // values the DUT never held.
 
     // priv_mode is updated at EX stage on mret; by the time the mret retires at
     // WB the register already holds the post-mret priv. Spike emits the priv at
@@ -457,28 +424,42 @@ module tb_rivercore;
             // CSR commit (Spike format: c<addr_dec>_<name> 0x<value>)
             if (cpu.exwb_csrWR) begin
                 case (cpu.exwb_csr_addr)
-                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   mstatus_committed(cpu.exwb_csr_wdata, cpu.csr_unit.mstatus));
+                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   cpu.csr_wval);
+                    // A refused misa.C clear leaves misa unchanged, and Spike
+                    // logs nothing for it.
                     12'h301: if (cpu.exwb_csr_wdata[2] == 1'b1 || !cpu.exwb_trap_pc[1])
-                                  $fwrite(dump_fd, " c769_misa 0x%08h", csr_committed(12'h301, cpu.exwb_csr_wdata));
-                    12'h304: $fwrite(dump_fd, " c772_mie 0x%08h",       csr_committed(12'h304, cpu.exwb_csr_wdata));
-                    12'h305: $fwrite(dump_fd, " c773_mtvec 0x%08h",     csr_committed(12'h305, cpu.exwb_csr_wdata));
-                    12'h306: $fwrite(dump_fd, " c774_mcounteren 0x%08h",csr_committed(12'h306, cpu.exwb_csr_wdata));
-                    12'h320: $fwrite(dump_fd, " c800_mcountinhibit 0x%08h", csr_committed(12'h320, cpu.exwb_csr_wdata));
-                    12'h340: $fwrite(dump_fd, " c832_mscratch 0x%08h",  cpu.exwb_csr_wdata);
-                    12'h341: $fwrite(dump_fd, " c833_mepc 0x%08h",      csr_committed(12'h341, cpu.exwb_csr_wdata));
-                    12'h342: $fwrite(dump_fd, " c834_mcause 0x%08h",    cpu.exwb_csr_wdata);
-                    12'h343: $fwrite(dump_fd, " c835_mtval 0x%08h",     cpu.exwb_csr_wdata);
-                    12'h344: $fwrite(dump_fd, " c836_mip 0x%08h",       csr_committed(12'h344, cpu.exwb_csr_wdata));
-                    12'h3A0: $fwrite(dump_fd, " c928_pmpcfg0 0x%08h",   csr_committed(12'h3A0, cpu.exwb_csr_wdata));
-                    12'h3B0: $fwrite(dump_fd, " c944_pmpaddr0 0x%08h",  cpu.exwb_csr_wdata);
-                    12'h3B1: $fwrite(dump_fd, " c945_pmpaddr1 0x%08h",  cpu.exwb_csr_wdata);
-                    12'h3B2: $fwrite(dump_fd, " c946_pmpaddr2 0x%08h",  cpu.exwb_csr_wdata);
-                    12'h3B3: $fwrite(dump_fd, " c947_pmpaddr3 0x%08h",  cpu.exwb_csr_wdata);
-                    12'hB00: $fwrite(dump_fd, " c2816_mcycle 0x%08h",   cpu.exwb_csr_wdata);
-                    12'hB02: $fwrite(dump_fd, " c2818_minstret 0x%08h", cpu.exwb_csr_wdata);
-                    12'hB80: $fwrite(dump_fd, " c2944_mcycleh 0x%08h",  cpu.exwb_csr_wdata);
-                    12'hB82: $fwrite(dump_fd, " c2946_minstreth 0x%08h",cpu.exwb_csr_wdata);
-                    default: $fwrite(dump_fd, " c%0d 0x%08h", cpu.exwb_csr_addr, cpu.exwb_csr_wdata);
+                                  $fwrite(dump_fd, " c769_misa 0x%08h", cpu.csr_wval);
+                    12'h304: $fwrite(dump_fd, " c772_mie 0x%08h",       cpu.csr_wval);
+                    12'h305: $fwrite(dump_fd, " c773_mtvec 0x%08h",     cpu.csr_wval);
+                    12'h306: $fwrite(dump_fd, " c774_mcounteren 0x%08h",cpu.csr_wval);
+                    12'h320: $fwrite(dump_fd, " c800_mcountinhibit 0x%08h", cpu.csr_wval);
+                    12'h340: $fwrite(dump_fd, " c832_mscratch 0x%08h",  cpu.csr_wval);
+                    12'h341: $fwrite(dump_fd, " c833_mepc 0x%08h",      cpu.csr_wval);
+                    12'h342: $fwrite(dump_fd, " c834_mcause 0x%08h",    cpu.csr_wval);
+                    12'h343: $fwrite(dump_fd, " c835_mtval 0x%08h",     cpu.csr_wval);
+                    12'h344: $fwrite(dump_fd, " c836_mip 0x%08h",       cpu.csr_wval);
+                    // A PMP write that a lock discards entirely is not
+                    // logged by Spike: pmpcfg0 only when every byte is
+                    // locked, pmpaddr[i] when its own or entry i+1's TOR
+                    // lock holds it.
+                    12'h3A0: if (!(cpu.csr_pmpcfg0[7]  && cpu.csr_pmpcfg0[15] &&
+                                   cpu.csr_pmpcfg0[23] && cpu.csr_pmpcfg0[31]))
+                                  $fwrite(dump_fd, " c928_pmpcfg0 0x%08h",  cpu.csr_wval);
+                    12'h3B0: if (!cpu.csr_unit.tor_lock_addr0)
+                                  $fwrite(dump_fd, " c944_pmpaddr0 0x%08h", cpu.csr_wval);
+                    12'h3B1: if (!cpu.csr_unit.tor_lock_addr1)
+                                  $fwrite(dump_fd, " c945_pmpaddr1 0x%08h", cpu.csr_wval);
+                    12'h3B2: if (!cpu.csr_unit.tor_lock_addr2)
+                                  $fwrite(dump_fd, " c946_pmpaddr2 0x%08h", cpu.csr_wval);
+                    12'h3B3: if (!cpu.csr_unit.tor_lock_addr3)
+                                  $fwrite(dump_fd, " c947_pmpaddr3 0x%08h", cpu.csr_wval);
+                    12'hB00: $fwrite(dump_fd, " c2816_mcycle 0x%08h",   cpu.csr_wval);
+                    12'hB02: $fwrite(dump_fd, " c2818_minstret 0x%08h", cpu.csr_wval);
+                    12'hB80: $fwrite(dump_fd, " c2944_mcycleh 0x%08h",  cpu.csr_wval);
+                    12'hB82: $fwrite(dump_fd, " c2946_minstreth 0x%08h",cpu.csr_wval);
+                    // Writes Spike accepts without logging: the
+                    // unimplemented pmpcfg1-3 and pmpaddr4-15, which read 0.
+                    default: ;
                 endcase
             end
 
