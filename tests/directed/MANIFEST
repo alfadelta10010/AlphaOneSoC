@@ -1,0 +1,80 @@
+# Directed regression manifest -- read by run.sh.
+#
+#   <name> spike  [+PLUSARG...]                          full-trace compare vs <name>.ref
+#   <name> expect <reg>=<hex>... [-- +PLUSARG...]        DUT only (deliberate divergence)
+#
+# Every .S in this directory must appear here. Memory timing matters: fixed
+# waits, random waits, zero waits and garbage not-ready data each expose
+# different bugs, so the stall-sensitive tests run under several.
+
+# ---- memory handshake, loads/stores, atomics ----------------------------------
+memops              spike
+memops              spike  +DMEM_WAIT=3
+memops              spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+atomics             spike
+atomics             spike  +DMEM_WAIT=3
+atomics             spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
+t_amo               spike
+t_amo               spike  +DMEM_WAIT=2 +DMEM_RANDOM=1
+t_memstress         spike
+t_memstress         spike  +IMEM_WAIT=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
+
+# ---- LR/SC ------------------------------------------------------------------
+lrsc_io             spike
+# Same-hart store/AMO to the reserved word clears the reservation here and
+# not on Spike; both are legal (the sequence is unconstrained).
+lrsc_policy         expect x10=0x1 x11=0x1 x12=0x1 x13=0x1 x14=0x0
+lrsc_policy         expect x10=0x1 x11=0x1 x12=0x1 x13=0x1 x14=0x0 -- +DMEM_WAIT=3
+
+# ---- multiply / divide --------------------------------------------------------
+t_mul               spike
+t_mul               spike  +IMEM_WAIT=2
+t_mul               spike  +IMEM_WAIT=5
+t_div               spike
+t_div               spike  +IMEM_WAIT=2
+
+# ---- traps, exception priority, mtval -----------------------------------------
+causes              spike
+causes              spike  +IMEM_WAIT=2 +DMEM_WAIT=2
+illegal_ld_misalign spike
+illegal_sd_misalign spike
+illegal_ld_aligned  spike
+lw_misalign         spike
+c_misalign          spike
+
+# ---- MRET, interrupts --------------------------------------------------------------
+mret_stall          spike
+mret_stall          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1
+mret_ctrl           spike
+mret_ctrl           spike  +IMEM_WAIT=2
+mret_fault          spike
+t_csrmret           spike
+t_csrmret           spike  +DMEM_WAIT=3
+# Timer-driven: mtime ticks per clock here and per ~100 retires on Spike, so
+# these cannot be lockstep-compared. They check the program completes with
+# no interrupt landing at a bad mepc; randomised waits are what used to
+# expose the double-injection bug.
+t_irq               expect x8=0x190 x25=0x0
+t_irq               expect x8=0x190 x25=0x0 -- +DMEM_WAIT=2 +DMEM_RANDOM=1
+t_irq2              expect x8=0x7d0 x25=0x0
+t_irq2              expect x8=0x7d0 x25=0x0 -- +IMEM_WAIT=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+t_mulirq            expect x8=0x14
+t_mulirq            expect x8=0x14 -- +IMEM_WAIT=2 +DMEM_WAIT=1 +DMEM_RANDOM=1
+t_ctl               expect x8=0x64 x25=0x64
+t_ctl               expect x8=0x64 x25=0x64 -- +IMEM_WAIT=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
+
+# ---- CSRs --------------------------------------------------------------------------
+csrfwd              spike
+marchid             spike
+mstatus_bits        spike
+t_mstatus           spike
+t_mepc              spike
+t_warl              spike
+# Reset values per spec: PMP off (Spike resets it permissive), mstatus 0.
+t_reset             expect x8=0x0 x9=0x0 x18=0x0 x19=0x0 x20=0x40101105 x21=0x0 x22=0x0 x23=0x0 x24=0x0
+
+# ---- PMP, MPRV, U-mode ---------------------------------------------------------
+pmpcfg              spike
+mprv                spike
+mprv2               spike
+t_umode             spike

@@ -1,14 +1,30 @@
 #!/bin/bash
-# run.sh — build the DUT, then run every directed test against Spike.
+# run.sh — directed regression for FyraCore against Spike.
 #
-#   ./run.sh build          rebuild sim from ../../src and ../../tb
-#   ./run.sh refs           regenerate the Spike reference for every test
-#   ./run.sh                run the regression
+#   ./run.sh build              rebuild the sim from ../../src and ../../tb
+#   ./run.sh                    every run listed in MANIFEST
 #   ./run.sh one <name> [+PLUSARG...]
+#   ./run.sh refs               regenerate the Spike reference of every test
 #
-# Tests live beside this script. Artifacts go to ./out (gitignored).
-# Toolchain: riscv64-unknown-elf-* and spike on PATH. On the sandbox those are
-# under /home/mempool/tools/{rv64-gcc-elf,rv32-isa-sim}/bin.
+# MANIFEST has one run per line:
+#
+#   <name> spike  [+PLUSARG...]
+#       Full-trace comparison: the DUT's commit log must equal <name>.ref
+#       (Spike's commit log up to the tohost store) line for line, and must
+#       itself reach the tohost store.
+#
+#   <name> expect <reg>=<hex>... [-- +PLUSARG...]
+#       DUT only, for a deliberate, spec-legal divergence from Spike: the
+#       final value of each listed register must be exactly as given. The
+#       comment above the line says why the test cannot be Spike-compared.
+#
+# Every run fails on: an assembly error, a testbench ERROR line (e.g. the
+# memory handshake checker), a DUT-ABORT (watchdog), an empty dump, or not
+# reaching tohost. Every .S in this directory must appear in MANIFEST, so a
+# test cannot silently drop out of the suite.
+#
+# Tests live beside this script, artifacts go to ./out (gitignored).
+# Toolchain: riscv64-unknown-elf-*, spike and iverilog on PATH.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -16,6 +32,9 @@ OUT="$HERE/out"
 mkdir -p "$OUT"
 SPIKE_ARGS="--hartids=0 --log-commits --priv=mu --pc=0x80000000 --isa=rv32imac_zicntr
             -m0x80000000:0x2000000 --pmpregions=4 --pmpgranularity=4"
+TOHOST=80001000
+# A test that needs a linker script of its own ships <name>.ld.
+ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 
 build() {
   iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
@@ -24,86 +43,118 @@ build() {
   echo "build ok"
 }
 
-asm() { # asm <name> [extra gcc flags]
-  local n=$1; shift
+asm() { # asm <name>
+  local n=$1
   riscv64-unknown-elf-gcc -static -std=gnu99 -O0 -mcmodel=medany -nostdlib \
-    -nostartfiles -march=rv32imac_zicsr_zifencei -mabi=ilp32 "$@" \
-    -T "$HERE/link.ld" "$HERE/$n.S" -o "$OUT/$n.elf" 2>/dev/null || return 1
+    -nostartfiles -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
+    -T "$(ld_for "$n")" "$HERE/$n.S" -o "$OUT/$n.elf" 2>"$OUT/$n.asm.log" || return 1
   riscv64-unknown-elf-objcopy -O verilog --change-addresses=-0x80000000 \
     "$OUT/$n.elf" "$OUT/$n.hex"
 }
 
+# Spike runs on past tohost (it only polls HTIF every few thousand steps),
+# so the reference is cut four lines after the tohost store -- the testbench
+# drains at most that many retires after it. The 5 boot-ROM lines are
+# dropped, and so are the mstatush/tcontrol/mtinst/mtval2 tokens Spike logs
+# alongside trap entry and mstatus writes on RV32 for CSRs this core does not
+# log. A reference that never reaches tohost is capped instead.
 ref() { # ref <name>
   local n=$1
-  spike $SPIKE_ARGS --log "$OUT/$n.ref.raw" "$OUT/$n.elf" >/dev/null 2>&1
-  sed '1,5d' "$OUT/$n.ref.raw" > "$HERE/$n.ref"
+  ( ulimit -f 200000; timeout 60 spike $SPIKE_ARGS --log "$OUT/$n.ref.raw" "$OUT/$n.elf" \
+      </dev/null >/dev/null 2>&1 ) 2>/dev/null
+  sed '1,5d' "$OUT/$n.ref.raw" \
+    | sed -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2) 0x[0-9a-f]+//g' \
+    | awk -v t="mem 0x$TOHOST " 'index($0, t) && !cut { cut = NR + 4 }
+                                  { print } cut && NR >= cut { exit } NR >= 20000 { exit }' \
+    > "$HERE/$n.ref"
 }
 
-# Spike pads single-digit register names to width 3 ("x8  0x..."), so the
-# separator must be ' +'. A single-space pattern silently matches x10-x31 only.
-rd() { grep -oE "\b$2 +0x[0-9a-fx]+" "$1" 2>/dev/null | tail -1 | awk '{print $2}'; }
+sim() { # sim <name> <plusargs...>
+  local n=$1; shift
+  vvp "$OUT/sim" +INIT_FILE="$OUT/$n.hex" +DUMP_FILE="$OUT/$n.dut" \
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=400000 "$@" >"$OUT/$n.sim.log" 2>&1
+}
+
+# Spike pads single-digit register names to width 3 ("x8  0x..."), so both
+# traces are compared with runs of spaces squeezed, and register values are
+# extracted with ' +'. A single-space pattern silently matches x10-x31 only.
+norm() { sed -E 's/ +/ /g' "$1"; }
+rd()   { grep -oE "\b$2 +0x[0-9a-f]+" "$1" 2>/dev/null | tail -1 | awk '{print $2}'; }
 
 pass=0; fail=0
-chk() { # chk <name> <regs...> [-- <plusargs...>]
-  local t=$1; shift; local regs=() extra=() seen=0
-  for a in "$@"; do
-    if [ "$a" = "--" ]; then seen=1
-    elif [ $seen = 0 ]; then regs+=("$a"); else extra+=("$a"); fi
-  done
-  asm "$t" || { printf "  BUILDFAIL %s\n" "$t"; fail=$((fail+1)); return; }
-  [ -f "$HERE/$t.ref" ] || ref "$t"
-  vvp "$OUT/sim" +INIT_FILE="$OUT/$t.hex" +DUMP_FILE="$OUT/$t.dut" \
-      +TOHOST_ADDR=80001000 +MAX_CYCLES=400000 "${extra[@]}" >/dev/null 2>&1
-  local d="" r=""
-  for g in "${regs[@]}"; do d="$d $(rd "$OUT/$t.dut" $g)"; r="$r $(rd "$HERE/$t.ref" $g)"; done
-  if [ "$d" = "$r" ]; then pass=$((pass+1)); printf "  PASS %-24s %s\n" "$t ${extra[*]}" "$d"
-  else fail=$((fail+1)); printf "  FAIL %-24s\n    dut:%s\n    ref:%s\n" "$t ${extra[*]}" "$d" "$r"; fi
+ok()  { pass=$((pass+1)); printf "  PASS %s\n" "$1"; }
+bad() { fail=$((fail+1)); printf "  FAIL %s\n" "$1"; [ -n "${2:-}" ] && printf "%s\n" "$2"; }
+
+# Checks common to both modes; prints a reason and returns 1 on failure.
+sane() { # sane <name>
+  local n=$1
+  grep -q "ERROR" "$OUT/$n.sim.log" && { grep -m1 "ERROR" "$OUT/$n.sim.log"; return 1; }
+  grep -q "DUT-ABORT" "$OUT/$n.dut" && { grep -m1 "DUT-ABORT" "$OUT/$n.dut"; return 1; }
+  [ -s "$OUT/$n.dut" ] || { echo "    empty dump"; return 1; }
+  grep -q "mem 0x$TOHOST 0x0*1\$" "$OUT/$n.dut" || { echo "    never reached tohost"; return 1; }
+  return 0
 }
 
-chk_exact() { # chk_exact <name> "<expected>" <regs...>  -- for intentional Spike divergences
-  local t=$1 want=$2; shift 2
-  asm "$t" || { printf "  BUILDFAIL %s\n" "$t"; fail=$((fail+1)); return; }
-  vvp "$OUT/sim" +INIT_FILE="$OUT/$t.hex" +DUMP_FILE="$OUT/$t.dut" \
-      +TOHOST_ADDR=80001000 +MAX_CYCLES=400000 >/dev/null 2>&1
-  local d=""
-  for g in "$@"; do d="$d $(rd "$OUT/$t.dut" $g)"; done
-  if [ "$d" = " $want" ]; then pass=$((pass+1)); printf "  PASS %-24s %s (policy, not Spike)\n" "$t" "$d"
-  else fail=$((fail+1)); printf "  FAIL %-24s\n    got :%s\n    want: %s\n" "$t" "$d" "$want"; fi
+run_spike() { # run_spike <name> <plusargs...>
+  local n=$1; shift; local label="$n $*"
+  asm "$n" || { bad "$label" "    assembly failed"; return; }
+  [ -f "$HERE/$n.ref" ] || ref "$n"
+  sim "$n" "$@"
+  local why; why=$(sane "$n") || { bad "$label" "$why"; return; }
+  local nd; nd=$(wc -l < "$OUT/$n.dut")
+  local first; first=$(diff <(norm "$OUT/$n.dut") <(norm "$HERE/$n.ref" | head -n "$nd") | head -1)
+  if [ -z "$first" ] && [ "$(norm "$HERE/$n.ref" | head -n "$nd" | wc -l)" = "$nd" ]; then
+    ok "$label"
+  else
+    local ln; ln=$(echo "$first" | grep -oE '^[0-9]+' | head -1); ln=${ln:-$nd}
+    bad "$label" "    line $ln
+      dut: $(norm "$OUT/$n.dut" | sed -n "${ln}p")
+      ref: $(norm "$HERE/$n.ref" | sed -n "${ln}p")"
+  fi
+}
+
+run_expect() { # run_expect <name> <reg>=<hex>... [-- <plusargs...>]
+  local n=$1; shift; local checks=() extra=() seen=0
+  for a in "$@"; do
+    if [ "$a" = "--" ]; then seen=1
+    elif [ $seen = 0 ]; then checks+=("$a"); else extra+=("$a"); fi
+  done
+  local label="$n ${extra[*]} (expect)"
+  asm "$n" || { bad "$label" "    assembly failed"; return; }
+  sim "$n" "${extra[@]}"
+  local why; why=$(sane "$n") || { bad "$label" "$why"; return; }
+  local c r want got msg=""
+  for c in "${checks[@]}"; do
+    r=${c%%=*}; want=$((${c#*=})); got=$(rd "$OUT/$n.dut" "$r")
+    [ -n "$got" ] && [ $((got)) = "$want" ] || msg="$msg    $r = ${got:-<never written>}, want $(printf 0x%08x "$want")
+"
+  done
+  [ -z "$msg" ] && ok "$label" || bad "$label" "${msg%$'\n'}"
 }
 
 suite() {
-  chk memops              x10 x11 x13 x15
-  chk memops              x10 x11 x13 x15 -- +DMEM_WAIT=3
-  chk memops              x10 x11 x13 x15 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
-  chk atomics             x10 x11 x12 x13 x14 x15 x16
-  chk atomics             x10 x11 x12 x13 x14 x15 x16 -- +DMEM_WAIT=3
-  chk causes              x12
-  chk causes              x12 -- +IMEM_WAIT=2 +DMEM_WAIT=2
-  chk mret_stall          x10 x11
-  chk mret_ctrl           x10 x11
-  chk mret_fault          x10 x12 x13
-  chk illegal_ld_misalign x12 x13
-  chk illegal_sd_misalign x12 x13
-  chk lw_misalign         x12 x13
-  chk illegal_ld_aligned  x12 x13
-  chk c_misalign          x12 x13
-  chk pmpcfg              x10 x11
-  chk csrfwd              x10 x11 x12 x13
-  chk marchid             x10 x11 x12
-  chk lrsc_io             x14
-  chk mprv2               x11 x12 x14
-  # lrsc_policy is NOT Spike-compared. Cases 1 and 2 (same-hart store / AMO
-  # overlapping the reservation) clear it here and do not on Spike. Both are
-  # conformant -- conservative clearing is explicitly permitted -- so this is
-  # checked against the intended DUT policy instead. See commit 027a17d.
-  chk_exact lrsc_policy "0x00000001 0x00000001 0x00000001 0x00000001 0x00000000" x10 x11 x12 x13 x14
+  local missing
+  for f in "$HERE"/*.S; do
+    local t; t=$(basename "$f" .S)
+    grep -qE "^$t( |\$)" "$HERE/MANIFEST" || missing="${missing:-} $t"
+  done
+  [ -n "${missing:-}" ] && bad "MANIFEST" "    not listed:$missing"
+  while read -r name mode rest; do
+    case "$name" in ''|\#*) continue ;; esac
+    # shellcheck disable=SC2086
+    case "$mode" in
+      spike)  run_spike "$name" $rest ;;
+      expect) run_expect "$name" $rest ;;
+      *)      bad "$name" "    unknown mode '$mode'" ;;
+    esac
+  done < "$HERE/MANIFEST"
   echo "REGRESS pass=$pass fail=$fail"
+  [ $fail = 0 ]
 }
 
 case "${1:-run}" in
   build) build ;;
   refs)  for f in "$HERE"/*.S; do n=$(basename "$f" .S); asm "$n" && ref "$n" && echo "ref $n"; done ;;
-  one)   shift; t=$1; shift; asm "$t" && vvp "$OUT/sim" +INIT_FILE="$OUT/$t.hex" \
-           +DUMP_FILE="$OUT/$t.dut" +TOHOST_ADDR=80001000 +MAX_CYCLES=400000 "$@" ;;
+  one)   shift; t=$1; shift; asm "$t" && sim "$t" "$@"; tail -3 "$OUT/$t.sim.log" ;;
   *)     build && suite ;;
 esac
