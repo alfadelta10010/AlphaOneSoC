@@ -880,7 +880,15 @@ module fyracore #(
 
     reg [31:0] next_pc;
     always @(*) begin
-        if (ex_trap)
+        // !stall: the trap is only real on the cycle its instruction leaves
+        // EX. During a stall EX can be looking at operands that are not valid
+        // yet -- a load-use or AMO-read stall forwards wb_data, i.e. dmem_rdata
+        // before dmem_ready -- and a garbage address can raise ex_misaligned
+        // or ex_data_fault for a cycle. Redirecting then sent fetch to mtvec
+        // while IF/EX held the instruction; when the data arrived the trap
+        // vanished, the instruction retired normally, and the handler ran
+        // with no trap taken. Every other redirect below is already gated.
+        if (ex_trap && !stall)
             next_pc = trap_target;
         else if (irq_inject)
             // Interrupt: redirect to mtvec; mepc will hold ifex_pc so the
