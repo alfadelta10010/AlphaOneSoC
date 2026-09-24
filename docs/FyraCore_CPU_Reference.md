@@ -2,17 +2,17 @@
 
 ## 1. Overview
 
-**FyraCore** is a 3-stage pipelined RISC-V processor implementing the **RV32IMAC** ISA plus the **Zicsr** and **Zifencei** standard extensions. It supports **M-mode** (Machine) and **U-mode** (User) privilege levels with Physical Memory Protection (PMP). The core is designed for area-constrained fabrication on **Skywater 180nm** and targets booting no-MMU Linux (uClinux-style).
+**FyraCore** is a 3-stage pipelined RISC-V processor implementing the **RV32IMAC** ISA plus the **Zicsr**, **Zicntr** and **Zifencei** standard extensions. It supports **M-mode** (Machine) and **U-mode** (User) privilege levels with Physical Memory Protection (PMP). The core is designed for area-constrained fabrication on **Skywater 130nm** (sky130, TinyTapeout) and targets booting NOMMU M-mode Linux.
 
 | Property | Value |
 |---|---|
-| ISA | RV32IMAC + Zicsr + Zifencei |
+| ISA | RV32IMAC + Zicsr + Zicntr + Zifencei |
 | Pipeline | 3 stages: IF / EX / WB |
 | Privilege Modes | M (Machine) + U (User) |
-| Memory Protection | PMP, 4 regions (TOR + NA4 + NAPOT) |
-| Interrupts | Timer, External, Software (via CLINT) |
-| Target Process | Skywater 180nm |
-| Primary Goal | Boot no-MMU Linux with area as #1 priority |
+| Memory Protection | PMP, 4 entries (OFF / TOR / NA4 / NAPOT), plus a fixed PMA map |
+| Interrupts | Timer, Software (CLINT), External (one input pin) |
+| Memory interface | Separate fetch and data ports, request/ready handshake |
+| Primary Goal | Boot NOMMU Linux with area as #1 priority |
 
 ---
 
@@ -27,75 +27,77 @@
   | C-Decomp  | ---------> | Regfile Read     | -----> | Writeback       |
   | PC Update |             | ALU / MulDiv     |        | CSR Commit      |
   +-----------+             | Branch Resolve   |        | Trap Entry      |
-                            | PMP Check        |        | AMO Phase 2     |
-                            | Trap Detection   |        +-----------------+
-                            +------------------+
+                            | PMA + PMP Check  |        | AMO Phase 2     |
+                            | Trap Detection   |        | LR/SC reservation|
+                            +------------------+        +-----------------+
 ```
 
 **IF (Instruction Fetch):**
-- Fetches instruction from `imem_addr` (= PC)
-- Detects compressed instructions (bits `[1:0] != 2'b11`)
-- Decompresses 16-bit RV32C instructions to 32-bit equivalents via `compressed_decoder`
+- Requests the instruction at `imem_addr` (= PC); `imem_req` is always high
+- The PC only changes on a cycle the fetch completes, so the address of an outstanding fetch is never withdrawn
+- Detects compressed instructions (bits `[1:0] != 2'b11`) and expands them via `compressed_decoder`
 - Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal)
 
 **EX (Execute):**
-- Decodes instruction fields via `decoder`
-- Generates control signals via `controller`
-- Reads register file (with WB->EX forwarding)
-- Executes ALU operation or starts multi-cycle multiply/divide
-- Evaluates branch conditions
-- Performs PMP checks on both ifetch PC and data address
-- Detects all trap conditions (illegal, misaligned, PMP fault, ecall, ebreak)
-- Computes CSR read-modify-write value
-- Detects and injects interrupts
+- Decodes instruction fields (`decoder`) and control signals (`controller`)
+- Reads the register file with WB->EX forwarding
+- Executes the ALU operation or runs the multi-cycle multiply/divide unit
+- Evaluates branches
+- Checks the fetch (both halves of a straddling 32-bit instruction) and the data address against the PMA map and PMP
+- Detects all synchronous traps and injects interrupts
+- Computes the CSR read-modify-write value
 
 **WB (Writeback):**
-- Performs memory load/store
-- Handles AMO two-phase operations (read then write)
-- Commits CSR writes
-- Writes back to register file
-- Commits traps to CSR unit (mepc, mcause, mtval, mstatus)
+- Performs the data memory access (a load, a store, or the two phases of an AMO)
+- Writes back the register file
+- Commits CSR writes and traps (mepc, mcause, mtval, mstatus)
+- Sets and clears the LR/SC reservation
 
 ### 2.2 Hazard Handling
 
 | Hazard | Resolution |
 |---|---|
 | Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
-| Load-use | 1-cycle pipeline stall |
+| Load-use | Stall until the load's data returns |
 | Branch/Jump | 1-cycle flush penalty |
-| Multi-cycle MulDiv | Pipeline stall until `muldiv_done` |
-| AMO | 2-cycle WB stall (read phase, write phase) |
-| Memory not ready | `imem_ready` / `dmem_ready` stall |
-| WFI | Pipeline stall until interrupt pending or NOP if no sources enabled in `mie` |
+| Multi-cycle MulDiv | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
+| AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
+| Memory not ready | Stall while `imem_ready` is low, or while a data request is outstanding |
+| WFI | Stall until an enabled interrupt is pending; NOP if no source is enabled in `mie` |
+| Straddling fetch with PMP live | One extra EX cycle to PMP-check the upper half (`ex_ifetch_hi_phase`) |
+| PMP CSR write | The next instruction is refetched, like FENCE.I |
 
-The stall signal hierarchy:
 ```
-stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active
-muldiv_stall = muldiv_want && (muldiv_start || muldiv_busy)
-stall = stall_other || muldiv_stall
-flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || irq_inject
+stall_other  = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active
+               || ex_ifetch_hi_phase
+wb_mem_stall = dmem_req && !dmem_ready
+muldiv_want  = ifex_valid && ctrl_isMulDiv && !ex_trap
+muldiv_have  = muldiv_ready || muldiv_done
+muldiv_stall = muldiv_want && !muldiv_have
+stall        = stall_other || muldiv_stall
+flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr
+               || irq_inject
 ```
 
-### 2.3 CSR Forwarding
+Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because EX can briefly see not-yet-valid forwarded load data during a load-use or AMO-read stall.
 
-When WB writes a CSR that EX reads in the same cycle, the forwarding logic (`csr_fwd`) bypasses the CSR register file and applies the same per-CSR write masks that `csr.v` would apply:
+### 2.3 CSR Values Seen by EX
 
-- `mstatus` (0x300): masked with `0x0000_1888` (MIE, MPIE, MPP bits only)
-- `mtvec` (0x305): bits `[1:0]` forced to `2'b00` (direct mode only, WARL)
-- `mepc` (0x341): bit 0 forced to 0
-- `pmpcfg0` (0x3A0): per-byte lock preservation, reserved `A=2'b10` masked to `2'b00`
-- `pmpaddr[0-3]`: forwarding suppressed if entry is locked (own L bit or TOR lock from entry i+1)
+CSR writes commit in WB, one stage behind EX. Zicsr requires a write's effects to be visible to the very next instruction, so `csr.v` exposes post-write state:
+
+- **`wval_out` (`csr_wval`)**: the value the CSR at `waddr` reads back once the pending write commits. Every WARL rule lives here and only here: MPP legalisation, the misa.C refusal, mie/mcounteren/mcountinhibit masks, mtvec direct mode, the mepc IALIGN read mask, mip's live bits, per-byte pmpcfg locks, TOR/L locks on pmpaddr, read-zero CSRs. The register update stores this value.
+- **CSR read forwarding**: an EX read of the CSR being written in WB (or of its U-mode counter alias: `cycle`/`instret`/`cycleh`/`instreth`) gets `csr_wval`.
+- **Post-write exports**: `mstatus_mie`, `mstatus_mpp`, `mstatus_mprv`, `mstatus_tw`, `mie_out` and `misa_c` all reflect a pending WB write, because their consumers (interrupt gating, the MRET privilege restore, the data PMP check, the U-mode WFI check, compressed decode and branch-target alignment) sit in EX.
+- **PMP registers are not forwarded.** A write to `pmpcfg0` or `pmpaddr0-3` refetches the next instruction instead (`ex_pmp_csr_wr`), so it reaches EX after the write has committed. This costs one cycle per PMP write instead of a 160-bit forwarding mux.
 
 ### 2.4 Trap Target / MRET Target Forwarding
 
-The pipeline forwards mtvec and mepc from WB CSR writes to avoid stale redirect targets. Without this, sequences like `csrw mepc, t5; mret` would use the old mepc value.
-
 ```verilog
-wire [31:0] trap_target = mtvec_fwd ? {exwb_csr_wdata[31:2], 2'b00} : csr_mtvec;
-wire [31:0] mret_target = mepc_fwd  ? {exwb_csr_wdata[31:1], 1'b0}  : csr_mepc;
+wire [31:0] trap_target = mtvec_fwd ? csr_wval : csr_mtvec;
+wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 ```
 
-Both forwarded values apply the same WARL masks as the CSR write path.
+`csrw mepc, t0; mret` returns to the new mepc; `csrw mtvec, t0` followed by a trapping instruction vectors to the new mtvec.
 
 ---
 
@@ -105,58 +107,34 @@ Both forwarded values apply the same WARL masks as the CSR write path.
 
 | File | Module | Description |
 |---|---|---|
-| `fyracore.v` | `fyracore` | Top-level 3-stage pipeline. Instantiates all other modules. ~920 lines. |
-| `alu.v` | `alu` | RV32I-only ALU (ADD, SUB, SLL, SRL, SRA, SLT, SLTU, XOR, OR, AND). M-extension removed. |
-| `muldiv.v` | `muldiv` | Iterative multi-cycle multiply/divide unit. Shift-add multiplier (33-34 cycles), restoring divider (34 cycles). Replaces ~10,000-gate combinational logic with ~800-1200 gates. |
-| `controller.v` | `controller` | Combinational control signal decoder for all RV32IMAC+Zicsr+Zifencei opcodes. Outputs: `regWR`, `aluOp`, `memRD/WR`, `csrOp`, `isAmo/LR/SC`, `isEcall/Ebreak/Mret`, `isFence/FenceI`, `isMulDiv`, `illegal`. |
+| `fyracore.v` | `fyracore` | Top-level 3-stage pipeline (~1250 lines). Instantiates everything below except `clint`, `memController` and `regs`. |
+| `alu.v` | `alu` | RV32I ALU (ADD, SUB, SLL, SRL, SRA, SLT, SLTU, XOR, OR, AND). |
+| `muldiv.v` | `muldiv` | Iterative multiply/divide unit: shift-add multiplier (33-34 cycles), restoring divider (34 cycles). |
+| `controller.v` | `controller` | Combinational decode of opcode/funct3/funct7 into control signals. Rejects illegal LOAD/STORE/JALR encodings without requesting side effects; the pipeline completes the rs2/rd/rs1 checks for SYSTEM and LR. |
 | `decoder.v` | `decoder` | Instruction field extractor: opcode, rd, rs1, rs2, funct3, funct7. |
-| `signExt.v` | `signExt` | Immediate generation for all instruction formats (I, S, B, U, J, CSR zimm, FENCE). |
-| `branchCtrl.v` | `branchCtrl` | Branch condition evaluator: BEQ, BNE, BLT, BGE, BLTU, BGEU. |
-| `regFile.v` | `regFile` | 32x32-bit register file. x0 hardwired to zero. Synchronous write, combinational read. |
-| `compressed_decoder.v` | `compressed_decoder` | RV32C 16-bit to 32-bit instruction expansion. Covers Q0, Q1, Q2 compressed encodings. Flags illegal encodings including `shamt[5]=1` on RV32 for C.SLLI/SRLI/SRAI. |
-| `csr.v` | `csr` | M-mode CSR register file. Dual-port (EX reads, WB writes). Handles trap entry/exit, mstatus save/restore, PMP registers, performance counters, interrupt pending/enable. |
-| `pmp.v` | `pmp` | Physical Memory Protection checker. 4 regions, supports OFF/TOR/NA4/NAPOT addressing modes. Two instances in fyracore: one for ifetch (X), one for data (R/W). |
-| `clint.v` | `clint` | SiFive-compatible Core Local Interruptor. Provides mtime, mtimecmp, msip registers. Timer interrupt when `mtime >= mtimecmp`. Software interrupt when `msip[0] = 1`. |
-| `memController.v` | `memController` | Dual-mode memory controller. SIM_MODE=1: internal 32MB byte array. SIM_MODE=0: QSPI FSM with address-tagged ifetch buffer, on-chip CLINT, GPIO. |
-| `regs.v` | `regs` | Generic register module (used internally). |
+| `signExt.v` | `signExt` | Immediate generation for all formats. |
+| `branchCtrl.v` | `branchCtrl` | Branch condition evaluator. |
+| `regFile.v` | `regFile` | 32x32-bit register file, x0 hardwired to zero. |
+| `compressed_decoder.v` | `compressed_decoder` | RV32C expansion. Its legal/illegal verdict matches the RV32IMAC rules on all 49,152 16-bit encodings. |
+| `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, and the post-write value `wval` (section 2.3). |
+| `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. Two instances: fetch (X) and data (R/W/RW). |
+| `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the memory model (simulation) or memory controller, not by the core. |
+| `memController.v` | `memController` | Dual-mode memory controller sketch. **Not instantiated by anything.** Its hardware path predates the request/ready contract (it infers reads from `dmem_wmask`) and needs rework once the SoC bus is chosen. |
+| `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
 
 | File | Description |
 |---|---|
-| `tb_cpu.v` | Full CPU integration testbench. Loads hex program, instantiates fyracore + memory_model, provides per-instruction trace output, detects halt loops. |
-| `memory_model.v` | Simulation memory model. 32MB flat byte array + embedded CLINT instance. Dual-port: combinational reads, synchronous writes. Always-ready (no stalls). |
-| `tb_alu.v` | ALU unit testbench |
-| `tb_branchCtrl.v` | Branch controller unit testbench |
-| `tb_controller.v` | Controller unit testbench |
-| `tb_csr.v` | CSR unit testbench |
-| `tb_compressed_decoder.v` | Compressed decoder unit testbench |
-| `tb_decoder.v` | Decoder unit testbench |
-| `tb_muldiv.v` | Multi-cycle multiply/divide unit testbench |
-| `tb_regFile.v` | Register file unit testbench |
-| `tb_signExt.v` | Sign extension/immediate generation unit testbench |
+| `tb_rivercore.v` | Lockstep testbench for the verification flow. Emits a Spike-format commit log; CSR values are printed from `cpu.csr_wval`. Watchdogs: `+MAX_INSTR`, `+MAX_CYCLES`, spin detection. |
+| `tb_cpu.v` | Older integration testbench used by `make asm` / `scripts/run_asm_test.sh`. |
+| `memory_model.v` | 32 MB flat array + CLINT + a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
+| `tb_alu.v` … `tb_signExt.v` | Component unit testbenches (`make test-components`). A FAIL line fails the make target. |
 
-### 3.3 Test Programs (`tests/`)
+### 3.3 Test Programs
 
-All tests are RISC-V assembly (`.S`) assembled to hex via the toolchain scripts. They use a shared linker script (`tests/linker.ld`) placing `.text` at 0x00000000 (Flash) and `.data` at Flash as well (for simplicity; a Linux linker script would place `.data` at 0x01000000 in RAM).
-
-| Test | Description |
-|---|---|
-| `rv32i_basic.S` | Basic RV32I instruction coverage |
-| `rv32m_test.S` | M-extension multiply/divide operations |
-| `rv32c_test.S` | RV32C compressed instruction execution |
-| `rv32c_illegal_test.S` | Compressed illegal instruction trapping (12 test cases) |
-| `rv32a_test.S` | A-extension atomic operations including edge cases (tests 16-22) |
-| `csr_test.S` | CSR read/write, counters, forwarding, mconfigptr |
-| `trap_test.S` | Trap handling (13 test cases): ecall, ebreak, illegal, misaligned, PMP |
-| `pipeline_hazard_test.S` | Pipeline hazard verification (12 test cases) |
-| `pmp_test.S` | PMP region configuration and access control |
-| `umode_test.S` | U-mode privilege support: ecall cause, CSR access control, MRET |
-| `timer_irq_test.S` | Timer interrupt via CLINT mtimecmp |
-| `sw_irq_test.S` | Software interrupt via CLINT msip |
-| `wfi_test.S` | WFI stall and wake behavior |
-| `zifencei_test.S` | FENCE.I self-modifying code support |
-| `fencei_smc_test.S` | FENCE.I flush for self-modifying code |
+- `tests/*.S`: legacy self-checking programs for `make asm`, linked at 0x0.
+- `tests/directed/`: the directed regression suite, run against Spike with full-trace comparison. See section 11.
 
 ---
 
@@ -170,51 +148,41 @@ Address Range               Device      Size    Description
 0x0200_0000 - 0x0200_BFFF   CLINT       48 KB   Timer and software interrupt registers
 0x0300_0000 - 0x0300_0007   GPO         8 B     GPIO output
 0x0300_0008 - 0x0300_000F   GPI         8 B     GPIO input
-0x0400_0000+                Reserved            Future peripherals (UART, SPI, etc.)
 ```
 
-### Key Design Decisions
-
-- **Flash at address 0**: PC resets to 0x0, bootloader/kernel lives at start of flash. XIP (execute-in-place) directly from flash.
-- **Unified Von Neumann**: Both instruction fetch and data access can target either Flash or RAM. No hard IMEM/DMEM boundary. Critical for Linux which needs self-modifying code, XIP from flash, and data in RAM.
-- **CLINT at 0x0200_0000**: Standard SiFive convention, discoverable by device tree.
-- **QSPI address routing**: In hardware mode, bit 24 of the address selects chip (0=Flash, 1=RAM). The lower 24 bits are the offset within each 16MB QSPI device.
+The map is provisional (the SoC bus and peripheral set are not settled). The core only knows it through the PMA parameters: `PMA_MEM_*` (fetch and data allowed; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). The testbench overrides the windows to Spike's map (RAM at 0x8000_0000, CLINT aperture 0x0200_0000-0x020B_FFFF).
 
 ### CLINT Register Map (offsets from 0x0200_0000)
 
 | Offset | Register | Description |
 |---|---|---|
-| 0x0000 | msip | Bit 0 = software interrupt pending (1-bit register) |
-| 0x4000 | mtimecmp_lo | Low 32 bits of mtimecmp |
+| 0x0000 | msip | Bit 0 = software interrupt pending |
+| 0x4000 | mtimecmp_lo | Low 32 bits of mtimecmp (resets to all ones) |
 | 0x4004 | mtimecmp_hi | High 32 bits of mtimecmp |
-| 0xBFF8 | mtime_lo | Low 32 bits of mtime (read-write, auto-increments every clock) |
+| 0xBFF8 | mtime_lo | Low 32 bits of mtime (increments every clock) |
 | 0xBFFC | mtime_hi | High 32 bits of mtime |
 
-- `timer_irq` asserted when `mtime >= mtimecmp`
-- `sw_irq` asserted when `msip[0] = 1`
-- `mtime` auto-increments every clock cycle; explicit write takes priority over increment
+- `timer_irq` = `mtime >= mtimecmp`; `sw_irq` = `msip[0]`
+- mtimecmp resets to all ones so no timer interrupt is pending out of reset (Spike resets it to 0).
+- mtime ticks at the core clock. A prescaler is an open design decision.
 
 ---
 
-## 5. Memory Controller
+## 5. Memory Interface
 
-### 5.1 Simulation Mode (`SIM_MODE=1`)
+### 5.1 Handshake
 
-- Single 32MB byte-addressable array covers both Flash and RAM ranges
-- Both `imem` and `dmem` ports index the same array (Von Neumann)
-- Combinational reads, synchronous byte-masked writes
-- `imem_ready` and `dmem_ready` always asserted (no stalls)
-- CLINT is embedded in `memory_model.v` (testbench), not in the memory controller
+Both ports follow the same contract:
 
-### 5.2 Hardware Mode (`SIM_MODE=0`)
+- A request is outstanding on every cycle `*_req` is high.
+- From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `wmask`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
+- Nothing transfers while `*_req` is low, whatever `*_ready` is.
 
-- QSPI FSM with 7 states: IDLE, IFETCH, IFETCH_W, DREAD, DREAD_W, DWRITE, DWRITE_W
-- Address-tagged ifetch buffer: `ifetch_hit = ifetch_valid && (ifetch_addr == imem_addr)`. Only reports `imem_ready` on address match, preventing stale instruction consumption after branches/jumps.
-- FENCE.I invalidates the ifetch buffer (`ifetch_valid <= 0`)
-- On-chip CLINT instantiated inside the hw_mem generate block (single-cycle, no QSPI)
-- GPIO reads/writes are single-cycle, no QSPI involvement
-- Data access priority: GPO write > CLINT > QSPI data write > QSPI data read > QSPI ifetch
-- Chip select: `bit[24]` of address determines Flash (0) vs RAM (1)
+`imem_req` is always high. When the pipeline is stalled with a fetch already completed, the same address is requested again. `dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. An AMO is a read followed by a write, back to back.
+
+### 5.2 memController.v
+
+`memController.v` (SIM_MODE=1 flat array, SIM_MODE=0 QSPI FSM with an address-tagged fetch buffer) is not instantiated and does not implement section 5.1. Treat it as a sketch until the SoC bus is chosen.
 
 ---
 
@@ -222,50 +190,36 @@ Address Range               Device      Size    Description
 
 ### 6.1 Privilege Modes
 
-Two privilege levels: M-mode (priv_mode=1) and U-mode (priv_mode=0).
-
-- **Boot**: M-mode (`priv_mode <= 1'b1` on reset)
-- **Trap entry**: Always to M-mode (no S-mode delegation)
-- **MRET**: Restores privilege from `mstatus.MPP` (2'b11 -> M, 2'b00 -> U), then sets MPP to U (2'b00 per spec)
-- **MRET from U-mode**: Traps as illegal instruction (`ex_is_mret` requires `priv_mode == 1`)
-- **IRQ inject**: Sets `priv_mode <= 1'b1` via the `csr_trap_signal` path (no separate assignment, avoiding the MPP save race)
+- **Reset**: M-mode, `mstatus` = 0 (MIE=0, MPRV=0, MPP=U).
+- **Trap entry**: always to M-mode (no delegation). `priv_mode` is set on the WB trap commit (`csr_trap_signal`), so MPP captures the old privilege.
+- **MRET** (`ex_mret_commit = ex_is_mret && !stall && !ex_trap && !irq_inject`): MIE <- MPIE, MPIE <- 1, privilege <- MPP, MPP <- U, and MPRV <- 0 when returning below M. MRET in U-mode is illegal.
+- **An interrupt pending at an MRET is taken instead of it**, as for any instruction: mepc = the MRET's PC.
 
 ### 6.2 CSR Access Control
 
-CSR address bits `[9:8]` encode minimum required privilege:
-- `2'b00`: U-mode accessible (0x000-0x0FF, 0xC00-0xCFF user counters)
-- `2'b01` or higher: M-mode only (0x300-0x3FF, 0x700-0x7FF, 0xB00-0xBFF, 0xF00-0xFFF)
-
-User counter access (0xC00/C80/C01/C81/C02/C82) is additionally gated by `mcounteren` bits:
-- Bit 0 (CY): cycle/cycleh access
-- Bit 1 (TM): time/timeh access
-- Bit 2 (IR): instret/instreth access
+CSR address bits `[9:8]` encode the minimum privilege; bits `[11:10] = 11` mark read-only CSRs, whose write attempts are illegal. U-mode reads of `cycle`/`time`/`instret` (and high halves) are gated by `mcounteren` CY/TM/IR.
 
 ### 6.3 Physical Memory Protection (PMP)
 
-4 PMP regions via `pmpcfg0` (0x3A0) and `pmpaddr0-3` (0x3B0-0x3B3).
+4 entries via `pmpcfg0` (0x3A0) and `pmpaddr0-3` (0x3B0-0x3B3).
 
-**Config byte layout** (per entry, packed in pmpcfg0):
+**Config byte** (per entry, packed in pmpcfg0):
 ```
 Bit  [7]    L  — Lock (applies to M-mode too; entry immutable until reset)
-Bit  [6:5]  reserved (WIRI)
-Bits [4:3]  A  — Address matching mode:
-                 00 = OFF (entry disabled)
-                 01 = TOR (Top of Range: addr >= baddr[i-1] && addr < baddr[i])
-                 10 = RESERVED — masked to OFF on write (WARL)
-                 11 = NAPOT (Naturally Aligned Power-of-Two)
-Bits [2:0]  R/W/X permissions
+Bits [6:5]  reserved, read 0
+Bits [4:3]  A  — 00 OFF, 01 TOR, 10 NA4, 11 NAPOT (all legal at G=0)
+Bits [2:0]  R/W/X
 ```
 
-**Matching rules:**
-- Entry 0 has highest priority, entry 3 lowest (first match wins)
-- No matching entry: M-mode allowed, U-mode denied
-- Locked entry (L=1): enforces permissions on M-mode as well
-- TOR locking: when entry i uses TOR+Lock, `pmpaddr[i-1]` is also locked
+**Matching:**
+- On RV32, pmpaddr holds PA[33:2]. All compares are on word addresses `{2'b00, addr[31:2]}` against the full 32-bit pmpaddr, so region bounds above 4 GB behave correctly.
+- TOR: `pmpaddr[i-1] <= waddr < pmpaddr[i]` (entry 0 lower bound 0). NA4: `waddr == pmpaddr`. NAPOT: `((waddr ^ pa) & ~(pa ^ (pa+1))) == 0`, so only the bits above the trailing ones and their terminating zero are compared; pmpaddr = all ones covers everything.
+- Entry 0 has highest priority. No match: M allowed, U denied. L=1 applies the permissions to M-mode too. Entry i with TOR+L also locks pmpaddr[i-1].
+- Reset: all entries OFF (Spike resets permissive; see the riscv-dv notes).
 
-**PMP check instances in pipeline:**
-- `pmp_ifetch`: Checks `ifex_pc` with Execute (3'b100) permission in EX stage
-- `pmp_data`: Checks `ex_alu_result` with R (3'b001), W (3'b010), or R+W (3'b011 for AMO) in EX stage
+**Checks in the pipeline:**
+- `pmp_ifetch` (X) checks `ifex_pc`. For a 32-bit instruction at an address with bit 1 set, the upper half at `{ifex_pc_next[31:2], 2'b00}` is checked too: by a dedicated PMA compare, and by the same PMP checker during one extra EX cycle (`ex_ifetch_hi_phase`) whenever PMP could deny it (U-mode, or any entry locked). A fault in only the upper half reports that half's address in mtval.
+- `pmp_data` checks `ex_alu_result` with R (load, LR), W (store, SC) or R+W (AMO). With `mstatus.MPRV = 1`, the privilege checked is MPP.
 
 ---
 
@@ -273,84 +227,81 @@ Bits [2:0]  R/W/X permissions
 
 ### 7.1 Machine Information (Read-Only)
 
-| Address | Name | Value | Description |
-|---|---|---|---|
-| 0xF11 | mvendorid | 0x0 | Vendor ID (non-commercial) |
-| 0xF12 | marchid | 0x0 | Architecture ID |
-| 0xF13 | mimpid | 0x1 | Implementation ID |
-| 0xF14 | mhartid | 0x0 | Hart ID |
-| 0xF15 | mconfigptr | 0x0 | Config data structure pointer (none) |
+| Address | Name | Value |
+|---|---|---|
+| 0xF11 | mvendorid | 0 |
+| 0xF12 | marchid | parameter `MARCHID`, default 0 (the testbench sets 5 to match Spike) |
+| 0xF13 | mimpid | 0 |
+| 0xF14 | mhartid | 0 |
+| 0xF15 | mconfigptr | 0 |
 
-### 7.2 Machine ISA (Read-Only)
+### 7.2 Machine ISA
 
-| Address | Name | Value | Description |
+| Address | Name | Value | Writable |
 |---|---|---|---|
-| 0x301 | misa | `{2'b01, 26'b...0001000100000101}` | XLEN=32, Extensions: I, M, A, C |
+| 0x301 | misa | 0x4010_1105 (RV32 I M A C U) | C only. Clearing C is refused when the next PC would be misaligned. |
 
 ### 7.3 Machine Trap Setup
 
-| Address | Name | Writable Bits | Description |
+| Address | Name | Writable Bits | Notes |
 |---|---|---|---|
-| 0x300 | mstatus | Mask `0x1888` (MIE[3], MPIE[7], MPP[12:11]) | Machine status |
-| 0x304 | mie | Mask `0x0888` (MSIE[3], MTIE[7], MEIE[11]) | Machine interrupt enable |
-| 0x305 | mtvec | `[31:2]` writable, `[1:0]` forced to `2'b00` | Machine trap vector (direct mode only, WARL) |
-| 0x306 | mcounteren | Mask `0x0007` (CY[0], TM[1], IR[2]) | U-mode counter access control |
+| 0x300 | mstatus | MIE[3], MPIE[7], MPP[12:11], MPRV[17], TW[21] | MPP is legalised to U unless written 11. Resets to 0. |
+| 0x310 | mstatush | none | Reads 0 (little-endian only) |
+| 0x304 | mie | MSIE[3], MTIE[7], MEIE[11] | |
+| 0x305 | mtvec | [31:2] | Direct mode only |
+| 0x306 | mcounteren | CY[0], TM[1], IR[2] | |
+| 0x30A / 0x31A | menvcfg / menvcfgh | none | Read 0 (FIOM read-only zero without S-mode) |
+| 0x320 | mcountinhibit | CY[0], IR[2] | TM reads 0 |
+| 0x323-0x33F | mhpmevent3-31 | none | Read 0 |
 
 ### 7.4 Machine Trap Handling
 
 | Address | Name | Description |
 |---|---|---|
-| 0x340 | mscratch | Scratch register for M-mode trap handler |
-| 0x341 | mepc | Exception PC (bit 0 forced to 0) |
-| 0x342 | mcause | Trap cause (bit 31 = interrupt flag) |
-| 0x343 | mtval | Trap value (faulting address or instruction) |
-| 0x344 | mip | Interrupt pending. Bits MSIP[3], MTIP[7], MEIP[11] are read-only live wires from CLINT/external pins. Other bits writable but masked with `~0x0888`. |
+| 0x340 | mscratch | Scratch |
+| 0x341 | mepc | Bit 0 always 0; bit 1 stored but reads 0 while misa.C = 0 |
+| 0x342 | mcause | Trap cause (bit 31 = interrupt) |
+| 0x343 | mtval | Faulting address, faulting instruction encoding, or 0 |
+| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the live interrupt wires; nothing is writable |
 
-### 7.5 Performance Counters
+### 7.5 Counters
 
 | Address | Name | Description |
 |---|---|---|
-| 0xB00 | mcycle | Cycle counter low 32 bits (auto-increments, writable) |
-| 0xB80 | mcycleh | Cycle counter high 32 bits |
-| 0xB02 | minstret | Retired instruction counter low 32 bits |
-| 0xB82 | minstreth | Retired instruction counter high 32 bits |
+| 0xB00 / 0xB80 | mcycle / mcycleh | Cycle counter |
+| 0xB02 / 0xB82 | minstret / minstreth | Retired-instruction counter |
+| 0xB03-0xB1F, 0xB83-0xB9F | mhpmcounter3-31(h) | Read 0 |
 
-Counter CSR writes are handled in dedicated `always` blocks (merged with auto-increment logic to avoid dual-driver synthesis failures). Write takes priority over increment.
+Counter auto-increment and CSR writes share one `always` block per counter (never split them). A write replaces the written half and keeps a carry from this cycle's increment into the other half.
 
 ### 7.6 User Counter Aliases
 
-| Address | Name | Gate | Description |
-|---|---|---|---|
-| 0xC00 | cycle | mcounteren[0] | Read alias for mcycle (U-mode gated) |
-| 0xC80 | cycleh | mcounteren[0] | Read alias for mcycleh |
-| 0xC01 | time | mcounteren[1] | Reads mtime from CLINT (U-mode gated) |
-| 0xC81 | timeh | mcounteren[1] | Reads mtime high from CLINT |
-| 0xC02 | instret | mcounteren[2] | Read alias for minstret (U-mode gated) |
-| 0xC82 | instreth | mcounteren[2] | Read alias for minstreth |
+| Address | Name | Gate |
+|---|---|---|
+| 0xC00 / 0xC80 | cycle / cycleh | mcounteren[0] |
+| 0xC01 / 0xC81 | time / timeh | mcounteren[1] (reads CLINT mtime) |
+| 0xC02 / 0xC82 | instret / instreth | mcounteren[2] |
+
+`hpmcounter3-31` are not implemented (no Zihpm) and trap.
 
 ### 7.7 PMP CSRs
 
 | Address | Name | Description |
 |---|---|---|
-| 0x3A0 | pmpcfg0 | 4 packed 8-bit PMP config bytes. Per-byte locked by L bit. A=2'b10 masked to 2'b00 on write. |
-| 0x3B0-0x3B3 | pmpaddr0-3 | PMP address registers. Locked by own L bit or TOR lock from next entry. |
-| 0x3A1-0x3A3 | pmpcfg1-3 | Hardwired to zero (WARL, only 4 regions implemented) |
-| 0x3B4-0x3BF | pmpaddr4-15 | Hardwired to zero (WARL) |
+| 0x3A0 | pmpcfg0 | 4 config bytes, each locked by its own L bit |
+| 0x3B0-0x3B3 | pmpaddr0-3 | Locked by own L bit or entry i+1's TOR lock |
+| 0x3A1-0x3A3 | pmpcfg1-3 | Read 0, writes ignored |
+| 0x3B4-0x3BF | pmpaddr4-15 | Read 0, writes ignored |
 
 ### 7.8 CSR Write Value Computation
 
-The pipeline pre-computes the CSR write value in EX and stores it in `exwb_csr_wdata`:
+EX computes the read-modify-write value into `exwb_csr_wdata`, and `csr.v` always receives op=CSRRW:
 ```
-CSRRW/CSRRWI: csr_new = wdata (rs1 value or zero-extended uimm)
-CSRRS/CSRRSI: csr_new = csr_rdata_eff | wdata
-CSRRC/CSRRCI: csr_new = csr_rdata_eff & ~wdata
+CSRRW/CSRRWI: wdata
+CSRRS/CSRRSI: csr_rdata_eff |  wdata
+CSRRC/CSRRCI: csr_rdata_eff & ~wdata
 ```
-
-The CSR unit always receives `op=2'b01` (CSRRW) because the pipeline has already computed the final value. This simplifies the CSR write path.
-
-### 7.9 CSR Write Suppression
-
-CSRRS/CSRRC with `rs1=x0` and CSRRSI/CSRRCI with `uimm=0` do NOT perform a write (`ex_csr_writes = 0`). This is required by the spec to allow read-only CSR access without trapping.
+CSRRS/CSRRC with rs1=x0 (and the immediate forms with uimm=0) do not write (`ex_csr_writes = 0`).
 
 ---
 
@@ -358,416 +309,203 @@ CSRRS/CSRRC with `rs1=x0` and CSRRSI/CSRRCI with `uimm=0` do NOT perform a write
 
 ### 8.1 Synchronous Trap Priority
 
-Trap cause assignment follows spec Table 3.7 priority (highest to lowest):
-
 | Priority | Condition | Cause | mtval |
 |---|---|---|---|
-| 1 | PMP instruction fetch fault | 1 (Instruction access fault) | Faulting PC |
-| 2 | Illegal instruction (controller, compressed, bad SYSTEM, bad WFI, CSR) | 2 (Illegal instruction) | Faulting instruction encoding |
-| 3 | ECALL | 11 (M-mode) or 8 (U-mode) | 0 |
-| 4 | EBREAK | 3 (Breakpoint) | 0 |
-| 5 | Load address misaligned | 4 | Faulting address |
-| 6 | Store/AMO address misaligned | 6 | Faulting address |
-| 7 | Load PMP access fault | 5 | Faulting address |
-| 8 | Store/AMO PMP access fault | 7 | Faulting address |
+| 1 | Instruction access fault (PMA or PMP, either half) | 1 | Address of the faulting portion |
+| 2 | Illegal instruction | 2 | Instruction encoding (16-bit for compressed) |
+| 3 | Instruction address misaligned (branch/jump target with misa.C = 0) | 0 | Target |
+| 4 | ECALL | 11 (M) / 8 (U) | 0 |
+| 5 | EBREAK | 3 | PC |
+| 6 | Load / store-AMO address misaligned | 4 / 6 | Address |
+| 7 | Load / store-AMO access fault (PMA or PMP) | 5 / 7 | Address |
 
-### 8.2 Trap Sources
+LR/SC to an IO window is an access fault (no reservation set there); an AMO to an IO window is allowed.
 
-All trap sources ORed into `ex_trap`:
-- `ex_is_ecall` / `ex_is_ebreak`
-- `ex_pmp_ifetch_fail` — PMP denied instruction fetch
-- `ctrl_illegal && !ctrl_isFence` — controller flagged illegal opcode
-- `ifex_c_illegal` — compressed decoder flagged illegal encoding
-- `ex_bad_system` — malformed SYSTEM encoding (wrong rd/rs1/rs2 fields)
-- `ex_wfi_umode` — WFI from U-mode (illegal per spec Section 3.3.3)
-- `ex_bad_wfi` — WFI with non-zero rd or rs1
-- `ex_csr_illegal` — invalid/read-only/privilege-fail CSR access
-- `ex_misaligned` — misaligned memory access
-- `ex_pmp_data_fail` — PMP denied data access
+### 8.2 Illegal Instruction Sources (`ex_illegal_insn`)
 
-### 8.3 Trap Entry Sequence
+- `ctrl_illegal` (unknown opcode/funct fields; FENCE excepted)
+- `ifex_c_illegal`: a reserved compressed encoding
+- a compressed instruction while misa.C = 0 (checked in EX against the post-write misa.C)
+- `ex_bad_system`: ECALL/EBREAK/MRET with wrong fields, or MRET in U-mode
+- `ex_bad_wfi`: anything in the funct7=0001000 family except a well-formed WFI (includes SRET)
+- `ex_wfi_umode`: WFI in U-mode with mstatus.TW = 1
+- `ex_bad_lr`: LR.W with rs2 != 0
+- `ex_csr_illegal`: nonexistent CSR, write to a read-only CSR, or insufficient privilege
 
-On `csr_trap_signal` (WB stage detects `exwb_trap`):
-1. `mepc <= trap_pc` (PC of trapping instruction)
-2. `mcause <= trap_cause`
-3. `mtval <= trap_val` (faulting address or instruction, or 0)
-4. `mstatus.MPIE <= mstatus.MIE`; `mstatus.MIE <= 0`
-5. `mstatus.MPP <= current_privilege` (2'b11 for M, 2'b00 for U)
-6. `priv_mode <= 1'b1` (enter M-mode)
-7. `PC <= trap_target` (mtvec, with forwarding and WARL mask)
+### 8.3 Trap Entry (`csr_trap_signal`, WB)
 
-### 8.4 MRET Sequence
+1. `mepc <= trap_pc`, `mcause <= trap_cause`, `mtval <= trap_val`
+2. `MPIE <= MIE`, `MIE <= 0`, `MPP <= current privilege`
+3. `priv_mode <= M`
+4. The LR/SC reservation is cleared
+5. The redirect to `trap_target` was already taken when the trap left EX
 
-On `ex_is_mret` (EX stage, M-mode only):
-1. `mstatus.MIE <= mstatus.MPIE`; `mstatus.MPIE <= 1`
-2. `mstatus.MPP <= 2'b00` (set to U-mode per spec)
-3. `priv_mode <= (mstatus.MPP == 2'b11)` (restore from MPP before it's cleared)
-4. `PC <= mepc` (with forwarding)
+### 8.4 Interrupts
 
-### 8.5 Interrupt Handling
+- Sources: MEIP (cause 11) > MSIP (3) > MTIP (7).
+- Enable: `irq_global_en = !priv_mode || mstatus.MIE`, with per-source `mie` bits. Both are the post-write values, so the instruction after `csrc mstatus, 8` or `csrc mie, …` is already masked, and the one after `csrs mie, …` is already interruptible.
+- Injection: `irq_inject = any_irq_pend && ifex_valid && !ex_trap && !muldiv_want && !stall_other`. It is never taken during a stall or while any M instruction is in EX, and a synchronous trap wins.
+- Entry: the EX instruction's side effects are suppressed and its PC becomes mepc, so it re-executes after MRET.
 
-**Interrupt sources:**
-- Machine External Interrupt (MEIP, cause 11, priority 1 — highest)
-- Machine Software Interrupt (MSIP, cause 3, priority 2)
-- Machine Timer Interrupt (MTIP, cause 7, priority 3 — lowest)
+### 8.5 WFI
 
-**Global enable logic:**
-```
-irq_global_en = !priv_mode || mstatus_mie_eff
-```
-Per spec Section 3.1.6.1: MIE only gates M-mode interrupts. U-mode interrupts are always enabled (no delegation in M+U only system).
-
-**mstatus.MIE forwarding:** The pipeline forwards mstatus.MIE from WB stage to avoid a 1-cycle window where an interrupt slips in after `csrci mstatus,8` (MIE 1->0) but before the write commits:
-```verilog
-wire mstatus_mie_eff = (exwb_valid && exwb_csrWR && !exwb_trap && exwb_csr_addr == 12'h300)
-    ? (exwb_csr_wdata[3] != 1'b0)  // forwarded MIE bit
-    : csr_mstatus_mie;
-```
-
-**Injection gating:**
-```
-irq_inject = any_irq_pend && ifex_valid && !ex_trap
-           && !muldiv_busy && !wb_busy && !wfi_active
-```
-- Only when a valid instruction is in EX (gives clean mepc)
-- Never mid-muldiv or mid-AMO
-- Synchronous traps take priority over interrupts
-- WFI has special handling (see below)
-
-**Interrupt entry:**
-- Suppresses all instruction side effects (regWR, memRD/WR, csrWR, AMO, LR/SC all zeroed)
-- Sets `exwb_trap = 1` with `irq_cause` (bit 31 set + cause code)
-- `mepc` = `ifex_pc` (re-execute interrupted instruction on MRET)
-- Exception: if interrupted instruction is WFI, `mepc = ifex_pc_next` (advance past WFI)
-
-### 8.6 WFI Behavior
-
-- **M-mode WFI**: Sets `wfi_active`, stalls pipeline until:
-  - An individually-enabled interrupt source fires (regardless of MIE global bit), OR
-  - No interrupt sources are enabled in `mie` (degenerates to NOP to prevent infinite stall)
-- **U-mode WFI**: Traps as illegal instruction (spec Section 3.3.3)
-- **WFI with bad fields** (non-zero rd or rs1): Traps as illegal instruction
-- When interrupt arrives during WFI: `wfi_active` clears, `irq_inject` fires next cycle, `mepc` points past WFI
+- M-mode (or U-mode with TW = 0): WFI retires and sets `wfi_active`, stalling the next instruction until an individually enabled interrupt is pending (regardless of MIE). If no source is enabled in `mie`, WFI is a NOP. On wake, a taken interrupt's mepc is the instruction after the WFI.
+- U-mode with TW = 1: illegal instruction.
 
 ---
 
 ## 9. Instruction Set Support
 
-### 9.1 RV32I Base Integer
+### 9.1 RV32I
 
-All 40 base integer instructions:
-- **Arithmetic**: ADD, SUB, ADDI
-- **Logical**: AND, OR, XOR, ANDI, ORI, XORI
-- **Shift**: SLL, SRL, SRA, SLLI, SRLI, SRAI
-- **Compare**: SLT, SLTU, SLTI, SLTIU
-- **Upper immediate**: LUI, AUIPC
-- **Load**: LB, LH, LW, LBU, LHU
-- **Store**: SB, SH, SW
-- **Branch**: BEQ, BNE, BLT, BGE, BLTU, BGEU
-- **Jump**: JAL, JALR
-- **System**: ECALL, EBREAK
-- **Fence**: FENCE (NOP behavior)
+All base instructions. FENCE is a NOP (in-order core, blocking memory). FENCE fields and FENCE.TSO/PAUSE encodings execute as FENCE.
 
-### 9.2 M Extension (Multiply/Divide)
+### 9.2 M Extension
 
-All 8 operations via iterative multi-cycle `muldiv` unit:
+| Op | Instruction | Cycles |
+|---|---|---|
+| MUL, MULH, MULHSU, MULHU | multiply | 33-34 |
+| DIV, DIVU, REM, REMU | divide | 34 |
 
-| Op | Instruction | Cycles | Description |
-|---|---|---|---|
-| 3'b000 | MUL | 33-34 | Lower 32 bits of rs1 x rs2 |
-| 3'b001 | MULH | 33-34 | Upper 32 bits of signed x signed |
-| 3'b010 | MULHSU | 33-34 | Upper 32 bits of signed x unsigned |
-| 3'b011 | MULHU | 33-34 | Upper 32 bits of unsigned x unsigned |
-| 3'b100 | DIV | 34 | Signed division |
-| 3'b101 | DIVU | 34 | Unsigned division |
-| 3'b110 | REM | 34 | Signed remainder |
-| 3'b111 | REMU | 34 | Unsigned remainder |
+Division by zero and signed overflow follow the spec. Handshake: `start` for one cycle, `busy` while computing, `done` for one cycle as `busy` drops. The pipeline takes the result on the done cycle if it can, otherwise it holds it in `muldiv_ready` until it can. It never restarts on the done cycle.
 
-**Edge cases per spec:** Division by zero returns all-ones (DIV/DIVU) or dividend (REM/REMU). Signed overflow (INT_MIN / -1) returns INT_MIN (DIV) or 0 (REM).
+### 9.3 A Extension
 
-**Handshake:** `start` pulse for one cycle -> `busy` held -> `done` pulse when result valid. Pipeline stalls during `busy`.
+AMOs (SWAP, ADD, XOR, AND, OR, MIN, MAX, MINU, MAXU): phase 0 reads (`wb_busy`), phase 1 computes and writes; rd gets the old value.
 
-### 9.3 A Extension (Atomics)
+**LR/SC reservation policy:**
 
-Load-Reserved / Store-Conditional:
-- **LR.W**: Load word, set reservation on address
-- **SC.W**: Store word if reservation valid and address matches; rd = 0 (success) or 1 (failure)
+| Event | Effect |
+|---|---|
+| LR.W retires in WB | reservation set; the reservation set is the aligned word (`reservation_addr` = addr[31:2]) |
+| SC.W retires (success or failure) | cleared |
+| A local store or AMO retires to the reserved word (any width) | cleared |
+| A trap or interrupt commits in WB | cleared |
+| Reset | cleared |
 
-Atomic Memory Operations (2-cycle AMO via pipeline stall):
-- AMOSWAP.W, AMOADD.W, AMOXOR.W, AMOAND.W, AMOOR.W
-- AMOMIN.W, AMOMAX.W, AMOMINU.W, AMOMAXU.W
+- SC succeeds iff the reservation is valid and the word matches; rd = 0 on success, 1 on failure. A failing SC issues no bus transaction.
+- LR/SC outside `PMA_MEM_*` fault (cause 5/7). Misaligned LR/SC trap (cause 4/6).
+- There is no external-agent clear: one hart, no DMA, no debug system-bus access. Add one if any of those appear.
+- Same-hart stores and traps are not required to clear the reservation. Clearing on them is permitted, and cannot break the forward-progress guarantee, because a constrained LR/SC loop contains no loads, stores, AMOs or SYSTEM instructions.
 
-AMO execution: Phase 0 (read, wb_busy=1) -> Phase 1 (compute + write, wb_busy=0). rd receives the original memory value.
+### 9.4 C Extension
 
-Reservation is invalidated on: SC execution (success or failure), any local
-store or AMO overlapping the reservation address, trap, interrupt, or reset.
-No external-agent invalidation is implemented: this SoC has a single hart and
-no other bus master.
+Quadrants 0-2 of RV32C. Reserved encodings (illegal): C.ADDI4SPN with nzuimm=0, C.ADDI16SP with nzimm=0, C.LUI with nzimm=0, C.LWSP with rd=x0, C.JR with rs1=x0, shift amounts with shamt[5]=1, the all-zero word, and the RV64/FPU/Zcb/Zcmop encodings. HINT encodings execute.
 
-### 9.4 C Extension (Compressed)
+### 9.5 Zicsr / Zicntr
 
-The `compressed_decoder` expands 16-bit instructions to 32-bit equivalents:
+See section 7. `CSRRW` with rd=x0 still reads the CSR; no CSR here has read side effects.
 
-**Quadrant 0:** C.ADDI4SPN, C.LW, C.SW
-**Quadrant 1:** C.NOP, C.ADDI, C.JAL, C.LI, C.ADDI16SP, C.LUI, C.SRLI, C.SRAI, C.ANDI, C.SUB, C.XOR, C.OR, C.AND, C.J, C.BEQZ, C.BNEZ
-**Quadrant 2:** C.SLLI, C.LWSP, C.JR, C.MV, C.EBREAK, C.JALR, C.ADD, C.SWSP
+### 9.6 Zifencei
 
-**Illegal encoding detection:**
-- C.ADDI4SPN with nzuimm=0
-- C.ADDI16SP with nzimm=0
-- C.LUI with nzimm=0 or rd=x0
-- C.LWSP with rd=x0
-- C.JR with rd=x0
-- C.SLLI/C.SRLI/C.SRAI with shamt[5]=1 (bit 12) on RV32
-
-### 9.5 Zicsr Extension
-
-CSR instructions: CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI
-
-**Implementation details:**
-- EX stage reads CSR and computes new value (with forwarding from WB)
-- WB stage writes computed value using CSRRW (op=01) — simplifies CSR write path
-- CSRRS/CSRRC with rs1=x0 suppresses write (spec-required for read-only CSR access)
-- Write to read-only CSR (addr[11:10]=2'b11) with actual write traps as illegal
-
-### 9.6 Zifencei Extension
-
-`FENCE.I` instruction:
-- Asserts `fencei_flush` for one cycle
-- Flushes pipeline (PC redirected to next sequential instruction)
-- In hardware mode: invalidates ifetch buffer, forcing QSPI re-fetch
-- Critical for self-modifying code and Linux module loading
+FENCE.I asserts `fencei_flush` for one cycle (a fetch-buffer invalidate for a memory controller) and refetches the next instruction.
 
 ---
 
 ## 10. Top-Level Interface
 
-### FyraCore Port Map
-
 ```verilog
-module fyracore(
-    input  wire        clk,
-    input  wire        rst,
-    // Instruction memory interface
-    output wire [31:0] imem_addr,      // PC value
-    input  wire [31:0] imem_rdata,     // Fetched instruction
-    input  wire        imem_ready,     // Fetch data valid
-    // Data memory interface
-    output wire [31:0] dmem_addr,      // Word-aligned data address
-    output wire [31:0] dmem_wdata,     // Store data (shifted to byte lane)
-    output wire [3:0]  dmem_wmask,     // Byte lane write mask
-    output wire        dmem_we,        // Write enable
-    input  wire [31:0] dmem_rdata,     // Load data
-    input  wire        dmem_ready,     // Data access complete
-    // Interrupts (active-high, directly from CLINT/PLIC)
+module fyracore #(
+    parameter [31:0] RESET_PC     = 32'h0000_0000,
+    parameter [31:0] MARCHID      = 32'h0000_0000,
+    parameter [31:0] PMA_MEM_BASE = 32'h0000_0000,  // fetch + data
+    parameter [31:0] PMA_MEM_TOP  = 32'h01FF_FFFF,
+    parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // data only (CLINT)
+    parameter [31:0] PMA_IO0_TOP  = 32'h0200_BFFF,
+    parameter [31:0] PMA_IO1_BASE = 32'h0300_0000,  // data only (GPIO)
+    parameter [31:0] PMA_IO1_TOP  = 32'h0300_000F   // BASE > TOP disables a window
+)(
+    input  wire        clk, rst,
+    // Instruction port (section 5.1)
+    output wire [31:0] imem_addr,
+    output wire        imem_req,
+    input  wire [31:0] imem_rdata,
+    input  wire        imem_ready,
+    // Data port (section 5.1)
+    output wire        dmem_req,
+    output wire [31:0] dmem_addr,      // word-aligned
+    output wire [31:0] dmem_wdata,     // shifted to byte lanes
+    output wire [3:0]  dmem_wmask,
+    output wire        dmem_we,
+    input  wire [31:0] dmem_rdata,
+    input  wire        dmem_ready,
+    // Interrupts
     input  wire        timer_irq,      // MTIP
     input  wire        external_irq,   // MEIP
     input  wire        sw_irq,         // MSIP
-    // CLINT mtime (for CSR time/timeh reads)
-    input  wire [63:0] mtime_in,
-    // FENCE.I
-    output wire        fencei_flush,   // 1-cycle pulse on FENCE.I
-    // Debug/trace outputs
-    output wire [31:0] dbg_pc,         // PC of retiring instruction
-    output wire        dbg_retired,    // Instruction retired this cycle
-    output wire [31:0] dbg_instr,      // Instruction encoding
-    output wire        dbg_trap        // Trap occurred this cycle
+    input  wire [63:0] mtime_in,       // for time/timeh
+    output wire        fencei_flush,
+    // Trace
+    output wire [31:0] dbg_pc,
+    output wire        dbg_retired,
+    output wire [31:0] dbg_instr,
+    output wire        dbg_compressed,
+    output wire        dbg_trap
 );
 ```
 
 ---
 
-## 11. Build System
-
-### Toolchain
-
-- **Simulator**: Icarus Verilog (`iverilog`) + `vvp`
-- **Assembler**: `riscv64-unknown-elf-gcc` with `-march=rv32imac -mabi=ilp32`
-- **Linker**: Custom linker script at `tests/linker.ld`
-
-### Key Commands
+## 11. Build and Test
 
 ```bash
-# Run a single assembly test
-bash scripts/run_asm_test.sh tests/<test>.S [--quiet] [--max-cycles N] [--vcd]
+make clean && make test-all          # unit testbenches (fail on any FAIL line) + CPU compile
+make asm FILE=tests/<test>.S         # legacy self-checking programs
 
-# Run all tests
-make test-all
-
-# Run specific component testbench
-make test-alu
-make test-csr
-make test-muldiv
-# etc.
-
-# Assemble and run arbitrary .S file
-make asm FILE=tests/rv32i_basic.S
-
-# Clean build artifacts
-make clean
+cd tests/directed
+./run.sh build                       # build the lockstep sim from ../../src and ../../tb
+./run.sh                             # every test in MANIFEST, full-trace compare with Spike
+./run.sh one <name> [+PLUSARGS]      # a single test
+./run.sh refs                        # regenerate the Spike references
 ```
 
-### Assembly-to-Hex Pipeline
-
-1. `scripts/asm2hex.sh` assembles `.S` -> `.elf` -> `.bin` -> `.hex`
-2. `scripts/run_asm_test.sh` calls asm2hex, compiles testbench with iverilog, runs simulation
-3. The hex file is loaded via `$readmemh` into the memory model at address 0
-
-### Source Files in Build
-
-All modules required for full CPU simulation:
-```
-src/alu.v  src/branchCtrl.v  src/clint.v  src/compressed_decoder.v
-src/controller.v  src/csr.v  src/decoder.v  src/fyracore.v
-src/muldiv.v  src/pmp.v  src/regFile.v  src/regs.v  src/signExt.v
-tb/memory_model.v  tb/tb_cpu.v
-```
+Memory-timing plusargs for the lockstep sim: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2`. Different settings expose different bugs; sweep them independently.
 
 ---
 
-## 12. Commit History (cpu-fix branch)
+## 12. Design Decisions and Rationale
 
-The cpu-fix branch contains 45 commits organized into development phases:
+### 12.1 Why 3 Stages?
+Area is the primary constraint. IF/EX/WB keeps pipeline registers minimal while most instructions still take one cycle; the QSPI memory bottleneck dominates throughput anyway.
 
-### Phase 1: Initial ISA Implementation (commits 1-8)
+### 12.2 Why Iterative MulDiv?
+The combinational operators cost more than 10k gates. The iterative unit costs about 1k, for 33-34 cycles per operation.
 
-| Commit | Description |
-|---|---|
-| `f3dd946` | Extended ALU with M-extension multiply and divide operations (combinational) |
-| `e7a61ac` | Updated decoder for all RV32IMCA+Zicsr+Zifencei instruction formats |
-| `e1b5cd0` | Updated immediate generation for all instruction formats |
-| `ddda767` | Cleaned up branch controller with named ports and expanded tests |
-| `34dac44` | Extended controller for full RV32IMCA+Zicsr+Zifencei control signals |
-| `c08cfde` | Simplified register file and mux31 |
-| `3811956` | Added RV32C compressed instruction decoder |
-| `dd0bfb7` | Added M-mode CSR register file with trap and mret handling |
+### 12.3 Why Direct-Mode mtvec?
+Vectored mode adds logic for no benefit on an M+U system; Linux uses direct mode.
 
-### Phase 2: Pipeline Integration (commits 9-14)
+### 12.4 Why 4 PMP Entries?
+Enough for M/U isolation (Linux M-mode programs one NAPOT entry covering everything). More entries cost area linearly.
 
-| Commit | Description |
-|---|---|
-| `8ec0337` | Rewrote FyraCore as 3-stage pipelined RV32IMCA+Zicsr+Zifencei core |
-| `03663c2` | Restored memory controller to hardware-calibrated 8MB+8MB address map |
-| `2b0c300` | Added simulation memory model with 16 MB dual-port access |
-| `6c98c96` | Added full CPU testbench with per-instruction trace output |
-| `fbac448` | Added linker script and assembly test programs for all extensions |
-| `dc95801` | Added build scripts and Makefile for test automation |
+### 12.5 Why a Post-Write Value in csr.v?
+The WARL rules used to exist in four places (csr.v, the EX forward, the trap/MRET target masks, the testbench trace), and each copy that drifted produced a defect. `wval` is the single copy; forwarding, the targets and the trace all use it.
 
-### Phase 3: Pipeline Hardening (commits 15-23)
+### 12.6 Why Refetch After a PMP Write?
+Forwarding pending PMP state into both checkers would need a 160-bit mux. PMP writes are rare, so a one-cycle refetch is the cheaper way to make the next instruction see them.
 
-| Commit | Description |
-|---|---|
-| `b804bce` | Added gitignore to not accidentally commit build artifacts |
-| `59e3833` | Added SYSTEM decode validation and WFI handling in controller |
-| `6ca0da9` | Added CSR dual-port interface and address validation |
-| `b095210` | Added comprehensive pipeline trap handling, CSR forwarding, and memory handshake |
-| `d9b80eb` | Added memory ready signals to memController and memory_model |
-| `1bb7e8e` | Added halt loop termination and memory ready wiring in CPU testbench |
-| `51f0f93` | Added trap handling test with 13 test cases |
-| `ef2474e` | Added pipeline hazard test with 12 test cases |
-| `3dbd701` | Added compressed illegal instruction CPU-level test with 12 test cases |
+### 12.7 Why Check a Straddling Instruction's Upper Half With the Same PMP Checker?
+A second fetch PMP checker would double the comparator area. The extra EX cycle is only spent when PMP can actually deny a fetch (U-mode, or a locked entry), so an M-mode kernel never pays it.
 
-### Phase 4: Linux-Capability Features (commits 24-31)
+### 12.8 Why Pre-Compute CSR Values in EX?
+EX computes the read-modify-write value, so the CSR unit only ever writes and the forwarded value is a single word.
 
-| Commit | Description |
-|---|---|
-| `e9b7149` | Added atomic extension edge case tests (tests 16-22) |
-| `e6074ed` | Replace combinational multiply/divide with iterative multi-cycle unit (~30-40% area reduction) |
-| `0374338` | Fix CSR forwarding for masked registers and csr_test termination |
-| `fafdcea` | Unify memory map: 16MB Flash + 16MB RAM, no IMEM/DMEM boundary |
-| `fa06bf3` | Populate mtval with faulting address/instruction on traps |
-| `a22268b` | Add U-mode privilege support with CSR access control |
-| `9efc27c` | Add PMP with 4 regions (TOR+NAPOT) for U-mode memory protection |
-| `fb8e107` | Add CLINT, timer/external/software interrupts, and WFI |
-
-### Phase 5: Cleanup and FENCE.I (commit 32)
-
-| Commit | Description |
-|---|---|
-| `c69509e` | Add FENCE.I memory flush signal and remove unused utility modules |
-
-### Phase 6: Hypercritical Spec Compliance (commits 33-36)
-
-Driven by a line-by-line spec review identifying privilege escalation bugs and interrupt handling errors.
-
-| Commit | Description |
-|---|---|
-| `2d85c0a` | Fix critical spec violations: MRET from U-mode privilege check, U-mode interrupt gating (MIE only gates M-mode), IRQ MPP save race, mstatus forwarding mask, AMO PMP R+W check |
-| `2223805` | Fix CSR spec compliance: unimplemented PMP CSRs read zero instead of trapping, TOR locking, mie/mip/mcounteren write masks |
-| `d2d1c5e` | Area optimizations: msip 1-bit register (~700 gates), muldiv count 5-bit, simpler address decode |
-| `6e71d49` | Add CLINT to hardware-mode memController and fix Makefile SRC_FILES |
-
-### Phase 7: Spec Compliance Fixes (commits 37-45)
-
-Based on detailed spec audit identifying 5 critical bugs, 5 significant gaps, and 4 minor issues.
-
-| Commit | Description |
-|---|---|
-| `9769bea` | Fix mcycle/minstret dual-driver synthesis failure (merge counter always blocks) |
-| `2a34612` | Fix mtvec mode bits leaking into trap target PC (force direct mode WARL) |
-| `e7773bb` | Fix trap cause priority to match spec Table 3.7 |
-| `8ab4b55` | Fix CSRRS/CSRRC with rs1=0 performing spurious CSR write |
-| `34ec858` | Flag C.SLLI/SRLI/SRAI with shamt[5]=1 as illegal on RV32 |
-| `1c816f3` | Trap WFI from U-mode and WFI with invalid fields as illegal instruction |
-| `61acf71` | Add time/timeh CSR support by wiring mtime from CLINT |
-| `75095cc` | Drive isEbreak in controller and use ctrl_isEbreak in pipeline |
-| `1a3f47c` | Address-tag QSPI ifetch buffer to prevent stale instruction consumption |
-| `dbf5c07` | Mask reserved pmpcfg A=2'b10 to OFF on write (WARL compliance) |
-| `22669f4` | Forward mstatus MIE from WB stage for interrupt gating |
-| `72219d6` | Add mconfigptr CSR (0xF15) as read-only zero |
-| `14d38cb` | Fix csr_new forward reference error in counter always blocks |
-| `5254dbc` | Fix trap_target forwarding missing mtvec WARL mask, fix tb_csr ports |
+### 12.9 IRQ MPP Save
+`priv_mode` is set to M on the WB trap commit, never directly on `irq_inject`, so the CSR unit saves the pre-interrupt privilege into MPP.
 
 ---
 
-## 13. Design Decisions and Rationale
+## 13. Known Limitations
 
-### 13.1 Why 3 Stages?
-
-Area is the primary constraint for Sky 180nm. A 3-stage pipeline (IF/EX/WB) minimizes pipeline register count while still allowing single-cycle execution for most instructions. Deeper pipelines would add area for diminishing throughput gains on this in-order core.
-
-### 13.2 Why Iterative MulDiv?
-
-The combinational `*`, `/`, `%` operators in the original ALU produced ~10,000+ gate area. The iterative shift-add multiplier and restoring divider reduce this to ~800-1200 gates at the cost of 33-34 cycle latency per operation. This is the highest-impact single area optimization.
-
-### 13.3 Why Direct Mode Only for mtvec?
-
-Vectored mode (mtvec[1:0]=01) adds complexity (BASE + 4*cause for interrupts) with minimal benefit for a simple M+U system. Direct mode is sufficient for Linux boot. mtvec[1:0] is forced to 2'b00 on write (WARL).
-
-### 13.4 Why 4 PMP Regions?
-
-4 regions is the minimum useful count: enough for firmware (OpenSBI) to grant U-mode access to designated memory while protecting M-mode. More regions add area linearly (~2000-3000 gates for 4 regions). Both TOR and NAPOT are supported because NAPOT is needed by most firmware for efficient large-region grants.
-
-### 13.5 Why Address-Tagged Ifetch Buffer?
-
-In hardware mode (QSPI), the ifetch buffer could return stale instructions after a branch/jump. Rather than adding a dedicated `pc_changed` signal, the buffer is tagged with its address and only reports `imem_ready` when the tag matches the requested `imem_addr`. This is more robust and requires no extra port.
-
-### 13.6 Why Unified Memory Map?
-
-Linux requires a flat address space: code executes from flash (XIP), data lives in RAM, and the kernel must read/write/execute across the full space. The original hard IMEM/DMEM split was replaced with a unified Von Neumann view where both instruction fetch and data access can target either Flash or RAM.
-
-### 13.7 Why CLINT in Both Sim and Hw Mode?
-
-In simulation, the CLINT lives in `memory_model.v` (alongside the flat memory array). In hardware mode, it's instantiated inside the `memController.v` hw_mem generate block as an on-chip peripheral (single-cycle access, no QSPI). This ensures timer/software interrupts work identically in both modes.
-
-### 13.8 Why Pre-Compute CSR Values in EX?
-
-The pipeline computes the full CSR write value (read-modify-write) in EX and stores it in `exwb_csr_wdata`. The CSR unit always receives op=CSRRW. This eliminates the need for the CSR unit to implement CSRRS/CSRRC logic and simplifies forwarding (only one value to forward, not a read + modify operation).
-
-### 13.9 IRQ MPP Save Race Fix
-
-A subtle bug: when an interrupt fires from U-mode, the original code set `priv_mode <= 1'b1` immediately on `irq_inject`. The CSR unit (executing one cycle later on `csr_trap_signal`) would then see `priv_mode=1` and save `MPP=11` (M-mode) instead of `MPP=00` (U-mode). MRET after the interrupt would return to M-mode instead of U-mode. Fix: removed the separate `irq_inject` privilege assignment; the `csr_trap_signal` path handles both traps and interrupts, reading the correct old `priv_mode` via non-blocking assignment semantics.
-
----
-
-## 14. Known Limitations
-
-1. **No S-mode or MMU**: No virtual memory support. Linux must run in flat physical addressing mode (uClinux-style or CONFIG_RISCV_M_MODE).
-2. **No interrupt delegation**: All traps go to M-mode. No medeleg/mideleg CSRs.
-3. **No vectored interrupt mode**: mtvec mode bits forced to 00 (direct mode only).
-4. **CSRRW with rd=x0 still reads the CSR**: Spec says suppress read to avoid side effects. No CSRs in this implementation have read side effects, so functionally harmless but technically non-compliant.
-5. **4 PMP regions only**: Sufficient for basic M/U isolation but limits complex memory layouts.
-6. **No hardware multiply optimization**: MulDiv takes 33-34 cycles for all multiply operations (no early termination).
-7. **FENCE is NOP**: No data cache to fence. Only FENCE.I has functional effect (ifetch buffer invalidation).
-8. **Single-hart only**: mhartid = 0, no multi-core support.
-9. **No debug module**: No JTAG/debug interface (trace outputs only).
+1. No S-mode or MMU; Linux must be NOMMU M-mode.
+2. No interrupt delegation; all traps go to M-mode.
+3. Direct-mode mtvec only.
+4. `CSRRW` with rd=x0 still reads the CSR (harmless: no read side effects).
+5. 4 PMP entries.
+6. MulDiv has no early termination.
+7. FENCE is a NOP.
+8. Single hart; no external reservation-clear path.
+9. No debug module and no trigger CSRs (Sdtrig); `tselect` traps.
+10. No Zihpm: `hpmcounter3-31` trap; `mhpmcounter3-31`/`mhpmevent3-31` read 0.
+11. mtime ticks every clock and mtimecmp is compared combinationally; a prescaler is an open decision.
+12. One external interrupt input and no PLIC.
+13. `memController.v` is not integrated and does not implement the request/ready contract.
