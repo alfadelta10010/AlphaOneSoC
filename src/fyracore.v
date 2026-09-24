@@ -804,7 +804,7 @@ module fyracore #(
 
     // Gate interrupt injection:
     //   - Only when a valid instruction is in EX (gives clean mepc)
-    //   - Never mid-muldiv (muldiv_busy)
+    //   - Never while an M instruction is in EX (muldiv_want)
     //   - Never when EX already has a synchronous trap (trap takes priority)
     //   - Never while the pipeline is stalled
     //
@@ -816,11 +816,12 @@ module fyracore #(
     // another interrupt. It also tore down an in-flight memory access, because
     // the injection path overrides the EX/WB hold.
     //
-    // muldiv_stall is deliberately NOT used here. It feeds muldiv_start, which
-    // is gated on flush, which contains irq_inject -- taking `stall` would
-    // close a combinational loop. muldiv_busy covers every cycle of a multiply
-    // except the first, and on that first cycle muldiv_start is itself
-    // suppressed by flush, so the operation never starts.
+    // muldiv_want rather than muldiv_stall (or `stall`): muldiv_stall feeds
+    // muldiv_start through flush, which contains irq_inject, so it would
+    // close a combinational loop. Excluding any M instruction in EX -- before
+    // it starts, while it runs, and on the cycle its result is captured --
+    // means an interrupt never discards a finished or in-flight multiply;
+    // it is taken at the next instruction instead.
     assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
                       && !muldiv_want && !stall_other;
 
