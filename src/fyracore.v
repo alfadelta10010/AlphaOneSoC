@@ -112,6 +112,8 @@ module fyracore #(
     reg [31:0] ifex_pc_next;
     reg        ifex_valid;
     reg        ifex_c_illegal;  // Compressed decoder flagged a reserved encoding
+    reg        ifetch_hi_done;  // upper half of the straddling instruction in EX checked
+    reg        ifetch_hi_denied;// ...and PMP refused it
 
     // ================================================================
     //  EX/WB Pipeline Register (declared here so EX-stage continuous
@@ -157,6 +159,7 @@ module fyracore #(
     wire        csr_misa_c;      // driven by CSR unit output (misa.C bit)
     wire        csr_mstatus_tw;  // driven by CSR unit output (mstatus.TW bit)
     wire        csr_mstatus_mprv;// driven by CSR unit output (mstatus.MPRV bit)
+    wire        ex_ifetch_hi_phase; // PMP is checking a straddling instruction's upper half
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -406,6 +409,18 @@ module fyracore #(
     // fetched bits in mtval. Cause 1 is the defensible hardware behaviour, so
     // this is a deliberate divergence, not an oversight.
     wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
+    // A 32-bit instruction whose address has bit 1 set straddles two words,
+    // and its upper half is a separate access that the PMA and PMP must
+    // allow too. Priv §3.7.1: the matching PMP entry must match all bytes of
+    // an access, and on a fault in that portion mtval holds the portion's
+    // address while mepc points at the start of the instruction. Checking
+    // only ifex_pc executed an instruction whose upper half lay past the end
+    // of memory (with junk upper bits), or in a region without X permission.
+    wire        ex_straddle = !ifex_compressed && ifex_pc[1];
+    // ifex_pc + 2 with no adder: a 32-bit instruction's ifex_pc_next is
+    // ifex_pc + 4, and that word is where the upper half lives.
+    wire [31:0] ex_pc_hi = {ifex_pc_next[31:2], 2'b00};
+    wire ex_pma_fetch_hi_ok = (ex_pc_hi >= PMA_MEM_BASE) && (ex_pc_hi <= PMA_MEM_TOP);
     // A window with BASE > TOP matches nothing, which is how the testbench
     // switches off the ports the simulation does not model.
     wire ex_pma_in_mem = (ex_alu_result >= PMA_MEM_BASE) &&
@@ -426,7 +441,16 @@ module fyracore #(
     // there. Both raise the same causes (1 / 5 / 7), so they are combined
     // here rather than at every use site.
     // (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
-    wire ex_ifetch_fault = ifex_valid && (!pmp_ifetch_allow || !ex_pma_fetch_ok);
+    //
+    // Fetch: the lower half is checked at ifex_pc. For a straddling
+    // instruction the upper half gets its own PMA compare, and the single
+    // fetch PMP checker looks at it for one extra EX cycle first
+    // (ex_ifetch_hi_phase) whenever PMP could deny it; the verdict is kept in
+    // ifetch_hi_denied. No fault is raised during that cycle.
+    wire ex_ifetch_fault_lo = !ex_pma_fetch_ok || !pmp_ifetch_allow;
+    wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok || ifetch_hi_denied);
+    wire ex_ifetch_fault = ifex_valid && !ex_ifetch_hi_phase &&
+                           (ex_ifetch_fault_lo || ex_ifetch_fault_hi);
     // Data side: only when a memory op is present and it's not already misaligned
     wire ex_data_fault   = ifex_valid && ex_mem_active && !ex_misaligned &&
                            (!pmp_data_allow || !ex_pma_data_ok);
@@ -489,7 +513,8 @@ module fyracore #(
 
     // stall_other: all stall sources except muldiv (used to gate muldiv_start)
     // wfi_active stalls the pipeline until an interrupt becomes pending.
-    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active;
+    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active ||
+                       ex_ifetch_hi_phase;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
     //   muldiv_start: pulse for one cycle to launch a new M-ext operation.
@@ -791,14 +816,22 @@ module fyracore #(
 
     // ── PMP checks ───────────────────────────────────────────────────────────
     // pmp_ifetch_allow and pmp_data_allow are forward-declared near top of EX stage.
-    // Instruction fetch: check ifex_pc with Execute permission (EX stage).
+    // Instruction fetch: check ifex_pc with Execute permission (EX stage), or
+    // the upper half of a straddling instruction during ex_ifetch_hi_phase.
+    //
+    // PMP can only refuse an M-mode fetch through a locked entry, so the
+    // extra cycle is spent only in U-mode or when some entry is locked; an
+    // M-mode kernel with unlocked (or no) PMP entries never pays it.
+    wire pmp_any_locked = csr_pmpcfg0[7] | csr_pmpcfg0[15] | csr_pmpcfg0[23] | csr_pmpcfg0[31];
+    assign ex_ifetch_hi_phase = ifex_valid && ex_straddle && !ifetch_hi_done &&
+                                (!priv_mode || pmp_any_locked);
     pmp pmp_ifetch(
         .pmpcfg0    (csr_pmpcfg0),
         .pmpaddr0   (csr_pmpaddr0),
         .pmpaddr1   (csr_pmpaddr1),
         .pmpaddr2   (csr_pmpaddr2),
         .pmpaddr3   (csr_pmpaddr3),
-        .addr       (ifex_pc),
+        .addr       (ex_ifetch_hi_phase ? ex_pc_hi : ifex_pc),
         .access_type(3'b100),       // Execute
         .priv_mode  (priv_mode),
         .pmp_allow  (pmp_ifetch_allow)
@@ -913,6 +946,8 @@ module fyracore #(
             ifex_pc_next   <= 32'b0;
             ifex_valid     <= 1'b0;
             ifex_c_illegal <= 1'b0;
+            ifetch_hi_done <= 1'b0;
+            ifetch_hi_denied <= 1'b0;
             // EX/WB
             exwb_alu_result <= 32'b0;
             exwb_rs2_data   <= 32'b0;
@@ -975,7 +1010,12 @@ module fyracore #(
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
-                // Hold IF/EX on stall
+                // Hold IF/EX on stall. If the stall is the upper-half PMP
+                // check, record its verdict; the next cycle checks ifex_pc.
+                if (ex_ifetch_hi_phase) begin
+                    ifetch_hi_done   <= 1'b1;
+                    ifetch_hi_denied <= !pmp_ifetch_allow;
+                end
             end else if (flush) begin
                 // Insert bubble
                 ifex_valid     <= 1'b0;
@@ -983,6 +1023,8 @@ module fyracore #(
                 ifex_raw_instr <= 32'h0000_0013;
                 ifex_compressed<= 1'b0;
                 ifex_c_illegal <= 1'b0;
+                ifetch_hi_done <= 1'b0;
+                ifetch_hi_denied <= 1'b0;
             end else begin
                 ifex_pc        <= pc;
                 ifex_instr     <= if_instr;
@@ -990,6 +1032,8 @@ module fyracore #(
                 ifex_compressed<= if_compressed;
                 ifex_pc_next   <= if_pc_next;
                 ifex_valid     <= 1'b1;
+                ifetch_hi_done <= 1'b0;
+                ifetch_hi_denied <= 1'b0;
                 // misa.C is applied in EX (ex_illegal_insn), not here.
                 ifex_c_illegal <= if_compressed && if_c_illegal;
             end
@@ -1056,7 +1100,9 @@ module fyracore #(
                     exwb_trap <= 1'b1;
                     if (ex_ifetch_fault) begin
                         exwb_trap_cause <= 32'd1;  // Instruction access fault (highest priority)
-                        exwb_trap_val   <= ifex_pc; // faulting fetch address
+                        // The faulting portion: the instruction's start, or
+                        // its upper half when only that half is refused.
+                        exwb_trap_val   <= ex_ifetch_fault_lo ? ifex_pc : ex_pc_hi;
                     end else if (ex_illegal_insn) begin
                         // Priv spec v1.12 Table 3.7: illegal instruction ranks
                         // directly below instruction access fault, above the
