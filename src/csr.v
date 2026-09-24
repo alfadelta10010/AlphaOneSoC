@@ -92,15 +92,11 @@ module csr #(
     reg [63:0] minstret;
 
     assign mtvec_out    = mtvec;
-    // Priv spec §3.1.15: when IALIGN=32 (misa.C=0), mepc[1] masked on reads.
-    wire [31:0] mepc_eff = {mepc[31:2], (misa_reg[2] ? mepc[1] : 1'b0), 1'b0};
-    assign mepc_out     = mepc_eff;
     assign pmpcfg0_out  = pmpcfg0;
     assign pmpaddr0_out = pmpaddr0;
     assign pmpaddr1_out = pmpaddr1;
     assign pmpaddr2_out = pmpaddr2;
     assign pmpaddr3_out = pmpaddr3;
-    assign misa_c       = misa_reg[2];
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
@@ -170,6 +166,15 @@ module csr #(
                                 (csr_new[2] || !pc_next_misaligned);
     wire [31:0] misa_after_we = misa_we_ok ? {misa_reg[31:3], csr_new[2], misa_reg[1:0]}
                                            : misa_reg;
+    // misa.C gates compressed decode, the branch-target alignment check and
+    // the mepc read mask, all of which fyracore applies in EX -- so, like the
+    // mstatus fields, it is exported as it stands after a pending write. The
+    // instruction right after `csrci misa, 4` is then already checked with
+    // C=0, as Zicsr requires.
+    assign misa_c = misa_after_we[2];
+    // Priv spec §3.1.15: when IALIGN=32 (misa.C=0), mepc[1] masked on reads.
+    wire [31:0] mepc_eff = {mepc[31:2], (misa_c ? mepc[1] : 1'b0), 1'b0};
+    assign mepc_out      = mepc_eff;
 
     // ===== Post-write value ======================================================
     // What a read of waddr returns once this cycle's write has committed:

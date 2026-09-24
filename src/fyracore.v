@@ -111,7 +111,7 @@ module fyracore #(
     reg        ifex_compressed;
     reg [31:0] ifex_pc_next;
     reg        ifex_valid;
-    reg        ifex_c_illegal;  // Compressed decoder flagged illegal encoding
+    reg        ifex_c_illegal;  // Compressed decoder flagged a reserved encoding
 
     // ================================================================
     //  EX/WB Pipeline Register (declared here so EX-stage continuous
@@ -428,7 +428,12 @@ module fyracore #(
     // than reaching it as the fallthrough case.
     wire ex_illegal_insn = ifex_valid && (
         (ctrl_illegal && !ctrl_isFence) ||
-        ifex_c_illegal ||              // Illegal compressed instruction from IF
+        ifex_c_illegal ||              // Reserved compressed encoding
+        // A compressed instruction while misa.C=0. Checked here rather than
+        // at IF so that it sees csr_misa_c as it stands after a csrw misa in
+        // WB: at IF the write is still two stages away, and the two
+        // instructions after `csrci misa, 4` used to execute compressed.
+        (ifex_compressed && !csr_misa_c) ||
         ex_bad_system ||               // Malformed SYSTEM encoding
         ex_wfi_umode ||                // WFI from U-mode (illegal)
         ex_bad_wfi ||                  // WFI with bad rd/rs1 fields
@@ -976,8 +981,8 @@ module fyracore #(
                 ifex_compressed<= if_compressed;
                 ifex_pc_next   <= if_pc_next;
                 ifex_valid     <= 1'b1;
-                // Compressed encoding while misa.C=0 → illegal-instruction trap.
-                ifex_c_illegal <= if_compressed && (if_c_illegal || !csr_misa_c);
+                // misa.C is applied in EX (ex_illegal_insn), not here.
+                ifex_c_illegal <= if_compressed && if_c_illegal;
             end
 
             // ---- EX/WB Pipeline Register ----
