@@ -326,13 +326,16 @@ module fyracore #(
                         (ifex_instr[24:20] == 5'b00000);
     wire ex_is_ebreak = ifex_valid && ctrl_isEbreak && ex_system_fields_ok &&
                         (ifex_instr[24:20] == 5'b00001);
-    wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok && priv_mode;
+    // MRET is funct7=0011000 with rs2=00010; the other rs2 values in that
+    // funct7 are reserved and must not execute as MRET.
+    wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok && priv_mode &&
+                        (ifex_instr[24:20] == 5'b00010);
     wire ex_is_fencei = ifex_valid && ctrl_isFenceI;
 
     // WFI: funct7=0001000 (not isMret, not isEcall, not isFenceI) — NOP in M-mode,
     // but with interrupt support we stall until an interrupt fires.
     // Encoding: opcode=1110011, funct3=000, funct7=0001000 (rs2=00101).
-    // U-mode WFI traps as illegal instruction (spec Section 3.3.3).
+    // In U-mode it is a NOP unless mstatus.TW is set (ex_wfi_umode).
     wire ex_is_wfi = ifex_valid && (ifex_instr[31:20] == 12'b000100000101) &&
                      (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
                      (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && priv_mode;
@@ -345,11 +348,16 @@ module fyracore #(
                         (ex_rd == 5'b0) && (ex_rs1 == 5'b0) && !priv_mode &&
                         csr_mstatus_tw;
 
-    // WFI with invalid rd/rs1 fields: trap as illegal instruction
+    // Everything in the funct7=0001000 family except a well-formed WFI is
+    // illegal: SRET (rs2=00010) with no S-mode ("should raise an
+    // illegal-instruction exception"), WFI with nonzero rd/rs1, and the
+    // reserved rs2 values. The controller decodes the whole family as a NOP.
     wire ex_bad_wfi = ifex_valid && (ifex_instr[31:25] == 7'b0001000) &&
                       (ex_opcode == 7'b1110011) && (ex_funct3 == 3'b000) &&
-                      (ifex_instr[24:20] == 5'b00101) &&
-                      !(ex_rd == 5'b0 && ex_rs1 == 5'b0);
+                      !(ifex_instr[24:20] == 5'b00101 && ex_rd == 5'b0 && ex_rs1 == 5'b0);
+
+    // LR.W has no rs2; a nonzero rs2 field is a reserved encoding.
+    wire ex_bad_lr = ifex_valid && ctrl_isLR && (ex_rs2 != 5'b0);
 
     // Bad SYSTEM encoding: controller recognized the funct7 family but the full
     // encoding doesn't match any valid instruction (wrong rd/rs1/rs2 fields)
@@ -468,7 +476,8 @@ module fyracore #(
         (ifex_compressed && !csr_misa_c) ||
         ex_bad_system ||               // Malformed SYSTEM encoding
         ex_wfi_umode ||                // WFI from U-mode (illegal)
-        ex_bad_wfi ||                  // WFI with bad rd/rs1 fields
+        ex_bad_wfi ||                  // SRET / malformed WFI / reserved rs2
+        ex_bad_lr ||                   // LR.W with rs2 != 0
         ex_csr_illegal                 // Invalid/read-only CSR access
     );
 

@@ -214,7 +214,9 @@ module controller(
                         //   EBREAK: funct7=0000000, rs2=00001 (refined in pipeline)
                         //   MRET:   funct7=0011000, rs2=00010 (rd=0, rs1=0 checked in pipeline)
                         //   WFI:    funct7=0001000, rs2=00101 (NOP in M-mode, legal per spec)
-                        // All other funct7 values are reserved → illegal.
+                        // All other funct7 values are reserved → illegal. Within
+                        // the MRET and WFI families the pipeline also rejects
+                        // the wrong rs2 (SRET and reserved encodings).
                         // Full rd/rs1/rs2 validation is done in the pipeline where those fields
                         // are available.
                         if (funct7 == 7'b0000000) begin
@@ -224,7 +226,7 @@ module controller(
                         else if (funct7 == 7'b0011000)
                             isMret = 1'b1;
                         else if (funct7 == 7'b0001000)
-                            ;              // WFI — executed as NOP in M-mode
+                            ;              // WFI family; exact encoding checked in the pipeline
                         else
                             illegal = 1'b1;
                     end
