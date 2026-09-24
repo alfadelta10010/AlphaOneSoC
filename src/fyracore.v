@@ -488,20 +488,28 @@ module fyracore #(
     // means the pipeline can take the result on whatever later cycle it is
     // able to, instead of losing it if that one cycle happened to be stalled.
     reg  muldiv_ready;
+    // The result is available from the done cycle itself, not only from the
+    // cycle after it. muldiv.v drops busy on the done cycle, and muldiv_ready
+    // is only set at its end, so testing muldiv_ready alone leaves the done
+    // cycle looking idle: muldiv_start fired again and relaunched the same
+    // operation, and that phantom's done later set muldiv_ready for the
+    // *next* M instruction, which then captured the previous result.
+    wire muldiv_have = muldiv_ready || muldiv_done;
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_ready && !wb_busy
-                          && !stall_other && !flush;
+    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
 
-    assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_ready
+    assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
                           && !stall_other && !flush;
-    assign muldiv_stall = muldiv_want && !muldiv_ready;
+    assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin
         // flush first: the operation's instruction is being discarded, so the
         // result must not survive to be captured by its own re-execution.
+        // capture before done: a result taken on its own done cycle must not
+        // be left sticky for the next M instruction.
         if (rst || flush)        muldiv_ready <= 1'b0;
-        else if (muldiv_done)    muldiv_ready <= 1'b1;
         else if (muldiv_capture) muldiv_ready <= 1'b0;
+        else if (muldiv_done)    muldiv_ready <= 1'b1;
     end
 
     wire stall = stall_other || muldiv_stall;
