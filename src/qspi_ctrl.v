@@ -32,14 +32,19 @@
 //                                          of an unfinished command
 //   CS1+CS2   66h, 99h (SPI)               PSRAM: reset enable, reset
 //   CS0       8 clocks of 1111             flash: all-ones mode bits end
-//                                          continuous-read mode, and FFh is
-//                                          Exit QPI on the W25Q128JV-DTR
+//                                          continuous-read mode
+//   CS0       FFh in QPI form (2 clocks)   flash: Exit QPI on the
+//                                          W25Q128JV-DTR; a flash in SPI mode
+//                                          sees two bits and ignores them
 //
-// The flash step goes last so the PSRAMs have had 20 clocks to finish their
-// reset before any request can reach them. Selecting both PSRAMs at once is
-// safe because none of these commands makes a device drive the bus. The
-// sequence assumes the devices' power-up time (150 us for the PSRAM) has
-// passed, which on the demo board it long has.
+// The flash steps go last, so the PSRAMs have had over 20 clocks to finish
+// their reset before any request can reach them. Selecting both PSRAMs at
+// once is safe because none of these commands makes a device drive the bus. The sequence assumes the devices' power-up time
+// (150 us for the PSRAM) has passed, which on the demo board it long has.
+// It does not undo flash states only a deliberate command sets -- a burst
+// wrap (77h), deep power-down (B9h), or Quad Enable cleared (the "IM" part
+// ships with QE = 0) -- which the master that programs the flash must leave
+// alone.
 //
 // Timing. SCK runs at clk/2 and idles low (SPI mode 0). The data pins change
 // on the clock edge that drives SCK low and the device samples them on the
@@ -67,11 +72,12 @@
 // we, nbytes_m1 and wdata stable until `done`. They are read combinationally
 // throughout the transaction, so none of them is copied here. `done` is high
 // for one cycle, the first cycle after the last data clock, and read data is
-// valid in that cycle. `idle` is high only on cycles `start` is taken, which
-// is never the cycle `done` is high, so a requester never has a stale request
-// sampled. Read data is shifted in at the bottom of a 32-bit register that is
-// *not* cleared between transactions, so two 2-byte reads in a row assemble
-// one 4-byte word (mem_ctrl's split fetch relies on this).
+// valid in that cycle. `start` is taken only on a cycle `idle` is high, and
+// `idle` is never high on the cycle `done` is, so a requester's request is
+// never sampled on its own ready cycle, when it may still show the request
+// being completed. Read data is shifted in at the bottom of a 32-bit
+// register that is *not* cleared between transactions, so two 2-byte reads in
+// a row assemble one 4-byte word (mem_ctrl's split fetch relies on this).
 //
 // While rst is high every pin is released (ctl_oe and io_oe low), so another
 // master -- the TinyTapeout demo board's RP2040 -- can program the flash or
@@ -112,7 +118,7 @@ module qspi_ctrl (
     reg [2:0]  cnt;     // SCK cycles left in the current phase, counting down
     reg [31:0] sr;      // read data, shifted in a nibble at a time
     reg        init;    // start-up sequence still running
-    reg [1:0]  step;    // which command of it
+    reg [2:0]  step;    // which command of it
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -120,11 +126,11 @@ module qspi_ctrl (
     // register holds the bytes big-endian; swapping them back is wiring.
     assign rdata = {sr[7:0], sr[15:8], sr[23:16], sr[31:24]};
 
-    // Start-up steps: 0 = F5h in QPI form, 1 = 66h, 2 = 99h (all PSRAM),
-    // 3 = FFh (flash).
-    wire       qpi_f5 = init && (step == 2'd0);
-    wire [7:0] cmd    = init ? ((step == 2'd1) ? 8'h66 : (step == 2'd2) ? 8'h99 : 8'hFF)
-                             : (we ? 8'h38 : 8'hEB);
+    // Start-up steps: 0 = F5h in QPI form, 1 = 66h, 2 = 99h (PSRAMs);
+    // 3 = 8 clocks of 1111, 4 = FFh in QPI form (flash).
+    wire       qpi_form = init && (step == 3'd0 || step == 3'd4);
+    wire [7:0] cmd      = init ? ((step == 3'd1) ? 8'h66 : (step == 3'd2) ? 8'h99 : 8'hFF)
+                               : (we ? 8'h38 : 8'hEB);
 
     // The data phase counts cnt down from 7 and stops at 8 - 2*nbytes. The
     // nibble on the wire is then number 7 - cnt of the transfer: byte
@@ -135,7 +141,8 @@ module qspi_ctrl (
 
     always @(*) begin
         case (state)
-            S_CMD:   io_out = qpi_f5 ? (cnt[0] ? 4'hF : 4'h5) : {3'b111, cmd[cnt]};
+            S_CMD:   io_out = qpi_form ? ((cnt[0] || step == 3'd4) ? 4'hF : 4'h5)
+                                       : {3'b111, cmd[cnt]};
             S_ADDR:  io_out = addr[{cnt, 2'b00} +: 4];
             S_DATA:  io_out = wdata[{wnib, 2'b00} +: 4];
             default: io_out = 4'b1111;       // mode byte 0xFF, and idle
@@ -149,7 +156,7 @@ module qspi_ctrl (
 
     // Chip selects for a transaction starting now. A write never selects
     // the flash.
-    wire [2:0] sel_now = init ? ((step == 2'd3) ? 3'b001 : 3'b110)
+    wire [2:0] sel_now = init ? ((step >= 3'd3) ? 3'b001 : 3'b110)
                               : ((3'b001 << cs_sel) & {2'b11, !we});
 
     always @(posedge clk) begin
@@ -161,7 +168,7 @@ module qspi_ctrl (
             ctl_oe <= 1'b0;
             io_oe  <= 1'b0;
             init   <= 1'b1;
-            step   <= 2'd0;
+            step   <= 3'd0;
         end else begin
             ctl_oe <= 1'b1;
             if (sample)
@@ -169,7 +176,7 @@ module qspi_ctrl (
             case (state)
                 S_IDLE: if (init || start) begin
                     state <= S_CMD;
-                    cnt   <= qpi_f5 ? 3'd1 : 3'd7;
+                    cnt   <= qpi_form ? 3'd1 : 3'd7;
                     cs_n  <= ~sel_now;
                     io_oe <= 1'b1;
                 end
@@ -180,8 +187,8 @@ module qspi_ctrl (
                 S_END: begin
                     state <= S_IDLE;
                     if (init) begin
-                        step <= step + 2'd1;
-                        if (step == 2'd3)
+                        step <= step + 3'd1;
+                        if (step == 3'd4)
                             init <= 1'b0;
                     end
                 end
