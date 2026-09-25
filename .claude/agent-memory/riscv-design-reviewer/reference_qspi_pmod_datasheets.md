@@ -19,6 +19,12 @@ Fxh"; M5-4=10 enters continuous read) + 4 dummy; "IO pins should be Hi-Z before 
 out clock". FFh on IO0 x8 clocks resets continuous-read mode. tSHSL1 10 ns (read), tSHSL2 50 ns, tCLQV 6 ns,
 tCLQX 1.5 ns, tSHQZ 7 ns, tDVCH 1 ns, tCHDX 2 ns, FR 133 MHz. Software reset 66h/99h clears M bits/wrap, tRST ~30 us.
 
+JV-DTR CRM exit: "recommended to input FFh on IO0 for the next instruction (8 clocks)" (any 8 clocks with IO0=1
+in the mode nibble works). Exit QPI (FFh, fig. 52) is drawn as 2 clocks then CS#; whether trailing clocks cancel it
+is NOT specified. Flash 66h/99h clears QPI, CRM, wrap (77h), read params; tRST ~30 us.
+APS6404L: s12 reset text does NOT say whether the array survives 66h/99h (matters for RP2040-preloaded PSRAM).
+Read termination: "recommended tCHD > tACLK+tCLK" so the last nibble can be latched.
+
 **APS6404L-3SQR** (R = RBX, row-boundary crossing): page 1 KB; default LINEAR burst crosses a page, max 84 MHz,
 "can cross page boundary one time only in a burst" (s8.2). Non-R parts (3SQN, s9.2) WRAP within the 1 KB page by
 default. C0h toggles wrap-32. SPI mode: EBh S/Q/6 wait, 38h S/Q/0 wait, 02h, 03h (33 MHz). QPI: 0Bh 4 wait

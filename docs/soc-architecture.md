@@ -88,10 +88,10 @@ ever from flash or PSRAM.
 Joins the core's two ports onto the one QSPI engine.
 
 * **Arbitration: data first.** When both ports are waiting, the data request
-  goes first. The pipeline only issues a new data request on a cycle a fetch
-  completes, so a fetch is never starved, and serving data first means a
-  fetch that is going to be needed after the load is not fetched before it and
-  lost while the load stalls the pipeline.
+  goes first. The pipeline only issues a new data request on the cycle
+  *after* a fetch completes, so a fetch is never starved. Serving data first
+  also avoids reading the next instruction before a load and then losing it
+  while the load stalls the pipeline; fetch-first would do that on every load.
 * **Chip select** from the address: flash if `addr[31]` is 0, otherwise PSRAM
   A/B by `addr[23]`.
 * **Reads are always a whole word** from the word address, whatever the byte
@@ -150,7 +150,8 @@ continuous-read mode) and releases the bus for the other four.
   longer for the last nibble. TinyQV measured the TinyTapeout pad round trip
   at a little over 20 ns; at 50 MHz use 0, and near 66 MHz use 1. It is a
   strap rather than a register because flash reads must work before any
-  software runs. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
+  software runs, and it is sampled during reset and held, so a pin that
+  changes later cannot move the sampling point mid-read. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
   1 passes 12–29 ns.
 * **Writes never select the flash.** `0x38` is the PSRAM's quad write, but
   on the W25Q128JV-DTR it is Enter QPI. The PMA already faults stores to
@@ -169,11 +170,25 @@ first request the engine therefore sends:
 | Chips | Sent | Effect |
 |---|---|---|
 | CS1+CS2 | `F5h` in QPI form (2 clocks) | PSRAM exits QPI; a PSRAM in SPI mode sees an unfinished command |
-| CS1+CS2 | `66h`, `99h` | PSRAM reset enable, reset |
-| CS0 | 8 clocks of `1111` | flash leaves continuous-read mode (and `FFh` is Exit QPI on the -DTR part) |
+| CS1+CS2 | `66h`, `99h` | PSRAM reset enable, reset -- only when booting from flash |
+| CS0 | 8 clocks of `1111` | flash leaves continuous-read mode |
+| CS0 | `FFh` in QPI form (2 clocks) | flash exits QPI (-DTR part); a flash in SPI mode sees an unfinished command |
 
-The flash step goes last, which gives the PSRAMs 20 clocks to finish their
-reset before any request reaches them.
+The flash steps go last, which gives a reset PSRAM over 20 clocks before any
+request reaches it. The PSRAM reset is skipped when booting from PSRAM
+(`boot_sel = 1`, the engine's `psram_reset` strap is `!boot_sel`): an external
+master has just loaded it, and the datasheet does not promise the array
+survives a reset. The engine drives SCK and the chip selects idle for one
+cycle after reset before the first chip select falls.
+
+Not undone, and so the job of whatever programs the flash: a flash burst
+wrap set with `77h`, deep power-down (`B9h`), and a cleared Quad Enable bit
+(the "IM" part ships with QE = 0).
+
+**Board prerequisites (open questions).** While reset is held the chip selects
+are released; unless the Pmod or the RP2040 pulls them high, they float. The
+TinyTapeout wrapper, which does not exist yet, must synchronise `rst_n`
+before it reaches this reset.
 
 **Device prerequisites.**
 * The flash's Quad Enable bit (SR2 bit 1) must be set once. It is
@@ -229,11 +244,32 @@ reset before any request reaches them.
   window with zeros, and boots from PSRAM (`boot_addr = 0x8000_0000`).
 * Spike is given `-m0x20000000:0x1000000,0x80000000:0x1000000`.
   **Spike has no read-only memory**, so a store to flash succeeds on Spike and
-  faults on the core. That is a known, spec-legal divergence. No test stores
-  to flash on purpose.
+  faults on the core. That is a known, spec-legal divergence. No
+  Spike-compared test stores to flash; `pma_flash` checks the flash faults
+  DUT-only (LR cause 5; SC, AMO, store cause 7; mtval = the address).
 * `tests/directed/run.sh soc` runs the same directed suite through the real
   memory path (bus fabric, memory controller, QSPI engine and a behavioural
-  flash/PSRAM model), compared against the same Spike references.
+  flash/PSRAM model, `tb/qspi_pmod_model.v`), compared against the same Spike
+  references. MANIFEST mode `flash` boots from flash (`flash_boot`: runs
+  from flash, copies a routine to PSRAM, runs it there). Tests that assume a
+  fast memory -- 40-clock timer periods, reading `cycle` right after writing
+  it -- are listed in `#soc-skip` lines; `t_irq_slow` covers timer interrupts
+  at QSPI speed.
+* `make test-qspi` runs `tb_qspi` (every transfer shape, page and chip
+  boundaries, arbitration) across device delays, the `rd_late` strap, a
+  page-wrapping PSRAM and devices handed over in QPI / continuous-read
+  modes, then `tb_qspi_stress` (core-shaped request streams, 400k clocks of
+  random traffic against a shadow memory). The Pmod model checks protocol,
+  bus contention, tCEM and tCPH as it goes.
+
+## Area
+
+Measured with yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`
+(standard-cell area before placement): the core is about 138,600 µm² and the
+whole SoC about 148,700 µm², roughly 1.9x the ~79,000 µm² seven tiles
+provide. The SoC blocks added here are about 8% of it (qspi_ctrl ~2,400,
+mem_ctrl ~750, clint ~7,600 µm²; soc_bus mostly folds away). The excess is in
+the core: register file ~51k, CSR ~28k, pipeline ~30k, muldiv ~18k.
 
 ## Performance
 
@@ -256,7 +292,12 @@ Options not yet taken, in the review's order of payoff per gate:
    shared bus, for about 0.5–0.7 kGE. It also ends the refetching during WFI
    and M-op stalls. It must close the stream at every 1 KB PSRAM page and
    within tCEM, and it is the heaviest of the three to verify.
-3. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
+3. **Abort the fall-through fetch on a taken branch.** A redirect waits for
+   the fetch already in flight, about 58 clocks wasted per taken branch. An
+   abort would need a change to the request/ready contract (today a request
+   is held until ready). Not in the review's first ranking, but it may beat
+   the next item.
+4. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
    core or the pads limit the clock. With a round trip over 20 ns it needs
    multi-cycle sampling and a gated clock output. Only worth it if the core's
    fmax is below twice the maximum SCK.

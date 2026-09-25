@@ -21,7 +21,9 @@ update after each review with confirmed decisions, findings, and recurring patte
 - Memory map (ADOPTED e98761e): PMA_ROM flash 0x20000000 16MB RX; PMA_RAM PSRAM 0x80000000 16MB RWX+LR/SC
   (CS by addr[23]); IO0 CLINT 0x02000000 64KB; IO1 UART/GPIO/syscon 0x10000000-0x1002FFFF; IO takes AMO, not LR/SC.
   Reset PC = boot_addr INPUT (caa2d10), strap picks flash/PSRAM. No boot ROM. mtvec still resets 0.
-  SoC plan (09-26): native req/ready fabric, data-first mem_ctrl, qspi_ctrl EBh/38h SPI mode, SCK=clk/2.
+  SoC BUILT (soc-fabric branch, 71a8514): soc_bus stateless decode, mem_ctrl data-first + 1 KB page split,
+  qspi_ctrl EBh/38h SPI mode SCK=clk/2, start-up F5h(QPI)/66h/99h to PSRAMs + 8x1111 to flash, rd_late strap,
+  CS0 masked on writes, registered MTIP, mtime = core clock (no prescaler), no PLIC, UART/GPIO/syscon read 0.
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on wb_mem_stall
   (2167485); other stalls bubble. Since c579eeb: dmem_req (excl. trapping/failing-SC) + imem_req (constant 1);
   every redirect gated on !stall so pc only moves when imem_ready. Loads still carry NO byte-lane info.
@@ -84,6 +86,9 @@ update after each review with confirmed decisions, findings, and recurring patte
 - 2026-09-26 pre-RTL SoC architecture review: no CRIT. MAJOR open: 1 KB page-wrap straddle (non-RBX PSRAM),
   device-state init (PSRAM 66/99, QPI/continuous-read leftovers, flash 38h=Enter QPI), ready-cycle arbitration
   invariant, read-sample margin at 66 MHz. See finding_soc_arch_review_2026-09-26.md
+- 2026-09-26 post-RTL SoC review at 71a8514: A1-A4 VERIFIED FIXED; no CRIT/MAJ. MINOR: flash QPI exit not
+  framed (QPI+CRM fails in own model), rd_late not latched, CS falls on first OE cycle, stale doc line.
+  Q: PSRAM 66/99 vs preloaded data (boot_sel=1), CS pull-ups. See finding_soc_rtl_review_2026-09-26.md
 
 ## Recurring patterns observed
 
@@ -110,6 +115,10 @@ update after each review with confirmed decisions, findings, and recurring patte
   arbitrates in its own ready cycle refetches a stale address and can complete it against the NEW one.
 - Device datasheets carry hidden state (PSRAM QPI/wrap, flash continuous-read/QPI) that survives a design reset
   and other TT designs set it. Always ask who establishes device state.
+- Behavioural models encode the designer's reading of the datasheet (qspi_pmod_model accepts QPI FFh with 24
+  trailing clocks). Check the MODEL against the datasheet, not only the RTL against the model.
+- Spike cannot model read-only memory, so PMA ROM faults (cause 5/7 on flash) never appear in lockstep; they need
+  a self-checking or SoC-only test. Likewise the SoC suite soc-skips timer tests — write SoC-speed variants.
 
 ## Notes index (2026-09-05 review)
 
@@ -129,3 +138,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [KianV memory map](reference_kianv_memory_map.md) — the DT that actually boots NOMMU Linux on this class of silicon: RAM at 0x80000000, no PLIC, 10 kHz timebase
 - [QSPI Pmod datasheets + precedents](reference_qspi_pmod_datasheets.md) — W25Q128JV-DTR/APS6404L-3SQR timing, RBX page crossing, TinyQV/KianV QSPI choices
 - [2026-09-26 SoC architecture review](finding_soc_arch_review_2026-09-26.md) — fabric/mem_ctrl/qspi_ctrl pre-RTL findings, verified-OK list, perf ranking
+- [2026-09-26 SoC RTL review](finding_soc_rtl_review_2026-09-26.md) — post-RTL verdicts, core-like stress tb + mutations, PMA/timer SoC probes, new-block area
