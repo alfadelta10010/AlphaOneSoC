@@ -33,7 +33,7 @@
 ```
 
 **IF (Instruction Fetch):**
-- Requests the instruction at `imem_addr` (= PC); `imem_req` is always high
+- Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window (`imem_req`); outside it nothing is fetched and the instruction faults in EX
 - The PC only changes on a cycle the fetch completes, so the address of an outstanding fetch is never withdrawn
 - Detects compressed instructions (bits `[1:0] != 2'b11`) and expands them via `compressed_decoder`
 - Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal)
@@ -178,7 +178,11 @@ Both ports follow the same contract:
 - From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `be`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
 - Nothing transfers while `*_req` is low, whatever `*_ready` is.
 
-`imem_req` is always high. When the pipeline is stalled with a fetch already completed, the same address is requested again. `dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. An AMO is a read followed by a write, back to back.
+`imem_req` is high whenever PC lies in `PMA_MEM_*`. Outside it no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
+
+`dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. `dmem_be` gives the byte lanes of every request, loads included; `dmem_we` says whether it is a write. An AMO is a read followed by a write, back to back.
+
+For a memory controller: while a data request waits, the pipeline is stalled and `imem_req` stays up with the same address, so a controller sharing one bus must not starve the data port (serve data first or alternate) and should keep the last fetched word so a repeated request completes without a new transfer. A 32-bit fetch at the last halfword of the window asks for bytes past its end; anything may be returned for them.
 
 ### 5.2 memController.v
 
