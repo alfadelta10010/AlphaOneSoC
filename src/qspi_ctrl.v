@@ -82,6 +82,8 @@
 // While rst is high every pin is released (ctl_oe and io_oe low), so another
 // master -- the TinyTapeout demo board's RP2040 -- can program the flash or
 // load the PSRAM over the same pins before it lets the core out of reset.
+// After reset SCK and the chip selects are driven, idle, for one cycle before
+// the first chip select falls.
 
 module qspi_ctrl (
     input  wire        clk,
@@ -174,7 +176,8 @@ module qspi_ctrl (
             if (sample)
                 sr <= {sr[27:0], io_in};
             case (state)
-                S_IDLE: if (init || start) begin
+                // ctl_oe: the pins have been driven idle for a cycle.
+                S_IDLE: if (ctl_oe && (init || start)) begin
                     state <= S_CMD;
                     cnt   <= qpi_form ? 3'd1 : 3'd7;
                     cs_n  <= ~sel_now;
