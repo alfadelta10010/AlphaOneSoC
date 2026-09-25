@@ -14,13 +14,32 @@
 // never enters continuous-read mode (0xAx would make it take the next command
 // byte as an address). The other four are released so the device can turn
 // the bus around. The flash's Quad Enable bit must already be set (it is
-// non-volatile; the TinyTapeout QSPI Pmod guide sets it). The PSRAM powers up
-// in SPI mode, which accepts both commands, and needs no initialisation.
+// non-volatile; the TinyTapeout QSPI Pmod guide sets it).
 //
 // Writes never select the flash. 0x38 is the PSRAM's quad write, but on the
 // W25Q128JV-DTR it is Enter QPI, which would leave the flash deaf to every
 // SPI read until a power cycle. The core's PMA check already faults stores
 // to flash; this is the backstop.
+//
+// Start-up sequence. The Pmod is shared, and the demo board does not power
+// cycle it between designs, so the devices can be left in a state this
+// engine does not speak -- TinyQV, for one, leaves the PSRAMs in QPI mode and
+// the flash in continuous-read mode. The PSRAM datasheet also asks for a
+// reset after power-up. So before taking its first request the engine sends:
+//
+//   CS1+CS2   F5h in QPI form (2 clocks)   PSRAM: leave QPI mode; a PSRAM
+//                                          already in SPI mode sees two bits
+//                                          of an unfinished command
+//   CS1+CS2   66h, 99h (SPI)               PSRAM: reset enable, reset
+//   CS0       8 clocks of 1111             flash: all-ones mode bits end
+//                                          continuous-read mode, and FFh is
+//                                          Exit QPI on the W25Q128JV-DTR
+//
+// The flash step goes last so the PSRAMs have had 20 clocks to finish their
+// reset before any request can reach them. Selecting both PSRAMs at once is
+// safe because none of these commands makes a device drive the bus. The
+// sequence assumes the devices' power-up time (150 us for the PSRAM) has
+// passed, which on the demo board it long has.
 //
 // Timing. SCK runs at clk/2 and idles low (SPI mode 0). The data pins change
 // on the clock edge that drives SCK low and the device samples them on the
@@ -43,9 +62,11 @@
 // we, nbytes_m1 and wdata stable until `done`. They are read combinationally
 // throughout the transaction, so none of them is copied here. `done` is high
 // for one cycle, the first cycle after the last data clock, and read data is
-// valid in that cycle. Read data is shifted in at the bottom of a 32-bit
-// register that is *not* cleared between transactions, so two 2-byte reads in
-// a row assemble one 4-byte word (mem_ctrl's split fetch relies on this).
+// valid in that cycle. `idle` is high only on cycles `start` is taken, which
+// is never the cycle `done` is high, so a requester never has a stale request
+// sampled. Read data is shifted in at the bottom of a 32-bit register that is
+// *not* cleared between transactions, so two 2-byte reads in a row assemble
+// one 4-byte word (mem_ctrl's split fetch relies on this).
 //
 // While rst is high every pin is released (ctl_oe and io_oe low), so another
 // master -- the TinyTapeout demo board's RP2040 -- can program the flash or
@@ -83,14 +104,20 @@ module qspi_ctrl (
     reg [2:0]  state;
     reg [2:0]  cnt;     // SCK cycles left in the current phase, counting down
     reg [31:0] sr;      // read data, shifted in a nibble at a time
+    reg        init;    // start-up sequence still running
+    reg [1:0]  step;    // which command of it
 
-    assign idle  = (state == S_IDLE);
-    assign done  = (state == S_END);
+    assign idle  = (state == S_IDLE) && !init;
+    assign done  = (state == S_END)  && !init;
     // The first nibble received is the high nibble of the first byte, so the
     // register holds the bytes big-endian; swapping them back is wiring.
     assign rdata = {sr[7:0], sr[15:8], sr[23:16], sr[31:24]};
 
-    wire [7:0] cmd = we ? 8'h38 : 8'hEB;
+    // Start-up steps: 0 = F5h in QPI form, 1 = 66h, 2 = 99h (all PSRAM),
+    // 3 = FFh (flash).
+    wire       qpi_f5 = init && (step == 2'd0);
+    wire [7:0] cmd    = init ? ((step == 2'd1) ? 8'h66 : (step == 2'd2) ? 8'h99 : 8'hFF)
+                             : (we ? 8'h38 : 8'hEB);
 
     // The data phase counts cnt down from 7 and stops at 8 - 2*nbytes. The
     // nibble on the wire is then number 7 - cnt of the transfer: byte
@@ -101,12 +128,20 @@ module qspi_ctrl (
 
     always @(*) begin
         case (state)
-            S_CMD:   io_out = {3'b111, cmd[cnt]};
+            S_CMD:   io_out = qpi_f5 ? (cnt[0] ? 4'hF : 4'h5) : {3'b111, cmd[cnt]};
             S_ADDR:  io_out = addr[{cnt, 2'b00} +: 4];
             S_DATA:  io_out = wdata[{wnib, 2'b00} +: 4];
             default: io_out = 4'b1111;       // mode byte 0xFF, and idle
         endcase
     end
+
+    // Where a read nibble is captured (see Timing above).
+    wire sample = !we && state == S_DATA && sck;
+
+    // Chip selects for a transaction starting now. A write never selects
+    // the flash.
+    wire [2:0] sel_now = init ? ((step == 2'd3) ? 3'b001 : 3'b110)
+                              : ((3'b001 << cs_sel) & {2'b11, !we});
 
     always @(posedge clk) begin
         if (rst) begin
@@ -116,32 +151,51 @@ module qspi_ctrl (
             cs_n   <= 3'b111;
             ctl_oe <= 1'b0;
             io_oe  <= 1'b0;
+            init   <= 1'b1;
+            step   <= 2'd0;
         end else begin
             ctl_oe <= 1'b1;
+            if (sample)
+                sr <= {sr[27:0], io_in};
             case (state)
-                S_IDLE: if (start) begin
+                S_IDLE: if (init || start) begin
                     state <= S_CMD;
-                    cnt   <= 3'd7;
-                    cs_n  <= ~((3'b001 << cs_sel) & {2'b11, !we});
+                    cnt   <= qpi_f5 ? 3'd1 : 3'd7;
+                    cs_n  <= ~sel_now;
                     io_oe <= 1'b1;
                 end
-                S_END:
+                S_END: begin
                     state <= S_IDLE;
+                    if (init) begin
+                        step <= step + 2'd1;
+                        if (step == 2'd3)
+                            init <= 1'b0;
+                    end
+                end
                 default: begin
                     // SCK toggles every clock of an active phase; everything
                     // else happens on the clock that drives it low.
                     sck <= ~sck;
                     if (sck) begin
-                        if (state == S_DATA && !we)
-                            sr <= {sr[27:0], io_in};
                         if (state == S_DUMMY && cnt == 3'd4)
                             io_oe <= 1'b0;      // mode byte done: release the bus
                         if (state == S_DATA ? (cnt == data_last) : (cnt == 3'd0)) begin
                             case (state)
-                                S_CMD:   begin state <= S_ADDR;                   cnt <= 3'd5; end
-                                S_ADDR:  begin state <= we ? S_DATA : S_DUMMY;    cnt <= we ? 3'd7 : 3'd5; end
-                                S_DUMMY: begin state <= S_DATA;                   cnt <= 3'd7; end
-                                default: begin state <= S_END; cs_n <= 3'b111;   io_oe <= 1'b0; end
+                                S_CMD: if (init) begin
+                                    state <= S_END;
+                                    cs_n  <= 3'b111;
+                                    io_oe <= 1'b0;
+                                end else begin
+                                    state <= S_ADDR;
+                                    cnt   <= 3'd5;
+                                end
+                                S_ADDR:  begin state <= we ? S_DATA : S_DUMMY; cnt <= we ? 3'd7 : 3'd5; end
+                                S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
+                                default: begin  // S_DATA
+                                    state <= S_END;
+                                    cs_n  <= 3'b111;
+                                    io_oe <= 1'b0;
+                                end
                             endcase
                         end else
                             cnt <= cnt - 3'd1;

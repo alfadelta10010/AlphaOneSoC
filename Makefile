@@ -128,15 +128,21 @@ test-muldiv: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
 	@$(call run_tb,tb_muldiv)
 
-# The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model, once at
-# the model's default device delay and once just under one SCK period, which
-# the controller's late read sampling must still tolerate.
+# The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model:
+#   default           2 ns device delay
+#   QSPI_DELAY=19     just under one SCK period, which late sampling must take
+#   PSRAM_QPI + FLASH_CRM, FLASH_QPI
+#                     devices handed over in states the start-up sequence
+#                     has to undo
+QSPI_RUNS := "" "+QSPI_DELAY=19" "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI"
 test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/tb_qspi.v
-	@$(call run_tb,tb_qspi)
-	@cd $(BUILD_DIR) && $(VVP) tb_qspi +QSPI_DELAY=19 | tee tb_qspi_slow.log && ! grep -qE '^(FAIL|TIMEOUT)' tb_qspi_slow.log
+	@cd $(BUILD_DIR) && for args in $(QSPI_RUNS); do \
+		$(VVP) tb_qspi $$args > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
+		grep -q '^PASS' tb_qspi.log || exit 1; \
+	done
 
 test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi
 	@echo ""
