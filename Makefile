@@ -37,7 +37,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv asm \
+        test-regfile test-csr test-compressed test-muldiv test-qspi asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -55,6 +55,7 @@ help:
 	@echo "  make test-regfile      Run register file testbench"
 	@echo "  make test-csr          Run CSR testbench"
 	@echo "  make test-compressed   Run compressed decoder testbench"
+	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -127,7 +128,17 @@ test-muldiv: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
 	@$(call run_tb,tb_muldiv)
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv
+# The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model, once at
+# the model's default device delay and once just under one SCK period, which
+# the controller's late read sampling must still tolerate.
+test-qspi: $(BUILD_DIR)
+	@echo "=== Testing QSPI memory path ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/tb_qspi.v
+	@$(call run_tb,tb_qspi)
+	@cd $(BUILD_DIR) && $(VVP) tb_qspi +QSPI_DELAY=19 | tee tb_qspi_slow.log && ! grep -qE '^(FAIL|TIMEOUT)' tb_qspi_slow.log
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi
 	@echo ""
 	@echo "=== All component tests completed ==="
 
