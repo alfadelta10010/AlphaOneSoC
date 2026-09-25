@@ -129,4 +129,9 @@ straddle_top        spike  +IMEM_WAIT=2 +IMEM_RANDOM=1
 pmp_straddle        spike
 m_straddle_locked   spike
 u_straddle          spike
+straddle_u_mix      spike
+straddle_u_mix      spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=1
+straddle_m_tor      spike
+irq_straddle        spike
+irq_straddle        spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 u_straddle          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
