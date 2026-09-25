@@ -139,6 +139,16 @@ irq_straddle        spike
 irq_straddle        spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 u_straddle          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 
+# Flash is read-only and not reservable: LR -> cause 5; SC, AMO, store -> 7;
+# mtval = the address. Spike maps flash as plain RAM, so this is DUT-only.
+# x18 holds the causes in order, x20 the traps with a wrong mtval.
+pma_flash           expect x18=0x5777 x20=0x0 x28=0x0 x30=0x0
+
+# Timer interrupts at a period a QSPI-speed handler can keep up with; the
+# timer counts clocks and Spike counts instructions, so DUT-only. x18 = taken,
+# x20 = taken with the wrong cause or an mepc outside the wait loop.
+t_irq_slow          expect x18=0x3 x20=0x0
+
 # Boots from flash (SoC only): runs from flash, copies a routine into PSRAM
 # and runs it there after FENCE.I, the way a boot loader hands over.
 flash_boot          flash
