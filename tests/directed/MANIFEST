@@ -103,6 +103,7 @@ t_reset             expect x8=0x0 x9=0x0 x18=0x0 x19=0x0 x20=0x40101105 x21=0x0 
 
 # ---- PMP, MPRV, U-mode ---------------------------------------------------------
 pmpcfg              spike
+pmp_rw_reserved     spike
 pmp_adjacent        spike
 pmp_adjacent_x      spike
 pmp_napot_small     spike

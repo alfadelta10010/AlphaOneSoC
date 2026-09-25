@@ -181,6 +181,13 @@ module csr #(
     wire [31:0] mepc_eff = {mepc[31:2], (misa_c ? mepc[1] : 1'b0), 1'b0};
     assign mepc_out      = mepc_eff;
 
+    // A pmpcfg byte as written, made legal: L, A, X and R as given, bits
+    // [6:5] zero, and W only alongside R.
+    function [7:0] pmpcfg_legal;
+        input [7:0] b;
+        pmpcfg_legal = {b[7], 2'b00, b[4:2], b[1] & b[0], b[0]};
+    endfunction
+
     // ===== Post-write value ======================================================
     // What a read of waddr returns once this cycle's write has committed:
     // every WARL rule in one place. The write case below stores this value
@@ -206,11 +213,13 @@ module csr #(
             12'h344: wval = mip_live;                        // mip: no writable bits
             // pmpcfg0: a locked byte keeps its value; otherwise bits [6:5]
             // are reserved and read 0. A = 2'b10 (NA4) is legal at G=0 and
-            // pmp.v implements it, so it is stored as written.
-            12'h3A0: wval = {pmpcfg0[31] ? pmpcfg0[31:24] : {csr_new[31], 2'b00, csr_new[28:24]},
-                             pmpcfg0[23] ? pmpcfg0[23:16] : {csr_new[23], 2'b00, csr_new[20:16]},
-                             pmpcfg0[15] ? pmpcfg0[15:8]  : {csr_new[15], 2'b00, csr_new[12:8]},
-                             pmpcfg0[7]  ? pmpcfg0[7:0]   : {csr_new[7],  2'b00, csr_new[4:0]}};
+            // pmp.v implements it, so it is stored as written. R/W/X form a
+            // collective WARL field in which R=0,W=1 is reserved (Priv
+            // §3.7.1): W is legalised to 0 when R is 0, as Spike does.
+            12'h3A0: wval = {pmpcfg0[31] ? pmpcfg0[31:24] : pmpcfg_legal(csr_new[31:24]),
+                             pmpcfg0[23] ? pmpcfg0[23:16] : pmpcfg_legal(csr_new[23:16]),
+                             pmpcfg0[15] ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),
+                             pmpcfg0[7]  ? pmpcfg0[7:0]   : pmpcfg_legal(csr_new[7:0])};
             // pmpaddr[i]: locked by its own L bit, or by entry i+1 when that
             // entry is TOR and locked.
             12'h3B0: wval = tor_lock_addr0 ? pmpaddr0 : csr_new;
