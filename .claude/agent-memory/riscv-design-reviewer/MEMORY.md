@@ -18,9 +18,10 @@ update after each review with confirmed decisions, findings, and recurring patte
 - ISA: RV32IMACU_Zicsr_Zicntr_Zifencei; misa reset 0x40101105 (U advertised since 009ad74), only C writable.
 - Hardware M: yes (multicycle muldiv). A: LR/SC + AMO, 2-cycle WB.
 - Privilege: M + U (no S), single hart. marchid param default 0, tb overrides to 5 (21fbe65). mstatus has MPRV+TW (7cd1eb6/8485cf0).
-- Memory map (CURRENT, TinyQV-style; proposal to move to flash 0x20000000 / PSRAM 0x80000000 made 09-25b): fyracore PMA params default Flash+RAM 0x0-0x01FFFFFF, CLINT 0x02000000-0x0200BFFF,
-  GPIO 0x03000000-0x0300000F; RESET_PC 0. tb overrides to 0x80000000+32MB (Spike-compatible).
-  memController.v is NOT instantiated anywhere — there is no SoC top yet.
+- Memory map (ADOPTED e98761e): PMA_ROM flash 0x20000000 16MB RX; PMA_RAM PSRAM 0x80000000 16MB RWX+LR/SC
+  (CS by addr[23]); IO0 CLINT 0x02000000 64KB; IO1 UART/GPIO/syscon 0x10000000-0x1002FFFF; IO takes AMO, not LR/SC.
+  Reset PC = boot_addr INPUT (caa2d10), strap picks flash/PSRAM. No boot ROM. mtvec still resets 0.
+  SoC plan (09-26): native req/ready fabric, data-first mem_ctrl, qspi_ctrl EBh/38h SPI mode, SCK=clk/2.
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on wb_mem_stall
   (2167485); other stalls bubble. Since c579eeb: dmem_req (excl. trapping/failing-SC) + imem_req (constant 1);
   every redirect gated on !stall so pc only moves when imem_ready. Loads still carry NO byte-lane info.
@@ -80,6 +81,9 @@ update after each review with confirmed decisions, findings, and recurring patte
   c641e76, d05e277, d83bff7). No new ISA CRITICAL. MAJOR SoC: single RWX exec window/flash writable/no bus
   error; halfword-aligned fetch contract. MINOR: mtvec reset 0. Proposed Linux map: flash 0x20000000,
   PSRAM 0x80000000 x16MB, CLINT 0x02000000, UART 0x10000000. See finding_branch_review_2026-09-25b_memmap.md
+- 2026-09-26 pre-RTL SoC architecture review: no CRIT. MAJOR open: 1 KB page-wrap straddle (non-RBX PSRAM),
+  device-state init (PSRAM 66/99, QPI/continuous-read leftovers, flash 38h=Enter QPI), ready-cycle arbitration
+  invariant, read-sample margin at 66 MHz. See finding_soc_arch_review_2026-09-26.md
 
 ## Recurring patterns observed
 
@@ -102,6 +106,10 @@ update after each review with confirmed decisions, findings, and recurring patte
   data-corruption bugs. Always full-trace diff against Spike, not final registers.
 - Deterministic vs randomised wait states expose DIFFERENT bugs: randomised found the
   interrupt-vs-stall overlap, deterministic found the muldiv phase-lock livelock. Run both.
+- req/ready slaves: in the ready cycle the core still shows the OLD request (imem_req=1, old pc). A slave that
+  arbitrates in its own ready cycle refetches a stale address and can complete it against the NEW one.
+- Device datasheets carry hidden state (PSRAM QPI/wrap, flash continuous-read/QPI) that survives a design reset
+  and other TT designs set it. Always ask who establishes device state.
 
 ## Notes index (2026-09-05 review)
 
@@ -119,3 +127,5 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-25 fix-verification review](finding_branch_review_2026-09-25.md) — per-commit verdicts, what was measured, pmpcfg R=0/W=1, UNOPTFLAT, bus-contract risks
 - [2026-09-25b review + Linux memory map](finding_branch_review_2026-09-25b_memmap.md) — toolchain/Spike-master gotchas, CSR probe, XIP removal, proposed map
 - [KianV memory map](reference_kianv_memory_map.md) — the DT that actually boots NOMMU Linux on this class of silicon: RAM at 0x80000000, no PLIC, 10 kHz timebase
+- [QSPI Pmod datasheets + precedents](reference_qspi_pmod_datasheets.md) — W25Q128JV-DTR/APS6404L-3SQR timing, RBX page crossing, TinyQV/KianV QSPI choices
+- [2026-09-26 SoC architecture review](finding_soc_arch_review_2026-09-26.md) — fabric/mem_ctrl/qspi_ctrl pre-RTL findings, verified-OK list, perf ranking
