@@ -17,6 +17,11 @@
 // non-volatile; the TinyTapeout QSPI Pmod guide sets it). The PSRAM powers up
 // in SPI mode, which accepts both commands, and needs no initialisation.
 //
+// Writes never select the flash. 0x38 is the PSRAM's quad write, but on the
+// W25Q128JV-DTR it is Enter QPI, which would leave the flash deaf to every
+// SPI read until a power cycle. The core's PMA check already faults stores
+// to flash; this is the backstop.
+//
 // Timing. SCK runs at clk/2 and idles low (SPI mode 0). The data pins change
 // on the clock edge that drives SCK low and the device samples them on the
 // next rising edge, a full clock later, so they are driven combinationally
@@ -117,7 +122,7 @@ module qspi_ctrl (
                 S_IDLE: if (start) begin
                     state <= S_CMD;
                     cnt   <= 3'd7;
-                    cs_n  <= ~(3'b001 << cs_sel);
+                    cs_n  <= ~((3'b001 << cs_sel) & {2'b11, !we});
                     io_oe <= 1'b1;
                 end
                 S_END:
