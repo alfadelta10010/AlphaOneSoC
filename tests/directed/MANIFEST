@@ -76,9 +76,12 @@ mret_irq            spike
 mret_irq            spike  +IMEM_WAIT=3 +IMEM_RANDOM=1
 mie_enable          spike
 # Spike takes this interrupt before the csrc (its msip store is visible at
-# once); the core takes it after the store lands, by which time mie is off.
-# Both legal; what matters is that it is never taken after the disable.
-mie_disable         expect x14=0x999
+# once); the core takes it after the store lands, by which time mie is off --
+# unless the pipeline is still waiting on a fetch when the store lands, as it
+# is behind the QSPI memory, and then the core takes it before the csrc too
+# (mepc = the csrc, 0x8000002c). Both legal; what matters is that it is never
+# taken after the disable.
+mie_disable         expect x14=0x999|0x8000002c
 # Timer-driven: mtime ticks per clock here and per ~100 retires on Spike, so
 # these cannot be lockstep-compared. They check the program completes with
 # no interrupt landing at a bad mepc; randomised waits are what used to
@@ -135,3 +138,6 @@ straddle_m_tor      spike
 irq_straddle        spike
 irq_straddle        spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 u_straddle          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+
+#soc-skip cnt_alias -- the csrr of `cycle` waits in EX through a QSPI fetch (about 57 clocks) and reads mcycle when it executes, 0x2039 rather than 0x2000; Spike counts one per instruction. The forwarding it checks is the same in both builds.
+#soc-skip t_irq t_irq2 t_mulirq t_ctl -- a 40-clock timer period is shorter than an interrupt handler at QSPI speed (about 90 clocks per instruction), so the handler never finishes before the next interrupt and the loop never advances. Legal; these tests assume a fast memory.

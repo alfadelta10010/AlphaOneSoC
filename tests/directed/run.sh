@@ -22,10 +22,15 @@
 #       (Spike's commit log up to the tohost store) line for line, and must
 #       itself reach the tohost store.
 #
-#   <name> expect <reg>=<hex>... [-- +PLUSARG...]
+#   <name> expect <reg>=<hex>[|<hex>...]... [-- +PLUSARG...]
 #       DUT only, for a deliberate, spec-legal divergence from Spike: the
-#       final value of each listed register must be exactly as given. The
-#       comment above the line says why the test cannot be Spike-compared.
+#       final value of each listed register must be one of the values given.
+#       The comment above the line says why the test cannot be
+#       Spike-compared, and why more than one value is legal where it is.
+#
+#   #soc-skip <name>... -- <reason>
+#       The SoC-level run skips these tests. For tests whose point depends on
+#       a fast memory (a timer period shorter than a QSPI-speed handler).
 #
 # Every run fails on: an assembly error, a testbench ERROR line (e.g. the
 # memory handshake checker), a DUT-ABORT (watchdog), an empty dump, or not
@@ -146,10 +151,13 @@ run_expect() { # run_expect <name> <reg>=<hex>... [-- <plusargs...>]
   asm "$n" || { bad "$label" "    assembly failed"; return; }
   sim "$n" "${extra[@]}"
   local why; why=$(sane "$n") || { bad "$label" "$why"; return; }
-  local c r want got msg=""
+  local c r alts a hit got msg=""
   for c in "${checks[@]}"; do
-    r=${c%%=*}; want=$((${c#*=})); got=$(rd "$OUT/$n.dut" "$r")
-    [ -n "$got" ] && [ $((got)) = "$want" ] || msg="$msg    $r = ${got:-<never written>}, want $(printf 0x%08x "$want")
+    r=${c%%=*}; alts=${c#*=}; got=$(rd "$OUT/$n.dut" "$r"); hit=0
+    for a in ${alts//|/ }; do
+      [ -n "$got" ] && [ $((got)) = $((a)) ] && hit=1
+    done
+    [ $hit = 1 ] || msg="$msg    $r = ${got:-<never written>}, want $alts
 "
   done
   [ -z "$msg" ] && ok "$label" || bad "$label" "${msg%$'\n'}"
@@ -162,11 +170,12 @@ suite() {
     grep -qE "^$t( |\$)" "$HERE/MANIFEST" || missing="${missing:-} $t"
   done
   [ -n "${missing:-}" ] && bad "MANIFEST" "    not listed:$missing"
-  local ran=" "
+  local ran=" " skip=" "
+  [ $SOC = 1 ] && skip=" $(sed -n 's/^#soc-skip \([^-]*\).*/\1/p' "$HERE/MANIFEST" | tr '\n' ' ') "
   while read -r name mode rest; do
     case "$name" in ''|\#*) continue ;; esac
     if [ $SOC = 1 ]; then
-      case "$ran" in *" $name "*) continue ;; esac
+      case "$ran$skip" in *" $name "*) continue ;; esac
       ran="$ran$name "
     fi
     # shellcheck disable=SC2086
