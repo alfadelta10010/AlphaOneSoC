@@ -30,16 +30,20 @@
 //   CS1+CS2   F5h in QPI form (2 clocks)   PSRAM: leave QPI mode; a PSRAM
 //                                          already in SPI mode sees two bits
 //                                          of an unfinished command
-//   CS1+CS2   66h, 99h (SPI)               PSRAM: reset enable, reset
+//   CS1+CS2   66h, 99h (SPI)               PSRAM: reset enable, reset --
+//                                          only when psram_reset is high
 //   CS0       8 clocks of 1111             flash: all-ones mode bits end
 //                                          continuous-read mode
 //   CS0       FFh in QPI form (2 clocks)   flash: Exit QPI on the
 //                                          W25Q128JV-DTR; a flash in SPI mode
 //                                          sees two bits and ignores them
 //
-// The flash steps go last, so the PSRAMs have had over 20 clocks to finish
-// their reset before any request can reach them. Selecting both PSRAMs at
-// once is safe because none of these commands makes a device drive the bus. The sequence assumes the devices' power-up time
+// The SoC drives psram_reset only when booting from flash. Booting from
+// PSRAM means an external master has just loaded it, and the PSRAM datasheet
+// does not promise the array survives a reset. The flash steps go last, so a
+// reset PSRAM has had over 20 clocks before any request can reach it.
+// Selecting both PSRAMs at once is safe because none of these commands makes
+// a device drive the bus. The sequence assumes the devices' power-up time
 // (150 us for the PSRAM) has passed, which on the demo board it long has.
 // It does not undo flash states only a deliberate command sets -- a burst
 // wrap (77h), deep power-down (B9h), or Quad Enable cleared (the "IM" part
@@ -91,6 +95,7 @@ module qspi_ctrl (
     input  wire        clk,
     input  wire        rst,
     input  wire        rd_late,    // strap, sampled during reset: read data one clock later
+    input  wire        psram_reset,// strap, sampled during reset: reset the PSRAMs at start-up
     // Transaction request, held by the requester until done
     input  wire        start,
     input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2)
@@ -124,6 +129,7 @@ module qspi_ctrl (
     reg        init;    // start-up sequence still running
     reg [2:0]  step;    // which command of it
     reg        late;    // rd_late, as sampled during reset
+    reg        do_psram_reset;
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -175,6 +181,7 @@ module qspi_ctrl (
             init   <= 1'b1;
             step   <= 3'd0;
             late   <= rd_late;
+            do_psram_reset <= psram_reset;
         end else begin
             ctl_oe <= 1'b1;
             if (sample)
@@ -194,7 +201,7 @@ module qspi_ctrl (
                 S_END: begin
                     state <= S_IDLE;
                     if (init) begin
-                        step <= step + 3'd1;
+                        step <= (step == 3'd0 && !do_psram_reset) ? 3'd3 : step + 3'd1;
                         if (step == 3'd4)
                             init <= 1'b0;
                     end

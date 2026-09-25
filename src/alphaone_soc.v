@@ -142,6 +142,9 @@ module alphaone_soc #(
         .clk      (clk),
         .rst      (rst),
         .rd_late  (qspi_rd_late),
+        // Reset the PSRAMs at start-up only when booting from flash: booting
+        // from PSRAM means it was just loaded, and a reset may not keep it.
+        .psram_reset(!boot_sel),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
