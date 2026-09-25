@@ -93,11 +93,17 @@ module tb_rivercore;
     // The CLINT gets dmem_addr[15:0], so the part of Spike's 0xC0000 CLINT
     // aperture above 0x0200_FFFF aliases the registers here instead of
     // reading 0 as memory_model does. No directed test touches it.
+    //
+    // +RD_LATE sets the QSPI read-latency strap; +QSPI_DELAY (read by the
+    // model) sets the device + pad delay it has to cover.
+    reg rd_late;
+    initial rd_late = $test$plusargs("RD_LATE");
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
     wire [3:0] qspi_io_out, pmod_io;
-    // The pins as the SoC sees them: whoever drives, else pulled up.
-    wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'b1111);
+    // The pins as the SoC sees them. Nobody driving reads X, so sampling an
+    // undriven bus cannot quietly return plausible data.
+    wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'bxxxx);
 
     alphaone_soc #(
         // Match the reference model's marchid so the lockstep dump agrees.
@@ -110,6 +116,7 @@ module tb_rivercore;
         .clk        (clk),
         .rst        (rst),
         .boot_sel   (1'b1),
+        .qspi_rd_late(rd_late),
         .qspi_sck   (qspi_sck),
         .qspi_cs_n  (qspi_cs_n),
         .qspi_ctl_oe(qspi_ctl_oe),

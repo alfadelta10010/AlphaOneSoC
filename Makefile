@@ -130,12 +130,14 @@ test-muldiv: $(BUILD_DIR)
 
 # The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model:
 #   default           2 ns device delay
-#   QSPI_DELAY=19     just under one SCK period, which late sampling must take
+#   QSPI_DELAY=19     just under one SCK period, which rd_late = 0 must take
+#   RD_LATE, 25 ns    past one SCK period, which needs the rd_late strap
 #   PSRAM_WRAP        a PSRAM that wraps at 1 KB pages (no row crossing)
 #   PSRAM_QPI + FLASH_CRM, FLASH_QPI
 #                     devices handed over in states the start-up sequence
 #                     has to undo
-QSPI_RUNS := "" "+QSPI_DELAY=19" "+PSRAM_WRAP" "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI"
+QSPI_RUNS := "" "+QSPI_DELAY=19" "+RD_LATE +QSPI_DELAY=25" "+PSRAM_WRAP" \
+             "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI"
 test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \

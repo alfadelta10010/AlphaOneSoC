@@ -8,6 +8,10 @@
 //   0x0200_0000  CLINT   64 KB
 //   0x1000_0000  UART / 0x1001_0000 GPIO / 0x1002_0000 syscon   (reserved)
 //
+// qspi_rd_late is a strap for the QSPI read-sampling point: 0 samples two
+// clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick
+// it from the clock frequency and the measured pad round trip.
+//
 // Boot: there is no boot ROM. boot_sel picks the reset PC -- 0 boots from
 // flash at 0x2000_0000, 1 from PSRAM at 0x8000_0000 -- and while rst is high
 // every QSPI pin is released, so an external master can program the flash or
@@ -27,6 +31,7 @@ module alphaone_soc #(
     input  wire       clk,
     input  wire       rst,
     input  wire       boot_sel,      // 0 = flash, 1 = PSRAM
+    input  wire       qspi_rd_late,  // strap: sample QSPI read data a clock later
     // QSPI Pmod
     output wire       qspi_sck,
     output wire [2:0] qspi_cs_n,     // CS0 flash, CS1 PSRAM A, CS2 PSRAM B
@@ -136,6 +141,7 @@ module alphaone_soc #(
     qspi_ctrl qspi (
         .clk      (clk),
         .rst      (rst),
+        .rd_late  (qspi_rd_late),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),

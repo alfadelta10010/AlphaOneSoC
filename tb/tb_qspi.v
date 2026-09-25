@@ -11,9 +11,11 @@
 //     PSRAM A into PSRAM B -- and flash fetches;
 //   * a fetch and a load raised together: the load must be served first.
 //
-// Run with +QSPI_DELAY=<ns> to vary the device + pad delay; the controller
-// samples read data late, so anything below one SCK period (20 ns here) must
-// pass.
+// Plusargs: +QSPI_DELAY=<ns> device + pad delay; +RD_LATE drives the
+// controller's rd_late strap; and the model's +PSRAM_WRAP, +PSRAM_QPI,
+// +FLASH_CRM, +FLASH_QPI (see tb/qspi_pmod_model.v). With rd_late = 0 the
+// controller samples two clocks after the launching edge, so any delay below
+// one SCK period (20 ns here) must pass; with rd_late = 1, three clocks.
 
 `timescale 1ns / 1ps
 
@@ -51,11 +53,14 @@ module tb_qspi;
     wire [2:0] cs_n;
     wire [3:0] io_out, dev_io;
     wire       dev_oe;
-    // The pins as the controller sees them: whoever drives, else pulled up.
-    wire [3:0] io_in = dev_oe ? dev_io : (io_oe ? io_out : 4'b1111);
+    // The pins as the controller sees them. Nobody driving reads X, so
+    // sampling an undriven bus shows up as a wrong result.
+    wire [3:0] io_in = dev_oe ? dev_io : (io_oe ? io_out : 4'bxxxx);
+    reg        rd_late;
+    initial    rd_late = $test$plusargs("RD_LATE");
 
     qspi_ctrl qspi (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .rd_late(rd_late),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),
@@ -188,7 +193,7 @@ module tb_qspi;
             errors = errors + 1;
         end
 
-        if (errors == 0) $display("PASS tb_qspi (QSPI_DELAY=%0d ns)", pmod.delay_ns);
+        if (errors == 0) $display("PASS tb_qspi (QSPI_DELAY=%0d ns, rd_late=%0d)", pmod.delay_ns, rd_late);
         else             $display("FAIL tb_qspi: %0d errors", errors);
         $finish;
     end

@@ -48,13 +48,18 @@
 // selects and both output enables are registered, since a glitch on those is
 // seen at once.
 //
-// Read data is sampled *late*: on the clock edge that drives SCK low, one
-// whole SCK period after the falling edge that launched it rather than half a
-// period. The device's clock-to-output time plus both pad delays then have
-// two core clocks instead of one, which is what TinyTapeout's slow I/O needs.
-// The other side of that edge is covered by the device's output hold time
-// plus the same pad delays: the falling edge driven on this clock reaches the
-// device only after the output pad delay.
+// Read data is sampled late, to cover TinyTapeout's slow I/O (the pad round
+// trip has been measured at a little over 20 ns). With rd_late = 0 a nibble is
+// sampled two clocks after the falling edge that launched it -- on the clock
+// that drives SCK low again, one whole SCK period later -- which fits a
+// device clock-to-output time plus round trip up to about 2 clocks. With
+// rd_late = 1 it is sampled three clocks after, for a round trip between 1 and
+// about 3 clocks: the right choice at clock rates where 2 clocks is too
+// tight (it is a strap, so it can be set before the first fetch). Chip select
+// then stays low one extra clock for the last nibble. The other side of the
+// sampling edge is covered by the device's output hold time plus the same
+// pad delays, since the next falling edge reaches the device only after the
+// output pad delay.
 //
 // Chip select is high for at least two clocks between transactions.
 //
@@ -75,6 +80,7 @@
 module qspi_ctrl (
     input  wire        clk,
     input  wire        rst,
+    input  wire        rd_late,    // strap: sample read data one clock later
     // Transaction request, held by the requester until done
     input  wire        start,
     input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2)
@@ -99,7 +105,8 @@ module qspi_ctrl (
                      S_ADDR  = 3'd2,
                      S_DUMMY = 3'd3,
                      S_DATA  = 3'd4,
-                     S_END   = 3'd5;
+                     S_TAIL  = 3'd5,    // rd_late: CS held for the last nibble
+                     S_END   = 3'd6;
 
     reg [2:0]  state;
     reg [2:0]  cnt;     // SCK cycles left in the current phase, counting down
@@ -135,8 +142,10 @@ module qspi_ctrl (
         endcase
     end
 
-    // Where a read nibble is captured (see Timing above).
-    wire sample = !we && state == S_DATA && sck;
+    // Where a read nibble is captured (see Timing above). Late: on each
+    // rising-edge clock of the data phase but the first, and in S_TAIL.
+    wire sample = !we && (rd_late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
+                                  :  (state == S_DATA &&  sck));
 
     // Chip selects for a transaction starting now. A write never selects
     // the flash.
@@ -163,6 +172,10 @@ module qspi_ctrl (
                     cnt   <= qpi_f5 ? 3'd1 : 3'd7;
                     cs_n  <= ~sel_now;
                     io_oe <= 1'b1;
+                end
+                S_TAIL: begin
+                    state <= S_END;
+                    cs_n  <= 3'b111;
                 end
                 S_END: begin
                     state <= S_IDLE;
@@ -192,9 +205,13 @@ module qspi_ctrl (
                                 S_ADDR:  begin state <= we ? S_DATA : S_DUMMY; cnt <= we ? 3'd7 : 3'd5; end
                                 S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
                                 default: begin  // S_DATA
-                                    state <= S_END;
-                                    cs_n  <= 3'b111;
                                     io_oe <= 1'b0;
+                                    if (rd_late && !we)
+                                        state <= S_TAIL;
+                                    else begin
+                                        state <= S_END;
+                                        cs_n  <= 3'b111;
+                                    end
                                 end
                             endcase
                         end else
