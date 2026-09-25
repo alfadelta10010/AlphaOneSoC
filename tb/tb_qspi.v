@@ -6,8 +6,9 @@
 //   * word, halfword and byte stores in every lane, to PSRAM A and B, checked
 //     against the model's array;
 //   * whole-word loads from both chips and from flash;
-//   * fetches at word and halfword addresses, including the one that crosses
-//     from PSRAM A into PSRAM B (split into two reads) and flash fetches;
+//   * fetches at word and halfword addresses, including those that cross a
+//     1 KB PSRAM page (split into two reads) -- one of which crosses from
+//     PSRAM A into PSRAM B -- and flash fetches;
 //   * a fetch and a load raised together: the load must be served first.
 //
 // Run with +QSPI_DELAY=<ns> to vary the device + pad delay; the controller
@@ -152,6 +153,15 @@ module tb_qspi;
         fetch(32'h8080_0000);
         fetch(32'h8000_0102);       // halfword-aligned, one chip
         fetch(32'h8080_0106);
+
+        // Every other 1 KB page boundary: split too, or a part that wraps at
+        // the page returns the page's first halfword.
+        store(32'h8000_03FC, 4'b1111, 32'h4433_2211);
+        store(32'h8000_0400, 4'b1111, 32'h8877_6655);
+        fetch(32'h8000_03FE);
+        store(32'h8080_07FC, 4'b1111, 32'hCCBB_AA99);
+        store(32'h8080_0800, 4'b1111, 32'h00FF_EEDD);
+        fetch(32'h8080_07FE);
 
         // Flash
         load(32'h2000_0000); load(32'h2000_0010);
