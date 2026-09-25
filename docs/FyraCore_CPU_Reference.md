@@ -212,7 +212,7 @@ CSR address bits `[9:8]` encode the minimum privilege; bits `[11:10] = 11` mark 
 Bit  [7]    L  — Lock (applies to M-mode too; entry immutable until reset)
 Bits [6:5]  reserved, read 0
 Bits [4:3]  A  — 00 OFF, 01 TOR, 10 NA4, 11 NAPOT (all legal at G=0)
-Bits [2:0]  R/W/X
+Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 ```
 
 **Matching:**
