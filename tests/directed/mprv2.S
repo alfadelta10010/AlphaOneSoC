@@ -1,6 +1,6 @@
 # MPRV with an explicit unlocked PMP entry, so the result does not depend on
 # either model's PMP reset value.
-# Entry 0: NA4 @0x81000000, no R/W/X, L=0. M-mode bypasses an unlocked entry;
+# Entry 0: NA4 @0x80800000, no R/W/X, L=0. M-mode bypasses an unlocked entry;
 # U-mode does not. So with MPRV=1 and MPP=U an M-mode access must fault.
 # Expect a1=0x11, a2=0x11, a4=0x75 (store fault 7 then load fault 5).
 .section .text.init
@@ -10,11 +10,11 @@ rvtest_entry_point:
     la   t6, handler
     csrw mtvec, t6
     li   s0, 0
-    li   a0, 0x81000000
+    li   a0, 0x80800000
     li   t0, 0x11
     sw   t0, 0(a0)
 
-    li   t0, 0x20400000        # 0x81000000 >> 2
+    li   t0, 0x20200000        # 0x80800000 >> 2
     csrw pmpaddr0, t0
     li   t0, 0x10              # A=NA4, no permissions, unlocked
     csrw pmpcfg0, t0

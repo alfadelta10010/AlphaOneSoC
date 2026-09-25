@@ -13,7 +13,7 @@ rvtest_entry_point:
     li   a0, 0x40000000        # unmapped in both models
     lw   t0, 0(a0)             # 5
     sw   t0, 0(a0)             # 7
-    li   a1, 0x81000001        # mapped but misaligned
+    li   a1, 0x80800001        # mapped but misaligned
     lw   t0, 0(a1)             # 4
     sw   t0, 0(a1)             # 6
     .word 0xffffffff           # 2

@@ -1,5 +1,5 @@
 # NAPOT must match only its own naturally aligned region. A 4 KB RWX NAPOT
-# region at 0x81000000 must NOT cover the U-mode code at 0x800000xx, so the
+# region at 0x80800000 must NOT cover the U-mode code at 0x800000xx, so the
 # first U-mode fetch faults (cause 1) -- then a second entry covering the
 # code makes the region's own data word loadable and the rest denied.
   .option norvc
@@ -8,7 +8,7 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
-  li   t1, 0x204001ff        # NAPOT 0x81000000, 4 KB
+  li   t1, 0x202001ff        # NAPOT 0x80800000, 4 KB
   csrw pmpaddr0, t1
   li   t1, 0x1f              # A=NAPOT, RWX
   csrw pmpcfg0, t1

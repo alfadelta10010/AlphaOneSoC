@@ -59,11 +59,16 @@
     };
   };
 
-  /* Must agree with [spike] mem_flags and tb_rivercore.v MEM_BASE/MEM_SIZE.
-   * -m is what actually creates the memory; this node is documentation. */
+  /* Must agree with [spike] mem_flags and src/fyracore.v PMA_ROM_* /
+   * PMA_RAM_*. -m is what actually creates the memory; these nodes are
+   * documentation. Spike maps both as RAM: it has no read-only memory. */
+  flash@20000000 {
+    device_type = "memory";
+    reg = <0x0 0x20000000 0x0 0x1000000>;
+  };
   memory@80000000 {
     device_type = "memory";
-    reg = <0x0 0x80000000 0x0 0x2000000>;
+    reg = <0x0 0x80000000 0x0 0x1000000>;
   };
 
   soc {

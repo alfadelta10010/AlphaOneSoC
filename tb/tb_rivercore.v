@@ -33,29 +33,23 @@ module tb_rivercore;
     wire [63:0] mtime_val;
 
     // Parameters
-    parameter MEM_SIZE = 33554432; // 32 MB
-
-    // ── Verification remap ──────────────────────────────────────────────
     //
-    // The SoC's real map -- Flash at 0x00000000, RAM at 0x01000000, CLINT at
-    // 0x02000000, GPIO at 0x03000000 -- is what src/fyracore.v and
-    // src/memController.v describe by default, and it is what the hardware
-    // will be. It cannot be used for river_core lockstep verification:
+    // The core runs on the SoC's own memory map (src/fyracore.v PMA_*
+    // defaults): 16 MB of PSRAM at 0x8000_0000, which tb/memory_model.v
+    // models, and 16 MB of flash at 0x2000_0000, which it answers with
+    // zeros. The program is loaded into PSRAM and the core boots from there,
+    // which is the SoC's boot_sel = 1 ("run what was loaded into PSRAM").
     //
-    //   * Spike's boot ROM is fixed at DEFAULT_RSTVEC 0x1000 and cannot be
-    //     disabled (--disable-dtb removes it and Spike then hangs with an
-    //     empty dump). It would sit inside Flash.
-    //   * Spike places RAM at DRAM_BASE 0x80000000 and -m only resizes it.
-    //
-    // So the remap lives here, in the testbench, rather than in the core.
-    // The core keeps describing the machine being built; this file bends the
-    // address map to whatever the reference model can be made to agree with.
-    //
-    // MEM_BASE/MEM_SIZE must match plugins/river-config.ini:
-    //   [spike] mem_flags = -m0x80000000:0x2000000
+    // The memory windows must match plugins/river-config.ini:
+    //   [spike] mem_flags = -m0x20000000:0x1000000,0x80000000:0x1000000
     // Change one and you must change the other, or the DUT and the reference
     // disagree about which addresses are mapped -- the bug the PMA check
     // exists to catch.
+    //
+    // Spike has no read-only memory, so a store to flash succeeds there and
+    // is a store access fault here. That divergence is deliberate and
+    // spec-legal; no test stores to flash on purpose.
+    parameter MEM_SIZE = 16777216; // 16 MB of PSRAM
     parameter MEM_BASE = 32'h8000_0000;
 
     // IO0 is the CLINT window, and its size is dictated by the reference
@@ -79,7 +73,8 @@ module tb_rivercore;
     // can move.
     parameter IO0_BASE = 32'h0200_0000;
     parameter IO0_TOP  = 32'h020B_FFFF;
-    // No GPIO is modelled, and spike has no device there either, so IO1 is
+    // No UART, GPIO or syscon is modelled, and spike has no device there
+    // either (plugins/helpers/spike-fyracore.dts drops its UART), so IO1 is
     // switched off by making BASE > TOP -- a window that matches nothing.
     parameter IO1_BASE = 32'hFFFF_FFFF;
     parameter IO1_TOP  = 32'h0000_0000;
@@ -87,11 +82,6 @@ module tb_rivercore;
     fyracore #(
         // Match the reference model's marchid so the lockstep dump agrees.
         .MARCHID     (32'd5),
-        // No flash is modelled: the window is switched off (BASE > TOP).
-        .PMA_ROM_BASE(32'hFFFF_FFFF),
-        .PMA_ROM_TOP (32'h0000_0000),
-        .PMA_RAM_BASE(MEM_BASE),
-        .PMA_RAM_TOP (MEM_BASE + MEM_SIZE - 1),
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
@@ -269,7 +259,7 @@ module tb_rivercore;
             // otherwise runs to MAX_CYCLES and writes an empty dump - a silent
             // failure the comparison stage reports as a DUT bug. Empty dumps
             // also compare equal to each other, so this must fail loudly.
-            // RESET_PC 0x80000000 aliases to mem[0] (memory_model masks [24:0]).
+            // boot_addr 0x80000000 is mem[0] (memory_model indexes PSRAM by [23:0]).
             if ({mem.mem[3], mem.mem[2], mem.mem[1], mem.mem[0]} === 32'h0) begin
                 $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
                          init_file_str);

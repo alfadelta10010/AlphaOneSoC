@@ -13,7 +13,7 @@ rvtest_entry_point:
   P(.word 0x12000073)        /* sfence.vma x0,x0 */
   P(.word 0x7b200073)        /* dret */
   P(.word 0x70200073)        /* mnret */
-  li s0, 0x81000000
+  li s0, 0x80800000
   P(.word 0x1014252f)        /* lr.w a0,(s0) with rs2=1 (reserved) */
   P(.word 0x0000100f)        /* fence.i */
   P(.word 0x8330000f)        /* fence.tso */

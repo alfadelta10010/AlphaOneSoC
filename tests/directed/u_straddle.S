@@ -19,7 +19,7 @@ rvtest_entry_point:
   .balign 4
 umode:
   c.nop                        # everything below starts at a 2-aligned address
-  li   s0, 0x81000000
+  li   s0, 0x80800000
   li   t1, 0x12345678
   sw   t1, 0(s0)
   lw   t2, 0(s0)

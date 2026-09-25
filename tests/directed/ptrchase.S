@@ -6,12 +6,12 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
-  li   s0, 0x81000000
-  li   t1, 0x81000100
+  li   s0, 0x80800000
+  li   t1, 0x80800100
   sw   t1, 0(s0)
   li   t2, 0x1234
   sw   t2, 0x100(s0)
-  lw   a0, 0(s0)          # a0 = 0x81000100
+  lw   a0, 0(s0)          # a0 = 0x80800100
   lw   a1, 0(a0)          # a1 = 0x1234
   addi a2, a1, 1
   addi a3, a2, 1

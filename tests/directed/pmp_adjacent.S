@@ -7,10 +7,10 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
-  li   s0, 0x81000000
+  li   s0, 0x80800000
   li   t0, 0x1234
   sw   t0, 0(s0)
-  li   t1, 0x20400000        # pmpaddr0 = 0x81000000 >> 2
+  li   t1, 0x20200000        # pmpaddr0 = 0x80800000 >> 2
   csrw pmpaddr0, t1
   li   t2, 0x90              # L=1, A=NA4, RWX=000
   li   a0, 0

@@ -31,7 +31,7 @@ ROOT="$HERE/../.."
 OUT="$HERE/out"
 mkdir -p "$OUT"
 SPIKE_ARGS="--hartids=0 --log-commits --priv=mu --pc=0x80000000 --isa=rv32imac_zicntr
-            -m0x80000000:0x2000000 --pmpregions=4 --pmpgranularity=4"
+            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
 TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
 ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }

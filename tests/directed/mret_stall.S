@@ -4,7 +4,7 @@
 rvtest_entry_point:
     la   t6, handler
     csrw mtvec, t6
-    li   t0, 0x81000000
+    li   t0, 0x80800000
     li   t1, 0x1800           # MPP=M, MPIE=0, MIE=0
     csrw mstatus, t1
     la   t2, after

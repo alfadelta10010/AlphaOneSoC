@@ -18,7 +18,7 @@ rvtest_entry_point:
     csrw pmpaddr0, t0
     li   t0, 0x18              # A=NAPOT, RWX=000, L=0
     csrw pmpcfg0, t0
-    li   a0, 0x81000000
+    li   a0, 0x80800000
     sw   x0, 0(a0)
 
     # baseline: M-mode store with MPRV=0 must succeed

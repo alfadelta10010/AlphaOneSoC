@@ -7,10 +7,10 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
-  li   s0, 0x81000000
-  li   t1, 0x81000100
+  li   s0, 0x80800000
+  li   t1, 0x80800100
   sw   t1, 0(s0)
-  amoor.w a0, zero, (s0)   # a0 = 0x81000100 via the AMO read phase
+  amoor.w a0, zero, (s0)   # a0 = 0x80800100 via the AMO read phase
   lw   a1, 0(a0)
   addi a2, a1, 1
   li   t0, 1
