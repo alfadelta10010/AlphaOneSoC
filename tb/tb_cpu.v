@@ -41,6 +41,7 @@ module tb_cpu;
     fyracore cpu(
         .clk         (clk),
         .rst         (rst),
+        .boot_addr   (32'h0000_0000),
         .imem_addr   (imem_addr),
         .imem_req    (imem_req),
         .imem_rdata  (imem_rdata),

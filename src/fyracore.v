@@ -12,7 +12,6 @@
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
-    parameter [31:0] RESET_PC = 32'h0000_0000,
     // See csr.v: 0 means "no registered architecture ID". The testbench
     // overrides this to 5 so the Spike lockstep trace matches.
     parameter [31:0] MARCHID  = 32'h0000_0000,
@@ -48,6 +47,11 @@ module fyracore #(
 )(
     input  wire        clk,
     input  wire        rst,
+    // Reset vector: pc is loaded from this on every cycle rst is high, so it
+    // only needs to be stable by the last one. An input rather than a
+    // parameter so the SoC can pick flash or PSRAM with a strap pin, and
+    // nothing about where the machine starts is fixed in silicon.
+    input  wire [31:0] boot_addr,
     // Memory interfaces: request/ready handshake.
     //
     // A request is outstanding on every cycle its *_req is high. From the
@@ -987,7 +991,7 @@ module fyracore #(
     // ================================================================
     always @(posedge clk) begin
         if (rst) begin
-            pc        <= RESET_PC;
+            pc        <= boot_addr;
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
