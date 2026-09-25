@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-**Status: OPEN (as of 2026-09-05 review). Reproduced against Spike.**
+**Status: FIXED (fc4c84d + 11384f8; verified 2026-09-22 and 2026-09-24 directed tests).**
 
 `src/fyracore.v:895-926` resolves simultaneous synchronous exceptions in this order:
 `1 (I-fetch access fault) > 0 (inst addr misaligned) > 11/8 (ecall) > 3 (ebreak) > 4 > 6 > 5 > 7 > 2 (illegal)`.

@@ -8,7 +8,9 @@ metadata:
 Review of `git diff main...HEAD -- src/ tb/` (merge-base cb8f051, HEAD 93735c4), 2026-09-12.
 All reproduced with a scratch harness (asm -> DUT tb_rivercore + local Spike
 `/tools/rv32-isa-sim/bin/spike`, same flags as the flow, **without** `--instructions`).
-Status of all: OPEN as of 2026-09-12. Locate by signal name; line numbers drift.
+Status of all: OPEN as of 2026-09-12. **Update 2026-09-24 (7cd1eb6):** R1 fixed 15a23df, R2 f2e42b5,
+R4 8485cf0+7cd1eb6, R6 fc4c84d+11384f8, R7 7babc48 (except mip mask/live bits), R8 21fbe65, dead ports
+a005334. STILL OPEN: R3 (misa.C lag), R5 (straddle; PMP variant too). Locate by signal name; line numbers drift.
 
 Silicon/spec (RTL):
 - R1 MAJOR (pre-existing, not previously recorded): csr.v write block is `trap > mret > we`,

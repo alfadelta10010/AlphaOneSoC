@@ -3,7 +3,6 @@ module tb_csr;
     reg         clk, rst;
     reg  [11:0] addr;   // Used as both raddr and waddr in unit tests
     reg  [31:0] wdata;
-    reg  [1:0]  op;
     reg         we;
     wire [31:0] rdata;
     reg         trap, mret_sig;
@@ -16,7 +15,7 @@ module tb_csr;
 
     csr uut(
         .clk(clk), .rst(rst), .raddr(addr), .waddr(addr), .wdata(wdata),
-        .op(op), .we(we), .rdata(rdata),
+        .we(we), .rdata(rdata),
         .trap(trap), .mret(mret_sig), .trap_pc(trap_pc),
         .trap_cause(trap_cause), .trap_val(trap_val),
         .priv_mode(1'b1),  // M-mode for unit tests
@@ -48,7 +47,7 @@ module tb_csr;
         $display("=== CSR Testbench ===");
 
         // Init
-        rst = 1; we = 0; op = 0; addr = 0; wdata = 0;
+        rst = 1; we = 0; addr = 0; wdata = 0;
         trap = 0; mret_sig = 0; trap_pc = 0; trap_cause = 0; trap_val = 0;
         instret_inc = 0;
         @(posedge clk); @(posedge clk);
@@ -58,18 +57,18 @@ module tb_csr;
         // Read-only CSRs
         addr = 12'hF11; check_read(32'h0, "mvendorid=0");
         addr = 12'hF12; check_read(32'h0, "marchid=0");
-        addr = 12'hF13; check_read(32'h1, "mimpid=1");
+        addr = 12'hF13; check_read(32'h0, "mimpid=0");
         addr = 12'hF14; check_read(32'h0, "mhartid=0");
-        // misa: RV32IMAC = 01_0000000000_01000100000101
-        addr = 12'h301; check_read({2'b01, 4'b0, 26'b00000000000001000100000101}, "misa");
+        // misa: RV32IMACU -- MXL=01, A(0) C(2) I(8) M(12) U(20)
+        addr = 12'h301; check_read(32'h4010_1105, "misa");
 
-        // mstatus after reset: MPP=11 (bits 12:11)
-        addr = 12'h300; check_read(32'h0000_1800, "mstatus after reset");
+        // mstatus after reset: all zero (MIE=MPRV=0, MPP=U)
+        addr = 12'h300; check_read(32'h0000_0000, "mstatus after reset");
 
         // CSRRW: write mtvec
         @(posedge clk);
-        addr = 12'h305; wdata = 32'h0000_0100; op = 2'b01; we = 1;
-        @(posedge clk); we = 0; op = 0;
+        addr = 12'h305; wdata = 32'h0000_0100; we = 1;
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'h305; check_read(32'h0000_0100, "mtvec after CSRRW");
         #1; if (mtvec_out !== 32'h0000_0100) begin fail_count=fail_count+1; $display("FAIL: mtvec_out"); end
@@ -77,28 +76,29 @@ module tb_csr;
 
         // CSRRS: set bits in mscratch
         @(posedge clk);
-        addr = 12'h340; wdata = 32'hAAAA_AAAA; op = 2'b01; we = 1; // First write
-        @(posedge clk); we = 0; op = 0;
+        addr = 12'h340; wdata = 32'hAAAA_AAAA; we = 1; // First write
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'h340; check_read(32'hAAAAAAAA, "mscratch write");
 
         @(posedge clk);
-        addr = 12'h340; wdata = 32'h5555_5555; op = 2'b10; we = 1; // Set bits
-        @(posedge clk); we = 0; op = 0;
+        // (the pipeline computes set/clear in EX; the unit is only written)
+        addr = 12'h340; wdata = 32'hAAAA_AAAA | 32'h5555_5555; we = 1; // Set bits
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'h340; check_read(32'hFFFFFFFF, "mscratch after CSRRS");
 
         // CSRRC: clear bits in mscratch
         @(posedge clk);
-        addr = 12'h340; wdata = 32'h0F0F0F0F; op = 2'b11; we = 1;
-        @(posedge clk); we = 0; op = 0;
+        addr = 12'h340; wdata = 32'hFFFF_FFFF & ~32'h0F0F0F0F; we = 1;
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'h340; check_read(32'hF0F0F0F0, "mscratch after CSRRC");
 
         // mepc: write and check bit 0 cleared
         @(posedge clk);
-        addr = 12'h341; wdata = 32'h0000_0103; op = 2'b01; we = 1;
-        @(posedge clk); we = 0; op = 0;
+        addr = 12'h341; wdata = 32'h0000_0103; we = 1;
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'h341; check_read(32'h0000_0102, "mepc bit0 cleared");
 
@@ -129,8 +129,8 @@ module tb_csr;
         // Trap handling
         @(posedge clk);
         // First enable MIE
-        addr = 12'h300; wdata = 32'h0000_1808; op = 2'b01; we = 1; // MIE=1, MPP=11
-        @(posedge clk); we = 0; op = 0;
+        addr = 12'h300; wdata = 32'h0000_1808; we = 1; // MIE=1, MPP=11
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'h300;
         #1; if (mstatus_mie !== 1'b1) begin fail_count=fail_count+1; $display("FAIL: MIE not set"); end
@@ -165,8 +165,8 @@ module tb_csr;
 
         // Write to read-only CSR should be ignored
         @(posedge clk);
-        addr = 12'hF14; wdata = 32'hFF; op = 2'b01; we = 1;
-        @(posedge clk); we = 0; op = 0;
+        addr = 12'hF14; wdata = 32'hFF; we = 1;
+        @(posedge clk); we = 0;
         @(negedge clk);
         addr = 12'hF14; check_read(32'h0, "mhartid unchanged after write");
 

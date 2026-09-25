@@ -11,23 +11,67 @@
 // Dual-port: simultaneous instruction fetch and data access.
 // Instruction port is read-only and combinational.
 // Data port supports byte-lane-masked synchronous writes.
+//
+// Wait states
+// -----------
+// The tapeout target is external QSPI flash + PSRAM, which never answers in
+// the same cycle.  This model can therefore hold imem_ready / dmem_ready low
+// for a configurable number of cycles so that the core's stall and handshake
+// logic is actually exercised in simulation.
+//
+//   IMEM_WAIT / DMEM_WAIT   0 = combinational (ready always 1, the historical
+//                           behaviour).  N > 0 = ready is asserted 1 cycle in
+//                           every N+1, i.e. N wait states per access.
+//   IMEM_RANDOM/DMEM_RANDOM 1 = ready is instead asserted pseudo-randomly with
+//                           probability 1/(WAIT+1), from a reproducible LFSR.
+//   MEM_SEED                LFSR seed, so a randomised run can be replayed.
+//
+// All six are overridable at run time with the matching plusargs
+// (+IMEM_WAIT=n, +DMEM_RANDOM=1, +MEM_SEED=n, ...) so one compiled simulation
+// can be re-run under several memory timings.
+//
+// Two properties make the wait states meaningful rather than cosmetic:
+//   * a write only commits on the cycle dmem_ready is high, so a request that
+//     the core withdraws early is genuinely lost;
+//   * read data is driven to X while ready is low, so a core that samples
+//     rdata before the handshake completes propagates X instead of silently
+//     getting the right answer from the combinational array.
+//
+// X is not enough on its own, though. iverilog evaluates `if (X)` as false,
+// so a control decision made from not-yet-valid data (an address computed
+// from a load still on the bus, say) silently takes the harmless branch in
+// simulation. Real buses return zeros or whatever was last on the wires, and
+// there the same decision can go the other way. NOTREADY_DATA (+NOTREADY_DATA)
+// selects what rdata carries while ready is low:
+//
+//   0  X (default)
+//   1  all zeros
+//   2  LFSR garbage, different every cycle
 
 module memory_model #(
-    parameter MEM_SIZE  = 33554432,      // 32 MB (0x0000_0000 – 0x01FF_FFFF)
-    parameter INIT_FILE = "program.hex"  // hex file loaded at address 0
+    parameter MEM_SIZE    = 33554432,      // 32 MB (0x0000_0000 – 0x01FF_FFFF)
+    parameter INIT_FILE   = "program.hex", // hex file loaded at address 0
+    parameter IMEM_WAIT   = 0,             // instruction-port wait states
+    parameter DMEM_WAIT   = 0,             // data-port wait states
+    parameter IMEM_RANDOM = 0,             // randomise instruction-port ready
+    parameter DMEM_RANDOM = 0,             // randomise data-port ready
+    parameter MEM_SEED    = 32'h1234_5678, // LFSR seed for the random modes
+    parameter NOTREADY_DATA = 0            // rdata while !ready: 0=X 1=zero 2=garbage
 )(
     input  wire        clk,
     input  wire        rst,
     // Instruction port (read-only, combinational)
+    input  wire        imem_req,
     input  wire [31:0] imem_addr,
     output wire [31:0] imem_rdata,
     // Data port (read/write)
+    input  wire        dmem_req,
     input  wire [31:0] dmem_addr,
     input  wire [31:0] dmem_wdata,
-    input  wire [3:0]  dmem_wmask,
+    input  wire [3:0]  dmem_be,      // byte lanes, loads included
     input  wire        dmem_we,
     output wire [31:0] dmem_rdata,
-    // Memory ready signals (always 1 for combinational sim memory)
+    // Memory ready signals (see the wait-state notes in the header)
     output wire        imem_ready,
     output wire        dmem_ready,
     // Interrupt outputs (from embedded CLINT)
@@ -38,8 +82,61 @@ module memory_model #(
     // mtime value for CSR time/timeh reads
     output wire [63:0] mtime_out
 );
-    assign imem_ready = 1'b1;
-    assign dmem_ready = 1'b1;
+    // ── Wait-state generation ───────────────────────────────────────────────
+    integer imem_wait_n, dmem_wait_n, imem_random, dmem_random, mem_seed;
+    integer notready_data;
+
+    initial begin
+        imem_wait_n = IMEM_WAIT;
+        dmem_wait_n = DMEM_WAIT;
+        imem_random = IMEM_RANDOM;
+        dmem_random = DMEM_RANDOM;
+        mem_seed    = MEM_SEED;
+        notready_data = NOTREADY_DATA;
+        if ($value$plusargs("IMEM_WAIT=%d",   imem_wait_n)) ;
+        if ($value$plusargs("DMEM_WAIT=%d",   dmem_wait_n)) ;
+        if ($value$plusargs("IMEM_RANDOM=%d", imem_random)) ;
+        if ($value$plusargs("DMEM_RANDOM=%d", dmem_random)) ;
+        if ($value$plusargs("MEM_SEED=%d",    mem_seed))    ;
+        if ($value$plusargs("NOTREADY_DATA=%d", notready_data)) ;
+        if (imem_wait_n < 0) imem_wait_n = 0;
+        if (dmem_wait_n < 0) dmem_wait_n = 0;
+        if (mem_seed   == 0) mem_seed    = 32'h1234_5678; // an all-zero LFSR is stuck
+    end
+
+    reg [15:0] i_cnt;
+    reg [15:0] d_cnt;
+    reg [31:0] lfsr;
+
+    initial begin
+        i_cnt = 16'd0;
+        d_cnt = 16'd0;
+        lfsr  = MEM_SEED ? MEM_SEED : 32'h1234_5678;
+    end
+
+    always @(posedge clk) begin
+        if (rst) begin
+            i_cnt <= imem_wait_n[15:0];
+            d_cnt <= dmem_wait_n[15:0];
+            lfsr  <= mem_seed[31:0];
+        end else begin
+            // Free-running down-counters: ready for one cycle in every WAIT+1,
+            // not timed from the start of each request. Every access still
+            // sees between 0 and WAIT wait states, and a fixed period against
+            // a fixed-latency core is exactly what exposes phase-lock bugs.
+            i_cnt <= (i_cnt == 16'd0) ? imem_wait_n[15:0] : i_cnt - 16'd1;
+            d_cnt <= (d_cnt == 16'd0) ? dmem_wait_n[15:0] : d_cnt - 16'd1;
+            lfsr  <= {lfsr[30:0], lfsr[31] ^ lfsr[21] ^ lfsr[1] ^ lfsr[0]};
+        end
+    end
+
+    // In random mode ready is high with probability 1/(WAIT+1); WAIT=0 makes
+    // the modulo 1, so both modes collapse to "always ready" at zero waits.
+    wire imem_rnd_ready = ((lfsr[7:0]  % (imem_wait_n + 1)) == 0);
+    wire dmem_rnd_ready = ((lfsr[15:8] % (dmem_wait_n + 1)) == 0);
+
+    assign imem_ready = imem_random ? imem_rnd_ready : (i_cnt == 16'd0);
+    assign dmem_ready = dmem_random ? dmem_rnd_ready : (d_cnt == 16'd0);
 
     // ── Address decode ───────────────────────────────────────────────────────
     //
@@ -94,7 +191,7 @@ module memory_model #(
     always @(posedge clk) begin
         if (rst)
             extirq_reg <= 1'b0;
-        else if (dmem_we && in_extirq && dmem_wmask[0])
+        else if (dmem_req && dmem_we && dmem_ready && in_extirq && dmem_be[0])
             extirq_reg <= dmem_wdata[0];
     end
     assign ext_irq = extirq_reg;
@@ -114,19 +211,28 @@ module memory_model #(
     // --- Instruction read (combinational) ---
     // 25-bit index covers the full 32 MB range (0x0000_0000 – 0x01FF_FFFF).
     wire [24:0] ia = imem_addr[24:0];
-    assign imem_rdata = {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]};
+    wire [31:0] imem_word = {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]};
+    // Not valid until the handshake completes: a core that captures the fetch
+    // while imem_ready is low latches junk rather than the right instruction.
+    // See NOTREADY_DATA in the header for why X alone is not enough.
+    wire [31:0] notready_word = (notready_data == 1) ? 32'h0000_0000 :
+                                (notready_data == 2) ? {lfsr[15:0], lfsr[31:16]} :
+                                                       32'hxxxx_xxxx;
+    assign imem_rdata = imem_ready ? imem_word : notready_word;
 
     // --- Data read (combinational) ---
     wire [24:0] da = dmem_addr[24:0];
     wire [31:0] mem_rdata = {mem[da+3], mem[da+2], mem[da+1], mem[da]};
 
     // --- Data write (synchronous, byte-lane masked) ---
+    // The write commits only on the cycle the handshake completes, so a store
+    // whose request is withdrawn before dmem_ready never reaches the array.
     always @(posedge clk) begin
-        if (dmem_we && in_mem) begin
-            if (dmem_wmask[0]) mem[da]   <= dmem_wdata[7:0];
-            if (dmem_wmask[1]) mem[da+1] <= dmem_wdata[15:8];
-            if (dmem_wmask[2]) mem[da+2] <= dmem_wdata[23:16];
-            if (dmem_wmask[3]) mem[da+3] <= dmem_wdata[31:24];
+        if (dmem_req && dmem_we && dmem_ready && in_mem) begin
+            if (dmem_be[0]) mem[da]   <= dmem_wdata[7:0];
+            if (dmem_be[1]) mem[da+1] <= dmem_wdata[15:8];
+            if (dmem_be[2]) mem[da+2] <= dmem_wdata[23:16];
+            if (dmem_be[3]) mem[da+3] <= dmem_wdata[31:24];
         end
     end
 
@@ -139,8 +245,8 @@ module memory_model #(
         .rst      (rst),
         .addr     (clint_offset),
         .wdata    (dmem_wdata),
-        .wmask    (dmem_wmask),
-        .we       (dmem_we && in_clint_reg),
+        .wmask    (dmem_be),
+        .we       (dmem_req && dmem_we && dmem_ready && in_clint_reg),
         .rdata    (clint_rdata),
         .timer_irq(timer_irq),
         .sw_irq   (sw_irq),
@@ -149,8 +255,50 @@ module memory_model #(
 
     // --- Data read mux: MEIP hook, CLINT registers, CLINT padding, or SRAM ---
     // in_extirq is first because its address lies inside the CLINT aperture.
-    assign dmem_rdata = in_extirq    ? {31'b0, extirq_reg} :
-                        in_clint_reg ? clint_rdata :
-                        in_clint     ? 32'h0000_0000 : mem_rdata;
+    // Masked by dmem_ready for the same reason as imem_rdata above.
+    wire [31:0] dmem_word = in_extirq    ? {31'b0, extirq_reg} :
+                            in_clint_reg ? clint_rdata :
+                            in_clint     ? 32'h0000_0000 : mem_rdata;
+    wire [31:0] notready_dword = (notready_data == 1) ? 32'h0000_0000 :
+                                 (notready_data == 2) ? ~lfsr :
+                                                        32'hxxxx_xxxx;
+    assign dmem_rdata = dmem_ready ? dmem_word : notready_dword;
+
+    // ── Handshake checker ───────────────────────────────────────────────────
+    // The core's side of the contract (see src/fyracore.v): once a request
+    // is raised it stays raised, with the same address -- and for data the
+    // same we/be/wdata -- until the cycle ready is seen with it. A core
+    // that withdraws or changes a request mid-wait would lose or corrupt the
+    // transfer on a real request/ready bus, even where this model's
+    // combinational array happens to hide it. Any violation stops the run.
+    reg        i_pend, d_pend;
+    reg [31:0] i_addr_q, d_addr_q, d_wdata_q;
+    reg [3:0]  d_be_q;
+    reg        d_we_q;
+    always @(posedge clk) begin
+        if (rst) begin
+            i_pend <= 1'b0;
+            d_pend <= 1'b0;
+        end else begin
+            if (i_pend && (!imem_req || imem_addr !== i_addr_q)) begin
+                $display("ERROR: imem request changed before ready (addr %08h -> %08h, req %b)",
+                         i_addr_q, imem_addr, imem_req);
+                $fatal(1);
+            end
+            if (d_pend && (!dmem_req || dmem_addr !== d_addr_q || dmem_we !== d_we_q ||
+                           dmem_be !== d_be_q || (d_we_q && dmem_wdata !== d_wdata_q))) begin
+                $display("ERROR: dmem request changed before ready (addr %08h -> %08h, we %b -> %b, req %b)",
+                         d_addr_q, dmem_addr, d_we_q, dmem_we, dmem_req);
+                $fatal(1);
+            end
+            i_pend    <= imem_req && !imem_ready;
+            d_pend    <= dmem_req && !dmem_ready;
+            i_addr_q  <= imem_addr;
+            d_addr_q  <= dmem_addr;
+            d_we_q    <= dmem_we;
+            d_be_q    <= dmem_be;
+            d_wdata_q <= dmem_wdata;
+        end
+    end
 
 endmodule

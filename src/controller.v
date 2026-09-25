@@ -125,7 +125,11 @@ module controller(
                     3'b010:  begin memSize = 2'b10; memUnsigned = 1'b0; end // LW
                     3'b100:  begin memSize = 2'b00; memUnsigned = 1'b1; end // LBU
                     3'b101:  begin memSize = 2'b01; memUnsigned = 1'b1; end // LHU
-                    default: illegal = 1'b1;
+                    default: begin
+                        illegal = 1'b1;
+                        regWR   = 1'b0;  // no destination write
+                        memRD   = 1'b0;  // and no access, so no address exception
+                    end
                 endcase
             end
 
@@ -139,7 +143,10 @@ module controller(
                     3'b000:  memSize = 2'b00; // SB
                     3'b001:  memSize = 2'b01; // SH
                     3'b010:  memSize = 2'b10; // SW
-                    default: illegal = 1'b1;
+                    default: begin
+                        illegal = 1'b1;
+                        memWR   = 1'b0;  // no access, so no address exception
+                    end
                 endcase
             end
 
@@ -191,7 +198,11 @@ module controller(
                 aluSrc1 = 1'b0;     // rs1
                 aluSrc2 = 1'b0;     // imm
                 doJump  = 1'b1;
-                if (funct3 != 3'b000) illegal = 1'b1;
+                if (funct3 != 3'b000) begin
+                    illegal = 1'b1;
+                    regWR   = 1'b0;  // no link write
+                    doJump  = 1'b0;  // and no jump, so no target exception
+                end
             end
 
             // ===== SYSTEM (CSR, ECALL, EBREAK, MRET) =====
@@ -203,7 +214,9 @@ module controller(
                         //   EBREAK: funct7=0000000, rs2=00001 (refined in pipeline)
                         //   MRET:   funct7=0011000, rs2=00010 (rd=0, rs1=0 checked in pipeline)
                         //   WFI:    funct7=0001000, rs2=00101 (NOP in M-mode, legal per spec)
-                        // All other funct7 values are reserved → illegal.
+                        // All other funct7 values are reserved → illegal. Within
+                        // the MRET and WFI families the pipeline also rejects
+                        // the wrong rs2 (SRET and reserved encodings).
                         // Full rd/rs1/rs2 validation is done in the pipeline where those fields
                         // are available.
                         if (funct7 == 7'b0000000) begin
@@ -213,7 +226,7 @@ module controller(
                         else if (funct7 == 7'b0011000)
                             isMret = 1'b1;
                         else if (funct7 == 7'b0001000)
-                            ;              // WFI — executed as NOP in M-mode
+                            ;              // WFI family; exact encoding checked in the pipeline
                         else
                             illegal = 1'b1;
                     end

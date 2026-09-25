@@ -28,3 +28,16 @@ Flags used by the flow: `--priv=mu -m0x80000000:0x2000000 --isa=rv32imac_zicntr 
   that starts at 0.
 
 Related: [[finding-branch-review-2026-09-12]], [[verification-flow-river-core-riscof]].
+
+## Added 2026-09-24 (probed at 7cd1eb6 flags, -m0x80000000:0x2000000)
+
+- CSR existence (M-mode csrr): mstatush, mhpmcounter3(h), mhpmevent3, menvcfg(h), tselect,
+  pmpcfg4, pmpaddr16 all read **0**; hpmcounter3 and mseccfg are illegal (no Zihpm/Smepmp).
+- mip after `csrw mip,-1` reads 0x80 (only live MTIP; nothing writable without S-mode).
+- SRET, funct7=0001000 rs2!=5, MRET-with-rs2!=2, LR.W rs2!=0, sfence.vma, dret, mnret: all cause 2.
+- mtimecmp resets to 0 (MTIP asserted), mtime ticks per 100 instructions: any test reading
+  mtime diverges at the first read — interrupt tests are DUT-only.
+- **Trap clears the reservation in effect**: processor_t::step sets `n = instret` on trap_t
+  (execute.cc); sim_t::step still adds the full requested chunk to current_step, hits
+  INTERLEAVE, calls `yield_load_reservation()` before the handler runs (sim.cc). Interrupts
+  go through the same trap path. So `lr; ecall; sc` fails on Spike (measured 2026-09-22).

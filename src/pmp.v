@@ -42,61 +42,71 @@ module pmp(
     localparam A_NA4   = 2'b10;
     localparam A_NAPOT = 2'b11;
 
-    // Byte-aligned base addresses from pmpaddr registers.
-    // pmpaddr[31:0] stores PA[33:2]; for RV32 only PA[31:0] matters, so use pmpaddr[29:0].
-    wire [31:0] baddr0 = {pmpaddr0[29:0], 2'b00};
-    wire [31:0] baddr1 = {pmpaddr1[29:0], 2'b00};
-    wire [31:0] baddr2 = {pmpaddr2[29:0], 2'b00};
-    wire [31:0] baddr3 = {pmpaddr3[29:0], 2'b00};
+    // On RV32 a pmpaddr register holds bits 33:2 of a 34-bit physical
+    // address, and every comparison is made in that space. The hart only
+    // generates 32-bit addresses (PA[33:32] = 0), but a region's bounds can
+    // still lie above 4 GB: pmpaddr = 0x4000_0000 as a TOR top is PA
+    // 0x1_0000_0000, so the region covers everything below it. Dropping
+    // pmpaddr[31:30], as this module used to, made that region empty and
+    // turned NAPOT 0x9fff_ffff (a region above 4 GB) into one covering
+    // 0x8000_0000 upward.
+    //
+    // All compares below are on word addresses: waddr = PA[33:2].
+    wire [31:0] waddr = {2'b00, addr[31:2]};
 
     // ── NAPOT match ──────────────────────────────────────────────────────────
-    // For t trailing ones in pmpaddr[29:0]: size = 2^(t+3) bytes.
-    // mask = ~(pa | (pa+1))  — bits that must match between addr and pmpaddr.
-    // match iff (addr[31:2] ^ pa) & mask == 0.
+    // pmpaddr = y...y0 1...1 with t trailing ones encodes a naturally aligned
+    // region of 2^(t+3) bytes; only the y bits above the trailing ones and
+    // their terminating zero have to match. pa ^ (pa+1) is exactly those low
+    // t+1 bits, so its complement is the compare mask. (All ones gives
+    // pa+1 = 0 and a zero mask: the whole address space, as the spec says.)
+    //
+    // The mask used to be ~(pa | (pa+1)), which also drops every y bit that
+    // is 1 -- so a region matched any address with arbitrary values in those
+    // positions, e.g. NAPOT 0x81000000/4K also matched 0x80000044.
     function automatic napot_match;
-        input [31:0] pmpaddr_in;
-        input [31:0] addr_in;
-        reg [29:0] pa, mask;
+        input [31:0] pa;
+        input [31:0] wa;
+        reg [31:0] mask;
         begin
-            pa   = pmpaddr_in[29:0];
-            mask = ~(pa | (pa + 1'b1));
-            napot_match = ((addr_in[31:2] ^ pa) & mask) == 30'b0;
+            mask = ~(pa ^ (pa + 1'b1));
+            napot_match = ((wa ^ pa) & mask) == 32'b0;
         end
     endfunction
 
     // ── Address match per entry ──────────────────────────────────────────────
-    // TOR lower bound: entry 0 → 0, entry i → baddr[i-1].
+    // TOR lower bound: entry 0 → 0, entry i → pmpaddr[i-1].
     reg match0, match1, match2, match3;
     always @(*) begin
         case (cfg0[4:3])
             A_OFF:   match0 = 1'b0;
-            A_TOR:   match0 = (addr < baddr0);                            // lower = 0
-            A_NA4:   match0 = (addr[31:2] == pmpaddr0[29:0]);
-            A_NAPOT: match0 = napot_match(pmpaddr0, addr);
+            A_TOR:   match0 = (waddr < pmpaddr0);                          // lower = 0
+            A_NA4:   match0 = (waddr == pmpaddr0);
+            A_NAPOT: match0 = napot_match(pmpaddr0, waddr);
             default: match0 = 1'b0;
         endcase
 
         case (cfg1[4:3])
             A_OFF:   match1 = 1'b0;
-            A_TOR:   match1 = (addr >= baddr0) && (addr < baddr1);
-            A_NA4:   match1 = (addr[31:2] == pmpaddr1[29:0]);
-            A_NAPOT: match1 = napot_match(pmpaddr1, addr);
+            A_TOR:   match1 = (waddr >= pmpaddr0) && (waddr < pmpaddr1);
+            A_NA4:   match1 = (waddr == pmpaddr1);
+            A_NAPOT: match1 = napot_match(pmpaddr1, waddr);
             default: match1 = 1'b0;
         endcase
 
         case (cfg2[4:3])
             A_OFF:   match2 = 1'b0;
-            A_TOR:   match2 = (addr >= baddr1) && (addr < baddr2);
-            A_NA4:   match2 = (addr[31:2] == pmpaddr2[29:0]);
-            A_NAPOT: match2 = napot_match(pmpaddr2, addr);
+            A_TOR:   match2 = (waddr >= pmpaddr1) && (waddr < pmpaddr2);
+            A_NA4:   match2 = (waddr == pmpaddr2);
+            A_NAPOT: match2 = napot_match(pmpaddr2, waddr);
             default: match2 = 1'b0;
         endcase
 
         case (cfg3[4:3])
             A_OFF:   match3 = 1'b0;
-            A_TOR:   match3 = (addr >= baddr2) && (addr < baddr3);
-            A_NA4:   match3 = (addr[31:2] == pmpaddr3[29:0]);
-            A_NAPOT: match3 = napot_match(pmpaddr3, addr);
+            A_TOR:   match3 = (waddr >= pmpaddr2) && (waddr < pmpaddr3);
+            A_NA4:   match3 = (waddr == pmpaddr3);
+            A_NAPOT: match3 = napot_match(pmpaddr3, waddr);
             default: match3 = 1'b0;
         endcase
     end
