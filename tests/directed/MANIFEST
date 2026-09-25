@@ -92,6 +92,10 @@ t_mulirq            expect x8=0x14 -- +IMEM_WAIT=2 +DMEM_WAIT=1 +DMEM_RANDOM=1
 t_ctl               expect x8=0x64 x25=0x64
 t_ctl               expect x8=0x64 x25=0x64 -- +IMEM_WAIT=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
 
+# ---- FENCE.I -------------------------------------------------------------------
+fencei_smc          spike
+fencei_smc          spike  +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1
+
 # ---- CSRs --------------------------------------------------------------------------
 csrfwd              spike
 csrlog_probe        spike
