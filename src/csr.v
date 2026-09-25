@@ -9,8 +9,9 @@ module csr #(
     // Dual-port: EX reads via raddr, WB writes via waddr
     input  wire [11:0] raddr,      // Read address (from EX stage)
     input  wire [11:0] waddr,      // Write address (from WB stage)
+    // The value to write. The pipeline computes the whole read-modify-write
+    // in EX, so this unit only ever writes: there is no CSRRS/CSRRC here.
     input  wire [31:0] wdata,
-    input  wire [1:0]  op,       // 00=none, 01=RW, 10=RS, 11=RC
     input  wire        we,
     output reg  [31:0] rdata,
     // Trap interface
@@ -112,10 +113,12 @@ module csr #(
                            (timer_irq    ? 32'h0000_0080 : 32'b0) |  // MTIP bit 7
                            (external_irq ? 32'h0000_0800 : 32'b0);   // MEIP bit 11
 
-    // CSR write-value computation (declared early for counter blocks)
-    // NOTE: rdata is from the combinational read block below (uses raddr, not waddr).
-    // In practice, the pipeline always sends op=01 (CSRRW) so csr_new = wdata.
-    wire [31:0] csr_new;
+    // The value being written. It used to fall back to the EX read port
+    // (rdata | wdata, rdata & ~wdata) for CSRRS/CSRRC ops the pipeline never
+    // sends. That dead mux put the EX read decode on a path into every
+    // post-write export (misa.C -> mepc_eff -> rdata closed a lint-level
+    // loop) and from there into interrupt gating and next_pc.
+    wire [31:0] csr_new = wdata;
 
     // Counter update model: auto-increment happens every retire/cycle (when not
     // inhibited), and the CSR write — if any — overwrites the *post-increment*
@@ -135,7 +138,7 @@ module csr #(
     reg [31:0] mstatus_after_we;
     always @(*) begin
         mstatus_after_we = mstatus;
-        if (we && op != 2'b00 && waddr == 12'h300) begin
+        if (we && waddr == 12'h300) begin
             mstatus_after_we[3]  = csr_new[3];   // MIE
             mstatus_after_we[7]  = csr_new[7];   // MPIE
             mstatus_after_we[17] = csr_new[17];  // MPRV
@@ -159,12 +162,12 @@ module csr #(
     // interrupt conditions to be re-evaluated immediately after an explicit
     // write to mie, so the instruction right after `csrs mie` is already
     // interruptible and the one right after `csrc mie` is not.
-    assign mie_out = (we && op != 2'b00 && waddr == 12'h304) ? (csr_new & 32'h0000_0888)
+    assign mie_out = (we && waddr == 12'h304) ? (csr_new & 32'h0000_0888)
                                                              : mie_reg;
 
     // misa as it will stand after a WB write: only C is writable, and a
     // clear is refused when it would leave the next PC misaligned.
-    wire        misa_we_ok    = we && op != 2'b00 && waddr == 12'h301 &&
+    wire        misa_we_ok    = we && waddr == 12'h301 &&
                                 (csr_new[2] || !pc_next_misaligned);
     wire [31:0] misa_after_we = misa_we_ok ? {misa_reg[31:3], csr_new[2], misa_reg[1:0]}
                                            : misa_reg;
@@ -226,9 +229,9 @@ module csr #(
     always @(posedge clk) begin
         if (rst)
             mcycle <= 64'b0;
-        else if (we && op != 2'b00 && waddr == 12'hB00)
+        else if (we && waddr == 12'hB00)
             mcycle <= {mcycle_next[63:32], csr_new};
-        else if (we && op != 2'b00 && waddr == 12'hB80)
+        else if (we && waddr == 12'hB80)
             mcycle <= {csr_new, mcycle_next[31:0]};
         else
             mcycle <= mcycle_next;
@@ -237,9 +240,9 @@ module csr #(
     always @(posedge clk) begin
         if (rst)
             minstret <= 64'b0;
-        else if (we && op != 2'b00 && waddr == 12'hB02)
+        else if (we && waddr == 12'hB02)
             minstret <= {minstret_next[63:32], csr_new};
-        else if (we && op != 2'b00 && waddr == 12'hB82)
+        else if (we && waddr == 12'hB82)
             minstret <= {csr_new, minstret_next[31:0]};
         else
             minstret <= minstret_next;
@@ -317,12 +320,6 @@ module csr #(
     end
     assign csr_addr_valid = addr_valid;
 
-    // CSR Write
-    assign csr_new = (op == 2'b01) ? wdata :           // CSRRW
-                     (op == 2'b10) ? (rdata | wdata) :  // CSRRS
-                     (op == 2'b11) ? (rdata & ~wdata) : // CSRRC
-                     rdata;
-
     always @(posedge clk) begin
         if (rst) begin
             // Priv §3.4: MIE and MPRV reset to 0; MPP's reset value is left
@@ -352,7 +349,7 @@ module csr #(
             // The stored value is `wval` (the WARL rules live there), except
             // where noted. Counters are written in their own blocks above;
             // mip has nothing to store.
-            if (we && op != 2'b00) begin
+            if (we) begin
             case (waddr)
                 12'h300: mstatus       <= wval;
                 12'h301: misa_reg      <= wval;

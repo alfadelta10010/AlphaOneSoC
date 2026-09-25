@@ -751,7 +751,6 @@ module fyracore #(
         .raddr      (ex_csr_addr),        // EX reads its own CSR address
         .waddr      (exwb_csr_addr),      // WB writes its own CSR address
         .wdata      (exwb_csr_wdata),
-        .op         (exwb_valid && exwb_csrWR ? 2'b01 : 2'b00), // Always CSRRW: EX pre-computes value
         .we         (exwb_valid && exwb_csrWR && !exwb_trap),
         .rdata      (csr_rdata),
         .trap       (csr_trap_signal),
