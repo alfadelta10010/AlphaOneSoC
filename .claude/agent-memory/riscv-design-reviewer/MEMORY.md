@@ -18,7 +18,7 @@ update after each review with confirmed decisions, findings, and recurring patte
 - ISA: RV32IMACU_Zicsr_Zicntr_Zifencei; misa reset 0x40101105 (U advertised since 009ad74), only C writable.
 - Hardware M: yes (multicycle muldiv). A: LR/SC + AMO, 2-cycle WB.
 - Privilege: M + U (no S), single hart. marchid param default 0, tb overrides to 5 (21fbe65). mstatus has MPRV+TW (7cd1eb6/8485cf0).
-- Memory map: fyracore PMA params default Flash+RAM 0x0-0x01FFFFFF, CLINT 0x02000000-0x0200BFFF,
+- Memory map (CURRENT, TinyQV-style; proposal to move to flash 0x20000000 / PSRAM 0x80000000 made 09-25b): fyracore PMA params default Flash+RAM 0x0-0x01FFFFFF, CLINT 0x02000000-0x0200BFFF,
   GPIO 0x03000000-0x0300000F; RESET_PC 0. tb overrides to 0x80000000+32MB (Spike-compatible).
   memController.v is NOT instantiated anywhere — there is no SoC top yet.
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on wb_mem_stall
@@ -76,6 +76,10 @@ update after each review with confirmed decisions, findings, and recurring patte
   VERIFIED FIXED, no new CRITICAL. New: MINOR pmpcfg R=0/W=1 stored+honoured; MINOR UNOPTFLAT false loop
   (6dbf31d); MAJOR SoC-contract: no load byte lanes (8250 RBR pop), imem_req=1 (fetch-priority arbiter
   starves dmem). See finding_branch_review_2026-09-25.md
+- 2026-09-25b review at 0b6eabb + memory-map proposal: 09-25 items VERIFIED FIXED (6aadc0f, bceaa5f,
+  c641e76, d05e277, d83bff7). No new ISA CRITICAL. MAJOR SoC: single RWX exec window/flash writable/no bus
+  error; halfword-aligned fetch contract. MINOR: mtvec reset 0. Proposed Linux map: flash 0x20000000,
+  PSRAM 0x80000000 x16MB, CLINT 0x02000000, UART 0x10000000. See finding_branch_review_2026-09-25b_memmap.md
 
 ## Recurring patterns observed
 
@@ -113,4 +117,5 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [LR/SC policy decision](finding_lrsc_policy_2026-09-22.md) — spec citations, why the trap clear is optional, the phase-locked interrupt livelock (real, not critical), recommended signal list
 - [2026-09-24 full review at 7cd1eb6](finding_branch_review_2026-09-24.md) — muldiv regressions, garbage-forward redirect, SC withdrawal, MRET+irq, CSR gaps, run.sh coverage facts
 - [2026-09-25 fix-verification review](finding_branch_review_2026-09-25.md) — per-commit verdicts, what was measured, pmpcfg R=0/W=1, UNOPTFLAT, bus-contract risks
+- [2026-09-25b review + Linux memory map](finding_branch_review_2026-09-25b_memmap.md) — toolchain/Spike-master gotchas, CSR probe, XIP removal, proposed map
 - [KianV memory map](reference_kianv_memory_map.md) — the DT that actually boots NOMMU Linux on this class of silicon: RAM at 0x80000000, no PLIC, 10 kHz timebase
