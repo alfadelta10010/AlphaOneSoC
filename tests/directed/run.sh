@@ -28,6 +28,12 @@
 #       The comment above the line says why the test cannot be
 #       Spike-compared, and why more than one value is legal where it is.
 #
+#   <name> flash
+#       SoC only: <name>.S is linked with <name>.ld into flash at
+#       0x2000_0000, loaded into the QSPI model's flash, and the SoC boots
+#       from there (boot_sel = 0). Then compared with Spike like `spike`.
+#       The core-level run skips it.
+#
 #   #soc-skip <name>... -- <reason>
 #       The SoC-level run skips these tests. For tests whose point depends on
 #       a fast memory (a timer period shorter than a QSPI-speed handler).
@@ -47,8 +53,9 @@ SOC=0
 OUT="$HERE/out"
 [ $SOC = 1 ] && OUT="$HERE/out/soc"
 mkdir -p "$OUT"
-SPIKE_ARGS="--hartids=0 --log-commits --priv=mu --pc=0x80000000 --isa=rv32imac_zicntr
+SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
             -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
+SPIKE_ARGS="$SPIKE_MEM --pc=0x80000000"
 TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
 ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
@@ -67,13 +74,22 @@ build() {
   echo "build ok"
 }
 
+# Tests the MANIFEST boots from flash.
+is_flash() { grep -qE "^$1 +flash( |\$)" "$HERE/MANIFEST"; }
+
 asm() { # asm <name>
   local n=$1
   riscv64-unknown-elf-gcc -static -std=gnu99 -O0 -mcmodel=medany -nostdlib \
     -nostartfiles -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
     -T "$(ld_for "$n")" "$HERE/$n.S" -o "$OUT/$n.elf" 2>"$OUT/$n.asm.log" || return 1
-  riscv64-unknown-elf-objcopy -O verilog --change-addresses=-0x80000000 \
-    "$OUT/$n.elf" "$OUT/$n.hex"
+  if is_flash "$n"; then
+    # Only what lives in flash; the PSRAM side starts zeroed.
+    riscv64-unknown-elf-objcopy -O verilog -j .text.init -j .text -j .rodata \
+      --change-addresses=-0x20000000 "$OUT/$n.elf" "$OUT/$n.hex"
+  else
+    riscv64-unknown-elf-objcopy -O verilog --change-addresses=-0x80000000 \
+      "$OUT/$n.elf" "$OUT/$n.hex"
+  fi
 }
 
 # Spike runs on past tohost (it only polls HTIF every few thousand steps),
@@ -84,7 +100,9 @@ asm() { # asm <name>
 # log. A reference that never reaches tohost is capped instead.
 ref() { # ref <name>
   local n=$1
-  ( ulimit -f 200000; timeout 60 spike $SPIKE_ARGS --log "$OUT/$n.ref.raw" "$OUT/$n.elf" \
+  local args=$SPIKE_ARGS
+  is_flash "$n" && args="$SPIKE_MEM --pc=0x20000000"
+  ( ulimit -f 200000; timeout 60 spike $args --log "$OUT/$n.ref.raw" "$OUT/$n.elf" \
       </dev/null >/dev/null 2>&1 ) 2>/dev/null
   sed '1,5d' "$OUT/$n.ref.raw" \
     | sed -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2) 0x[0-9a-f]+//g' \
@@ -99,7 +117,9 @@ MAXC=400000
 
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
-  vvp "$OUT/sim" +INIT_FILE="$OUT/$n.hex" +DUMP_FILE="$OUT/$n.dut" \
+  local image=+INIT_FILE="$OUT/$n.hex"
+  is_flash "$n" && image="+BOOT_FLASH +FLASH_FILE=$OUT/$n.hex"
+  vvp "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
       +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" >"$OUT/$n.sim.log" 2>&1
 }
 
@@ -177,10 +197,12 @@ suite() {
     if [ $SOC = 1 ]; then
       case "$ran$skip" in *" $name "*) continue ;; esac
       ran="$ran$name "
+    elif [ "$mode" = flash ]; then
+      continue
     fi
     # shellcheck disable=SC2086
     case "$mode" in
-      spike)  run_spike "$name" $rest ;;
+      spike|flash) run_spike "$name" $rest ;;
       expect) run_expect "$name" $rest ;;
       *)      bad "$name" "    unknown mode '$mode'" ;;
     esac

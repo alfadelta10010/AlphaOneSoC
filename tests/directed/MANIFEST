@@ -139,5 +139,9 @@ irq_straddle        spike
 irq_straddle        spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 u_straddle          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 
+# Boots from flash (SoC only): runs from flash, copies a routine into PSRAM
+# and runs it there after FENCE.I, the way a boot loader hands over.
+flash_boot          flash
+
 #soc-skip cnt_alias -- the csrr of `cycle` waits in EX through a QSPI fetch (about 57 clocks) and reads mcycle when it executes, 0x2039 rather than 0x2000; Spike counts one per instruction. The forwarding it checks is the same in both builds.
 #soc-skip t_irq t_irq2 t_mulirq t_ctl -- a 40-clock timer period is shorter than an interrupt handler at QSPI speed (about 90 clocks per instruction), so the handler never finishes before the next interrupt and the loop never advances. Legal; these tests assume a fast memory.

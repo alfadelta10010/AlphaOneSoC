@@ -96,8 +96,13 @@ module tb_rivercore;
     //
     // +RD_LATE sets the QSPI read-latency strap; +QSPI_DELAY (read by the
     // model) sets the device + pad delay it has to cover.
-    reg rd_late;
-    initial rd_late = $test$plusargs("RD_LATE");
+    //
+    // +BOOT_FLASH boots from flash instead (boot_sel = 0): the program is
+    // then put in the model's flash with +FLASH_FILE= and no INIT_FILE is
+    // given (tests/directed MANIFEST mode `flash`).
+    reg rd_late, boot_flash;
+    initial rd_late    = $test$plusargs("RD_LATE");
+    initial boot_flash = $test$plusargs("BOOT_FLASH");
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
     wire [3:0] qspi_io_out, pmod_io;
@@ -115,7 +120,7 @@ module tb_rivercore;
     ) soc (
         .clk        (clk),
         .rst        (rst),
-        .boot_sel   (1'b1),
+        .boot_sel   (!boot_flash),
         .qspi_rd_late(rd_late),
         .qspi_sck   (qspi_sck),
         .qspi_cs_n  (qspi_cs_n),
