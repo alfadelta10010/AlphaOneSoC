@@ -57,9 +57,20 @@ module fyracore #(
     // is taken on it. The next request may start on the following cycle.
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
     //
-    // Instruction memory interface (read-only). The core always wants the
-    // next instruction, so imem_req stays high; when the pipeline is stalled
+    // Instruction memory interface (read-only). imem_req is high whenever the
+    // PC lies in the executable PMA window (PMA_MEM_*); outside it no fetch is
+    // requested at all (see imem_req below). When the pipeline is stalled
     // with a fetch already completed, the same address is requested again.
+    //
+    // For the memory controller:
+    //   - While a data request waits for dmem_ready the pipeline is stalled
+    //     and imem_req stays up with the same address. A controller that
+    //     shares one bus between the ports must not starve the data port --
+    //     serve data first, or alternate -- and should keep the last fetched
+    //     word so a repeated request for it completes without a new transfer.
+    //   - A 32-bit fetch at the last halfword of the window asks for bytes
+    //     past its end; any data may be returned for them (the core faults
+    //     that instruction on the upper half).
     output wire [31:0] imem_addr,
     output wire        imem_req,      // Fetch request
     input  wire [31:0] imem_rdata,
@@ -95,7 +106,12 @@ module fyracore #(
     //  IF Stage
     // ================================================================
     reg  [31:0] pc;
-    wire [31:0] if_fetched    = imem_rdata;
+    // Outside the executable window nothing is fetched (imem_req low), and
+    // the instruction is known to fault in EX (cause 1) whatever its bits.
+    // They are forced to 0 so the doomed instruction decodes to something
+    // harmless rather than whatever the port happens to hold -- in
+    // simulation, rather than X.
+    wire [31:0] if_fetched    = imem_rdata & {32{imem_req}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     wire [31:0] if_instr_decompressed;
     wire        if_c_illegal;
@@ -103,7 +119,11 @@ module fyracore #(
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
 
     assign imem_addr = pc;
-    assign imem_req  = 1'b1;
+    // A fetch outside PMA_MEM_* can never execute, so it is never requested:
+    // a fetch must not read an IO device (a read can have side effects, e.g.
+    // popping a UART FIFO), and an address with no device behind it must not
+    // wait forever for a ready that nobody will give.
+    assign imem_req  = (pc >= PMA_MEM_BASE) && (pc <= PMA_MEM_TOP);
 
     compressed_decoder cdec(
         .instr_in (if_fetched[15:0]),
@@ -520,7 +540,7 @@ module fyracore #(
     // Memory handshake stalls:
     //   - IF stall: instruction memory not ready (multi-cycle fetch)
     //   - WB stall: data memory not ready during active load/store
-    wire if_mem_stall = !imem_ready;
+    wire if_mem_stall = imem_req && !imem_ready;
     // The WB stall is exactly "a data request is outstanding and not yet
     // answered". dmem_req (assigned with the rest of the data interface
     // below) excludes a trapping access, which never reaches the bus, and a

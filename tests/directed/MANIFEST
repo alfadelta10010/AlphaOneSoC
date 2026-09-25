@@ -46,6 +46,12 @@ t_div               spike  +IMEM_WAIT=2
 mul_fetchfault      spike
 mul_fetchfault      spike  +IMEM_WAIT=2
 mul_pmpx            spike
+fetch_unmapped      spike
+fetch_unmapped      spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +NOTREADY_DATA=2
+# Spike fetches from the CLINT and raises cause 2 on the bits it reads; the
+# core never requests a fetch outside memory and raises cause 1.
+fetch_clint         expect x10=0x1 x11=0x02000000
+fetch_clint         expect x10=0x1 x11=0x02000000 -- +IMEM_WAIT=3
 
 # ---- traps, exception priority, mtval -----------------------------------------
 causes              spike
