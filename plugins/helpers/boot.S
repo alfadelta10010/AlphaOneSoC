@@ -7,11 +7,9 @@
  * being hardcoded, so the stub needs no edit when the image is linked at a
  * different base (the verification base 0x8000_0000, see link.ld).
  *
- * It is NOT enough for link_soc.ld, the hardware map: that script gives .data
- * a load address in flash and a virtual address in RAM, and nothing here
- * copies it across or zeroes .bss. A real boot path needs both, plus the
- * .tohost section moved out of read-only flash. link_soc.ld is a description
- * of the intended map, not a working boot script.
+ * Programs that boot from flash use boot_flash.S with link_soc.ld instead:
+ * there .data has to be copied from flash to PSRAM and .bss cleared, which
+ * this stub does not do.
  */
 
     .section .text.init
