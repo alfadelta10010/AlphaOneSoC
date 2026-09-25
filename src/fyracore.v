@@ -969,8 +969,9 @@ module fyracore #(
     //  FENCE.I flush output
     // ================================================================
     // Asserted for exactly one cycle when a FENCE.I instruction completes
-    // in the EX stage (not stalled, not already flushed by something else).
-    assign fencei_flush = ex_is_fencei && !stall;
+    // in the EX stage: not stalled, and not replaced by a trap (a fetch
+    // fault on its word) or an interrupt taken instead of it.
+    assign fencei_flush = ex_is_fencei && !stall && !ex_trap && !irq_inject;
 
     // ================================================================
     //  Debug / Trace outputs
