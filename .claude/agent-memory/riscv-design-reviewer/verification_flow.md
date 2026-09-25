@@ -45,3 +45,10 @@ root (relocated after an earlier loss under build/). When reproducing trap-takin
 Spike, omit `--instructions` — see [[reference-spike-probed-behaviours]].
 
 Related: [[project-fyracore-overview]].
+
+**Local arch-test without river_core (2026-09-24):** clone riscv-arch-test 3.9.1 into scratch, compile each
+`rv32i_m/{I,C,A,M,Zifencei,privilege}` test with `-DTEST_CASE_1=True -DXLEN=32 -Drvtest_mtrap_routine=True`
+(without the last macro, misalign-l*/s* and C/cebreak trap into nothing and hang identically on both models),
+tohost from `readelf -s`, Spike under `ulimit -f` + `timeout`. 101 applicable tests (11 Zcb tests don't
+compile for rv32imac, expected) take ~20 min at -P6 on the 8-core control box. At 7cd1eb6: 93 PASS, 8 FAIL
+= all RV32M (2e6718b regression); parent 4437a41 passes M with 0 diff lines.

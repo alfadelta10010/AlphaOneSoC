@@ -18,8 +18,12 @@ on sky130 TinyTapeout silicon with 16 MB QSPI flash + 16 MB PSRAM.
 - **uart@10000000**, size 0x100, `compatible = "ns16850"`,
   `bootargs = "earlycon=uart8250,mmio,0x10000000,3000000 console=ttyS0"`. Same base Spike
   uses for its ns16550.
-- **NO PLIC.** `interrupts-extended = <intc 3>, <intc 7>` — MSI and MTI only. A single-hart
-  NOMMU SoC does not need a PLIC; the 8250 console runs without an interrupt.
+- **NO PLIC** in the ASIC NOMMU DTS (and harris_mcycle_edition). `interrupts-extended = <intc 3>, <intc 7>`
+  — MSI and MTI only; the 8250 console runs polled (serial8250_timeout, port->irq=0). KianV's MMU
+  SoC (`linux_socs/kianv_mc_rv32ima_sv32/engineering/plic.v`, 31 src x 2 ctx) DOES have a PLIC:
+  yosys generic synth ~1037 cells / 129 FF (2026-09-24). A 1-context 4-source 1-bit-priority
+  Linux-compatible PLIC is ~165 cells / 17 FF. MEIP straight into riscv-intc is NOT usable by a
+  normal driver: intc hwirqs are percpu_devid and request_irq() returns -EINVAL for them.
 - **syscon@11100000** + `syscon-poweroff` (0x5555) / `syscon-reboot` (0x7777) — needed for
   a clean `poweroff`/`reboot`, costs one 16-bit compare.
 - spi@10500000 for the SD/SPI-NOR path.

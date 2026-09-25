@@ -86,4 +86,19 @@ module; PSRAM self-refresh does not modify data.
 `docs/FyraCore_CPU_Reference.md:502` documents the current (asymmetric) behaviour and must
 be updated with whatever lands.
 
+## Status at 7cd1eb6 (2026-09-24) — policy FINAL, two RTL gaps
+
+027a17d dropped `!exwb_isAmo` and the ref doc was updated. Remaining gaps against the
+policy above: (1) the trap clear is the EX-stage `ex_trap || irq_inject`, ungated by
+stall — it fires while an older SC waits on dmem_ready and withdraws the SC's store
+(reproduced, DMEM_WAIT>=2). Must be the WB commit (`csr_trap_signal`). (2) the
+local-write compare is full 32-bit, so `sb` into bytes 1-3 of the reserved word does
+not clear; compare [31:2] (and store only 30 bits). Spike's "trap keeps the
+reservation" is false in effect: a trap ends processor_t::step early (`n = instret`),
+sim_t::step still charges the whole chunk, so `yield_load_reservation()` runs before
+the handler's first instruction. docs/LR-SC_decision.md's "reservation_clear =
+executing_SC" is legal but loses the trap clear; its forward-progress argument is
+wrong (other-hart stores are a SATISFYING event in `norm:constrained_lrsc_forward_progress`).
+See [[finding-branch-review-2026-09-24]].
+
 Related: [[finding-branch-review-2026-09-22]], [[reference-spike-probed-behaviours]].

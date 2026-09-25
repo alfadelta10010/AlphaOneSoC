@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-**Status: OPEN (as of 2026-09-05 review).** `src/fyracore.v:855-866`.
+**Status: FIXED by 2167485 (verified 2026-09-22/24).** Originally `src/fyracore.v:855-866`.
 
 ```
 end else if (stall && !irq_inject) begin

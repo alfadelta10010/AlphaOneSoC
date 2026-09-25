@@ -17,12 +17,18 @@ update after each review with confirmed decisions, findings, and recurring patte
 <!-- Fill in and keep current. The review depends on these. -->
 - ISA: RV32IMACU_Zicsr_Zicntr_Zifencei; misa reset 0x40101105 (U advertised since 009ad74), only C writable.
 - Hardware M: yes (multicycle muldiv). A: LR/SC + AMO, 2-cycle WB.
-- Privilege: M + U (no S), single hart. marchid=5/mimpid=0 copied from Spike (R8).
+- Privilege: M + U (no S), single hart. marchid param default 0, tb overrides to 5 (21fbe65). mstatus has MPRV+TW (7cd1eb6/8485cf0).
 - Memory map: fyracore PMA params default Flash+RAM 0x0-0x01FFFFFF, CLINT 0x02000000-0x0200BFFF,
   GPIO 0x03000000-0x0300000F; RESET_PC 0. tb overrides to 0x80000000+32MB (Spike-compatible).
   memController.v is NOT instantiated anywhere — there is no SoC top yet.
-- Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB.
-- Verification: river_core + Spike trace diff; tb/tb_rivercore.v + tb/memory_model.v (always-ready).
+- Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on wb_mem_stall
+  (2167485); other stalls bubble. Since c579eeb: dmem_req (excl. trapping/failing-SC) + imem_req (constant 1);
+  every redirect gated on !stall so pc only moves when imem_ready. Loads still carry NO byte-lane info.
+- Straddling 32-bit fetch (PC[1]=1): extra EX cycle (ex_ifetch_hi_phase) for the hi-half PMP check, only in
+  U-mode or with a locked entry (96ee78a). PMP CSR writes refetch the next insn like FENCE.I (2d02808).
+- Verification: river_core + Spike trace diff; tb/tb_rivercore.v + tb/memory_model.v (wait states since 68d85b6;
+  rdata=X while !ready HIDES garbage-data control bugs — also run a 0/LFSR-returning bus). Directed tests in
+  tests/directed/ (since 5a50547: MANIFEST-driven, full-trace compare, ~90 runs incl. NOTREADY/straddle/PMP).
 
 ## Reference designs to benchmark against (proven, compact, open)
 
@@ -62,6 +68,14 @@ update after each review with confirmed decisions, findings, and recurring patte
   VERIFIED FIXED. NEW CRIT: muldiv livelock at IMEM_WAIT>=2 (C1); `csrw X; mret` loses the
   write (C2 = old R1, unfixed). R3/R4/R5 + WARL third-copy still open. See
   finding_branch_review_2026-09-22.md
+- 2026-09-24 full review at 7cd1eb6: 2e6718b (muldiv fix) introduced 2 CRITICALs (stale M-op results — all
+  8 RV32M arch tests fail; fetch-fault M-op deadlock). NEW CRIT: spurious trap redirect from garbage-forwarded
+  load data during stall. MAJOR: SC store withdrawn by ungated EX trap clear; MRET+irq double commit; mie not
+  forwarded to irq gating. See finding_branch_review_2026-09-24.md
+- 2026-09-25 verification of 35 fix commits (7f7e6f9..39f6380; RTL same at 832e068): ALL 09-24 C/M/m items
+  VERIFIED FIXED, no new CRITICAL. New: MINOR pmpcfg R=0/W=1 stored+honoured; MINOR UNOPTFLAT false loop
+  (6dbf31d); MAJOR SoC-contract: no load byte lanes (8250 RBR pop), imem_req=1 (fetch-priority arbiter
+  starves dmem). See finding_branch_review_2026-09-25.md
 
 ## Recurring patterns observed
 
@@ -74,6 +88,14 @@ update after each review with confirmed decisions, findings, and recurring patte
 - Livelocks here are phase/congruence effects, not thresholds: a period that locks can be
   safe one wait-state setting later. Sweep contiguously and compare against a non-atomic
   control loop before calling it a defect.
+- A "fix" that makes a pulse sticky must also block re-launch on the pulse cycle itself (register set at END
+  of the cycle). 2e6718b swapped `!done` for `!ready` and silently broke every back-to-back M-op.
+- Any redirect/side effect computed from EX operands must be gated by !stall: forwarded load data is garbage
+  until dmem_ready. X-in-tb makes these invisible (iverilog `if (X)` = false).
+- Exporting a post-write value from csr.v that its own read mux consumes makes a word-level loop
+  (Verilator UNOPTFLAT, 6dbf31d). Run `verilator --lint-only -Wall` on every RTL review; yosys check won't flag it.
+- Directed tests that retire a multi-cycle op but never check its VALUE (t_mul, t_mulirq, t_irq) pass through
+  data-corruption bugs. Always full-trace diff against Spike, not final registers.
 - Deterministic vs randomised wait states expose DIFFERENT bugs: randomised found the
   interrupt-vs-stall overlap, deterministic found the muldiv phase-lock livelock. Run both.
 
@@ -89,4 +111,6 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [Spike probed behaviours](reference_spike_probed_behaviours.md) — measured Spike device map, CSR WARL choices, mtval, and why --instructions is not a bound
 - [2026-09-22 rtl-fix branch review](finding_branch_review_2026-09-22.md) — what the 14 commits actually fixed, the muldiv livelock, csrw+mret write loss, and the reset-state probe
 - [LR/SC policy decision](finding_lrsc_policy_2026-09-22.md) — spec citations, why the trap clear is optional, the phase-locked interrupt livelock (real, not critical), recommended signal list
+- [2026-09-24 full review at 7cd1eb6](finding_branch_review_2026-09-24.md) — muldiv regressions, garbage-forward redirect, SC withdrawal, MRET+irq, CSR gaps, run.sh coverage facts
+- [2026-09-25 fix-verification review](finding_branch_review_2026-09-25.md) — per-commit verdicts, what was measured, pmpcfg R=0/W=1, UNOPTFLAT, bus-contract risks
 - [KianV memory map](reference_kianv_memory_map.md) — the DT that actually boots NOMMU Linux on this class of silicon: RAM at 0x80000000, no PLIC, 10 kHz timebase

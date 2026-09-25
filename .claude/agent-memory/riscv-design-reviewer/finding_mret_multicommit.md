@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-**Status: OPEN (as of 2026-09-05 review). Reproduced.**
+**Status: FIXED (760a524 one-shot commit; 15a23df csrw+mret). Verified 2026-09-24. New sibling: MRET + irq_inject same cycle, see finding_branch_review_2026-09-24.md.**
 
 `src/fyracore.v:555` passes `.mret(ex_is_mret)` to `csr.v`. `ex_is_mret` (`:292`) is a purely
 combinational EX-stage decode with **no `!stall` qualifier**, and `csr.v:239-241` applies the whole

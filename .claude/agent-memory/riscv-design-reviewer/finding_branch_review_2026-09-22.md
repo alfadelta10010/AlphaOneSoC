@@ -29,6 +29,10 @@ Review of `git diff main..HEAD -- src/ tb/` in the worktree
 
 ## NEW CRITICALS (this review)
 
+**Update 2026-09-24:** C2 fixed by 15a23df (verified). C1's fix 2e6718b removed the livelock but
+introduced two new CRITICALs (stale M-op results; fetch-fault M-op deadlock) — see
+[[finding-branch-review-2026-09-24]]. R4 fixed (8485cf0/7cd1eb6).
+
 - **C1 muldiv livelock under instruction-fetch wait states.** `muldiv_done` is a 1-cycle
   pulse; the result is only captured in the EX/WB `else` arm, which requires `!stall`.
   If `if_mem_stall` is high on the done cycle the result is dropped and `muldiv_start`
