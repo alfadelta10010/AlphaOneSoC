@@ -5,6 +5,15 @@
 #   ./run.sh                    every run listed in MANIFEST
 #   ./run.sh one <name> [+PLUSARG...]
 #   ./run.sh refs               regenerate the Spike reference of every test
+#   ./run.sh soc                every test in MANIFEST through the whole SoC
+#
+# `soc` builds tb_rivercore with -DSOC_TB: the core runs through the bus
+# fabric, memory controller and QSPI engine against a behavioural QSPI Pmod
+# (tb/qspi_pmod_model.v) instead of tb/memory_model.v's ideal memory, and is
+# compared against the same Spike references. The memory-timing plusargs
+# (+IMEM_WAIT and friends) belong to memory_model and do nothing there, so
+# each test runs once, with the first MANIFEST line that names it. Artifacts
+# go to ./out/soc.
 #
 # MANIFEST has one run per line:
 #
@@ -28,7 +37,10 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
+SOC=0
+[ "${1:-}" = soc ] && SOC=1
 OUT="$HERE/out"
+[ $SOC = 1 ] && OUT="$HERE/out/soc"
 mkdir -p "$OUT"
 SPIKE_ARGS="--hartids=0 --log-commits --priv=mu --pc=0x80000000 --isa=rv32imac_zicntr
             -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
@@ -36,10 +48,17 @@ TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
 ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 
+CORE_SRC=("$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,signExt}.v)
 build() {
-  iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
-    "$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,signExt}.v \
-    "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v || return 1
+  if [ $SOC = 1 ]; then
+    iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
+      "${CORE_SRC[@]}" "$ROOT"/src/{qspi_ctrl,mem_ctrl,soc_bus,alphaone_soc}.v \
+      "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/tb_rivercore.v || return 1
+  else
+    iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
+      "${CORE_SRC[@]}" \
+      "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v || return 1
+  fi
   echo "build ok"
 }
 
@@ -69,10 +88,14 @@ ref() { # ref <name>
     > "$HERE/$n.ref"
 }
 
+# Every QSPI access costs about 60 clocks, so the SoC gets a larger backstop.
+MAXC=400000
+[ $SOC = 1 ] && MAXC=30000000
+
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
   vvp "$OUT/sim" +INIT_FILE="$OUT/$n.hex" +DUMP_FILE="$OUT/$n.dut" \
-      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=400000 "$@" >"$OUT/$n.sim.log" 2>&1
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" >"$OUT/$n.sim.log" 2>&1
 }
 
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both
@@ -139,8 +162,13 @@ suite() {
     grep -qE "^$t( |\$)" "$HERE/MANIFEST" || missing="${missing:-} $t"
   done
   [ -n "${missing:-}" ] && bad "MANIFEST" "    not listed:$missing"
+  local ran=" "
   while read -r name mode rest; do
     case "$name" in ''|\#*) continue ;; esac
+    if [ $SOC = 1 ]; then
+      case "$ran" in *" $name "*) continue ;; esac
+      ran="$ran$name "
+    fi
     # shellcheck disable=SC2086
     case "$mode" in
       spike)  run_spike "$name" $rest ;;
