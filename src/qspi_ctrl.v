@@ -60,7 +60,9 @@
 // device clock-to-output time plus round trip up to about 2 clocks. With
 // rd_late = 1 it is sampled three clocks after, for a round trip between 1 and
 // about 3 clocks: the right choice at clock rates where 2 clocks is too
-// tight (it is a strap, so it can be set before the first fetch). Chip select
+// tight. It is a strap, sampled while rst is high and held after it, so a pin
+// that changes later cannot move the sampling point in the middle of a read.
+// Chip select
 // then stays low one extra clock for the last nibble. The other side of the
 // sampling edge is covered by the device's output hold time plus the same
 // pad delays, since the next falling edge reaches the device only after the
@@ -88,7 +90,7 @@
 module qspi_ctrl (
     input  wire        clk,
     input  wire        rst,
-    input  wire        rd_late,    // strap: sample read data one clock later
+    input  wire        rd_late,    // strap, sampled during reset: read data one clock later
     // Transaction request, held by the requester until done
     input  wire        start,
     input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2)
@@ -121,6 +123,7 @@ module qspi_ctrl (
     reg [31:0] sr;      // read data, shifted in a nibble at a time
     reg        init;    // start-up sequence still running
     reg [2:0]  step;    // which command of it
+    reg        late;    // rd_late, as sampled during reset
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -153,8 +156,8 @@ module qspi_ctrl (
 
     // Where a read nibble is captured (see Timing above). Late: on each
     // rising-edge clock of the data phase but the first, and in S_TAIL.
-    wire sample = !we && (rd_late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
-                                  :  (state == S_DATA &&  sck));
+    wire sample = !we && (late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
+                               :  (state == S_DATA &&  sck));
 
     // Chip selects for a transaction starting now. A write never selects
     // the flash.
@@ -171,6 +174,7 @@ module qspi_ctrl (
             io_oe  <= 1'b0;
             init   <= 1'b1;
             step   <= 3'd0;
+            late   <= rd_late;
         end else begin
             ctl_oe <= 1'b1;
             if (sample)
@@ -216,7 +220,7 @@ module qspi_ctrl (
                                 S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
                                 default: begin  // S_DATA
                                     io_oe <= 1'b0;
-                                    if (rd_late && !we)
+                                    if (late && !we)
                                         state <= S_TAIL;
                                     else begin
                                         state <= S_END;
