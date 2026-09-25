@@ -34,6 +34,7 @@ make test-decoder
 make test-signext
 make test-branchctrl
 make test-regfile
+make test-qspi          # memory controller + QSPI engine vs the QSPI Pmod model
 
 # Clean build artifacts
 make clean
@@ -117,16 +118,18 @@ The pipeline top-level is `src/fyracore.v` (~1250 lines). It instantiates all ot
 
 **LR/SC:** the reservation set is the aligned word. Set on LR retire; cleared on any SC retire, a local store/AMO to the word, a trap/interrupt commit in WB, and reset. No external-agent clear (one hart, no other master).
 
-### Memory Map (unified Von Neumann)
+### Memory Map and SoC
 
 ```
-0x0000_0000 – 0x00FF_FFFF : Flash (16 MB, QSPI CS0)
-0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB, QSPI CS1)
-0x0200_0000 – 0x0200_BFFF : CLINT
-0x0300_0000 – 0x0300_000F : GPIO
+0x2000_0000 – 0x20FF_FFFF : flash (16 MB, read + execute, QSPI CS0)
+0x8000_0000 – 0x80FF_FFFF : PSRAM (16 MB, rwx + LR/SC, QSPI CS1 = A, CS2 = B by addr[23])
+0x0200_0000 – 0x0200_FFFF : CLINT
+0x1000_0000 – 0x1002_FFFF : UART / GPIO / syscon (reserved, read 0)
 ```
 
-Provisional. The core only knows the map through its PMA parameters (`PMA_MEM_*` fetch+data, `PMA_IO0/1_*` data only; anything else faults). In simulation the CLINT lives in `tb/memory_model.v`. `memController.v` is not instantiated and predates the request/ready contract.
+The core knows the map only through its PMA parameters (`PMA_ROM_*` fetch + plain loads, `PMA_RAM_*` everything, `PMA_IO0/1_*` data only, anything else faults). Stores/AMO/SC to flash fault (cause 7), LR to flash cause 5. There is no boot ROM: the reset PC is the `boot_addr` input, which `src/alphaone_soc.v` drives from `boot_sel` (0 = flash 0x2000_0000, 1 = PSRAM 0x8000_0000), and the QSPI pins are released while `rst` is high so an external master can load flash/PSRAM. SoC: `alphaone_soc.v` = core + `soc_bus.v` (stateless decode, the core's own req/ready, not APB) + `mem_ctrl.v` (data-first arbitration, PSRAM fetch split at every 1 KB page) + `qspi_ctrl.v` (0xEB read / 0x38 write, SCK = clk/2, late sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices, never selects the flash for a write) + `clint.v` (registered MTIP, mtime = core clock). Design notes: `docs/soc-architecture.md`.
+
+Verification runs the core on this map (boot from PSRAM). Spike gets `-m0x20000000:0x1000000,0x80000000:0x1000000`; Spike has no read-only memory, so a store to flash is a known legal divergence. `tests/directed/run.sh soc` runs the directed suite through the whole SoC against a behavioural QSPI Pmod (`tb/qspi_pmod_model.v`).
 
 ## Critical Invariants
 
