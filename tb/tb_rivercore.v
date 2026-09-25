@@ -87,8 +87,11 @@ module tb_rivercore;
     fyracore #(
         // Match the reference model's marchid so the lockstep dump agrees.
         .MARCHID     (32'd5),
-        .PMA_MEM_BASE(MEM_BASE),
-        .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1),
+        // No flash is modelled: the window is switched off (BASE > TOP).
+        .PMA_ROM_BASE(32'hFFFF_FFFF),
+        .PMA_ROM_TOP (32'h0000_0000),
+        .PMA_RAM_BASE(MEM_BASE),
+        .PMA_RAM_TOP (MEM_BASE + MEM_SIZE - 1),
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
