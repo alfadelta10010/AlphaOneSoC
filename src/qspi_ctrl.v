@@ -1,0 +1,149 @@
+// QSPI engine -- one flash or PSRAM transaction at a time, on the TinyTapeout
+// QSPI Pmod (W25Q128JV flash on CS0, two 8 MB PSRAMs on CS1 / CS2, one shared
+// quad bus).
+//
+// A transaction is: chip select low, an 8-bit command on IO0, a 24-bit
+// address on IO[3:0], then data on IO[3:0]:
+//
+//   read   0xEB  8 cmd + 6 addr + 6 dummy + 2 per byte   (SCK cycles)
+//   write  0x38  8 cmd + 6 addr +           2 per byte
+//
+// Both chips take the same 0xEB framing. The flash reads the first two dummy
+// cycles as its mode byte M7-0 and then waits four; the PSRAM simply waits
+// six. The first two are driven 1111, so the mode byte is 0xFF and the flash
+// never enters continuous-read mode (0xAx would make it take the next command
+// byte as an address). The other four are released so the device can turn
+// the bus around. The flash's Quad Enable bit must already be set (it is
+// non-volatile; the TinyTapeout QSPI Pmod guide sets it). The PSRAM powers up
+// in SPI mode, which accepts both commands, and needs no initialisation.
+//
+// Timing. SCK runs at clk/2 and idles low (SPI mode 0). The data pins change
+// on the clock edge that drives SCK low and the device samples them on the
+// next rising edge, a full clock later, so they are driven combinationally
+// from the state: a glitch settles long before it is sampled. SCK, the chip
+// selects and both output enables are registered, since a glitch on those is
+// seen at once.
+//
+// Read data is sampled *late*: on the clock edge that drives SCK low, one
+// whole SCK period after the falling edge that launched it rather than half a
+// period. The device's clock-to-output time plus both pad delays then have
+// two core clocks instead of one, which is what TinyTapeout's slow I/O needs.
+// The other side of that edge is covered by the device's output hold time
+// plus the same pad delays: the falling edge driven on this clock reaches the
+// device only after the output pad delay.
+//
+// Chip select is high for at least two clocks between transactions.
+//
+// Interface. The requester (mem_ctrl) raises `start` and holds cs_sel, addr,
+// we, nbytes_m1 and wdata stable until `done`. They are read combinationally
+// throughout the transaction, so none of them is copied here. `done` is high
+// for one cycle, the first cycle after the last data clock, and read data is
+// valid in that cycle. Read data is shifted in at the bottom of a 32-bit
+// register that is *not* cleared between transactions, so two 2-byte reads in
+// a row assemble one 4-byte word (mem_ctrl's split fetch relies on this).
+//
+// While rst is high every pin is released (ctl_oe and io_oe low), so another
+// master -- the TinyTapeout demo board's RP2040 -- can program the flash or
+// load the PSRAM over the same pins before it lets the core out of reset.
+
+module qspi_ctrl (
+    input  wire        clk,
+    input  wire        rst,
+    // Transaction request, held by the requester until done
+    input  wire        start,
+    input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2)
+    input  wire [23:0] addr,       // byte address within the chip
+    input  wire        we,         // 1 = quad write 0x38, 0 = quad I/O read 0xEB
+    input  wire [1:0]  nbytes_m1,  // bytes to transfer, minus one
+    input  wire [31:0] wdata,      // write data, first byte sent in [7:0]
+    output wire        idle,       // no transaction in progress: start is taken
+    output wire        done,       // transaction complete (one cycle)
+    output wire [31:0] rdata,      // bytes received, first byte in [7:0]
+    // Pins
+    output reg         sck,
+    output reg  [2:0]  cs_n,
+    output reg         ctl_oe,     // output enable for SCK and the chip selects
+    output reg  [3:0]  io_out,
+    output reg         io_oe,      // output enable for IO[3:0]
+    input  wire [3:0]  io_in
+);
+
+    localparam [2:0] S_IDLE  = 3'd0,
+                     S_CMD   = 3'd1,
+                     S_ADDR  = 3'd2,
+                     S_DUMMY = 3'd3,
+                     S_DATA  = 3'd4,
+                     S_END   = 3'd5;
+
+    reg [2:0]  state;
+    reg [2:0]  cnt;     // SCK cycles left in the current phase, counting down
+    reg [31:0] sr;      // read data, shifted in a nibble at a time
+
+    assign idle  = (state == S_IDLE);
+    assign done  = (state == S_END);
+    // The first nibble received is the high nibble of the first byte, so the
+    // register holds the bytes big-endian; swapping them back is wiring.
+    assign rdata = {sr[7:0], sr[15:8], sr[23:16], sr[31:24]};
+
+    wire [7:0] cmd = we ? 8'h38 : 8'hEB;
+
+    // The data phase counts cnt down from 7 and stops at 8 - 2*nbytes. The
+    // nibble on the wire is then number 7 - cnt of the transfer: byte
+    // ~cnt[2:1], high half first, which is nibble {~cnt[2:1], cnt[0]} of
+    // wdata.
+    wire [2:0] data_last = {~nbytes_m1, 1'b0};
+    wire [2:0] wnib      = {~cnt[2:1], cnt[0]};
+
+    always @(*) begin
+        case (state)
+            S_CMD:   io_out = {3'b111, cmd[cnt]};
+            S_ADDR:  io_out = addr[{cnt, 2'b00} +: 4];
+            S_DATA:  io_out = wdata[{wnib, 2'b00} +: 4];
+            default: io_out = 4'b1111;       // mode byte 0xFF, and idle
+        endcase
+    end
+
+    always @(posedge clk) begin
+        if (rst) begin
+            state  <= S_IDLE;
+            cnt    <= 3'd0;
+            sck    <= 1'b0;
+            cs_n   <= 3'b111;
+            ctl_oe <= 1'b0;
+            io_oe  <= 1'b0;
+        end else begin
+            ctl_oe <= 1'b1;
+            case (state)
+                S_IDLE: if (start) begin
+                    state <= S_CMD;
+                    cnt   <= 3'd7;
+                    cs_n  <= ~(3'b001 << cs_sel);
+                    io_oe <= 1'b1;
+                end
+                S_END:
+                    state <= S_IDLE;
+                default: begin
+                    // SCK toggles every clock of an active phase; everything
+                    // else happens on the clock that drives it low.
+                    sck <= ~sck;
+                    if (sck) begin
+                        if (state == S_DATA && !we)
+                            sr <= {sr[27:0], io_in};
+                        if (state == S_DUMMY && cnt == 3'd4)
+                            io_oe <= 1'b0;      // mode byte done: release the bus
+                        if (state == S_DATA ? (cnt == data_last) : (cnt == 3'd0)) begin
+                            case (state)
+                                S_CMD:   begin state <= S_ADDR;                   cnt <= 3'd5; end
+                                S_ADDR:  begin state <= we ? S_DATA : S_DUMMY;    cnt <= we ? 3'd7 : 3'd5; end
+                                S_DUMMY: begin state <= S_DATA;                   cnt <= 3'd7; end
+                                default: begin state <= S_END; cs_n <= 3'b111;   io_oe <= 1'b0; end
+                            endcase
+                        end else
+                            cnt <= cnt - 3'd1;
+                    end
+                end
+            endcase
+        end
+    end
+
+endmodule
