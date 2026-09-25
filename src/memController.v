@@ -42,7 +42,7 @@ module memController #(
     // CPU data interface (active on load/store, combinational read, synchronous write)
     input  wire [31:0] dmem_addr,
     input  wire [31:0] dmem_wdata,
-    input  wire [3:0]  dmem_wmask,
+    input  wire [3:0]  dmem_be,      // byte lanes (loads included)
     input  wire        dmem_we,
     output reg  [31:0] dmem_rdata,
 
@@ -126,10 +126,10 @@ module memController #(
             // --- Data write (synchronous, byte-lane masked) ---
             always @(posedge clk) begin
                 if (!rst && dmem_we && in_mem_range) begin
-                    if (dmem_wmask[0]) mem[da]   <= dmem_wdata[7:0];
-                    if (dmem_wmask[1]) mem[da+1] <= dmem_wdata[15:8];
-                    if (dmem_wmask[2]) mem[da+2] <= dmem_wdata[23:16];
-                    if (dmem_wmask[3]) mem[da+3] <= dmem_wdata[31:24];
+                    if (dmem_be[0]) mem[da]   <= dmem_wdata[7:0];
+                    if (dmem_be[1]) mem[da+1] <= dmem_wdata[15:8];
+                    if (dmem_be[2]) mem[da+2] <= dmem_wdata[23:16];
+                    if (dmem_be[3]) mem[da+3] <= dmem_wdata[31:24];
                 end
             end
 
@@ -210,7 +210,7 @@ module memController #(
                 .rst      (rst),
                 .addr     (dmem_addr[15:0]),
                 .wdata    (dmem_wdata),
-                .wmask    (dmem_wmask),
+                .wmask    (dmem_be),
                 .we       (dmem_we && in_clint_range),
                 .rdata    (clint_rdata),
                 .timer_irq(hw_timer_irq),
@@ -276,7 +276,7 @@ module memController #(
                                 qspi_addr  <= dmem_addr[23:0];
                                 qspi_wdata <= dmem_wdata;
                                 state      <= DWRITE;
-                            end else if (!dmem_we && in_mem_range && (dmem_wmask != 4'b0)) begin
+                            end else if (!dmem_we && in_mem_range && (dmem_be != 4'b0)) begin
                                 qspi_req    <= 1'b1;
                                 qspi_cs     <= dmem_cs;
                                 qspi_wr     <= 1'b0;

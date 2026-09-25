@@ -109,7 +109,7 @@ The pipeline top-level is `src/fyracore.v` (~1250 lines). It instantiates all ot
 
 **Redirects only on a non-stalled cycle.** Every `next_pc` arm is gated on `!stall`. During a stall EX may be looking at forwarded load data that is not valid yet (C3), and the fetch address must not move while a fetch is outstanding.
 
-**Memory handshake:** both ports use request/ready. A request is outstanding while `*_req` is high; its address (and for data we/wmask/wdata) is held until the cycle `*_ready` is seen with it. `imem_req` is always high; `dmem_req` excludes trapping accesses and a failing SC. `tb/memory_model.v` checks this every cycle and stops the run on a violation.
+**Memory handshake:** both ports use request/ready. A request is outstanding while `*_req` is high; its address (and for data we/be/wdata) is held until the cycle `*_ready` is seen with it. `imem_req` is always high; `dmem_req` excludes trapping accesses and a failing SC. `tb/memory_model.v` checks this every cycle and stops the run on a violation.
 
 **Multi-cycle operations stall the pipeline:** MulDiv (33-34 cycles) and AMO (2 phases via `wb_busy`). `muldiv_have = muldiv_ready | muldiv_done` gates start, stall and capture: the result is taken on the done cycle if the pipeline can take it and held otherwise, and the unit is never restarted on its own done cycle (`2e6718b` did that, and every M instruction after the first returned the previous result). `muldiv_want` excludes a trapping instruction, or a fetch fault on an M-op word deadlocks. Interrupts are never injected while an M instruction is in EX or during any stall.
 

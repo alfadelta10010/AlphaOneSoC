@@ -52,7 +52,7 @@ module fyracore #(
     //
     // A request is outstanding on every cycle its *_req is high. From the
     // cycle it is raised until the cycle *_ready is sampled high with it,
-    // the core holds the request's address (and for data: we, wmask and
+    // the core holds the request's address (and for data: we, be and
     // wdata) stable; that ready cycle completes the transfer, and read data
     // is taken on it. The next request may start on the following cycle.
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
@@ -76,10 +76,10 @@ module fyracore #(
     input  wire [31:0] imem_rdata,
     input  wire        imem_ready,    // Instruction fetch data is valid
     // Data memory interface
-    output wire        dmem_req,      // Load/store/AMO request (see dmem_we)
+    output wire        dmem_req,      // Load/store/AMO request (see dmem_we, dmem_be)
     output wire [31:0] dmem_addr,
     output wire [31:0] dmem_wdata,
-    output wire [3:0]  dmem_wmask,
+    output wire [3:0]  dmem_be,       // byte lanes of the access, loads included
     output wire        dmem_we,
     input  wire [31:0] dmem_rdata,
     input  wire        dmem_ready,    // Data access complete
@@ -653,28 +653,32 @@ module fyracore #(
     wire [31:0] mem_addr_aligned = {exwb_alu_result[31:2], 2'b00};
     wire [1:0]  mem_byte_offset  = exwb_alu_result[1:0];
 
-    // Store data alignment
+    // Byte lanes and store data alignment. The lanes follow from the
+    // access's size and offset, and are the same for a load as for a store:
+    // dmem_addr is word-aligned, so without them a device could not tell an
+    // lbu of byte 1 from a load of byte 0 (an 8250 at reg-shift 0 has IER at
+    // byte 1 and RBR, which a read pops, at byte 0).
     reg [31:0] store_data_shifted;
-    reg [3:0]  store_wmask;
+    reg [3:0]  access_be;
     always @(*) begin
         store_data_shifted = 32'b0;
-        store_wmask = 4'b0;
+        access_be = 4'b0;
         case (exwb_memSize)
-            2'b00: begin // SB
+            2'b00: begin // byte
                 store_data_shifted = {4{exwb_rs2_data[7:0]}};
-                store_wmask = 4'b0001 << mem_byte_offset;
+                access_be = 4'b0001 << mem_byte_offset;
             end
-            2'b01: begin // SH
+            2'b01: begin // halfword
                 store_data_shifted = {2{exwb_rs2_data[15:0]}};
-                store_wmask = (mem_byte_offset[1]) ? 4'b1100 : 4'b0011;
+                access_be = (mem_byte_offset[1]) ? 4'b1100 : 4'b0011;
             end
-            2'b10: begin // SW
+            2'b10: begin // word
                 store_data_shifted = exwb_rs2_data;
-                store_wmask = 4'b1111;
+                access_be = 4'b1111;
             end
             default: begin
                 store_data_shifted = 32'b0;
-                store_wmask = 4'b0;
+                access_be = 4'b0;
             end
         endcase
     end
@@ -688,7 +692,8 @@ module fyracore #(
 
     assign dmem_addr  = mem_addr_aligned;
     assign dmem_wdata = (exwb_isAmo && amo_phase) ? amo_new_val : store_data_shifted;
-    assign dmem_wmask = wb_mem_write ? ((exwb_isAmo && amo_phase) ? 4'b1111 : store_wmask) : 4'b0;
+    // An AMO, LR or SC is a word access, so access_be is 1111 for it.
+    assign dmem_be    = access_be;
     assign dmem_we    = wb_mem_write;
     assign dmem_req   = exwb_valid && !exwb_trap && (exwb_memRD || exwb_memWR) &&
                         !(exwb_isSC && !sc_success);

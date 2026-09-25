@@ -119,7 +119,7 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. Two instances: fetch (X) and data (R/W/RW). |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the memory model (simulation) or memory controller, not by the core. |
-| `memController.v` | `memController` | Dual-mode memory controller sketch. **Not instantiated by anything.** Its hardware path predates the request/ready contract (it infers reads from `dmem_wmask`) and needs rework once the SoC bus is chosen. |
+| `memController.v` | `memController` | Dual-mode memory controller sketch. **Not instantiated by anything.** Its hardware path predates the request/ready contract (it infers reads from byte lanes and has no request strobe) and needs rework once the SoC bus is chosen. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -175,7 +175,7 @@ The map is provisional (the SoC bus and peripheral set are not settled). The cor
 Both ports follow the same contract:
 
 - A request is outstanding on every cycle `*_req` is high.
-- From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `wmask`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
+- From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `be`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
 - Nothing transfers while `*_req` is low, whatever `*_ready` is.
 
 `imem_req` is always high. When the pipeline is stalled with a fetch already completed, the same address is requested again. `dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. An AMO is a read followed by a write, back to back.
@@ -425,7 +425,7 @@ module fyracore #(
     output wire        dmem_req,
     output wire [31:0] dmem_addr,      // word-aligned
     output wire [31:0] dmem_wdata,     // shifted to byte lanes
-    output wire [3:0]  dmem_wmask,
+    output wire [3:0]  dmem_be,        // byte lanes, loads included
     output wire        dmem_we,
     input  wire [31:0] dmem_rdata,
     input  wire        dmem_ready,

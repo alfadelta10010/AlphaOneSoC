@@ -19,7 +19,7 @@ module tb_rivercore;
     wire        imem_ready;
     wire        imem_req, dmem_req;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
-    wire [3:0]  dmem_wmask;
+    wire [3:0]  dmem_be;
     wire        dmem_we;
     wire        dmem_ready;
 
@@ -104,7 +104,7 @@ module tb_rivercore;
         .dmem_req    (dmem_req),
         .dmem_addr   (dmem_addr),
         .dmem_wdata  (dmem_wdata),
-        .dmem_wmask  (dmem_wmask),
+        .dmem_be     (dmem_be),
         .dmem_we     (dmem_we),
         .dmem_rdata  (dmem_rdata),
         .dmem_ready  (dmem_ready),
@@ -141,7 +141,7 @@ module tb_rivercore;
         .dmem_req  (dmem_req),
         .dmem_addr (dmem_addr),
         .dmem_wdata(dmem_wdata),
-        .dmem_wmask(dmem_wmask),
+        .dmem_be   (dmem_be),
         .dmem_we   (dmem_we),
         .dmem_rdata(dmem_rdata),
         .imem_ready(imem_ready),
