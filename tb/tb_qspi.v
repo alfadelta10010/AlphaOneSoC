@@ -69,8 +69,8 @@ module tb_qspi;
     );
 
     qspi_pmod_model pmod (
-        .sck(sck), .cs_n(ctl_oe ? cs_n : 3'b111), .host_io(io_out), .host_oe(io_oe),
-        .dev_io(dev_io), .dev_oe(dev_oe)
+        .host_sck(sck), .host_cs_n(cs_n), .host_ctl_oe(ctl_oe),
+        .host_io(io_out), .host_oe(io_oe), .dev_io(dev_io), .dev_oe(dev_oe)
     );
 
     integer errors = 0;

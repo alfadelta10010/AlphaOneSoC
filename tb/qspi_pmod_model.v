@@ -49,6 +49,15 @@
 // a device never driving IO at the same time, the PSRAM's maximum
 // chip-select-low time (tCEM) and every chip's minimum deselect time (tCPH).
 //
+// Pins. The model takes the host's pins with their output enable
+// (host_ctl_oe for SCK and the chip selects) and applies what the Pmod does
+// to a released pin: the chip selects are pulled up (10k on the Pmod), SCK
+// is not and floats -- X here. A chip select may only fall once SCK has
+// been driven low for TSCK_CS_NS (mode 0; the flash's /CS setup times are
+// 3 ns), so a host that selects a chip on the same edge it starts driving
+// SCK -- a clock edge of unknown level -- stops the run. Testbenches connect
+// the raw pins and leave this to the model.
+//
 // +PSRAM_WRAP=1 makes the PSRAMs wrap a read or write at the end of each 1 KB
 // page, as a part without row-boundary crossing does (the -3SQN rather than
 // the -3SQR). qspi_ctrl must not depend on crossing.
@@ -71,15 +80,21 @@ module qspi_pmod_model #(
     parameter RAM_SIZE   = 16777216,
     parameter TCEM_NS    = 8000,       // PSRAM maximum CS-low time
     parameter TCPH_NS    = 18,         // minimum deselect time
-    parameter TCHZ_NS    = 7           // chip select high to output released
+    parameter TCHZ_NS    = 7,          // chip select high to output released
+    parameter TSCK_CS_NS = 3           // SCK driven low before chip select falls
 )(
-    input  wire       sck,
-    input  wire [2:0] cs_n,
+    input  wire       host_sck,
+    input  wire [2:0] host_cs_n,
+    input  wire       host_ctl_oe,  // host drives SCK and the chip selects
     input  wire [3:0] host_io,
     input  wire       host_oe,
     output reg  [3:0] dev_io,
     output reg        dev_oe
 );
+    // The pins as the devices see them (see Pins above).
+    wire [2:0] cs_n = host_ctl_oe ? host_cs_n : 3'b111;
+    wire       sck  = host_ctl_oe ? host_sck  : 1'bx;
+
     reg [7:0] flash [0:FLASH_SIZE-1];
     reg [7:0] ram   [0:RAM_SIZE-1];
 
@@ -125,8 +140,20 @@ module qspi_pmod_model #(
     reg         allones;    // every nibble so far was 1111 (flash CRM exit)
     reg         first_nib;  // the next nibble out is the first of the read
     reg  [3:0]  wait_n;     // dummy / wait cycles before read data
-    realtime    t_sel, t_desel;
+    realtime    t_sel, t_desel, t_sck;
     initial t_desel = -1000.0;
+
+    // SCK driven low before a chip select falls (see Pins above). Checked
+    // 1 ps after the select, once every update of that time step has landed:
+    // SCK and the chip selects change on the same clock edge, and the order
+    // the simulator runs their blocks in is not defined.
+    event selected;
+    always @(sck) t_sck = $realtime;
+    always @(selected) begin
+        #0.001;
+        if (sck !== 1'b0 || (t_sel - t_sck) < TSCK_CS_NS)
+            fail("chip select fell before SCK was driven low");
+    end
 
     wire any_sel = (cs_n != 3'b111);
 
@@ -190,6 +217,7 @@ module qspi_pmod_model #(
         if (any_sel && phase == P_IDLE) begin
             if (($realtime - t_desel) < TCPH_NS)
                 fail("chip select high for less than tCPH");
+            -> selected;
             phase   = P_CMD;
             n       = 0;
             cmd     = 8'h00;

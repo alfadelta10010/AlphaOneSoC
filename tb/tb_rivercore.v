@@ -134,12 +134,13 @@ module tb_rivercore;
     );
 
     qspi_pmod_model pmod (
-        .sck    (qspi_sck),
-        .cs_n   (qspi_ctl_oe ? qspi_cs_n : 3'b111),
-        .host_io(qspi_io_out),
-        .host_oe(qspi_io_oe),
-        .dev_io (pmod_io),
-        .dev_oe (pmod_oe)
+        .host_sck   (qspi_sck),
+        .host_cs_n  (qspi_cs_n),
+        .host_ctl_oe(qspi_ctl_oe),
+        .host_io    (qspi_io_out),
+        .host_oe    (qspi_io_oe),
+        .dev_io     (pmod_io),
+        .dev_oe     (pmod_oe)
     );
 
     assign imem_addr      = soc.cpu.imem_addr;

@@ -58,8 +58,8 @@ module tb_qspi_stress;
         .idle(q_idle), .done(q_done), .rdata(q_rdata),
         .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in));
 
-    qspi_pmod_model pmod (.sck(sck), .cs_n(ctl_oe ? cs_n : 3'b111), .host_io(io_out), .host_oe(io_oe),
-        .dev_io(dev_io), .dev_oe(dev_oe));
+    qspi_pmod_model pmod (.host_sck(sck), .host_cs_n(cs_n), .host_ctl_oe(ctl_oe),
+        .host_io(io_out), .host_oe(io_oe), .dev_io(dev_io), .dev_oe(dev_oe));
 
     integer errors = 0, k, n_i = 0, n_d = 0;
     reg dbg_order = 0;
