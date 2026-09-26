@@ -766,6 +766,39 @@ Costs to accept:
   check that QPI flash reads start 4-byte aligned; and it must stop
   rejecting `Ax` mode bytes.
 
+### 9.4 Implementation cost of each flash mode
+
+The PSRAM goes QPI whatever the flash does, so the engine gets a QPI
+command phase and a `35h` start-up step regardless. Against that
+baseline, the four flash choices cost:
+
+| Flash mode | SCK / 4 B read | Normal-traffic logic | Start-up | `mem_ctrl` | Outside the chip | Proven on this Pmod |
+|---|---|---|---|---|---|---|
+| **A. QSPI as today** (`EBh` 1-4-4, M = `FFh`) | 28 | per-chip command width (flash 8 × 1-bit, PSRAM 2 × 4-bit) and wait length (flash 2 driven + 4 released, PSRAM 4 released) | no new step | none | nothing | KianV |
+| **B. SPI continuous read** (M = `A0h`) | **20** (28 first) | A, plus 1 flop (armed), a skip of the command phase when armed, the mode nibble `1010` instead of `1111` | no new step | none | nothing (TinyQV leaves the same state) | TinyQV, FazyRV-ExoTiny |
+| **C. QPI** (`0Bh`, P = 01) | 20 | *less* than A: both chips send the same `0Bh` shape, no per-chip mux | +2 steps: `38h` (SPI) and `C0h`+P (QPI, a command with a parameter byte — a new step shape) | 6-byte aligned fetch: byte count 2 → 3 bits in `mem_ctrl`, nibble counter 3 → 4 bits in `qspi_ctrl` | RP2040 must release the flash before flashing | nobody |
+| **D. QPI + continuous read** (P = 00) | **16** (20 unaligned, 18 first) | C's shape plus B's flop and skip, and a per-chip wait again (flash 2, PSRAM 4) | as C | as C | as C | nobody |
+
+Rough size of the deltas (estimates, not synthesis): B over A is one
+flip-flop and a handful of gates, ~10–15 GE; C and D add two start-up
+steps, the parameter-byte step shape, one or two counter bits and the
+aligned-fetch path, ~30–60 GE; a `flash_spi` fallback strap on top of D
+carries both B's and D's paths. The engine is ~2,400 µm² today, so none
+of these is large; the real differences are verification effort and risk.
+
+* **B is the cheapest per SCK saved:** 8 SCK off every flash read for a
+  flop, and the flash path stays the one the model already checks.
+* **C is not simpler than B** once start-up and alignment are counted,
+  and no faster (20 SCK both).
+* **D buys the last 4 SCK** (−20 % on flash reads) for C's costs plus B's.
+  Flash is read only while booting from it; the PSRAM choice is what
+  matters to Linux.
+* If the PSRAM used QPI `EBh` (6 wait) instead of `0Bh` (4 wait), its
+  post-address phase would match the flash's in A and B exactly and the
+  per-chip wait length would go away — for +2 SCK on every PSRAM read.
+  Not worth it: the PSRAM is the hot path, and the per-chip wait is a
+  2:1 mux on one counter load.
+
 ---
 
 ## 10. Notes from the TinyTapeout Discord
