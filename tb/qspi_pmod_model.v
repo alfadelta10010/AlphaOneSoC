@@ -71,7 +71,8 @@
 // Memory: ram[] is the two PSRAMs back to back (A at 0, B at 8 MB), zero-filled.
 // flash[] holds the first FLASH_SIZE bytes of flash; reads above that return
 // 0, the same as Spike's zero-filled RAM model of the flash window. Load them
-// by hierarchical reference or with +FLASH_FILE=.
+// by hierarchical reference or with +FLASH_FILE=, a path of up to 1023
+// characters; a longer one, or a file that cannot be opened, stops the run.
 
 `timescale 1ns / 1ps
 
@@ -103,7 +104,10 @@ module qspi_pmod_model #(
 
     reg  [2:0]  phase;
     integer delay_ns;
-    reg [1023:0] flash_file;
+    // 1024 characters, as tb_rivercore's INIT_FILE: $value$plusargs cuts a
+    // longer path short without a word, and $readmemh of the stub only warns.
+    reg [8191:0] flash_file;
+    integer      flash_fd;
     reg     psram_wrap, flash_crm, flash_qpi;
     // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
     reg [1:0] psram_qpi;    // in QPI mode
@@ -122,8 +126,20 @@ module qspi_pmod_model #(
         flash_qpi  = $test$plusargs("FLASH_QPI");
         for (k = 0; k < FLASH_SIZE; k = k + 1) flash[k] = 8'h00;
         for (k = 0; k < RAM_SIZE; k = k + 1)   ram[k]   = 8'h00;
-        if ($value$plusargs("FLASH_FILE=%s", flash_file))
+        if ($value$plusargs("FLASH_FILE=%s", flash_file)) begin
+            // A path that fills the buffer may have been cut short.
+            if (flash_file[8191:8184] != 8'h00) begin
+                $display("ERROR: qspi_pmod_model: FLASH_FILE path longer than 1023 characters");
+                $fatal(1);
+            end
+            flash_fd = $fopen(flash_file, "r");
+            if (flash_fd == 0) begin
+                $display("ERROR: qspi_pmod_model: cannot open FLASH_FILE=%0s", flash_file);
+                $fatal(1);
+            end
+            $fclose(flash_fd);
             $readmemh(flash_file, flash);
+        end
         dev_io = 4'b0000;
         dev_oe = 1'b0;
         phase  = P_IDLE;
