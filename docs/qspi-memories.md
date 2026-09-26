@@ -485,7 +485,7 @@ standby 250 µA (85 °C) / 140 µA (25 °C).
 | Our read today | `EBh` 1-4-4, M = `FFh`, 4 dummy | **`0Bh` QPI, 4 wait** (since `97010f4`; `EBh` 1-4-4 before) |
 | Same framing? | **yes**: 8 + 6 + 6 clocks, first data on edge 20 | |
 | QPI read | `0Bh`/`EBh`, 2/4/6/8 dummy by `C0h` | `0Bh` 4 wait (≤ 66 MHz) / `EBh` 6 wait |
-| **Recommended read (§9)** | **QPI `EBh` in continuous read, P5-4 = 00: 6 address + 2 mode** | **QPI `0Bh`: 2 command + 6 address + 4 wait** |
+| **Decided read (§9.3)** | **quad I/O `EBh`: 8 command (IO0) + 6 address + 2 mode (`FFh`) + 4 dummy** | **QPI `0Bh`: 2 command + 6 address + 4 wait** |
 | Address alignment | QPI/Quad reads: **A1:A0 = 00** | none |
 | Page | 256 B program page; reads run on | 1 KB; RBX runs on once per burst |
 | Max CS low | none | 8 µs |
@@ -559,7 +559,11 @@ with 2 dummy clocks **50 MHz**, with 4 dummy 80 MHz.
 The flash steps sit between the PSRAM reset and `35h`, well over tRST =
 50 ns. This is §7.3's sequence without its flash-QPI steps 5–6.
 
-### 7.3 Start-up for the recommended operation (§9)
+### 7.3 Start-up for flash QPI (option not taken)
+
+> **Not taken** (§9.3): the flash stays out of QPI and continuous read.
+> The sequence in use is §7.2. This is what the flash-QPI option would
+> have needed, kept as analysis.
 
 PSRAM in QPI; flash in QPI with continuous read. Eight steps — the
 3-bit `step` counter already has room:
@@ -567,8 +571,8 @@ PSRAM in QPI; flash in QPI with continuous read. Eight steps — the
 | Step | CS | Sent | Why |
 |---|---|---|---|
 | 0 | CS1+CS2 | `F5h` QPI form | PSRAM → SPI |
-| 1 | CS1+CS2 | `66h` SPI (if `psram_reset`) | |
-| 2 | CS1+CS2 | `99h` SPI (if `psram_reset`) | PSRAM → SPI, Linear Burst |
+| 1 | CS1+CS2 | `66h` SPI | |
+| 2 | CS1+CS2 | `99h` SPI | PSRAM → SPI, Linear Burst |
 | 3 | CS0 | 8 clk `1111` | flash leaves CRM (SPI or QPI) |
 | 4 | CS0 | `FFh` QPI form | flash leaves QPI |
 | 5 | CS0 | `38h` SPI | flash → QPI (ignored if QE = 0) — skipped when `flash_spi` |
@@ -595,13 +599,15 @@ that `9Fh` as address and mode bits, its bits give M4 = 1, and it drops
 out of CRM) — and TinyQV has left flashes in SPI-CRM on every demo
 board it has run on, so this is the state community tools already live
 with. **It cannot reach a flash left in QPI mode** until the Pmod is
-power-cycled — and §9 leaves the flash in QPI. So before flashing, the
-RP2040 must release it: CS0 low, IO0–IO3 driven high for 8 clocks (ends
-CRM), CS0 high; then CS0 low, IO0–IO3 high for 2 clocks (`FFh`, Exit
-QPI), CS0 high. After that the flash is in plain SPI mode and the
-flasher works. We need an RP2040 script for this design anyway (straps), so this belongs
-in it; failing that, unplug the Pmod before flashing. (Today the flash is
-left in SPI mode, so none of this is needed yet.)
+power-cycled.
+
+**Our design leaves the flash in SPI mode with continuous read off**
+(every read sends mode byte `FFh`, and the flash is never put in QPI,
+§9.3), so the flasher reaches it directly. Had the flash gone to QPI, the
+RP2040 would have had to release it before flashing: CS0 low, IO0–IO3
+driven high for 8 clocks (ends CRM), CS0 high; then CS0 low, IO0–IO3 high
+for 2 clocks (`FFh`, Exit QPI), CS0 high. We leave the PSRAMs in QPI, but
+the flasher never touches them.
 
 ---
 
@@ -622,7 +628,8 @@ and 4 dummy clocks at 32 MHz SCK, and has run from this flash on every
 shuttle since TT06. **In QPI with reduced dummy clocks it is an explicit
 rule** and nobody has tested breaking it.
 
-With the flash in QPI (§9) the fix is **required**. It is cheap: for a flash fetch with
+Had the flash gone to QPI (§9, not taken — §9.3) the fix would be
+**required**. It is cheap: for a flash fetch with
 `pc[1]` = 1, read 6 bytes from `pc & ~3`. `qspi_ctrl`'s 32-bit read
 register shifts in at the bottom and is never cleared, so after 6 bytes
 it already holds exactly the last 4 — the ones the fetch wants. Cost: a
@@ -651,7 +658,7 @@ engine's 8 µs model default is right; 4 µs applies only to a `-3SQRX`.
 The BOM part is RBX, which reads across a page. The split in `mem_ctrl`
 covers non-RBX clones on other boards; it costs little and stays.
 
-### 8.6 Hand-over from a flash in QPI **and** CRM — our own state after §9
+### 8.6 Hand-over from a flash in QPI **and** CRM (left by another design)
 
 Step 3 clocks 8 nibbles of `1111`. A flash in QPI-CRM with 2 dummy
 clocks takes them as address + mode byte and starts driving data at the
@@ -659,11 +666,13 @@ SCK ↓ where the engine raises CS0 and drops its output enable. The
 flash's output-disable (tSHQZ ≤ 7 ns) and the host's own drive can then
 overlap for a few ns.
 
-With §9 this is no longer somebody else's state: our design leaves the
-flash in exactly this mode, so **every reset of our design after the
-first** meets it (the Pmod is not power-cycled). The fix is the same
-turnaround as a normal QPI read: **drive `1111` for the first 7 clocks of
-step 3 and release the bus for the 8th.** In every state the flash can
+Our design never leaves the flash in this state (§9.3): only another
+design that ran the flash in QPI continuous read could hand it over like
+this, and nobody on this board is known to (§12). Had the flash gone to
+QPI, our own design would have met it at every reset after the first.
+If it ever matters, the fix is the same turnaround as a normal QPI read:
+**drive `1111` for the first 7 clocks of step 3 and release the bus for
+the 8th.** In every state the flash can
 be in, the 8th nibble is harmless undriven: in SPI- or QPI-CRM it is
 M3-0, which is don't-care (M5-4 = `11` was already sent in the 7th); in
 QPI without CRM the nibbles can only form `FFh`, Exit QPI, which step 4
@@ -710,7 +719,7 @@ protocols" is one mux on the width of one phase.
 
 Core clocks per transaction ≈ 2 × SCK + 4 (start, `S_END`, deselect).
 
-| Transaction | Today (SPI form) | PSRAM QPI | Flash SPI-CRM, M = `A0h` | Flash QPI P = 00 (2 dummy) | **Flash QPI-CRM, P = 00** |
+| Transaction | SPI form (flash today; PSRAM before `97010f4`) | PSRAM QPI (today) | Flash SPI-CRM, M = `A0h` | Flash QPI P = 00 (2 dummy) | **Flash QPI-CRM, P = 00** |
 |---|---|---|---|---|---|
 | PSRAM read 4 B | 28 SCK / ~60 clk | **20 / ~44** | | | |
 | PSRAM write 4 B | 22 / ~48 | **16 / ~36** | | | |
@@ -728,7 +737,7 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
 15 (3 address + 8 mode/dummy + 4 data) — one SCK for DDR pads and a
 66 MHz cap: not worth it.
 
-### 9.3 Verdict: QPI on both chips; continuous read on the flash too
+### 9.3 Decision, and the recommendation it replaced
 
 > **Decided (2026-09-26, the user): PSRAM QPI only; flash QSPI only** —
 > quad I/O `EBh` with the command on IO0, mode byte `FFh`, never continuous
@@ -736,7 +745,8 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
 > (`97010f4`). Items 2–3 below are kept as analysis, not as the plan; the
 > flash-QPI start-up of §7.3 and the flasher release of §7.4 do not apply.
 
-1. **PSRAM: QPI, `0Bh` reads (4 wait), `02h` writes.** −29 % on every
+1. **PSRAM: QPI, `0Bh` reads (4 wait), `38h` writes (QPI form; `02h` is
+   equivalent).** −29 % on every
    read, −27 % on a 4-byte write, −37 % on a byte store; all of Linux's
    traffic is PSRAM traffic, so this is the ~25 % CPI cut the review
    estimated. TinyQV, tinygpu_v2 and FazyRV-ExoTiny all run the PSRAM
@@ -761,9 +771,9 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
    from the QSPI data pins during reset (TinyQV's trick, §11) and they
    cost no pins.
 
-Costs to accept:
+Costs the full recommendation would have carried (items 2–3, not taken):
 
-* Start-up grows from 5 to 8 steps (§7.3).
+* Start-up would grow from 6 to 8 steps (§7.3).
 * `mem_ctrl`: the 6-byte aligned flash fetch; `qspi_ctrl`: a 3-bit byte
   count, a continuous-read flop, and a preamble that depends on the chip
   (flash, once armed: 6 address + 2 mode = 8 SCK; PSRAM: 2 command +
@@ -771,10 +781,10 @@ Costs to accept:
 * We leave the flash in QPI, so the RP2040 must release it before the TT
   flasher can reach it (§7.4).
 * QE = 1 on the flash — already required today, and set by TT's QA.
-* The Pmod model needs QPI `0Bh`/`02h` and `35h` on the PSRAMs; `38h`,
-  QPI `C0h`, QPI `EBh` with `A0h` and command-less reads on the flash; a
-  check that QPI flash reads start 4-byte aligned; and it must stop
-  rejecting `Ax` mode bytes.
+* The Pmod model would need, on the flash, `38h`, QPI `C0h`, QPI `EBh`
+  with `A0h` and command-less reads; a check that QPI flash reads start
+  4-byte aligned; and to stop rejecting `Ax` mode bytes. (The PSRAM's QPI
+  `0Bh`, `38h`/`02h` and `35h` are in, since `6a0fdda`.)
 
 ### 9.4 Implementation cost of each flash mode
 
@@ -930,7 +940,7 @@ Read from source (links in the Discord threads; commits as cloned
 | TinyQV `cpu/qspi_flash.v` | TT09 (Atari 2600 project) | — / clk/2 | — | SPI `EBh`, command on IO0 only (IO1-3 released, needs QE = 1), mode `11h` | fixed, 2 clocks | "Should work up to about 60 MHz project clock on TT06+" |
 | **KianV uLinux SoC** `src/qqspi.v` (splinedrive/KianV-RV32IMA-RISC-V-uLinux-SoC `e6f0d3f`) | TT06 | 30 MHz (max tested 34.5; 15 MHz failsafe) / clk/2 | **SPI mode**: `EBh` 8+6+6 wait, `38h` 8+6+data — our framing today | SPI `EBh`, **mode byte left floating** (bus released for all 6 wait clocks) | fixed, 1 clock (sampled at the next SCK rise) — why it tops out near 34 MHz | Word-aligned reads only. Same map as ours: flash `0x2000_0000`, PSRAM `0x8000_0000` 16 MB, UART `0x1000_0000`. **Boots uLinux**: reset PC `0x2010_0000`; flash holds bootloader at 1 MB, DTB at 1.5 MB, kernel+rootfs Image at 2 MB; the bootloader copies the Image to PSRAM (~20 s) and a shell appears after ~120 s |
 | tinygpu_v2 `src/spi_flash_controller.v` (pongsagon, `09c0ede`) | ttsky25b, working | 25.175 MHz / **SCK = gated `!clk`** (= clk) | own `35h` at start, then QPI `0Bh` 4 wait, `02h`; long streams (§10) | SPI `EBh`, mode `00h`, 6 wait; drives `0000` through **all** wait clocks on both chips and releases the bus only as data starts | 3-bit strap on `ui_in`, half-clock steps (posedge/negedge buffers); the setting used on silicon is not stated | Uses only PSRAM A. Combinational gated clock output and a tight bus turnaround, both tolerated at 25 MHz on silicon, and both patterns our engine avoids |
-| FazyRV-ExoTiny `rtl/wb_qspi_mem.sv` (meiniKi, `c433d40`) | — (not checked) | SCK = `~clk` | own `35h` at reset, then QPI `0Bh` 2+6+4, QPI `38h` | SPI `EBh` continuous read, mode `A5h`, 4 dummy; command dropped after first read | none; samples on the falling edge (~15 MHz SCK limit) | Word-address reads. The closest match to our `flash_spi` fallback |
+| FazyRV-ExoTiny `rtl/wb_qspi_mem.sv` (meiniKi, `c433d40`) | — (not checked) | SCK = `~clk` | own `35h` at reset, then QPI `0Bh` 2+6+4, QPI `38h` | SPI `EBh` continuous read, mode `A5h`, 4 dummy; command dropped after first read | none; samples on the falling edge (~15 MHz SCK limit) | Word-address reads. Its flash scheme is §9.4 option B (SPI continuous read), not taken |
 
 Models for verification: TinyQV's `test/sim_qspi.v` (tt06-tinyQV
 `981d027`) models exactly the recommended scheme — flash in CRM without
@@ -969,10 +979,9 @@ Ideas worth borrowing:
    PSRAM); read the JEDEC ID at bring-up.
 2. ~~Does TinyQV start flash reads off a 4-byte boundary?~~ **Answered
    (§8.1): yes**, at halfword and byte addresses, on silicon since TT06.
-3. **Has anyone run the flash in QPI on this board?** Nobody in the
-   threads or the designs surveyed has. §9 takes it anyway, with the
-   `flash_spi` strap as the fallback; it is the first thing to try on a
-   board (FPGA + real Pmod) before tapeout.
+3. ~~Has anyone run the flash in QPI on this board?~~ **Moot (§9.3):**
+   the flash stays out of QPI. (Nobody in the threads or the designs
+   surveyed has run it.)
 4. **Measured SCK-to-data round trip** on a recent shuttle. What is
    known: TinyQV needs 2–3 clocks of latency at 64 MHz (tt3p5 data);
    KianV, sampling after 1 clock, was tested to 34.5 MHz, so its round
