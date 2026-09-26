@@ -66,7 +66,7 @@ CORE_SRC=("$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,de
 build() {
   if [ $SOC = 1 ]; then
     iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
-      "${CORE_SRC[@]}" "$ROOT"/src/{qspi_ctrl,mem_ctrl,soc_bus,alphaone_soc}.v \
+      "${CORE_SRC[@]}" "$ROOT"/src/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,alphaone_soc}.v \
       "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/tb_rivercore.v || return 1
   else
     iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \

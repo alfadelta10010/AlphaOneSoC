@@ -130,7 +130,14 @@ module tb_rivercore;
         .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out),
         .qspi_io_oe (qspi_io_oe),
-        .qspi_io_in (qspi_io_in)
+        .qspi_io_in (qspi_io_in),
+        // IO1 is off in this testbench (see IO1_BASE), so the peripherals
+        // are unreachable; their pins are only tied to idle levels.
+        .uart_rx    (1'b1),
+        .uart_tx    (),
+        .uart_rts_n (),
+        .gpio_in    (8'h00),
+        .gpio_out   ()
     );
 
     qspi_pmod_model pmod (
