@@ -1,4 +1,4 @@
-/* Linker script for programs that boot AlphaOneSoC from flash (boot_sel = 0).
+/* Linker script for AlphaOneSoC programs. The SoC always boots from flash.
  *
  *   0x2000_0000 – 0x20FF_FFFF : flash (16 MB, read + execute, QSPI CS0)
  *                               reset vector, code, read-only data, and the
@@ -12,8 +12,8 @@
  * (the core faults every store to it), so anything a program writes has to
  * be in PSRAM.
  *
- * A program that is instead loaded straight into PSRAM and booted there
- * (boot_sel = 1) needs none of this: link it at 0x8000_0000 with link.ld.
+ * link.ld is for the verification flow only, which starts the core straight
+ * in PSRAM at 0x8000_0000.
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_boot_start)

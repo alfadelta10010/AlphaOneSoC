@@ -12,10 +12,11 @@
 // clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick
 // it from the clock frequency and the measured pad round trip.
 //
-// Boot: there is no boot ROM. boot_sel picks the reset PC -- 0 boots from
-// flash at 0x2000_0000, 1 from PSRAM at 0x8000_0000 -- and while rst is high
-// every QSPI pin is released, so an external master can program the flash or
-// load the PSRAM first. Whatever it wrote is the first thing the core runs.
+// Boot: from flash, always -- the reset PC is 0x2000_0000, the first byte of
+// flash. There is no boot ROM: whatever was last programmed there is the
+// first thing the core runs, and anything that runs from PSRAM is put there by
+// code in flash. While rst is high every QSPI pin is released, so an external
+// master (the demo board's RP2040) can program the flash first.
 //
 // The PMA_* parameters default to the map above. They are exposed only so
 // the verification testbench can size the CLINT window to Spike's and switch
@@ -30,7 +31,6 @@ module alphaone_soc #(
 )(
     input  wire       clk,
     input  wire       rst,
-    input  wire       boot_sel,      // 0 = flash, 1 = PSRAM
     input  wire       qspi_rd_late,  // strap: sample QSPI read data a clock later
     // QSPI Pmod
     output wire       qspi_sck,
@@ -59,7 +59,7 @@ module alphaone_soc #(
     ) cpu (
         .clk         (clk),
         .rst         (rst),
-        .boot_addr   (boot_sel ? 32'h8000_0000 : 32'h2000_0000),
+        .boot_addr   (32'h2000_0000),     // flash
         .imem_addr   (imem_addr),
         .imem_req    (imem_req),
         .imem_rdata  (imem_rdata),
@@ -142,9 +142,6 @@ module alphaone_soc #(
         .clk      (clk),
         .rst      (rst),
         .rd_late  (qspi_rd_late),
-        // Reset the PSRAMs at start-up only when booting from flash: booting
-        // from PSRAM means it was just loaded, and a reset may not keep it.
-        .psram_reset(!boot_sel),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),

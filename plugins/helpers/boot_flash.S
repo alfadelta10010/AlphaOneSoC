@@ -1,5 +1,5 @@
-/* Boot stub for programs that boot AlphaOneSoC from flash (boot_sel = 0),
- * linked with link_soc.ld.
+/* Boot stub for AlphaOneSoC programs, linked with link_soc.ld. The SoC always
+ * boots from flash.
  *
  * The core starts at 0x2000_0000, the first byte of flash, which is where
  * link_soc.ld puts .text.init. Nothing here is fixed in silicon: this is

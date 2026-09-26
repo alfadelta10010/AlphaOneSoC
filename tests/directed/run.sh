@@ -30,9 +30,11 @@
 #
 #   <name> flash
 #       SoC only: <name>.S is linked with <name>.ld into flash at
-#       0x2000_0000, loaded into the QSPI model's flash, and the SoC boots
-#       from there (boot_sel = 0). Then compared with Spike like `spike`.
-#       The core-level run skips it.
+#       0x2000_0000 and loaded into the QSPI model's flash, which is where
+#       the SoC boots. Then compared with Spike like `spike`, traced from
+#       reset. (Other tests reach their PSRAM image through a stub the
+#       testbench puts in flash, and are traced from 0x8000_0000.) The
+#       core-level run skips it.
 #
 #   #soc-skip <name>... -- <reason>
 #       The SoC-level run skips these tests. For tests whose point depends on
@@ -118,7 +120,7 @@ MAXC=400000
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
   local image=+INIT_FILE="$OUT/$n.hex"
-  is_flash "$n" && image="+BOOT_FLASH +FLASH_FILE=$OUT/$n.hex"
+  is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
   vvp "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
       +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" >"$OUT/$n.sim.log" 2>&1
 }

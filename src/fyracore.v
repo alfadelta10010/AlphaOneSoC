@@ -48,9 +48,8 @@ module fyracore #(
     input  wire        clk,
     input  wire        rst,
     // Reset vector: pc is loaded from this on every cycle rst is high, so it
-    // only needs to be stable by the last one. An input rather than a
-    // parameter so the SoC can pick flash or PSRAM with a strap pin, and
-    // nothing about where the machine starts is fixed in silicon.
+    // only needs to be stable by the last one. The SoC ties it to the start
+    // of flash; the core-level testbench starts in PSRAM, where Spike does.
     input  wire [31:0] boot_addr,
     // Memory interfaces: request/ready handshake.
     //

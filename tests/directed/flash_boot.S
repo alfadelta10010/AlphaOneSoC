@@ -1,6 +1,6 @@
 # Boot from flash (SoC only: the MANIFEST mode `flash` builds this into the
-# flash model and releases reset with boot_sel = 0, so the first fetch is
-# 0x2000_0000). Everything up to the tohost store runs out of flash.
+# flash model, where the SoC boots, so the first fetch is 0x2000_0000).
+# Everything up to the tohost store runs out of flash.
 #
 #  - a mix of 16- and 32-bit instructions, so some 32-bit instructions
 #    straddle a word boundary in flash;

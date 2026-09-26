@@ -52,7 +52,7 @@ module tb_qspi_stress;
     reg        rd_late;
     initial    rd_late = $test$plusargs("RD_LATE");
 
-    qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late), .psram_reset(1'b1),
+    qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),

@@ -37,8 +37,8 @@ module tb_rivercore;
     // The core runs on the SoC's own memory map (src/fyracore.v PMA_*
     // defaults): 16 MB of PSRAM at 0x8000_0000, which tb/memory_model.v
     // models, and 16 MB of flash at 0x2000_0000, which it answers with
-    // zeros. The program is loaded into PSRAM and the core boots from there,
-    // which is the SoC's boot_sel = 1 ("run what was loaded into PSRAM").
+    // zeros. The program is loaded into PSRAM and the core is started there
+    // (boot_addr), where Spike starts too; the SoC itself boots from flash.
     //
     // The memory windows must match plugins/river-config.ini:
     //   [spike] mem_flags = -m0x20000000:0x1000000,0x80000000:0x1000000
@@ -85,10 +85,19 @@ module tb_rivercore;
     // Built with -DSOC_TB (tests/directed/run.sh soc), the core runs through
     // the complete memory path -- bus fabric, memory controller and QSPI
     // engine -- against a behavioural QSPI Pmod, instead of memory_model's
-    // ideal memory. The program is loaded into the Pmod model's PSRAM and
-    // the SoC boots from there (boot_sel = 1). Everything below this block
-    // is shared: the trace reads the core through `CPU, and the tb-level
-    // port wires are views of the core's own ports.
+    // ideal memory. Everything below this block is shared: the trace reads
+    // the core through `CPU, and the tb-level port wires are views of the
+    // core's own ports.
+    //
+    // The SoC always boots from flash. A test linked in PSRAM (the usual
+    // case) is loaded into the model's PSRAM through the back door, as
+    // memory_model does, and the testbench writes a two-instruction stub at
+    // the start of the model's flash to reach it -- lui t0, 0x80000; jr t0 --
+    // and starts the trace at 0x8000_0000. So the stub is not in the trace,
+    // t0 = 0x8000_0000 on entry just as Spike's boot ROM leaves it, and the
+    // reference is the same Spike run as the core-level flow. A test given
+    // +FLASH_FILE= is a flash-booting program (MANIFEST mode `flash`): it is
+    // the flash image, gets no stub, and is traced from reset.
     //
     // The CLINT gets dmem_addr[15:0], so the part of Spike's 0xC0000 CLINT
     // aperture above 0x0200_FFFF aliases the registers here instead of
@@ -96,13 +105,8 @@ module tb_rivercore;
     //
     // +RD_LATE sets the QSPI read-latency strap; +QSPI_DELAY (read by the
     // model) sets the device + pad delay it has to cover.
-    //
-    // +BOOT_FLASH boots from flash instead (boot_sel = 0): the program is
-    // then put in the model's flash with +FLASH_FILE= and no INIT_FILE is
-    // given (tests/directed MANIFEST mode `flash`).
-    reg rd_late, boot_flash;
-    initial rd_late    = $test$plusargs("RD_LATE");
-    initial boot_flash = $test$plusargs("BOOT_FLASH");
+    reg rd_late;
+    initial rd_late = $test$plusargs("RD_LATE");
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
     wire [3:0] qspi_io_out, pmod_io;
@@ -120,7 +124,6 @@ module tb_rivercore;
     ) soc (
         .clk        (clk),
         .rst        (rst),
-        .boot_sel   (!boot_flash),
         .qspi_rd_late(rd_late),
         .qspi_sck   (qspi_sck),
         .qspi_cs_n  (qspi_cs_n),
@@ -352,6 +355,22 @@ module tb_rivercore;
         end
     end
 
+
+`ifdef SOC_TB
+    // The flash stub that takes a PSRAM-linked test from the SoC's flash boot
+    // to 0x8000_0000 (see the SoC block above). At #1, after the model's
+    // time-0 fill and FLASH_FILE load and after the plusargs above, and long
+    // before reset ends.
+    initial begin
+        #1;
+        if (!$test$plusargs("FLASH_FILE")) begin
+            {pmod.flash[3], pmod.flash[2], pmod.flash[1], pmod.flash[0]} = 32'h8000_02B7; // lui t0, 0x80000
+            {pmod.flash[7], pmod.flash[6], pmod.flash[5], pmod.flash[4]} = 32'h0002_8067; // jalr x0, 0(t0)
+            start_pc       = 32'h8000_0000;
+            logging_active = 1'b0;
+        end
+    end
+`endif
 
     // ================================================================
     //  Counters
