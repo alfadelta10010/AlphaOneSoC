@@ -18,8 +18,9 @@
 // full four cycles to turn around. The flash reads the first two of its six
 // dummy cycles as its mode byte M7-0 and then waits four: the first two are
 // driven 1111, so the mode byte is 0xFF and the flash never enters
-// continuous-read mode (0xAx would make it take the next command byte as an
-// address), and the other four are released. The flash's Quad Enable bit
+// continuous-read mode (mode bits M5-4 = 10 -- 0xAx, but also 0x20 -- would
+// make it take the next command byte as an address), and the other four are
+// released. The flash's Quad Enable bit
 // must already be set (it is non-volatile; TinyTapeout's QA sets it on the
 // Pmods it ships).
 //

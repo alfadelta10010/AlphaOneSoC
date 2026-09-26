@@ -8,9 +8,10 @@
 //
 //   flash, SPI mode:
 //     0xEB  quad I/O read  6 address nibbles, 6 dummy cycles, data. The first
-//                          two dummy cycles are the mode byte, which must not
-//                          be 0xAx (that would put a real W25Q into
-//                          continuous-read mode).
+//                          two dummy cycles are the mode byte M7-0, whose
+//                          bits M5-4 must not be 10 (that would put a real
+//                          W25Q into continuous-read mode; the other bits are
+//                          don't-care, so 0x20 enters it as surely as 0xA0).
 //     0xFF                 continuous-read mode reset / Exit QPI (ignored).
 //   PSRAM, SPI mode:
 //     0xEB  quad read      6 address nibbles, 6 wait cycles, data.
@@ -246,8 +247,8 @@ module qspi_pmod_model #(
                     mode = {mode[3:0], host_io};
                 end
                 n = n + 1;
-                if (n == 2 && chip == 2'd0 && mode[7:4] == 4'hA)
-                    fail("mode byte 0xAx would enter continuous-read mode");
+                if (n == 2 && chip == 2'd0 && mode[5:4] == 2'b10)
+                    fail("mode bits M5-4 = 10 would enter continuous-read mode");
                 if (n == wait_n) begin
                     phase     = P_RDATA;
                     hi        = 1'b1;
