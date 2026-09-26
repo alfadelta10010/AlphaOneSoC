@@ -4,9 +4,10 @@ What each of the chip's 24 TinyTapeout I/O pins does, how the demo board and
 the Pmods connect to them, and the peripheral RTL that has to be built behind
 them.
 
-**Status: the pinout is final; the peripheral RTL is planned, not built.**
-`src/soc_bus.v` already decodes the UART and GPIO windows and returns 0 from
-them. The address map, boot flow and QSPI engine are in
+**Status: the pinout is final. The UART (`src/uart.v`), the GPIO block with
+the SPI transmitter (`src/gpio.v`) and the bus and top-level changes are
+built and wired into `src/alphaone_soc.v`. The TinyTapeout wrapper is not
+built yet.** The address map, boot flow and QSPI engine are in
 `docs/soc-architecture.md`.
 
 The board is the TinyTapeout ETR demo board v3.2
@@ -149,21 +150,23 @@ columns).
   jumpers JP1–8, so it flickers with the traffic. Cut the jumpers to stop
   that, or use `uo_out[7]` (segment DP) as a heartbeat LED.
 
-## RTL to build
+## Peripheral RTL
 
-| # | Block | Where | Size (estimate, unmeasured) | Linux |
-|---|---|---|---|---|
-| 1 | TinyTapeout wrapper | `tt_um_*` top | reset synchroniser, wiring | — |
-| 2 | UART | `0x1000_0000` | ~90–100 flops | `ns16550a` (8250 driver), polled |
-| 3 | GPIO | `0x1001_0000` | ~22 flops | generic gpio-mmio |
-| 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | ~19 flops | small SPI controller driver |
-| 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | a mux | — |
+| # | Block | Where | Status | Size (measured) | Linux |
+|---|---|---|---|---|---|
+| 1 | TinyTapeout wrapper | `tt_um_*` top | not built | reset synchroniser, wiring | — |
+| 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.28 tiles, 73 flops | `ns16550a` (8250 driver), polled |
+| 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
+| 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
+| 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
 
-The SoC is already about 1.9x the seven-tile budget (see "Area" in
-`docs/soc-architecture.md`). These blocks are small next to that excess,
-but measure each one when it is written.
+Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
+block synthesised on its own; 1 tile ≈ 11,300 µm² of standard cells at
+TinyTapeout's 60% density (UART 3,114 µm², GPIO 1,380 µm²). The SoC is
+already about 1.9x the seven-tile budget (see "Area" in
+`docs/soc-architecture.md`); these two add 0.4 tiles.
 
-### 1. TinyTapeout wrapper
+### 1. TinyTapeout wrapper (not built)
 
 * `rst_n` passes through a two-flop synchroniser and becomes the active-high
   `rst`. `ena` is unused.
@@ -229,6 +232,30 @@ The behaviour that matters to Linux (`drivers/tty/serial/8250`):
 * **RX sampling:** two-flop synchroniser, 16x oversampling, start bit checked
   at mid-bit.
 
+As built (`src/uart.v`):
+
+* **No separate holding registers.** THR is the transmit shift register, so
+  THRE and TEMT are the same bit and a write stalls until the previous
+  frame's stop bit has gone. RBR is the receive shift register: a frame only
+  starts while RBR is empty (RTS# sees to that), so nothing is overwritten.
+  With the core's store loop between two bytes the line idles for a few
+  instruction times per character, a few percent of the throughput.
+* **A frame that starts while RBR is full** (a sender ignoring CTS) is not
+  shifted in: RBR keeps the older byte, and the frame sets OE at its stop
+  bit. **A frame whose stop bit reads 0** (framing error, break) is dropped,
+  and the receiver waits for the line to go high before it looks for the
+  next start bit. There are no FE or BI bits.
+* **Reading LSR clears OE**, as on a 16550. RBR pops, and OE clears, only on
+  the cycle the load completes.
+* **LCR stores only DLAB**; its other bits read 0. Linux keeps its own copy
+  of LCR, and its read-modify-writes of LCR only clear bits.
+* **The divisor resets to 27**, 115200 baud at a 50 MHz clock (+0.5%), so a
+  program in flash can print before it sets the divisor
+  (`alphaone_soc`'s `UART_DIV_RESET`). A divisor of 0 behaves as 1.
+* Every register write waits for `ready`, so a word store that writes THR
+  and LCR together while the transmitter is busy writes LCR once, when THR
+  is taken, and cannot flip DLAB under its own THR write.
+
 Device tree: `compatible = "ns16550a"`, `reg-shift = <0>`,
 `reg-io-width = <1>`, `clock-frequency` = the core clock, no `interrupts`.
 Early console: `earlycon=uart8250,mmio,0x10000000,115200`.
@@ -273,6 +300,10 @@ shares.
   53 MHz, DIV=3 (clk/16) above that.
 * CS# and D/C stay GPIO lines.
 * With the keypad fitted, EN stays 0.
+* As built (`src/gpio.v`): MOSI is its own flop and changes only on SCK's
+  falling edge, so the device gets half an SCK period of setup and of hold
+  even when the next byte is loaded the cycle after the last rising edge.
+  Between two bytes SCK stays high for at least half a period. DATA reads 0.
 
 Linux needs a small SPI controller driver under fbtft's `fb_ssd1331`
 (staging); its `transfer_one` is one register write per byte. Alternatively,
@@ -281,10 +312,13 @@ writing the driver.
 
 ### 5. Bus and top level
 
-* `soc_bus.v`: take `ready` from the IO targets for the UART's and SPI's
-  back-pressure. Today every IO access completes at once.
-* `alphaone_soc.v`: new ports for UART TX/RX/RTS#, GPIO OUT/IN (SPI muxed
-  inside the GPIO block).
+* `soc_bus.v`: `ready` comes from the IO targets, for the UART's and SPI's
+  back-pressure. An IO target may hold `ready` low only on a cycle its own
+  select is high, so the bus ANDs the readies.
+* `alphaone_soc.v`: ports `uart_rx`, `uart_tx`, `uart_rts_n`, `gpio_in[7:0]`
+  and `gpio_out[7:0]` (SPI muxed inside the GPIO block; `gpio_out[5:4]` are
+  0, since those pins are the UART's). The wrapper maps them onto `ui_in`
+  and `uo_out` as in the pinout table.
 * `syscon` (`0x1002_0000`) stays reserved and unassigned.
 
 ## Not building

@@ -14,8 +14,8 @@ apart, this document says which one won and why.
 | PSRAM | `0x8000_0000` | 16 MB | read, write, execute, LR/SC, AMO | 2x 8 MB PSRAM on QSPI CS1 (A) / CS2 (B), `addr[23]` picks the chip |
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
 | PLIC | `0x0C00_0000` | — | reserved, not implemented (accesses fault) | — |
-| UART | `0x1000_0000` | 64 KB | read, write, AMO | planned: 16550-compatible subset, byte registers (`docs/pins-and-peripherals.md`); reads 0 until built |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | planned: GPIO and the OLED's SPI transmitter (`docs/pins-and-peripherals.md`); reads 0 until built |
+| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550-compatible subset, byte registers, polled (`docs/pins-and-peripherals.md`) |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v`: GPIO and the OLED's SPI transmitter (`docs/pins-and-peripherals.md`) |
 | syscon | `0x1002_0000` | 64 KB | read, write, AMO | reserved (reads 0) |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
@@ -72,11 +72,14 @@ held request (see `src/fyracore.v`), which is all a single-master bus needs.
   `addr[17:16]`), otherwise the CLINT;
 * a read-data and ready mux.
 
-It has no registers. Peripherals answer in the cycle they are selected
-(`ready` = select), with combinational read data, so a peripheral access is one
-cycle. A peripheral with a read side effect (a UART RX pop) acts on the cycle
-its select is high with `we` low; the request strobe guarantees that cycle is
-a real load.
+It has no registers. Peripherals answer with combinational read data, and
+in the cycle they are selected, so a peripheral access is one cycle -- except
+for back-pressure: the UART holds a THR write, and the GPIO block a SPI DATA
+write, until its transmitter is free. An IO target may hold `ready` low only
+on a cycle its own select is high, so the bus simply ANDs the IO readies. A
+peripheral with a side effect (a UART RX pop, a THR load) acts only on the
+cycle its select and its `ready` are both high; the request strobe
+guarantees that cycle is one real access.
 
 The instruction port goes straight to the memory controller: fetch is only
 ever from flash or PSRAM.
@@ -280,7 +283,9 @@ Measured with yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`
 (standard-cell area before placement): the core is about 138,600 µm² and the
 whole SoC about 148,700 µm², roughly 1.9x the ~79,000 µm² seven tiles
 provide. The SoC blocks added here are about 8% of it (qspi_ctrl ~2,400,
-mem_ctrl ~750, clint ~7,600 µm²; soc_bus mostly folds away). The excess is in
+mem_ctrl ~750, clint ~7,600 µm²; soc_bus mostly folds away). The UART
+(~3,100 µm², 0.28 tiles) and the GPIO block with its SPI transmitter
+(~1,400 µm², 0.12 tiles), measured on their own, come on top of that. The excess is in
 the core: register file ~51k, CSR ~28k, pipeline ~30k, muldiv ~18k.
 
 ## Performance
