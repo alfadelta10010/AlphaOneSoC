@@ -14,8 +14,8 @@ apart, this document says which one won and why.
 | PSRAM | `0x8000_0000` | 16 MB | read, write, execute, LR/SC, AMO | 2x 8 MB PSRAM on QSPI CS1 (A) / CS2 (B), `addr[23]` picks the chip |
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
 | PLIC | `0x0C00_0000` | — | reserved, not implemented (accesses fault) | — |
-| UART | `0x1000_0000` | 64 KB | read, write, AMO | reserved for an ns16550a subset (reads 0) |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | reserved (reads 0) |
+| UART | `0x1000_0000` | 64 KB | read, write, AMO | planned: 16550-compatible subset, byte registers (`docs/pins-and-peripherals.md`); reads 0 until built |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | planned: GPIO and the OLED's SPI transmitter (`docs/pins-and-peripherals.md`); reads 0 until built |
 | syscon | `0x1002_0000` | 64 KB | read, write, AMO | reserved (reads 0) |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
@@ -145,9 +145,10 @@ enters continuous-read mode) and releases the bus for the other four.
   selects, the output enable). The data outputs are combinational: they settle
   a full clock before the SCK edge that samples them.
 * **Pinout** follows the TinyTapeout QSPI Pmod on `uio`: 0 CS0 (flash),
-  1 SD0, 2 SD1, 3 SCK, 4 SD2, 5 SD3, 6 CS1 (RAM A), 7 CS2 (RAM B).
+  1 SD0, 2 SD1, 3 SCK, 4 SD2, 5 SD3, 6 CS1 (RAM A), 7 CS2 (RAM B). The
+  rest of the chip's pins are in `docs/pins-and-peripherals.md`.
 
-* **Read latency is a strap**, `qspi_rd_late`. At 0 a nibble is sampled two
+* **Read latency is a strap**, `qspi_rd_late` (on `ui_in[0]`). At 0 a nibble is sampled two
   clocks after its launching edge, which covers a clock-to-output time plus
   pad round trip up to about 2 clocks. At 1 it is sampled three clocks after,
   which covers about 1 to 3 clocks, and chip select stays low one clock
@@ -216,7 +217,8 @@ synchronise `rst_n` before it reaches this reset.
   next-PC logic, at the cost of one flop and one cycle of latency.
 * `mtimecmp` resets to all-ones, so no timer interrupt is pending out of reset.
 * No PLIC. With a polled UART, Linux needs no external interrupt; the `0x0C00_0000`
-  window is reserved for one if that changes.
+  window is reserved for one if that changes. `docs/pins-and-peripherals.md`
+  explains why interrupts would not make the console faster on this core.
 * Registered MTIP is legal: Priv §3.2.1 says MTIP reflects the comparison
   "eventually, but not necessarily immediately". Linux's CLINT driver sets
   MTIE before it writes `mtimecmp` (low word, then high), with MIE off, and
