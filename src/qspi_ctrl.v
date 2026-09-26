@@ -4,9 +4,10 @@
 //
 // A transaction is: chip select low, a command, a 24-bit address on IO[3:0],
 // then data on IO[3:0]. The PSRAMs run in QPI mode, where the command too
-// goes out on all four lines as two nibbles; the flash runs in SPI mode,
-// where the command is 8 bits on IO0 (docs/qspi-memories.md weighs the
-// options):
+// goes out on all four lines as two nibbles. The flash uses its quad I/O
+// read in the chip's default mode ("SPI mode"), where only the command is
+// 8 bits on IO0 (docs/qspi-memories.md weighs the options, including QPI
+// for the flash):
 //
 //   PSRAM read   0x0B QPI   2 cmd + 6 addr + 4 wait  + 2 per byte  (SCK)
 //   PSRAM write  0x38 QPI   2 cmd + 6 addr +           2 per byte

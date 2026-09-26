@@ -119,10 +119,10 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. Two instances: fetch (X) and data (R/W/RW). |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
-| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT. `boot_sel` picks the reset PC. |
+| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT. Boots from flash (0x2000_0000). |
 | `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
 | `mem_ctrl.v` | `mem_ctrl` | Joins the fetch and data ports onto the QSPI engine: data-first arbitration, chip select from the address, PSRAM fetch split at 1 KB pages. |
-| `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: 0xEB quad read (flash and PSRAM), 0x38 quad write (PSRAM only), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices. |
+| `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -157,7 +157,7 @@ Address Range               Device      Size    Attributes
 0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only, reserved (reads 0)
 ```
 
-The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC drives it from `boot_sel`. SoC design, boot and QSPI details: `docs/soc-architecture.md`.
+The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC ties it to 0x2000_0000, so it always boots from flash. SoC design, boot and QSPI details: `docs/soc-architecture.md`.
 
 The verification testbench uses these windows for flash and PSRAM and boots from PSRAM. It still overrides the CLINT window to Spike's 0xC0000 aperture (0x0200_0000-0x020B_FFFF) and switches IO1 off, because Spike has no device there.
 
@@ -195,7 +195,7 @@ For a memory controller: while a data request waits, the pipeline is stalled and
 
 ### 5.2 Memory controller and QSPI engine
 
-`src/mem_ctrl.v` serves both ports from one QSPI engine (`src/qspi_ctrl.v`): data first; a fetch reads 4 bytes from the halfword PC; a load reads the whole aligned word; a store sends only its enabled bytes; a PSRAM fetch that crosses a 1 KB page (which includes PSRAM A into B at 0x807F_FFFE) is split into two 2-byte reads, because PSRAM parts without row-boundary crossing wrap within the page. `qspi_ctrl` resets the Pmod's devices before its first request, never selects the flash for a write, and has a read-latency strap (`rd_late`). It does not keep the last fetched word, so a pipeline stalled with a fetch outstanding (M ops, WFI) refetches. See `docs/soc-architecture.md`.
+`src/mem_ctrl.v` serves both ports from one QSPI engine (`src/qspi_ctrl.v`): data first; a fetch reads 4 bytes from the halfword PC; a load reads the whole aligned word; a store sends only its enabled bytes; a PSRAM fetch that crosses a 1 KB page (which includes PSRAM A into B at 0x807F_FFFE) is split into two 2-byte reads, because PSRAM parts without row-boundary crossing wrap within the page. `qspi_ctrl` resets the Pmod's devices before its first request and puts the PSRAMs in QPI mode (a 4-byte PSRAM read is 20 SCK cycles, a flash read 28), never selects the flash for a write, and has a read-latency strap (`rd_late`). It does not keep the last fetched word, so a pipeline stalled with a fetch outstanding (M ops, WFI) refetches. See `docs/soc-architecture.md`.
 
 ---
 

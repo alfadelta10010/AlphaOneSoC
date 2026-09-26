@@ -414,7 +414,7 @@ DC: VIH ≥ 0.7 VCC, VIL ≤ 0.3 VCC, VOH ≥ VCC − 0.2 V at −100 µA, VOL �
 
 SCK cycles for our transfer sizes:
 
-| Transaction | SPI form (ours today) | QPI form |
+| Transaction | SPI form (ours until `97010f4`) | QPI form (ours since) |
 |---|---|---|
 | Read 4 B | `EBh` 8 + 6 + 6 + 8 = **28** | `0Bh` 2 + 6 + 4 + 8 = **20** (`EBh`: 22) |
 | Read 2 B (page-split fetch half) | 24 | 16 |
@@ -482,7 +482,7 @@ standby 250 µA (85 °C) / 140 µA (25 °C).
 | Quad needs | QE = 1 (non-volatile, set once) | nothing |
 | Enter / exit QPI | `38h` SPI form / `FFh` QPI form | `35h` SPI form / `F5h` QPI form |
 | Reset | `66h`+`99h`, **30 µs** | `66h`+`99h`, **50 ns** |
-| Our read today | `EBh` 1-4-4, M = `FFh`, 4 dummy | `EBh` 1-4-4, 6 wait |
+| Our read today | `EBh` 1-4-4, M = `FFh`, 4 dummy | **`0Bh` QPI, 4 wait** (since `97010f4`; `EBh` 1-4-4 before) |
 | Same framing? | **yes**: 8 + 6 + 6 clocks, first data on edge 20 | |
 | QPI read | `0Bh`/`EBh`, 2/4/6/8 dummy by `C0h` | `0Bh` 4 wait (≤ 66 MHz) / `EBh` 6 wait |
 | **Recommended read (§9)** | **QPI `EBh` in continuous read, P5-4 = 00: 6 address + 2 mode** | **QPI `0Bh`: 2 command + 6 address + 4 wait** |
@@ -520,7 +520,7 @@ launched it. T = 20 ns at 50 MHz, 15 ns at 66 MHz.
 | CS hold after last SCK ↑ | 3 ns | ≥ T (3T with `S_TAIL`) | ✓ | ✓ |
 | SCK duty | 45–55 % | 50 % (registered toggle) | ✓ | ✓ |
 | CS high between transactions | 18 ns (PSRAM), 10 ns (flash read) | ≥ 2T | 40 ns ✓ | 30 ns ✓ |
-| SCK ceiling, current commands | PSRAM `EBh` 84 MHz (linear), flash `EBh` 133 | clk/2 | 25 MHz | 33 MHz |
+| SCK ceiling, current commands | PSRAM QPI `0Bh` 66 MHz, flash `EBh` 133 | clk/2 | 25 MHz | 33 MHz |
 | SCK ceiling, TT output pads | ~33 MHz toggle (community figure, §10) | clk/2 | ✓ | at the limit |
 | CS low, one 4 B read | ≤ 8 µs | ≈ 56T | 1.1 µs | 0.85 µs |
 | Minimum clock for tCEM (4 B read, ≈ 60 clocks) | | | ≥ 7.5 MHz (std), 15 MHz (ext) | |
@@ -546,17 +546,18 @@ with 2 dummy clocks **50 MHz**, with 4 dummy 80 MHz.
 | Flash | power-down (`B9h`) | a low-power user | `ABh`, then 3 µs |
 | Flash | QE = 0 | a fresh -IM part | `06h`, `31h 02h` — a programming job, not ours |
 
-### 7.2 Today's sequence (SPI framing)
+### 7.2 Today's sequence (PSRAM in QPI, flash in SPI; since `97010f4`)
 
 | Step | CS | Sent | Effect |
 |---|---|---|---|
 | 0 | CS1+CS2 | `F5h` QPI form (2 clk) | PSRAM leaves QPI; SPI-mode PSRAM sees 2 bits of nothing |
-| 1–2 | CS1+CS2 | `66h`, `99h` SPI | PSRAM reset — only when booting from flash |
+| 1–2 | CS1+CS2 | `66h`, `99h` SPI | PSRAM reset (always: the SoC boots from flash only, so nothing is in PSRAM yet) |
 | 3 | CS0 | 8 clk of `1111` | flash leaves CRM (SPI or QPI) |
 | 4 | CS0 | `FFh` QPI form (2 clk) | flash leaves QPI; SPI-mode flash sees 2 bits of nothing |
+| 5 | CS1+CS2 | `35h` SPI | PSRAM enters QPI |
 
-The flash steps sit between the PSRAM reset and the first request, well
-over tRST = 50 ns.
+The flash steps sit between the PSRAM reset and `35h`, well over tRST =
+50 ns. This is §7.3's sequence without its flash-QPI steps 5–6.
 
 ### 7.3 Start-up for the recommended operation (§9)
 
@@ -598,9 +599,9 @@ power-cycled — and §9 leaves the flash in QPI. So before flashing, the
 RP2040 must release it: CS0 low, IO0–IO3 driven high for 8 clocks (ends
 CRM), CS0 high; then CS0 low, IO0–IO3 high for 2 clocks (`FFh`, Exit
 QPI), CS0 high. After that the flash is in plain SPI mode and the
-flasher works. We need an RP2040 script for this design anyway (straps,
-loading PSRAM for `boot_sel` = 1), so this belongs in it; failing that,
-unplug the Pmod before flashing.
+flasher works. We need an RP2040 script for this design anyway (straps), so this belongs
+in it; failing that, unplug the Pmod before flashing. (Today the flash is
+left in SPI mode, so none of this is needed yet.)
 
 ---
 
@@ -670,7 +671,10 @@ repeats anyway; in
 plain SPI mode it is the last bit of an 8-bit opcode `1111111x`, which
 is no instruction (`FFh` for 8 clocks is Winbond's own recommended
 reset of the mode bits). The model's `+FLASH_QPI` and `+FLASH_CRM` are
-separate today; the combination needs a plusarg of its own.
+combinable (`make test-qspi` runs `+FLASH_QPI +FLASH_CRM`), but in CRM
+the model only consumes the 8 clocks and never drives data after the mode
+byte, so the overlap described here cannot show in simulation until the
+model's CRM path drives data.
 
 ---
 
@@ -725,6 +729,10 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
 66 MHz cap: not worth it.
 
 ### 9.3 Verdict: QPI on both chips; continuous read on the flash too
+
+> **Status:** item 1 (PSRAM QPI) is implemented (`97010f4`). The flash is
+> unchanged: quad I/O `EBh` with the command on IO0 (option A of §9.4);
+> items 2–3 await a decision.
 
 1. **PSRAM: QPI, `0Bh` reads (4 wait), `02h` writes.** −29 % on every
    read, −27 % on a 4-byte write, −37 % on a byte store; all of Linux's
@@ -940,9 +948,10 @@ threads as a cheap Pmod-compatible FPGA board. Neither was tried here.
 Ideas worth borrowing:
 
 * **Straps on the QSPI data pins during reset** (TinyQV). Our pins are
-  already released in reset, so the RP2040 could drive `rd_late` (and
-  `boot_sel`) on SD0–SD3 and free the dedicated input pins the TT wrapper
-  would otherwise spend on them.
+  already released in reset, so the RP2040 could drive `rd_late` on
+  SD0–SD3 and free the dedicated input pin the TT wrapper would otherwise
+  spend on it. The data lines have no pull-ups (§1.2), so the RP2040 must
+  then drive them on every reset, not only when flashing.
 * **Half-clock latency steps** (TinyQV's negedge SCK option, tinygpu's
   negedge sample buffers). `rd_late` has whole-clock steps only; a
   half-clock option would widen the window of clock rates that work.
