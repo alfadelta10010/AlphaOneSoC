@@ -2,19 +2,25 @@
 // QSPI Pmod (W25Q128JV flash on CS0, two 8 MB PSRAMs on CS1 / CS2, one shared
 // quad bus).
 //
-// A transaction is: chip select low, an 8-bit command on IO0, a 24-bit
-// address on IO[3:0], then data on IO[3:0]:
+// A transaction is: chip select low, a command, a 24-bit address on IO[3:0],
+// then data on IO[3:0]. The PSRAMs run in QPI mode, where the command too
+// goes out on all four lines as two nibbles; the flash runs in SPI mode,
+// where the command is 8 bits on IO0 (docs/qspi-memories.md weighs the
+// options):
 //
-//   read   0xEB  8 cmd + 6 addr + 6 dummy + 2 per byte   (SCK cycles)
-//   write  0x38  8 cmd + 6 addr +           2 per byte
+//   PSRAM read   0x0B QPI   2 cmd + 6 addr + 4 wait  + 2 per byte  (SCK)
+//   PSRAM write  0x38 QPI   2 cmd + 6 addr +           2 per byte
+//   flash read   0xEB SPI   8 cmd + 6 addr + 6 dummy + 2 per byte
 //
-// Both chips take the same 0xEB framing. The flash reads the first two dummy
-// cycles as its mode byte M7-0 and then waits four; the PSRAM simply waits
-// six. The first two are driven 1111, so the mode byte is 0xFF and the flash
-// never enters continuous-read mode (0xAx would make it take the next command
-// byte as an address). The other four are released so the device can turn
-// the bus around. The flash's Quad Enable bit must already be set (it is
-// non-volatile; the TinyTapeout QSPI Pmod guide sets it).
+// So a 4-byte PSRAM read is 20 SCK cycles (28 in SPI form) and a 4-byte
+// write 16 (22). All four PSRAM wait cycles are released, giving the bus a
+// full four cycles to turn around. The flash reads the first two of its six
+// dummy cycles as its mode byte M7-0 and then waits four: the first two are
+// driven 1111, so the mode byte is 0xFF and the flash never enters
+// continuous-read mode (0xAx would make it take the next command byte as an
+// address), and the other four are released. The flash's Quad Enable bit
+// must already be set (it is non-volatile; TinyTapeout's QA sets it on the
+// Pmods it ships).
 //
 // Writes never select the flash. 0x38 is the PSRAM's quad write, but on the
 // W25Q128JV-DTR it is Enter QPI, which would leave the flash deaf to every
@@ -25,7 +31,8 @@
 // cycle it between designs, so the devices can be left in a state this
 // engine does not speak -- TinyQV, for one, leaves the PSRAMs in QPI mode and
 // the flash in continuous-read mode. The PSRAM datasheet also asks for a
-// reset after power-up. So before taking its first request the engine sends:
+// reset after power-up. So before taking its first request the engine sends
+// the following, and leaves the PSRAMs in QPI mode:
 //
 //   CS1+CS2   F5h in QPI form (2 clocks)   PSRAM: leave QPI mode; a PSRAM
 //                                          already in SPI mode sees two bits
@@ -36,10 +43,12 @@
 //   CS0       FFh in QPI form (2 clocks)   flash: Exit QPI on the
 //                                          W25Q128JV-DTR; a flash in SPI mode
 //                                          sees two bits and ignores them
+//   CS1+CS2   35h (SPI)                    PSRAM: Enter Quad (QPI) mode
 //
 // The SoC always boots from flash, so nothing is in the PSRAMs yet and they
-// are always reset. The flash steps go last, so a reset PSRAM has had over
-// 20 clocks before any request can reach it.
+// are always reset. The flash steps sit between the reset and 35h, far more
+// than the PSRAM's 50 ns tRST. The first F5h is what gets a PSRAM we left in
+// QPI mode ourselves back to SPI mode at the next reset.
 // Selecting both PSRAMs at once is safe because none of these commands makes
 // a device drive the bus. The sequence assumes the devices' power-up time
 // (150 us for the PSRAM) has passed, which on the demo board it long has.
@@ -134,10 +143,23 @@ module qspi_ctrl (
     assign rdata = {sr[7:0], sr[15:8], sr[23:16], sr[31:24]};
 
     // Start-up steps: 0 = F5h in QPI form, 1 = 66h, 2 = 99h (PSRAMs);
-    // 3 = 8 clocks of 1111, 4 = FFh in QPI form (flash).
-    wire       qpi_form = init && (step == 3'd0 || step == 3'd4);
-    wire [7:0] cmd      = init ? ((step == 3'd1) ? 8'h66 : (step == 3'd2) ? 8'h99 : 8'hFF)
-                               : (we ? 8'h38 : 8'hEB);
+    // 3 = 8 clocks of 1111, 4 = FFh in QPI form (flash); 5 = 35h (PSRAMs).
+    // After it, PSRAM traffic is QPI form and flash traffic SPI form.
+    wire       psram    = (cs_sel != 2'd0);
+    wire       qpi_form = init ? (step == 3'd0 || step == 3'd4) : psram;
+    reg  [7:0] cmd;
+    always @(*) begin
+        if (init)
+            case (step)
+                3'd0:    cmd = 8'hF5;
+                3'd1:    cmd = 8'h66;
+                3'd2:    cmd = 8'h99;
+                3'd5:    cmd = 8'h35;
+                default: cmd = 8'hFF;
+            endcase
+        else
+            cmd = we ? 8'h38 : psram ? 8'h0B : 8'hEB;
+    end
 
     // The data phase counts cnt down from 7 and stops at 8 - 2*nbytes. The
     // nibble on the wire is then number 7 - cnt of the transfer: byte
@@ -148,7 +170,9 @@ module qspi_ctrl (
 
     always @(*) begin
         case (state)
-            S_CMD:   io_out = qpi_form ? ((cnt[0] || step == 3'd4) ? 4'hF : 4'h5)
+            // QPI form: high nibble first. SPI form: MSB first on IO0, with
+            // IO1-IO3 held high (on a flash with QE = 0 they are /WP, /HOLD).
+            S_CMD:   io_out = qpi_form ? (cnt[0] ? cmd[7:4] : cmd[3:0])
                                        : {3'b111, cmd[cnt]};
             S_ADDR:  io_out = addr[{cnt, 2'b00} +: 4];
             S_DATA:  io_out = wdata[{wnib, 2'b00} +: 4];
@@ -163,7 +187,7 @@ module qspi_ctrl (
 
     // Chip selects for a transaction starting now. A write never selects
     // the flash.
-    wire [2:0] sel_now = init ? ((step >= 3'd3) ? 3'b001 : 3'b110)
+    wire [2:0] sel_now = init ? ((step == 3'd3 || step == 3'd4) ? 3'b001 : 3'b110)
                               : ((3'b001 << cs_sel) & {2'b11, !we});
 
     always @(posedge clk) begin
@@ -197,7 +221,7 @@ module qspi_ctrl (
                     state <= S_IDLE;
                     if (init) begin
                         step <= step + 3'd1;
-                        if (step == 3'd4)
+                        if (step == 3'd5)
                             init <= 1'b0;
                     end
                 end
@@ -218,7 +242,15 @@ module qspi_ctrl (
                                     state <= S_ADDR;
                                     cnt   <= 3'd5;
                                 end
-                                S_ADDR:  begin state <= we ? S_DATA : S_DUMMY; cnt <= we ? 3'd7 : 3'd5; end
+                                // Reads: the PSRAM's 4 wait cycles are all
+                                // released; the flash's 6 start with its
+                                // driven mode byte (released at cnt 4 below).
+                                S_ADDR: begin
+                                    state <= we ? S_DATA : S_DUMMY;
+                                    cnt   <= we ? 3'd7 : psram ? 3'd3 : 3'd5;
+                                    if (!we && psram)
+                                        io_oe <= 1'b0;
+                                end
                                 S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
                                 default: begin  // S_DATA
                                     io_oe <= 1'b0;
