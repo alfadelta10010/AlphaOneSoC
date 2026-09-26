@@ -10,11 +10,15 @@
 // Address, write data, byte enables and write enable go to every target
 // unchanged (the SoC top wires them straight through); only the request is
 // steered. A target sees a transfer on a cycle its select is high, and the
-// transfer completes on the cycle it returns ready. Peripherals are
-// single-cycle: ready is their select, and read data is combinational. A
-// peripheral with a read side effect (a UART RX pop) acts on a cycle its
-// select is high with we low; the core raises its request only for real
-// loads, so that cycle is always one.
+// transfer completes on the cycle it returns ready. Read data is
+// combinational. Peripherals answer in the cycle they are selected, except
+// for back-pressure: the UART holds a THR write, and the GPIO block a SPI
+// DATA write, until its transmitter is free. An IO target's ready may be low
+// only on a cycle its select is high, so the bus ANDs them instead of
+// decoding which one to listen to. A peripheral with a side effect (a UART RX
+// pop, a THR load) acts only on the cycle its select and its ready are both
+// high; the core raises its request only for real accesses and holds it for
+// exactly one ready cycle, so that cycle is always one.
 //
 // The decode looks at a handful of address bits. That is only correct because
 // the core's PMA check has already refused every address outside the mapped
@@ -26,7 +30,7 @@
 //   addr[28]          IO       0x1000_0000   -> addr[17:16]: 0 UART, 1 GPIO, 2 syscon
 //   none of those     CLINT    0x0200_0000
 //
-// A target with nothing behind it yet reads 0 and ignores writes.
+// A target with nothing behind it (syscon) reads 0 and ignores writes.
 
 module soc_bus (
     // Core data port
@@ -44,8 +48,10 @@ module soc_bus (
     // IO peripherals
     output wire        uart_sel,
     input  wire [31:0] uart_rdata,
+    input  wire        uart_ready,
     output wire        gpio_sel,
     input  wire [31:0] gpio_rdata,
+    input  wire        gpio_ready,
     output wire        syscon_sel,
     input  wire [31:0] syscon_rdata
 );
@@ -60,7 +66,7 @@ module soc_bus (
     assign gpio_sel   = d_req && is_io && (io_idx == 2'd1);
     assign syscon_sel = d_req && is_io && (io_idx == 2'd2);
 
-    assign d_ready = is_mem ? mem_ready : 1'b1;
+    assign d_ready = is_mem ? mem_ready : (uart_ready && gpio_ready);
     assign d_rdata = is_mem              ? mem_rdata    :
                      !d_addr[28]         ? clint_rdata  :
                      (io_idx == 2'd0)    ? uart_rdata   :

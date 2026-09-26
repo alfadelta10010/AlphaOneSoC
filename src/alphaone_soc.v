@@ -101,8 +101,10 @@ module alphaone_soc #(
         .clint_rdata (clint_rdata),
         .uart_sel    (),
         .uart_rdata  (32'h0000_0000),
+        .uart_ready  (1'b1),
         .gpio_sel    (),
         .gpio_rdata  (32'h0000_0000),
+        .gpio_ready  (1'b1),
         .syscon_sel  (),
         .syscon_rdata(32'h0000_0000)
     );
