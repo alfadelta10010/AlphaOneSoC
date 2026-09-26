@@ -779,12 +779,36 @@ baseline, the four flash choices cost:
 | **C. QPI** (`0Bh`, P = 01) | 20 | *less* than A: both chips send the same `0Bh` shape, no per-chip mux | +2 steps: `38h` (SPI) and `C0h`+P (QPI, a command with a parameter byte — a new step shape) | 6-byte aligned fetch: byte count 2 → 3 bits in `mem_ctrl`, nibble counter 3 → 4 bits in `qspi_ctrl` | RP2040 must release the flash before flashing | nobody |
 | **D. QPI + continuous read** (P = 00) | **16** (20 unaligned, 18 first) | C's shape plus B's flop and skip, and a per-chip wait again (flash 2, PSRAM 4) | as C | as C | as C | nobody |
 
-Rough size of the deltas (estimates, not synthesis): B over A is one
-flip-flop and a handful of gates, ~10–15 GE; C and D add two start-up
-steps, the parameter-byte step shape, one or two counter bits and the
-aligned-fetch path, ~30–60 GE; a `flash_spi` fallback strap on top of D
-carries both B's and D's paths. The engine is ~2,400 µm² today, so none
-of these is large; the real differences are verification effort and risk.
+**Measured** (yosys 0.66 + `sky130_fd_sc_hd` tt, the area-baseline
+recipe; `qspi_ctrl` standalone; prototypes in a scratch copy, checked for
+the right wire shapes in simulation but not run against the Pmod model):
+
+| Engine | µm² | vs today | Flops |
+|---|---|---|---|
+| Today (SPI form, both chips) | 2,471 | — | 54 |
+| PSRAM QPI, flash QSPI as today (A) | 2,673 | +201 | 54 |
+| PSRAM QPI, flash SPI continuous read (B) | 2,674 | **+203** | 55 |
+| PSRAM QPI, flash QPI + continuous read (D), *without* the aligned-fetch path | 2,775 | +304 | 55 |
+| B with the flash path tied off (PSRAM only) | 2,539 | | 54 |
+
+* **About 95 % of the engine is shared by all three chips.** Flash
+  support costs 135 µm² over a PSRAM-only engine (2,674 vs 2,539). The
+  shared part is the 32-bit read shift register (34 enable flops,
+  ~1,020 µm² — the biggest single item), the FSM, counters and
+  registered pins (~420 µm² of flops), the address and write-data nibble
+  muxes and the `rd_late` sampling. Chip-specific: command constants,
+  wait length, chip-select decode, the continuous-read flop, and the
+  start-up steps.
+* **Continuous read is free** (B vs A: +1 µm², one flop that ABC pays for
+  by simplifying elsewhere).
+* **The PSRAM QPI switch costs ~200 µm²**, mostly the general QPI
+  command-nibble path and the larger command-constant mux.
+* **Flash QPI costs ~100 µm² more** than B, before the aligned-fetch
+  path (a wider nibble counter here, a 3-bit byte count and an address
+  mux in `mem_ctrl`), which adds more.
+* In context: +203 µm² is **0.14 % of the SoC** (148,728 µm²), which is
+  ~69,700 µm² over the seven-tile budget; the register file alone is
+  ~50,900. The flash mode is a speed decision, not an area one.
 
 * **B is the cheapest per SCK saved:** 8 SCK off every flash read for a
   flop, and the flash path stays the one the model already checks.
