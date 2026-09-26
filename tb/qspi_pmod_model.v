@@ -3,27 +3,34 @@
 //
 // It implements the commands src/qspi_ctrl.v issues, and stops the run on
 // anything else, so a protocol mistake in the controller cannot pass
-// silently:
+// silently. SPI form = the 8-bit command on IO0; QPI form = the command as
+// two nibbles on IO[3:0]. Address and data are always on IO[3:0].
 //
-//   0xEB  quad I/O read   8 cmd bits on IO0, 6 address nibbles, 6 dummy
-//                         cycles, then data. On the flash the first two dummy
-//                         cycles are the mode byte, which must not be 0xAx
-//                         (that would put a real W25Q into continuous-read
-//                         mode). Accepted on all three chips.
-//   0x38  quad write      8 cmd bits, 6 address nibbles, then data. PSRAM
-//                         only: on the W25Q128JV-DTR 0x38 is Enter QPI.
-//   0x66, 0x99            PSRAM reset enable / reset. Both PSRAMs may be
-//                         selected together for these, and for the QPI-form
-//                         0xF5 below.
-//   0xFF                  flash: continuous-read mode reset / Exit QPI.
+//   flash, SPI mode:
+//     0xEB  quad I/O read  6 address nibbles, 6 dummy cycles, data. The first
+//                          two dummy cycles are the mode byte, which must not
+//                          be 0xAx (that would put a real W25Q into
+//                          continuous-read mode).
+//     0xFF                 continuous-read mode reset / Exit QPI (ignored).
+//   PSRAM, SPI mode:
+//     0xEB  quad read      6 address nibbles, 6 wait cycles, data.
+//     0x38  quad write     6 address nibbles, data.
+//     0x66, 0x99           reset enable / reset (back to SPI mode).
+//     0x35                 Enter Quad (QPI) mode.
+//   PSRAM, QPI mode (all QPI form):
+//     0x0B  fast read      6 address nibbles, 4 wait cycles, data.
+//     0x38, 0x02  write    6 address nibbles, data.
+//     0x66, 0x99           reset enable / reset (back to SPI mode).
+//     0xF5                 Exit Quad mode.
+//   Both PSRAMs may be selected together for 0x35, 0x66, 0x99 and 0xF5.
+//   0x38 is never accepted by the flash: on the W25Q128JV-DTR it is Enter QPI.
 //
 // Start-up state. The Pmod is shared between designs and not power cycled,
 // so it can be handed over in a state the controller does not speak. These
 // plusargs start the model in such a state, to check that qspi_ctrl's
 // start-up sequence gets it out:
 //
-//   +PSRAM_QPI=1   both PSRAMs in QPI mode: the only command they then accept
-//                  is 0xF5 (Exit QPI) sent in QPI form, as two nibbles.
+//   +PSRAM_QPI=1   both PSRAMs in QPI mode (commands in QPI form only).
 //   +FLASH_CRM=1   flash in continuous-read mode: it takes the first clocks as
 //                  an address, and leaves the mode only on 8 clocks of 1111.
 //   +FLASH_QPI=1   flash in QPI mode (W25Q128JV-DTR): leaves it on 0xFF in QPI
@@ -103,6 +110,7 @@ module qspi_pmod_model #(
     reg         both;       // both PSRAMs selected (reset broadcast)
     reg         allones;    // every nibble so far was 1111 (flash CRM exit)
     reg         first_nib;  // the next nibble out is the first of the read
+    reg  [3:0]  wait_n;     // dummy / wait cycles before read data
     realtime    t_sel, t_desel;
     initial t_desel = -1000.0;
 
@@ -182,10 +190,21 @@ module qspi_pmod_model #(
                     cmd = {cmd[3:0], host_io};
                     n   = n + 1;
                     if (n == 2) begin
-                        if (chip != 2'd0 && cmd == 8'hF5)      psram_qpi = 1'b0;
-                        else if (chip == 2'd0 && cmd == 8'hFF) flash_qpi = 1'b0;
-                        else fail("device in QPI mode got something other than its Exit QPI");
+                        n     = 0;
                         phase = P_IGNORE;
+                        if (chip == 2'd0) begin
+                            if (cmd == 8'hFF) flash_qpi = 1'b0;
+                            else fail("flash in QPI mode got something other than its Exit QPI");
+                        end else if (cmd == 8'hF5 || cmd == 8'h99)
+                            psram_qpi = 1'b0;          // Exit QPI, or reset (to SPI mode)
+                        else if (cmd == 8'h66)
+                            ;                          // reset enable
+                        else if (both)
+                            fail("both PSRAMs selected for a read or write");
+                        else if (cmd == 8'h0B || cmd == 8'h38 || cmd == 8'h02)
+                            phase = P_ADDR;
+                        else
+                            fail("unsupported QPI command for the PSRAM");
                     end
                 end else begin
                     cmd = {cmd[6:0], host_io[0]};
@@ -194,6 +213,10 @@ module qspi_pmod_model #(
                         n = 0;
                         if (chip != 2'd0 && (cmd == 8'h66 || cmd == 8'h99))
                             phase = P_IGNORE;          // PSRAM reset enable / reset
+                        else if (chip != 2'd0 && cmd == 8'h35) begin
+                            psram_qpi = 1'b1;          // PSRAM Enter Quad mode
+                            phase = P_IGNORE;
+                        end
                         else if (chip == 2'd0 && cmd == 8'hFF && !both)
                             phase = P_IGNORE;          // flash CRM reset / Exit QPI
                         else if (both)
@@ -210,9 +233,11 @@ module qspi_pmod_model #(
                 addr = {addr[19:0], host_io};
                 n    = n + 1;
                 if (n == 6) begin
-                    phase = (cmd == 8'h38) ? P_WDATA : P_DUMMY;
-                    n     = 0;
-                    hi    = 1'b1;
+                    phase  = (cmd == 8'h38 || cmd == 8'h02) ? P_WDATA : P_DUMMY;
+                    // Wait cycles: 4 for the PSRAM's QPI 0x0B, 6 for 0xEB.
+                    wait_n = (cmd == 8'h0B) ? 4'd4 : 4'd6;
+                    n      = 0;
+                    hi     = 1'b1;
                 end
             end
             P_DUMMY: begin
@@ -223,7 +248,7 @@ module qspi_pmod_model #(
                 n = n + 1;
                 if (n == 2 && chip == 2'd0 && mode[7:4] == 4'hA)
                     fail("mode byte 0xAx would enter continuous-read mode");
-                if (n == 6) begin
+                if (n == wait_n) begin
                     phase     = P_RDATA;
                     hi        = 1'b1;
                     first_nib = 1'b1;
