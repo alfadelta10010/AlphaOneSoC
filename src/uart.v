@@ -1,0 +1,251 @@
+// UART -- a 16550-compatible subset at 0x1000_0000, for the Linux console.
+//
+// Byte-wide registers at consecutive offsets (reg-shift = 0, reg-io-width =
+// 1), the layout Spike and QEMU's virt board put at the same address, so one
+// kernel and a near-identical device tree run on all three:
+//
+//   offset  read (DLAB=0)       write (DLAB=0)   DLAB=1
+//   0       RBR (pops)          THR              DLL
+//   1       IER                 IER              DLM
+//   2       IIR                 FCR (ignored)
+//   3       LCR                 LCR              LCR
+//   4       MCR (reads 0)       ignored
+//   5       LSR                 ignored
+//   6       MSR (0xB0)          ignored
+//   7       SCR (reads 0)       ignored
+//
+// The core's data port is word-aligned with byte lanes (src/fyracore.v), so
+// offset k is lane k[1:0] of word k[2]: `addr2` picks the word and `be` the
+// registers in it. Each register sits on a fixed lane, so the write data
+// needs no steering. The 8 bytes alias through the rest of the 64 KB window.
+//
+// Fixed 8N1. baud = clk / (16 x divisor). The divisor resets to DIV_RESET,
+// non-zero, so a THR write can never stall forever before software sets it;
+// the default, 27, is 115200 baud (+0.5%) at a 50 MHz core clock, so a
+// program in flash can print before it programs the divisor. A divisor of 0
+// counts as 1.
+//
+// What is kept of each register:
+//   IER  bits 0 (ERBFI) and 1 (ETBEI); the rest read 0.
+//   LCR  only DLAB (bit 7) is stored; the other bits read 0. The frame is
+//        fixed, and Linux keeps its own copy of LCR, so it never reads the
+//        word-length bits back. (Its read-modify-writes of LCR only clear
+//        bits.)
+//   LSR  0 DR, 1 OE, 5 THRE, 6 TEMT. Reading LSR clears OE.
+//   IIR  0x04 when ERBFI && DR, else 0x02 when ETBEI && THRE, else 0x01.
+//        No interrupt line leaves the UART (no PLIC), but Linux's 8250
+//        driver polls by calling its interrupt handler from a timer, and the
+//        handler reads IIR first and returns at once if bit 0 is set, so IIR
+//        has to be right anyway.
+//   MSR  0xB0: CTS, DSR and DCD always asserted.
+//
+// No FIFOs. The device tree says ns16550a (16-byte FIFO), so each poll the
+// driver writes up to 16 bytes to THR back to back; instead of a FIFO:
+//
+// * Transmit back-pressure. A THR write while the transmitter is busy does
+//   not complete: `ready` stays low until the frame in flight has gone,
+//   and the write lands on the cycle it does. The bus paces the driver, so
+//   a poll sends 16 characters, not one (a FIFO-less 16550 polled by Linux
+//   moves one character per timer tick). There is no separate holding
+//   register: the byte goes straight into the shift register, so THRE and
+//   TEMT are the same bit. Every register write waits for `ready`, so the
+//   other lanes of a stalled word store are written once, when it completes.
+//
+// * Receive flow control. RTS# (active low) is asserted only while the
+//   receiver is idle and RBR is empty. A sender that checks CTS before each
+//   character (the demo board's RP2350, with flow control on) therefore has
+//   at most one character in flight, and nothing is lost: input runs at one
+//   character per driver poll. The received byte is shifted straight into
+//   RBR -- a frame only starts while RBR is empty, so there is nothing in it
+//   to overwrite. A frame that starts while RBR is still full (a sender
+//   ignoring CTS) is not shifted in; at its stop bit it sets OE and is
+//   dropped, and RBR keeps the older byte. A frame whose stop bit reads 0 (a
+//   framing error, or a break) is dropped too, and the receiver waits for
+//   the line to go high before it looks for the next start bit.
+//
+// Receive sampling: two-flop synchroniser, 16x oversampling on the same
+// divisor as transmit, start bit re-checked at mid-bit (a shorter low pulse
+// is ignored), every bit sampled once at its middle.
+//
+// Bus side effects happen only on the cycle a transfer completes (sel with
+// ready): a load that selects offset 0 with DLAB=0 pops RBR (clears DR), a
+// load that selects offset 5 clears OE. The core raises its request only
+// for real loads, and holds it for exactly one ready cycle.
+//
+// Reset: TX idle (1), RTS# deasserted (1) -- both registered, so the pins
+// hold those values while rst is high and never glitch.
+
+module uart #(
+    parameter [15:0] DIV_RESET = 16'd27    // 115200 baud at 50 MHz
+)(
+    input  wire        clk,
+    input  wire        rst,
+    // Bus: the core's request/ready handshake (soc_bus)
+    input  wire        sel,        // request for this target
+    input  wire        we,
+    input  wire [3:0]  be,
+    input  wire        addr2,      // dmem_addr[2]: 0 = offsets 0-3, 1 = offsets 4-7
+    input  wire [31:0] wdata,
+    output wire [31:0] rdata,
+    output wire        ready,      // low only while a THR write waits
+    // Pins
+    input  wire        rx,         // asynchronous
+    output reg         tx,
+    output reg         rts_n
+);
+
+    // ── Registers ───────────────────────────────────────────────────────────
+    reg        dlab;
+    reg        erbfi, etbei;
+    reg [7:0]  dll, dlm;
+    reg [7:0]  rbr;
+    reg        dr, oe;
+
+    // ── Transmitter ─────────────────────────────────────────────────────────
+    // tx_sh holds the frame still to send, LSB first: {stop, data, start} on
+    // a THR write, shifted right with 0 fill once per bit. The stop bit is
+    // the last 1 in it, so the frame is done when the register is all zeros:
+    // idle is tx_sh == 0 and needs no bit counter.
+    reg [9:0]  tx_sh;
+    reg [3:0]  tx_ph;               // 16x ticks into the current bit
+    wire       tx_idle = (tx_sh == 10'd0);
+
+    // ── Bus decode ──────────────────────────────────────────────────────────
+    wire thr_sel = sel && we && be[0] && !addr2 && !dlab;
+    assign ready = !(thr_sel && !tx_idle);
+    wire wr      = sel && we && ready;
+    wire rd      = sel && !we;      // reads always complete at once
+    wire wr_thr  = wr && be[0] && !addr2 && !dlab;
+    wire wr_dll  = wr && be[0] && !addr2 &&  dlab;
+    wire wr_ier  = wr && be[1] && !addr2 && !dlab;
+    wire wr_dlm  = wr && be[1] && !addr2 &&  dlab;
+    wire wr_lcr  = wr && be[3] && !addr2;
+    wire rd_rbr  = rd && be[0] && !addr2 && !dlab;
+    wire rd_lsr  = rd && be[1] &&  addr2;
+
+    wire [7:0] lsr = {1'b0, tx_idle, tx_idle, 3'b000, oe, dr};
+    wire [7:0] iir = (erbfi && dr)      ? 8'h04 :
+                     (etbei && tx_idle) ? 8'h02 : 8'h01;
+    wire [7:0] ier = {6'b0, etbei, erbfi};
+
+    assign rdata = addr2 ? {8'h00, 8'hB0, lsr, 8'h00}
+                         : {dlab, 7'b0, iir, dlab ? dlm : ier, dlab ? dll : rbr};
+
+    // ── Baud generator: one 16x tick every divisor clocks ───────────────────
+    reg [15:0] brg;
+    wire       tick = (brg[15:1] == 15'd0);   // brg is 1 (or 0, for divisor 0)
+
+    always @(posedge clk) begin
+        if (rst) brg <= 16'd0;
+        else     brg <= tick ? {dlm, dll} : brg - 16'd1;
+    end
+
+    // ── Register writes ─────────────────────────────────────────────────────
+    always @(posedge clk) begin
+        if (rst) begin
+            dlab  <= 1'b0;
+            erbfi <= 1'b0;
+            etbei <= 1'b0;
+            dll   <= DIV_RESET[7:0];
+            dlm   <= DIV_RESET[15:8];
+        end else begin
+            if (wr_lcr) dlab <= wdata[31];
+            if (wr_ier) begin
+                erbfi <= wdata[8];
+                etbei <= wdata[9];
+            end
+            if (wr_dll) dll <= wdata[7:0];
+            if (wr_dlm) dlm <= wdata[15:8];
+        end
+    end
+
+    // ── Transmit ────────────────────────────────────────────────────────────
+    always @(posedge clk) begin
+        if (rst) begin
+            tx_sh <= 10'd0;
+            tx_ph <= 4'd0;
+            tx    <= 1'b1;
+        end else begin
+            if (wr_thr) begin
+                tx_sh <= {1'b1, wdata[7:0], 1'b0};
+                tx_ph <= 4'd0;
+            end else if (tick && !tx_idle) begin
+                tx_ph <= tx_ph + 4'd1;
+                if (tx_ph == 4'd15)
+                    tx_sh <= {1'b0, tx_sh[9:1]};
+            end
+            tx <= tx_idle || tx_sh[0];
+        end
+    end
+
+    // ── Receive ─────────────────────────────────────────────────────────────
+    // rx_bit: 0 start, 1-8 data, 9 stop, 10 waiting for the line to go high
+    // after a frame whose stop bit read 0. rx_keep: RBR was empty when the
+    // frame started, so its bits go into RBR.
+    reg [1:0]  rx_sync;
+    wire       rx_s = rx_sync[1];
+    reg        rx_busy;
+    reg [3:0]  rx_bit;
+    reg [3:0]  rx_ph;
+    reg        rx_keep;
+    wire       rx_mid = tick && (rx_ph == 4'd7);
+
+    always @(posedge clk) begin
+        if (rst) begin
+            rx_sync <= 2'b11;
+            rx_busy <= 1'b0;
+            rx_bit  <= 4'd0;
+            rx_ph   <= 4'd0;
+            rx_keep <= 1'b0;
+            dr      <= 1'b0;
+            oe      <= 1'b0;
+            rts_n   <= 1'b1;
+        end else begin
+            rx_sync <= {rx_sync[0], rx};
+
+            if (!rx_busy) begin
+                if (tick && !rx_s) begin               // start bit seen
+                    rx_busy <= 1'b1;
+                    rx_bit  <= 4'd0;
+                    rx_ph   <= 4'd0;
+                    rx_keep <= !dr;
+                end
+            end else if (rx_bit == 4'd10) begin
+                if (rx_s) rx_busy <= 1'b0;             // line back to idle
+            end else if (tick) begin
+                rx_ph <= rx_ph + 4'd1;
+                if (rx_ph == 4'd7) begin               // middle of the bit
+                    rx_bit <= rx_bit + 4'd1;
+                    if (rx_bit == 4'd0 && rx_s)
+                        rx_busy <= 1'b0;               // glitch, not a start bit
+                    if (rx_bit == 4'd9) begin
+                        if (rx_s) rx_busy <= 1'b0;     // good stop bit
+                        else      rx_bit  <= 4'd10;    // framing error / break
+                    end
+                end
+            end
+
+            // DR: set by a good frame that was kept, cleared by an RBR pop.
+            // A kept frame only starts while DR is 0, so the two never meet.
+            if (rx_mid && rx_busy && rx_bit == 4'd9 && rx_s && rx_keep)
+                dr <= 1'b1;
+            else if (rd_rbr)
+                dr <= 1'b0;
+
+            if (rx_mid && rx_busy && rx_bit == 4'd9 && rx_s && !rx_keep)
+                oe <= 1'b1;
+            else if (rd_lsr)
+                oe <= 1'b0;
+
+            rts_n <= !(!rx_busy && !dr);
+        end
+    end
+
+    // RBR is the receive shift register: data bits arrive LSB first and
+    // shift in at the top.
+    always @(posedge clk) begin
+        if (rx_mid && rx_busy && rx_keep && rx_bit >= 4'd1 && rx_bit <= 4'd8)
+            rbr <= {rx_s, rbr[7:1]};
+    end
+
+endmodule
