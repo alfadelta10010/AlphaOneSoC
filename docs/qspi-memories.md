@@ -730,9 +730,11 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
 
 ### 9.3 Verdict: QPI on both chips; continuous read on the flash too
 
-> **Status:** item 1 (PSRAM QPI) is implemented (`97010f4`). The flash is
-> unchanged: quad I/O `EBh` with the command on IO0 (option A of §9.4);
-> items 2–3 await a decision.
+> **Decided (2026-09-26, the user): PSRAM QPI only; flash QSPI only** —
+> quad I/O `EBh` with the command on IO0, mode byte `FFh`, never continuous
+> read, never QPI (option A of §9.4). PSRAM QPI is implemented
+> (`97010f4`). Items 2–3 below are kept as analysis, not as the plan; the
+> flash-QPI start-up of §7.3 and the flasher release of §7.4 do not apply.
 
 1. **PSRAM: QPI, `0Bh` reads (4 wait), `02h` writes.** −29 % on every
    read, −27 % on a 4-byte write, −37 % on a byte store; all of Linux's
