@@ -258,7 +258,16 @@ As built (`src/uart.v`):
 
 Device tree: `compatible = "ns16550a"`, `reg-shift = <0>`,
 `reg-io-width = <1>`, `clock-frequency` = the core clock, no `interrupts`.
-Early console: `earlycon=uart8250,mmio,0x10000000,115200`.
+
+Early console: `earlycon=uart8250,mmio,0x10000000,115200,<core clock in Hz>`,
+or `earlycon=uart8250,mmio,0x10000000` with no baud at all. The clock
+matters: given a baud and no clock, `drivers/tty/serial/earlycon.c` assumes
+`BASE_BAUD * 16` = 1.8432 MHz and `8250_early.c` programs divisor
+1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.1 Mbaud at
+50 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
+UART runs at whatever it holds -- 115200 at 50 MHz straight out of reset,
+or whatever the boot loader set. A plain `earlycon` with `stdout-path` in
+the device tree takes `clock-frequency` from the node and is also right.
 
 ### 3. GPIO at `0x1001_0000`
 
