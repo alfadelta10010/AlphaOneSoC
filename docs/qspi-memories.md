@@ -809,6 +809,11 @@ the right wire shapes in simulation but not run against the Pmod model):
 * In context: +203 µm² is **0.14 % of the SoC** (148,728 µm²), which is
   ~69,700 µm² over the seven-tile budget; the register file alone is
   ~50,900. The flash mode is a speed decision, not an area one.
+* In tiles (≈ 11,300 µm² of usable standard-cell area per sky130 tile at
+  TinyTapeout's 60 % placement density; the 2x2 reference is 45,362):
+  the whole engine is 0.22 tiles today and 0.24 with option B; B costs
+  **+0.018 tiles** (about 1/56 of a tile), D +0.027 before its
+  aligned-fetch path. The SoC is ~13.2 tiles against 7.
 
 * **B is the cheapest per SCK saved:** 8 SCK off every flash read for a
   flop, and the flash path stays the one the model already checks.
