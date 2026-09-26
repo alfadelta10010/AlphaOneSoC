@@ -448,10 +448,14 @@ module tb_rivercore;
     end
 
     // ================================================================
-    //  START_PC gating — activate logging when PC matches start_pc
+    //  START_PC gating — logging starts with the instruction at start_pc
     // ================================================================
+    // logging_on includes the retire of that first instruction itself;
+    // logging_active, a register, only turns on after it, so gating the dump
+    // on it alone dropped the first line.
+    wire logging_on = logging_active || (dbg_retired && dbg_pc == start_pc);
     always @(posedge clk) begin
-        if (!logging_active && dbg_retired && dbg_pc == start_pc)
+        if (logging_on)
             logging_active <= 1'b1;
     end
 
@@ -484,7 +488,7 @@ module tb_rivercore;
         // loop: the loop checks after the write has already happened, which
         // emitted max_instr+1 lines. Spike stops at exactly --instructions,
         // so one extra line would fail every bounded test on length.
-        if (!rst && dbg_retired && logging_active && !terminate &&
+        if (!rst && dbg_retired && logging_on && !terminate &&
             (max_instr == 0 || instr_count < max_instr)) begin
             // Header: core <hart>: <priv> 0x<PC> (0x<instr>)
             // Compressed instructions print as 4 hex digits to match Spike.
