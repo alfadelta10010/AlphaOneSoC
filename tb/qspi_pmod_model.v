@@ -18,6 +18,12 @@
 //     0x38  quad write     6 address nibbles, data.
 //     0x66, 0x99           reset enable / reset (back to SPI mode).
 //     0x35                 Enter Quad (QPI) mode.
+//   The PSRAM needs a user-issued reset to finish initialising after power-up
+//   (APS6404L datasheet section 7), and 99h resets only when it immediately
+//   follows 66h (section 12). So every PSRAM starts out waiting for that reset:
+//   until 66h then 99h reach it, anything but 66h, 99h and Exit QPI stops the
+//   run. The model insists on it whatever state the chip is handed over in,
+//   since the controller cannot know that state.
 //   PSRAM, QPI mode (all QPI form):
 //     0x0B  fast read      6 address nibbles, 4 wait cycles, data.
 //     0x38, 0x02  write    6 address nibbles, data.
@@ -83,13 +89,20 @@ module qspi_pmod_model #(
     reg  [2:0]  phase;
     integer delay_ns;
     reg [1023:0] flash_file;
-    reg     psram_wrap, psram_qpi, flash_crm, flash_qpi;
+    reg     psram_wrap, flash_crm, flash_qpi;
+    // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
+    reg [1:0] psram_qpi;    // in QPI mode
+    reg [1:0] psram_rst;    // reset since power-up: reads, writes and 35h allowed
+    reg [1:0] psram_rsten;  // the last command was Reset Enable (66h)
+    reg [1:0] rsten_q;      // psram_rsten as it was when this transaction began
     integer k;
     initial begin
         delay_ns = 2;
         if ($value$plusargs("QSPI_DELAY=%d", delay_ns)) ;
         psram_wrap = $test$plusargs("PSRAM_WRAP");
-        psram_qpi  = $test$plusargs("PSRAM_QPI");
+        psram_qpi  = $test$plusargs("PSRAM_QPI") ? 2'b11 : 2'b00;
+        psram_rst  = 2'b00;
+        psram_rsten = 2'b00;
         flash_crm  = $test$plusargs("FLASH_CRM");
         flash_qpi  = $test$plusargs("FLASH_QPI");
         for (k = 0; k < FLASH_SIZE; k = k + 1) flash[k] = 8'h00;
@@ -143,8 +156,31 @@ module qspi_pmod_model #(
         end
     endtask
 
-    // Is the selected device in a state where it only reads nibbles?
-    wire in_qpi = (chip == 2'd0) ? flash_qpi : psram_qpi;
+    // The PSRAMs selected, as a psram_* mask.
+    wire [1:0] psel = both ? 2'b11 : (chip == 2'd1) ? 2'b01 : (chip == 2'd2) ? 2'b10 : 2'b00;
+
+    // Is the selected device in a state where it only reads nibbles? The
+    // PSRAMs are only ever broadcast to in the same mode (checked at select).
+    wire in_qpi = (chip == 2'd0) ? flash_qpi : |(psram_qpi & psel);
+
+    // A PSRAM command other than 66h, 99h and Exit QPI: the chip must have
+    // had its power-up reset.
+    task need_reset;
+        if ((psram_rst & psel) != psel)
+            fail("PSRAM command before its power-up reset (66h, 99h)");
+    endtask
+
+    // 66h: reset enable, for the next command only. 99h right after it:
+    // reset, which also returns the chip to SPI mode. A 99h not preceded by
+    // 66h is ignored, as on the chip.
+    task psram_reset_cmd(input [7:0] c);
+        if (c == 8'h66)
+            psram_rsten = psram_rsten | psel;
+        else begin
+            psram_qpi = psram_qpi & ~(rsten_q & psel);
+            psram_rst = psram_rst |  (rsten_q & psel);
+        end
+    endtask
 
     // Select / deselect
     always @(cs_n) begin
@@ -161,6 +197,12 @@ module qspi_pmod_model #(
             both    = (cs_n == 3'b001);
             allones = 1'b1;
             t_sel   = $realtime;
+            if (both && psram_qpi[0] != psram_qpi[1])
+                fail("both PSRAMs selected while in different modes");
+            // Any command ends a reset enable; 66h sets it again. (From cs_n:
+            // psel, a wire, may not have caught up with chip and both yet.)
+            rsten_q     = psram_rsten;
+            psram_rsten = psram_rsten & cs_n[2:1];
             if (chip == 2'd0 && flash_crm) phase = P_MODE;
         end else if (!any_sel && phase != P_IDLE) begin
             if (chip != 2'd0 && ($realtime - t_sel) > TCEM_NS)
@@ -196,15 +238,16 @@ module qspi_pmod_model #(
                         if (chip == 2'd0) begin
                             if (cmd == 8'hFF) flash_qpi = 1'b0;
                             else fail("flash in QPI mode got something other than its Exit QPI");
-                        end else if (cmd == 8'hF5 || cmd == 8'h99)
-                            psram_qpi = 1'b0;          // Exit QPI, or reset (to SPI mode)
-                        else if (cmd == 8'h66)
-                            ;                          // reset enable
+                        end else if (cmd == 8'hF5)
+                            psram_qpi = psram_qpi & ~psel;   // Exit QPI
+                        else if (cmd == 8'h66 || cmd == 8'h99)
+                            psram_reset_cmd(cmd);
                         else if (both)
                             fail("both PSRAMs selected for a read or write");
-                        else if (cmd == 8'h0B || cmd == 8'h38 || cmd == 8'h02)
+                        else if (cmd == 8'h0B || cmd == 8'h38 || cmd == 8'h02) begin
+                            need_reset;
                             phase = P_ADDR;
-                        else
+                        end else
                             fail("unsupported QPI command for the PSRAM");
                     end
                 end else begin
@@ -212,18 +255,22 @@ module qspi_pmod_model #(
                     n   = n + 1;
                     if (n == 8) begin
                         n = 0;
-                        if (chip != 2'd0 && (cmd == 8'h66 || cmd == 8'h99))
-                            phase = P_IGNORE;          // PSRAM reset enable / reset
-                        else if (chip != 2'd0 && cmd == 8'h35) begin
-                            psram_qpi = 1'b1;          // PSRAM Enter Quad mode
+                        if (chip != 2'd0 && (cmd == 8'h66 || cmd == 8'h99)) begin
+                            psram_reset_cmd(cmd);      // PSRAM reset enable / reset
+                            phase = P_IGNORE;
+                        end else if (chip != 2'd0 && cmd == 8'h35) begin
+                            need_reset;
+                            psram_qpi = psram_qpi | psel;   // PSRAM Enter Quad mode
                             phase = P_IGNORE;
                         end
                         else if (chip == 2'd0 && cmd == 8'hFF && !both)
                             phase = P_IGNORE;          // flash CRM reset / Exit QPI
                         else if (both)
                             fail("both PSRAMs selected for a read or write");
-                        else if (cmd == 8'hEB || (cmd == 8'h38 && chip != 2'd0))
+                        else if (cmd == 8'hEB || (cmd == 8'h38 && chip != 2'd0)) begin
+                            if (chip != 2'd0) need_reset;
                             phase = P_ADDR;
+                        end
                         else
                             fail("unsupported command for this chip");
                     end
