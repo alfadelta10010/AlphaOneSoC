@@ -18,7 +18,8 @@ rvtest_entry_point:
   sc.w t1, t2, (s0)           # 7
   amoadd.w t1, t2, (s0)       # 7
   sw   t2, 0(s0)              # 7
-  lw   t3, 0(s0)              # fine: flash reads 0 here
+  lw   t3, 0x100(s0)          # fine: flash reads 0 here (0x2000_0000 itself
+                              # holds the SoC testbench's jump stub)
   lr.w t1, (s1)
   sc.w t5, t2, (s1)           # t5 = 0: success
   j    done
