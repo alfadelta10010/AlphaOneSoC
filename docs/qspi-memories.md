@@ -520,6 +520,7 @@ launched it. T = 20 ns at 50 MHz, 15 ns at 66 MHz.
 | SCK duty | 45–55 % | 50 % (registered toggle) | ✓ | ✓ |
 | CS high between transactions | 18 ns (PSRAM), 10 ns (flash read) | ≥ 2T | 40 ns ✓ | 30 ns ✓ |
 | SCK ceiling, current commands | PSRAM `EBh` 84 MHz (linear), flash `EBh` 133 | clk/2 | 25 MHz | 33 MHz |
+| SCK ceiling, TT output pads | ~33 MHz toggle (community figure, §10) | clk/2 | ✓ | at the limit |
 | CS low, one 4 B read | ≤ 8 µs | ≈ 56T | 1.1 µs | 0.85 µs |
 | Minimum clock for tCEM (4 B read, ≈ 60 clocks) | | | ≥ 7.5 MHz (std), 15 MHz (ext) | |
 | Read data: launch → sample | tACLK/tCLQV + 2 pad delays | 2T or 3T | see `rd_late` | |
@@ -691,18 +692,66 @@ Costs to accept:
 
 ---
 
-## 10. Open questions (need a human, the TT Discord, or a board)
+## 10. Notes from the TinyTapeout Discord
+
+From two threads saved beside this document (`docs/Questions on
+SPI-RAM-emulation (vs QSPI).txt`, Nov 2024 – Mar 2025, and `docs/PSRAM
+and VGA timing question.txt`, Jun 2026). They are people's experience,
+not specifications.
+
+* **TT outputs are rated at about a 33 MHz toggle rate** (a TT team
+  member and TinyQV's author, separately). So SCK ≤ 33 MHz, which is
+  clk/2 at up to 66 MHz — our design point. SCK = clk is only possible
+  at clk ≤ 33 MHz.
+* **Mux latency both ways is the real limit.** Sampling read data on the
+  next SCK edge ("flip the clock, read when you next flip it") halves the
+  usable SCK to about 12–15 MHz; accounting for the latency allows about
+  33 MHz. TinyQV's controller has a configurable read latency for this —
+  the same idea as our `rd_late`. Above 25 MHz SCK the turnaround
+  propagation delay needs care.
+* **TinyQV: 16 project clocks per 32-bit fetch** at SCK = clk/2 (8 for a
+  compressed instruction). That is the *streaming* rate — 8 SCK per word
+  with the flash kept selected on sequential fetches — not a per-access
+  cost. Per access TinyQV pays 12 SCK of preamble on flash (SPI-CRM) and
+  20 SCK for a 4-byte PSRAM read (QPI `0Bh`). After QPI, keeping the
+  fetch stream open is the next big lever (soc-architecture.md,
+  "Performance", option 2).
+* **Continuous read mode byte: `1010xxxx` (`A0h`),** and `1111xxxx`
+  followed by a normal command to leave it (TinyQV's author, who also
+  noted it seemed undocumented — it is documented, but only in the
+  W25Q128JV-DTR datasheet, §8.2.13).
+* **Clock pin hygiene:** SCK should come straight from a flop with no
+  logic between the flop and the pad, or a cell transient becomes a
+  clock edge. `qspi_ctrl` registers `sck`, the chip selects and the
+  output enables for this reason.
+* **tCEM is real for streaming users:** 8 µs is shorter than a VGA line;
+  the two PSRAMs cannot be interleaved to hide it because they share the
+  bus (the second cannot be primed while the first streams), and the
+  18 ns deselect is only one clock anyway. For us it bounds any future
+  streaming fetch: close the stream well inside 8 µs.
+* **Auto-calibration idea:** SCK driven out on `uio_out[3]` comes back
+  on `uio_in[3]` one pad round trip later, so the chip can measure its
+  own round trip and pick the read latency. Both TinyQV's author and a
+  retro-console author prefer to keep a manual setting as the fallback;
+  our `rd_late` strap is that setting.
+* **The flash can do DTR** (8 bits per SCK on four lines); nobody on
+  the board has used it (TinyQV considered it for TT10 and found the
+  controller change hard). §9 explains why it buys us almost nothing.
+
+## 11. Open questions (need a human, the TT Discord, or a board)
 
 1. **Which parts do shipped QSPI Pmods actually carry?** The KiCad BOM
-   says W25Q128JVSIM + APS6404L-3SQR-SN; earlier revisions or clones may
-   differ (non-RBX PSRAM, -IQ flash with `EF 40 18`, which has no QPI).
+   and the TT flashing guide say W25Q128JVSIM + APS6404L-3SQR-SN;
+   earlier revisions or clones may differ (non-RBX PSRAM, -IQ flash with
+   `EF 40 18`, which has no QPI).
 2. **Does TinyQV ever start a flash read off a 4-byte boundary?** If it
    does, that is silicon evidence that unaligned SPI-mode `EBh` works on
    this flash at 32 MHz.
 3. **Has anyone run the flash in QPI on this board**, and does the
    community flasher or `tt-micropython` recover a flash left in QPI?
-4. **Measured SCK-to-data round trip** on a TT06+ chip with this Pmod,
-   with and without the 22 pF SCK cap, and with the flash's DRV bits at
-   25 % vs 100 %. That decides `rd_late` and whether SCK = clk is viable.
+4. **Measured SCK-to-data round trip** on a recent shuttle with this
+   Pmod, with and without the 22 pF SCK cap, and with the flash's DRV
+   bits at 25 % vs 100 %. TinyQV's configurable latency settings on
+   silicon would answer most of it. That decides `rd_late`.
 5. **Does the demo board power-cycle the Pmod** when the RP2040 selects a
    different design or resets? (Everything in §7 assumes it does not.)
