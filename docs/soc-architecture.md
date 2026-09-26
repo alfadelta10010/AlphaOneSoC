@@ -307,11 +307,13 @@ Options not yet taken, roughly in order of payoff per gate:
    the fetch already in flight, about 44 clocks wasted per taken branch. An
    abort would need a change to the request/ready contract (today a request
    is held until ready).
-3. **Flash continuous read or QPI** (`docs/qspi-memories.md` §9.4): 28 → 20
-   or 16 SCK per flash read. It speeds up only what runs from flash, mainly
-   the boot loader's copy of the kernel into PSRAM.
-4. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
+
+3. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
    core or the pads limit the clock. With a round trip over 20 ns it needs
    multi-cycle sampling and a gated clock output, and the TinyTapeout pads
    toggle at about 33 MHz at most, so it only helps at a core clock of 33 MHz
    or less.
+
+Declined: flash continuous read or QPI (`docs/qspi-memories.md` §9.4, 28 →
+20 or 16 SCK per flash read). The decision (2026-09-26, §9.3 there) is PSRAM
+QPI only; the flash keeps the quad I/O `0xEB` read with mode byte `0xFF`.
