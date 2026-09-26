@@ -9,7 +9,10 @@
 //   * fetches at word and halfword addresses, including those that cross a
 //     1 KB PSRAM page (split into two reads) -- one of which crosses from
 //     PSRAM A into PSRAM B -- and flash fetches;
-//   * a fetch and a load raised together: the load must be served first.
+//   * a fetch and a load raised together: the load must be served first;
+//   * a store aimed at flash, which the core's PMA check never lets out: it
+//     must complete without selecting any chip -- qspi_ctrl's backstop, as
+//     0x38 is Enter QPI on the W25Q128JV-DTR -- and change nothing.
 //
 // Plusargs: +QSPI_DELAY=<ns> device + pad delay; +RD_LATE drives the
 // controller's rd_late strap; and the model's +PSRAM_WRAP, +PSRAM_QPI,
@@ -131,6 +134,15 @@ module tb_qspi;
     integer    lane;
     time       t_d, t_i;
 
+    // Any chip select low while flash_wr is set is a failure.
+    reg        flash_wr = 0;
+    always @(posedge clk)
+        if (flash_wr && ctl_oe && cs_n != 3'b111) begin
+            $display("FAIL flash store selected a chip (cs_n=%b)", cs_n);
+            errors   = errors + 1;
+            flash_wr = 0;
+        end
+
     initial begin
         for (k = 0; k < 256; k = k + 1) pmod.flash[k] = k ^ 8'h5A;
         repeat (3) @(posedge clk);
@@ -171,6 +183,15 @@ module tb_qspi;
         // Flash
         load(32'h2000_0000); load(32'h2000_0010);
         fetch(32'h2000_0020); fetch(32'h2000_0022);
+
+        // A store to flash. Flash 0x100 reads 0; PSRAM A 0x100, the same chip
+        // address, holds the word stored above.
+        flash_wr = 1;
+        store(32'h2000_0100, 4'b1111, 32'hDEAD_BEEF);
+        flash_wr = 0;
+        check("flash store: flash", 32'h2000_0100, mem_word(32'h2000_0100), 32'h0);
+        check("flash store: PSRAM", 32'h8000_0100, mem_word(32'h8000_0100), 32'h1122_3344);
+        load(32'h2000_0000);        // the flash still answers reads
 
         // A load and a fetch raised on the same cycle: data first.
         @(negedge clk);
