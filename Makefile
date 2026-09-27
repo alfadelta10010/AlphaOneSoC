@@ -37,7 +37,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio asm \
+        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -58,6 +58,7 @@ help:
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
 	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
+	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -172,7 +173,32 @@ test-gpio: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(TB_DIR)/tb_gpio.v
 	@$(call run_tb,tb_gpio)
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio
+# The peripherals through the whole SoC: each tests/soc/*.S program boots
+# from the QSPI Pmod model's flash with the demo board's devices on the pins
+# (RP2350 UART with CTS, SSD1331, keypad) -- tb/tb_soc_periph.v. A run fails
+# on a FAIL, ERROR or TIMEOUT line or a missing PASS; all runs go first.
+SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access
+SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
+test-soc-periph: $(BUILD_DIR)
+	@echo "=== Testing the peripherals through the SoC ==="
+	@mkdir -p $(SOC_PERIPH_DIR)
+	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_soc_periph.v
+	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf || { bad=1; continue; }; \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 $$t.elf $$t.hex; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex > $$t.log 2>&1; \
+		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_]+: ' $$t.log | head -6; \
+		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
+	done; exit $$bad
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph
 	@echo ""
 	@echo "=== All component tests completed ==="
 
