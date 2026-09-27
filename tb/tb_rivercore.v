@@ -91,13 +91,13 @@ module tb_rivercore;
     //
     // The SoC always boots from flash. A test linked in PSRAM (the usual
     // case) is loaded into the model's PSRAM through the back door, as
-    // memory_model does, and the testbench writes a two-instruction stub at
-    // the start of the model's flash to reach it -- lui t0, 0x80000; jr t0 --
-    // and starts the trace at 0x8000_0000. So the stub is not in the trace,
-    // t0 = 0x8000_0000 on entry just as Spike's boot ROM leaves it, and the
-    // reference is the same Spike run as the core-level flow. A test given
-    // +FLASH_FILE= is a flash-booting program (MANIFEST mode `flash`): it is
-    // the flash image, gets no stub, and is traced from reset.
+    // memory_model does, and the testbench forces the core's boot_addr to
+    // 0x8000_0000, so the first fetch goes through the fabric and the QSPI
+    // engine to PSRAM. Every register is 0 on entry, as it is on Spike, which
+    // starts the hart at --pc directly; the reference is the same Spike run
+    // as the core-level flow. A test given +FLASH_FILE= is a flash-booting
+    // program (MANIFEST mode `flash`): it is the flash image, boots from the
+    // real boot_addr, and is traced from reset.
     //
     // The CLINT gets dmem_addr[15:0], so the part of Spike's 0xC0000 CLINT
     // aperture above 0x0200_FFFF aliases the registers here instead of
@@ -387,15 +387,17 @@ module tb_rivercore;
 
 
 `ifdef SOC_TB
-    // The flash stub that takes a PSRAM-linked test from the SoC's flash boot
-    // to 0x8000_0000 (see the SoC block above). At #1, after the model's
-    // time-0 fill and FLASH_FILE load and after the plusargs above, and long
-    // before reset ends.
+    // A PSRAM-linked test boots straight into PSRAM (see the SoC block
+    // above). This used to be a two-instruction flash stub -- lui t0, 0x80000;
+    // jr t0 -- which left t0 = 0x8000_0000 on entry. That matched the boot ROM
+    // of the Spike of the time, which ended in the same state; current Spike
+    // runs no ROM and enters with t0 = 0, so the stub would now diverge on any
+    // test that reads t0 before writing it. At #1, after the plusargs above
+    // and long before reset ends.
     initial begin
         #1;
         if (!$test$plusargs("FLASH_FILE")) begin
-            {pmod.flash[3], pmod.flash[2], pmod.flash[1], pmod.flash[0]} = 32'h8000_02B7; // lui t0, 0x80000
-            {pmod.flash[7], pmod.flash[6], pmod.flash[5], pmod.flash[4]} = 32'h0002_8067; // jalr x0, 0(t0)
+            force soc.cpu.boot_addr = 32'h8000_0000;
             start_pc       = 32'h8000_0000;
             logging_active = 1'b0;
         end

@@ -32,8 +32,8 @@
 #       SoC only: <name>.S is linked with <name>.ld into flash at
 #       0x2000_0000 and loaded into the QSPI model's flash, which is where
 #       the SoC boots. Then compared with Spike like `spike`, traced from
-#       reset. (Other tests reach their PSRAM image through a stub the
-#       testbench puts in flash, and are traced from 0x8000_0000.) The
+#       reset. (Other tests boot straight into their PSRAM image: the
+#       testbench forces the core's boot_addr to 0x8000_0000.) The
 #       core-level run skips it.
 #
 #   #soc-skip <name>... -- <reason>
