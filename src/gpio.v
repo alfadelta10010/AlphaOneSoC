@@ -2,9 +2,12 @@
 // SPI shifter for the OLED that borrows two of the outputs.
 //
 //   0x00  OUT   read/write. Bit i drives out[i]. Bits 4 and 5 are the UART's
-//               pins (TX, RTS#): they read 0 and ignore writes. Resets to 0,
-//               which holds the OLED in reset with its panel supply off and
-//               drives the keypad columns low.
+//               pins (TX, RTS#): they read 0 and ignore writes. Resets to
+//               0x09: the OLED held in reset with its panel supply off (bit 6
+//               low), its CS# deselected (bit 0 high) and SCK at the mode-3
+//               idle level (bit 3 high), so turning the shifter on makes no
+//               edge; on the keypad, two columns high and two low, which
+//               nothing reads until software scans.
 //   0x04  IN    read only. in[7:0] through a two-flop synchroniser.
 //   0x08  DATA  write only (reads 0). Shifts the byte in [7:0] out on MOSI,
 //               MSB first. A byte is one store.
@@ -95,7 +98,7 @@ module gpio (
 
     always @(posedge clk) begin
         if (rst) begin
-            out_r    <= 8'h00;
+            out_r    <= 8'h09;
             spi_en   <= 1'b0;
             spi_div  <= 2'd0;
             spi_sh   <= 9'd0;
