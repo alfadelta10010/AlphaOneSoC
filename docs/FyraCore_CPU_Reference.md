@@ -411,6 +411,8 @@ Quadrants 0-2 of RV32C. Reserved encodings (illegal): C.ADDI4SPN with nzuimm=0, 
 
 See section 7. `CSRRW` with rd=x0 still reads the CSR; no CSR here has read side effects.
 
+An explicit write to either half of `mcycle` or `minstret` is done instead of that cycle's increment (Zicsr: "the explicit write is done instead of the update from the side effect"): the half not written keeps its current value, and writing the high half does not bump the low half. So the value written to `minstret`/`minstreth` is exactly what the next instruction reads (riscv-tests `rv32mi-instret_overflow`; Spike since 51835fd7).
+
 ### 9.6 Zifencei
 
 FENCE.I asserts `fencei_flush` for one cycle (a fetch-buffer invalidate for a memory controller) and refetches the next instruction.
