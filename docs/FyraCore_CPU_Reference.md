@@ -132,8 +132,9 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 | `tb_rivercore.v` | Lockstep testbench for the verification flow. Emits a Spike-format commit log; CSR values are printed from `cpu.csr_wval`. Watchdogs: `+MAX_INSTR`, `+MAX_CYCLES`, spin detection. |
 | `tb_cpu.v` | Older integration testbench used by `make asm` / `scripts/run_asm_test.sh`. |
 | `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
-| `qspi_pmod_model.v` | Behavioural QSPI Pmod (flash on CS0, PSRAMs on CS1/CS2) with protocol checks and a `+QSPI_DELAY` device delay. |
-| `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model (`make test-qspi`). |
+| `qspi_pmod_model.v` | Behavioural QSPI Pmod (flash on CS0, PSRAMs on CS1/CS2). Stops the run on any command `qspi_ctrl` should not send, a flash mode byte with M5-4 = 10, PSRAM traffic before its 66h/99h reset, bus contention, or a tCEM/tCPH violation. Takes the raw pins with their output enable and models released ones (chip selects pulled up, SCK floating), so a chip select falling before SCK is driven low fails. `+QSPI_DELAY` device delay. |
+| `req_hold_check.v` | Hold-until-done checker for a request handshake. The SoC build (`-DSOC_TB`) checks the core's two ports, the data port at `mem_ctrl` and `mem_ctrl`'s requests to `qspi_ctrl`; `tb_qspi*` check the last. |
+| `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model, including a store aimed at flash that must select no chip; `tb_qspi_stress.v` drives core-shaped request streams (`make test-qspi`). |
 | `tb_alu.v` … `tb_signExt.v` | Component unit testbenches (`make test-components`). A FAIL line fails the make target. |
 
 ### 3.3 Test Programs
