@@ -27,11 +27,9 @@ amo_chase           spike  +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 lrsc_io             spike
 sc_trap             spike
 sc_trap             spike  +DMEM_WAIT=3
-# Same-hart store/AMO to the reserved word clears the reservation here and
-# not on Spike; both are legal (the sequence is unconstrained).
-lrsc_policy         expect x10=0x1 x11=0x1 x12=0x1 x13=0x1 x14=0x0
-lrsc_policy         expect x10=0x1 x11=0x1 x12=0x1 x13=0x1 x14=0x0 -- +DMEM_WAIT=3
-lr_sb_sc            expect x11=0x1 x12=0x1 x13=0x1
+lrsc_policy         spike
+lrsc_policy         spike  +DMEM_WAIT=3
+lr_sb_sc            spike
 
 # ---- multiply / divide --------------------------------------------------------
 mul_chain           spike
