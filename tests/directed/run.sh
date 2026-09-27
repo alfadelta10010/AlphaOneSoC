@@ -96,18 +96,18 @@ asm() { # asm <name>
 
 # Spike runs on past tohost (it only polls HTIF every few thousand steps),
 # so the reference is cut four lines after the tohost store -- the testbench
-# drains at most that many retires after it. The 5 boot-ROM lines are
-# dropped, and so are the mstatush/tcontrol/mtinst/mtval2 tokens Spike logs
-# alongside trap entry and mstatus writes on RV32 for CSRs this core does not
-# log. A reference that never reaches tohost is capped instead.
+# drains at most that many retires after it. Spike starts at --pc directly
+# and logs no boot ROM, so nothing precedes the program. The mstatush/
+# tcontrol/mtinst/mtval2 tokens Spike logs alongside trap entry and mstatus
+# writes on RV32, for CSRs this core does not log, are dropped. A reference
+# that never reaches tohost is capped instead.
 ref() { # ref <name>
   local n=$1
   local args=$SPIKE_ARGS
   is_flash "$n" && args="$SPIKE_MEM --pc=0x20000000"
   ( ulimit -f 200000; timeout 60 spike $args --log "$OUT/$n.ref.raw" "$OUT/$n.elf" \
       </dev/null >/dev/null 2>&1 ) 2>/dev/null
-  sed '1,5d' "$OUT/$n.ref.raw" \
-    | sed -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2) 0x[0-9a-f]+//g' \
+  sed -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2) 0x[0-9a-f]+//g' "$OUT/$n.ref.raw" \
     | awk -v t="mem 0x$TOHOST " 'index($0, t) && !cut { cut = NR + 4 }
                                   { print } cut && NR >= cut { exit } NR >= 20000 { exit }' \
     > "$HERE/$n.ref"
