@@ -129,14 +129,15 @@ module csr #(
     // low half either. Upstream Spike does the same since 51835fd7, and
     // riscv-tests rv32mi-instret_overflow checks it for minstret.
     //
-    // minstret_next is both the register's next value and what the EX read
-    // port returns, so the increment is suppressed at its enable: while WB
-    // writes either half, an adjacent read of the *other* half sees it
-    // unchanged. (The written half itself reaches EX through fyracore's
-    // csr_fwd.) Suppressing it only on the register's input made that read
-    // return the discarded increment.
+    // *_next is both the register's next value and what the EX read port
+    // returns, so the increment is suppressed at its enable: while WB writes
+    // either half, an adjacent read of the *other* half sees it unchanged.
+    // (The written half itself reaches EX through fyracore's csr_fwd.)
+    // Suppressing it only on the register's input made that read return the
+    // discarded increment.
+    wire        mcycle_we     = we && (waddr == 12'hB00 || waddr == 12'hB80);
     wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
-    wire [63:0] mcycle_next   = (!mcountinhibit[0]) ? mcycle + 64'd1 : mcycle;
+    wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we) ? mcycle + 64'd1 : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
                                 minstret + 64'd1 : minstret;
 
