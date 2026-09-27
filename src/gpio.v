@@ -56,7 +56,7 @@ module gpio (
     input  wire [3:2]  addr,
     input  wire [31:0] wdata,
     output wire [31:0] rdata,
-    output wire        ready,      // low only while a DATA write waits
+    output wire        ready,      // low only while a write waits for a shifting byte
     // Pins
     input  wire [7:0]  in,         // asynchronous
     output wire [7:0]  out         // [5:4] belong to the UART and are 0 here
