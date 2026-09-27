@@ -106,6 +106,15 @@ module uart #(
     // a THR write, shifted right with 0 fill once per bit. The stop bit is
     // the last 1 in it, so the frame is done when the register is all zeros:
     // idle is tx_sh == 0 and needs no bit counter.
+    //
+    // The baud generator free-runs (it is shared with the receiver), so a
+    // THR write lands anywhere inside a 16x tick. The pin therefore changes
+    // only on ticks: the start bit begins at the first tick after the write
+    // and every bit, the first included, is exactly 16 ticks long. (Driving
+    // the pin straight from tx_sh made the first start bit up to one divisor
+    // period short.) The pin lags tx_sh by up to one tick, so THRE/TEMT rise
+    // up to 1/16 bit before the stop bit ends; a write in that window still
+    // starts its start bit after a full stop bit.
     reg [9:0]  tx_sh;
     reg [3:0]  tx_ph;               // 16x ticks into the current bit
     wire       tx_idle = (tx_sh == 10'd0);
@@ -174,7 +183,8 @@ module uart #(
                 if (tx_ph == 4'd15)
                     tx_sh <= {1'b0, tx_sh[9:1]};
             end
-            tx <= tx_idle || tx_sh[0];
+            if (tick)
+                tx <= tx_idle || tx_sh[0];
         end
     end
 
