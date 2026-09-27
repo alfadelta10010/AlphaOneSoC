@@ -128,8 +128,17 @@ module csr #(
     // keeps its current value, and a write to the high half does not bump the
     // low half either. Upstream Spike does the same since 51835fd7, and
     // riscv-tests rv32mi-instret_overflow checks it for minstret.
+    //
+    // minstret_next is both the register's next value and what the EX read
+    // port returns, so the increment is suppressed at its enable: while WB
+    // writes either half, an adjacent read of the *other* half sees it
+    // unchanged. (The written half itself reaches EX through fyracore's
+    // csr_fwd.) Suppressing it only on the register's input made that read
+    // return the discarded increment.
+    wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
     wire [63:0] mcycle_next   = (!mcountinhibit[0]) ? mcycle + 64'd1 : mcycle;
-    wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2]) ? minstret + 64'd1 : minstret;
+    wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
+                                minstret + 64'd1 : minstret;
 
     // mstatus as it will stand after a CSR write in WB commits this cycle.
     // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
