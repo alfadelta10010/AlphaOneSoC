@@ -141,12 +141,18 @@ module uart #(
                          : {dlab, 7'b0, iir, dlab ? dlm : ier, dlab ? dll : rbr};
 
     // ── Baud generator: one 16x tick every divisor clocks ───────────────────
+    // A write to DLL or DLM restarts the count, as on a 16550 ("Upon loading
+    // either of the Divisor Latches, a 16-bit baud counter is immediately
+    // loaded. This prevents long counts on initial load."): brg goes to 0,
+    // so the next cycle ticks and reloads from the new divisor. Otherwise a
+    // switch from a slow rate to a fast one keeps the old period for up to
+    // 65,536 clocks, and a character sent at the new rate meanwhile is lost.
     reg [15:0] brg;
     wire       tick = (brg[15:1] == 15'd0);   // brg is 1 (or 0, for divisor 0)
 
     always @(posedge clk) begin
-        if (rst) brg <= 16'd0;
-        else     brg <= tick ? {dlm, dll} : brg - 16'd1;
+        if (rst || wr_dll || wr_dlm) brg <= 16'd0;
+        else                         brg <= tick ? {dlm, dll} : brg - 16'd1;
     end
 
     // ── Register writes ─────────────────────────────────────────────────────
