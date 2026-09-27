@@ -658,8 +658,8 @@ module fyracore #(
     // LR/SC reservation. The reservation set is the naturally aligned word
     // holding the LR's address -- the smallest set the spec allows -- so only
     // the word address is kept. LR.W/SC.W are always word-aligned (anything
-    // else traps as misaligned), and a byte or halfword store anywhere in the
-    // word overlaps the set and must be seen as such.
+    // else traps as misaligned), so the word address names it exactly. Only
+    // an SC or a trap clears it; see the reservation update in WB.
     reg        reservation_valid;
     reg [29:0] reservation_addr;
     wire       sc_success = reservation_valid &&
@@ -1245,24 +1245,17 @@ module fyracore #(
                     reservation_addr  <= exwb_alu_result[31:2];
                 end else if (exwb_isSC) begin
                     reservation_valid <= 1'b0;
-                end else if (exwb_memWR) begin
-                    // Any local write overlapping the reservation invalidates
-                    // it -- a plain store and an AMO alike. The `!exwb_isAmo`
-                    // that used to be here made a store clear the reservation
-                    // while an AMO to the same address did not, so two paths
-                    // independently decided the same semantics and disagreed.
-                    //
-                    // Clearing on a same-hart write is not required (the
-                    // must-fail list covers other harts and devices, not this
-                    // one) but is explicitly permitted, and it cannot threaten
-                    // the forward-progress guarantee: a constrained LR/SC
-                    // sequence may not contain loads or stores between the LR
-                    // and the SC, and an AMO is not in the base I set, so
-                    // neither clear is reachable inside a constrained loop.
-                    if (reservation_valid &&
-                        reservation_addr == exwb_alu_result[31:2])
-                        reservation_valid <= 1'b0;
                 end
+                // A store or AMO from this hart leaves the reservation alone,
+                // even one to the reserved word. The spec's must-fail list
+                // covers stores by other harts and writes by other devices,
+                // and this SoC has neither; what a hart's own write does is
+                // left to the implementation. Keeping the reservation is what
+                // Spike does, so the lockstep comparison stays aligned past
+                // the SC -- clearing it made every unconstrained LR..store..SC
+                // sequence diverge there, which hid ~26% of each rrag
+                // program from the comparison. Forward progress is not
+                // affected: a constrained LR/SC loop contains no stores.
             end
 
             // Clear reservation on trap or interrupt. Not required by the
