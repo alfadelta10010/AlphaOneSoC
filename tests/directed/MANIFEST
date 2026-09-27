@@ -156,6 +156,13 @@ t_irq_slow          expect x18=0x3 x20=0x0
 wfi_slow            expect x9=0x0 x10=0x0 x18=0x2 x20=0x80000007 x21=0x77 x22=0x80
 wfi_slow            expect x9=0x0 x10=0x0 x18=0x2 x20=0x80000007 x21=0x77 x22=0x80 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 
+# Timer interrupts landing on M ops, loads and stores to both PSRAMs, an AMO
+# and page- and chip-straddling fetches: the checksum with interrupts on must
+# equal the one with them off (x21, Spike's value for that loop), and every
+# interrupt must have had the timer's cause (x9). DUT-only, as t_irq_slow.
+irq_stress          expect x9=0x1 x21=0xf08894e2 x25=0x0
+irq_stress          expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+
 # Boots from flash (SoC only): runs from flash, copies a routine into PSRAM
 # and runs it there after FENCE.I, the way a boot loader hands over.
 flash_boot          flash
