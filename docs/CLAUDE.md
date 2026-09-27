@@ -119,7 +119,7 @@ The pipeline top-level is `src/fyracore.v` (~1250 lines). It instantiates all ot
 
 **PMP:** `pmp_ifetch` checks `ifex_pc` (X), plus the upper half of a straddling 32-bit instruction during one extra EX cycle when PMP could deny it; `pmp_data` checks `ex_alu_result` with R/W/R+W (AMO R+W), at MPP's privilege when MPRV=1. Compares are on PA[33:2] (pmpaddr holds 34-bit addresses on RV32).
 
-**LR/SC:** the reservation set is the aligned word. Set on LR retire; cleared on any SC retire, a local store/AMO to the word, a trap/interrupt commit in WB, and reset. No external-agent clear (one hart, no other master).
+**LR/SC:** the reservation set is the aligned word. Set on LR retire; cleared on any SC retire, a trap/interrupt commit in WB, and reset. A local store/AMO leaves it alone, even to the reserved word (legal, and what Spike does, so lockstep stays aligned past the SC). No external-agent clear (one hart, no other master).
 
 ### Memory Map and SoC
 
