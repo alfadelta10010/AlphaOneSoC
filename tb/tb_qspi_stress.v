@@ -61,6 +61,11 @@ module tb_qspi_stress;
     qspi_pmod_model pmod (.host_sck(sck), .host_cs_n(cs_n), .host_ctl_oe(ctl_oe),
         .host_io(io_out), .host_oe(io_oe), .dev_io(dev_io), .dev_oe(dev_oe));
 
+    // mem_ctrl's side of the QSPI engine's request (tb/req_hold_check.v).
+    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1)) chk_qspi (
+        .clk(clk), .rst(rst), .take(q_idle && q_start), .hold(q_start), .done(q_done),
+        .payload({q_cs, q_addr, q_we, q_nbytes_m1, q_we ? q_wdata : 32'h0}));
+
     integer errors = 0, k, n_i = 0, n_d = 0;
     reg dbg_order = 0;
     reg [7:0] shadow [0:16777215];

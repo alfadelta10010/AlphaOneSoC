@@ -167,6 +167,28 @@ module tb_rivercore;
     assign dbg_instr      = soc.cpu.dbg_instr;
     assign dbg_compressed = soc.cpu.dbg_compressed;
     assign dbg_trap       = soc.cpu.dbg_trap;
+
+    // Handshake checkers (tb/req_hold_check.v): memory_model checks the
+    // core's side of its ports in the core-level testbench, and there is no
+    // memory_model here, where every wait is 40-60 clocks rather than a few.
+    // Checked: the core's two ports, the data port as it reaches mem_ctrl
+    // through the bus fabric, and mem_ctrl's requests to the QSPI engine.
+    req_hold_check #(.W(32), .NAME("imem request")) chk_imem (
+        .clk(clk), .rst(rst), .take(imem_req), .hold(imem_req), .done(imem_ready),
+        .payload(imem_addr));
+    req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
+        .clk(clk), .rst(rst), .take(dmem_req), .hold(dmem_req), .done(dmem_ready),
+        .payload({dmem_addr, dmem_we, dmem_be, dmem_we ? dmem_wdata : 32'h0}));
+    req_hold_check #(.W(69), .NAME("mem_ctrl data request")) chk_memd (
+        .clk(clk), .rst(rst), .take(soc.memc.d_req), .hold(soc.memc.d_req),
+        .done(soc.memc.d_ready),
+        .payload({soc.memc.d_addr, soc.memc.d_we, soc.memc.d_be,
+                  soc.memc.d_we ? soc.memc.d_wdata : 32'h0}));
+    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1)) chk_qspi (
+        .clk(clk), .rst(rst), .take(soc.qspi.idle && soc.qspi.start),
+        .hold(soc.qspi.start), .done(soc.qspi.done),
+        .payload({soc.qspi.cs_sel, soc.qspi.addr, soc.qspi.we, soc.qspi.nbytes_m1,
+                  soc.qspi.we ? soc.qspi.wdata : 32'h0}));
 `define CPU    soc.cpu
 `define MEMARR pmod.ram
 `else

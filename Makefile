@@ -142,13 +142,13 @@ QSPI_RUNS := "" "+QSPI_DELAY=19" "+RD_LATE +QSPI_DELAY=25" "+PSRAM_WRAP" \
 test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
-		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/tb_qspi.v
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
 	@cd $(BUILD_DIR) && for args in $(QSPI_RUNS); do \
 		$(VVP) tb_qspi $$args > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
 		grep -q '^PASS' tb_qspi.log || exit 1; \
 	done
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_stress $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
-		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/tb_qspi_stress.v
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi_stress.v
 	@cd $(BUILD_DIR) && for args in "" "+RD_LATE +QSPI_DELAY=25 +PSRAM_WRAP"; do \
 		$(VVP) tb_qspi_stress $$args > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
