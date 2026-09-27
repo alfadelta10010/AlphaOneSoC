@@ -368,6 +368,13 @@ writing the driver.
    control on GPIO38 (MicroPython's `UART(..., flow=UART.CTS)` would).
 3. **Linux drivers:** the SPI controller driver, and the gpio-mmio binding.
 4. **Area:** measure every block once written.
-5. **Testbench models:** the RP2350 side of the UART (with CTS), an SSD1331
-   SPI capture, and a keypad matrix. Add directed tests to
-   `tests/directed/run.sh soc`.
+5. ~~**Testbench models**~~ -- done: `tb/rp2350_uart_model.v`,
+   `tb/ssd1331_model.v`, `tb/keypad_model.v`, driven by `make
+   test-soc-periph` (`tests/soc/`) rather than `run.sh soc`, whose IO window
+   is off to match Spike. Unit benches: `make test-uart`, `make test-gpio`.
+6. **Stall path timing:** the IO `ready` now sits in the core's global stall
+   path (request decode → UART/GPIO ready → `wb_mem_stall`); check it in
+   STA once the design is hardened.
+7. **Keypad reads:** GPIO IN lags two clocks, so a load right after the
+   column store can read the old rows; software discards one IN read after
+   each column write (`tests/soc/keypad.S`), and a Linux driver must too.

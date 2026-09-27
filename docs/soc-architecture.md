@@ -276,6 +276,25 @@ synchronise `rst_n` before it reaches this reset.
   modes, then `tb_qspi_stress` (core-shaped request streams, 400k clocks of
   random traffic against a shadow memory). The Pmod model checks protocol,
   bus contention, tCEM and tCPH as it goes.
+* The peripherals are not reachable from the directed suite (its IO window
+  is off, since Spike has no such devices), and Spike could not lockstep
+  them anyway. They are checked self-checking instead:
+  * `make test-uart`: `tb_uart` -- every offset, byte enable and DLAB
+    state against a scoreboard, TX predicted on every clock from the 16x
+    tick grid, RX from a reference transmitter across baud error, glitches,
+    framing errors, breaks and overrun, RTS#, IIR, same-cycle priorities,
+    divisor reload, constrained-random traffic.
+  * `make test-gpio`: `tb_gpio` -- registers and pins every clock, the IN
+    synchroniser's latency, a mode-3 SPI checker at every DIV, and the
+    write back-pressure that keeps CS#/D/C still under a byte.
+  * `make test-soc-periph`: `tb_soc_periph` runs flash-booted programs
+    (`tests/soc/`) through the whole SoC against board models --
+    `tb/rp2350_uart_model.v` (CTS-honouring terminal), `tb/ssd1331_model.v`
+    (the OLED's serial timing, table 21) and `tb/keypad_model.v` -- with
+    `req_hold_check` on both core ports: hello-world with and without
+    polling, echo under flow control, a replay of the Linux 8250 driver's
+    polled accesses, OLED bring-up, keypad scan, timer interrupts while a
+    peripheral holds a store, and every access width and AMO on the IO.
 
 ## Area
 

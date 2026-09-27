@@ -35,6 +35,9 @@ make test-signext
 make test-branchctrl
 make test-regfile
 make test-qspi          # memory controller + QSPI engine vs the QSPI Pmod model
+make test-uart          # UART unit testbench (scoreboard + reference TX/RX)
+make test-gpio          # GPIO + SPI transmitter unit testbench
+make test-soc-periph    # tests/soc/ programs through the SoC vs UART/OLED/keypad models
 
 # Clean build artifacts
 make clean
