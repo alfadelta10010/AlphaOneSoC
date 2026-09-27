@@ -393,14 +393,15 @@ AMOs (SWAP, ADD, XOR, AND, OR, MIN, MAX, MINU, MAXU): phase 0 reads (`wb_busy`),
 |---|---|
 | LR.W retires in WB | reservation set; the reservation set is the aligned word (`reservation_addr` = addr[31:2]) |
 | SC.W retires (success or failure) | cleared |
-| A local store or AMO retires to the reserved word (any width) | cleared |
+| A local store or AMO retires, even to the reserved word | **no effect** |
 | A trap or interrupt commits in WB | cleared |
 | Reset | cleared |
 
 - SC succeeds iff the reservation is valid and the word matches; rd = 0 on success, 1 on failure. A failing SC issues no bus transaction.
 - LR/SC outside `PMA_RAM_*` (PSRAM) fault (cause 5/7). Misaligned LR/SC trap (cause 4/6).
 - There is no external-agent clear: one hart, no DMA, no debug system-bus access. Add one if any of those appear.
-- Same-hart stores and traps are not required to clear the reservation. Clearing on them is permitted, and cannot break the forward-progress guarantee, because a constrained LR/SC loop contains no loads, stores, AMOs or SYSTEM instructions.
+- The spec's must-fail list covers stores by other harts and writes by other devices; what a hart's own store does is left to the implementation. Keeping the reservation across it is what Spike does, so the lockstep comparison stays aligned past the SC (clearing it made every unconstrained LR..store..SC sequence in the random suites diverge there). Forward progress is unaffected: a constrained LR/SC loop contains no loads, stores, AMOs or SYSTEM instructions.
+- Traps are not required to clear the reservation either; clearing on them is permitted and kept as defence in depth.
 
 ### 9.4 C Extension
 
