@@ -42,8 +42,11 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `ui_in[3]` | UART RX | in | RP2350 GPIO20 (UART1 TX) |
 | `ui_in[4..7]` | GPIO in 4..7 | in | keypad ROW4..ROW1, or DIP 5–8 |
 
-**Reset values.** GPIO outputs reset to 0: the OLED is held in reset with its
-panel supply off, and the keypad columns are all low, which nothing reads.
+**Reset values.** GPIO OUT resets to `0x09`: `uo_out[6]` low holds the OLED
+in reset with its panel supply off, while its CS# (`uo_out[0]`) is high,
+deselected, and SCK (`uo_out[3]`) sits at SPI mode 3's idle-high level, so
+enabling the transmitter makes no edge. On the keypad that leaves two columns
+high and two low, which nothing reads until software scans.
 UART TX resets to 1 (idle) and RTS# to 1 (not ready), so the RP2350 sees
 neither a break nor a clear-to-send while the chip is in reset. While reset is
 held the QSPI pins are released, as they are today.
@@ -273,7 +276,7 @@ the device tree takes `clock-frequency` from the node and is also right.
 
 | Offset | Register |
 |---|---|
-| `0x00` | OUT (read/write). Bit *i* drives `uo_out[i]`. Bits 4 and 5 belong to the UART: they read 0 and ignore writes. Resets to 0. |
+| `0x00` | OUT (read/write). Bit *i* drives `uo_out[i]`. Bits 4 and 5 belong to the UART: they read 0 and ignore writes. Resets to `0x09`. |
 | `0x04` | IN (read only). `ui_in[7:0]` through a two-flop synchroniser. |
 
 Linux uses the generic gpio-mmio driver: one output-only chip and one
@@ -300,19 +303,26 @@ shares.
 
 | Offset | Register |
 |---|---|
-| `0x08` | DATA (write). Shifts 8 bits out, MSB first. A write while the previous byte is still shifting stalls, the same back-pressure as the UART. |
+| `0x08` | DATA (write). Shifts 8 bits out, MSB first. While a byte is shifting, **every** GPIO register write stalls until it is done, the same back-pressure as the UART; reads do not. |
 | `0x0C` | CTRL (read/write). Bit 0 EN: 1 = the transmitter drives `uo_out[1]` (MOSI) and `uo_out[3]` (SCK); 0 = GPIO does. Bits 2:1 DIV: SCK = clk / 2^(DIV+1). Bit 8 BUSY (read only). |
 
 * SPI mode 3: SCK idles high, data changes on the falling edge and is sampled
   on the rising edge.
-* The SSD1331 needs an SCK period of at least 150 ns: DIV=2 (clk/8) up to
-  53 MHz, DIV=3 (clk/16) above that.
+* The SSD1331 needs an SCK period of at least 150 ns and each phase at
+  least 75 ns. DIV=2 (clk/8) meets that exactly at 53 MHz, with no margin
+  for pad duty-cycle distortion or edge rates, so use DIV=2 up to about
+  48 MHz and DIV=3 (clk/16) above.
 * CS# and D/C stay GPIO lines.
 * With the keypad fitted, EN stays 0.
 * As built (`src/gpio.v`): MOSI is its own flop and changes only on SCK's
   falling edge, so the device gets half an SCK period of setup and of hold
   even when the next byte is loaded the cycle after the last rising edge.
-  Between two bytes SCK stays high for at least half a period. DATA reads 0.
+  The transmitter stays busy for one more half-period after that edge, and
+  every register write waits for it, so `DATA; OUT` back to back is safe:
+  the SSD1331 samples D/C on each byte's eighth rising edge and needs CS# and
+  D/C held 60 / 40 ns after it, which the extra half-period gives. It also
+  stops a CTRL write from changing DIV or EN mid-byte. Between two bytes SCK
+  stays high for at least a period. DATA reads 0.
 
 Linux needs a small SPI controller driver under fbtft's `fb_ssd1331`
 (staging); its `transfer_one` is one register write per byte. Alternatively,
