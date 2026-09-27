@@ -37,7 +37,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart asm \
+        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -57,6 +57,7 @@ help:
 	@echo "  make test-compressed   Run compressed decoder testbench"
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
+	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -164,7 +165,14 @@ test-uart: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart.v
 	@$(call run_tb,tb_uart)
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart
+# GPIO OUT/IN and the SPI shifter: register and pin model, a mode-3 SPI
+# checker at every DIV, back-pressure, and a random run.
+test-gpio: $(BUILD_DIR)
+	@echo "=== Testing GPIO + SPI transmitter ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(TB_DIR)/tb_gpio.v
+	@$(call run_tb,tb_gpio)
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio
 	@echo ""
 	@echo "=== All component tests completed ==="
 
