@@ -37,7 +37,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-qspi asm \
+        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -56,6 +56,7 @@ help:
 	@echo "  make test-csr          Run CSR testbench"
 	@echo "  make test-compressed   Run compressed decoder testbench"
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
+	@echo "  make test-uart         Run UART testbench"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -154,7 +155,16 @@ test-qspi: $(BUILD_DIR)
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
 	done
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi
+# The UART against spec-derived models: register/lane scoreboard, a
+# reference receiver on TX, an asynchronous reference transmitter on RX
+# (baud error, glitches, framing errors, overruns), RTS# and back-pressure
+# checks, and a constrained-random run (+SEED=, +NRAND= for more).
+test-uart: $(BUILD_DIR)
+	@echo "=== Testing UART ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart.v
+	@$(call run_tb,tb_uart)
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart
 	@echo ""
 	@echo "=== All component tests completed ==="
 
