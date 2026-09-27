@@ -597,8 +597,15 @@ module tb_rivercore;
                     // Read-only-zero CSRs Spike does log a write to.
                     12'h30A: $fwrite(dump_fd, " c778_menvcfg 0x%08h",   `CPU.csr_wval);
                     12'h31A: $fwrite(dump_fd, " c794_menvcfgh 0x%08h",  `CPU.csr_wval);
+                    // pmpaddr4-15 beyond the 4 implemented regions: Spike
+                    // (since 4850489d) accepts the write, keeps 0 and logs it.
+                    12'h3B4, 12'h3B5, 12'h3B6, 12'h3B7,
+                    12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB,
+                    12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF:
+                        $fwrite(dump_fd, " c%0d_pmpaddr%0d 0x%08h",
+                                `CPU.exwb_csr_addr, `CPU.exwb_csr_addr[3:0], `CPU.csr_wval);
                     // Writes Spike accepts without logging: the
-                    // unimplemented pmpcfg1-3 and pmpaddr4-15, mstatush and
+                    // unimplemented pmpcfg1-3, mstatush and
                     // mhpmcounter3-31(h), all of which read 0.
                     default:
                         if (`CPU.exwb_csr_addr[11:5] == 7'b0011_001 &&
