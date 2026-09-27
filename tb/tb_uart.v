@@ -8,16 +8,16 @@
 //     predicts all four lanes of every read -- LSR and IIR included, from
 //     the transmitter and receiver models below -- and every side effect
 //     (an RBR pop, an OE clear);
-//   * a reference receiver on TX that decodes each frame and checks that
-//     every bit, the start bit included, is exactly 16 x divisor clocks,
-//     that the start bit begins on the first 16x tick after the THR write
-//     (1 to divisor clocks later; exactly on the tick grid the previous
-//     frame showed, while the divisor is unchanged), that the stop bit is
-//     high for a full bit before the next start bit, and that the byte is
-//     the one written to THR;
-//   * a THR back-pressure model: THRE rises one tick before the stop bit
-//     ends on the pin, and a THR write must complete on the first edge at
-//     which it is requested and THRE is set -- no sooner and no later;
+//   * a model of the TX pin on every clock, from the 16x tick grid (one
+//     tick every divisor clocks; restarted on the clock after a DLL/DLM
+//     write, as a 16550 reloads its counter; learnt from the first start
+//     bit after reset): the start bit begins on the first tick after the
+//     THR write, every bit is exactly 16 ticks, data LSB first, a full
+//     stop bit -- divisors 0 (as 1), 1, 2, 3, 5, 27, 300 and 1000;
+//   * THR back-pressure: THRE rises on the frame's 160th tick, one tick
+//     before the stop bit ends on the pin, and a THR write must complete on
+//     the first edge at which it is requested and THRE is set -- no sooner
+//     and no later;
 //   * a reference transmitter on RX, asynchronous to clk (any phase, baud off
 //     by up to +/-3%), that can honour CTS (= RTS#) or ignore it, and that
 //     sends glitches, framing errors and breaks. Its model predicts when DR
@@ -113,155 +113,130 @@ module tb_uart;
         cur_div = divisor(m_dll, m_dlm);
     endfunction
 
-    // ── Transmit model: THR back-pressure and the reference receiver ────────
+    // ── Transmit model: THR back-pressure and the TX pin ────────────────────
+    // The baud generator makes one 16x tick every divisor clocks. It runs
+    // freely, except that a completed DLL or DLM write restarts it: the next
+    // clock ticks, and the new divisor applies from there (as a 16550
+    // reloads its counter when a divisor latch is written). The model keeps
+    // that tick grid -- learnt from the first start bit after reset, then
+    // moved by every divisor write -- and from it predicts the TX pin on
+    // every clock: a THR write's start bit begins on the first tick after
+    // the write, every bit (start, 8 data LSB first, stop) is exactly 16
+    // ticks, THRE rises on the frame's 160th tick, one tick before the stop
+    // bit ends on the pin, and a THR write completes on the first edge at
+    // which it is requested and THRE is set -- no sooner and no later.
+    // Divisor writes in the middle of a frame (the random run rewrites the
+    // divisor with its own value) just move the grid; the model follows.
+    //
     // Cycle numbers are edges: a transfer that completes on edge p has
-    // cyc == p right after it, and a sample taken at the following falling
-    // edge sees what edge p registered.
-    integer tx_q_data [$];        // bytes written to THR, not yet on the line
-    integer tx_q_wcyc [$];        // the edge each write completed on
-    integer tx_q_div  [$];        // the divisor it was written under
-    integer tx_last_wcyc = -1;    // the latest THR write (-1: none since reset)
-    integer tx_frame_end = 0;     // first edge at which its frame has gone
-    reg     tx_end_known = 1'b1;  // tx_frame_end is known for the latest write
-    integer tx_frames = 0, tx_writes = 0, tx_stalls = 0;
-    reg     mon_on = 1'b1;
+    // cyc == p right after it, and a sample at the following falling edge
+    // sees what edge p registered.
+    reg       f_active = 1'b0;    // a frame written and not yet off the pin
+    integer   f_W, f_ticks, f_d, f_thre_edge;
+    reg [7:0] f_data;
+    integer   tx_frames = 0, tx_writes = 0, tx_stalls = 0;
+    reg       mon_on = 1'b1;
+    // The tick grid: edges tick_ref + k * tick_d from edge tick_switch on,
+    // the previous grid before it.
+    reg       tick_known = 1'b0, tickp_known = 1'b0;
+    integer   tick_ref = 0, tick_d = 1, tickp_ref = 0, tickp_d = 1, tick_switch = 0;
+    integer   tx_frames_by_div [0:3];         // coverage: d=1, 2-3, 4-31, >=32
+    initial begin tx_frames_by_div[0] = 0; tx_frames_by_div[1] = 0;
+                  tx_frames_by_div[2] = 0; tx_frames_by_div[3] = 0; end
+
+    function integer grid_known(input integer e);
+        grid_known = (e >= tick_switch) ? tick_known : tickp_known;
+    endfunction
+    function integer is_tick(input integer e);
+        if (e >= tick_switch) is_tick = tick_known  && e >= tick_ref  && (e - tick_ref)  % tick_d  == 0;
+        else                  is_tick = tickp_known && e >= tickp_ref && (e - tickp_ref) % tickp_d == 0;
+    endfunction
+    // A divisor latch write completed on edge p.
+    task automatic tick_restart(input integer p, input integer d);
+        begin
+            tickp_known = tick_known; tickp_ref = tick_ref; tickp_d = tick_d;
+            tick_switch = p + 1;
+            tick_known = 1'b1; tick_ref = p + 1; tick_d = d;
+        end
+    endtask
 
     // THRE (= TEMT) as seen by a read completing on edge p.
     function integer thre_at(input integer p);
-        if (tx_last_wcyc < 0)   thre_at = 1;
-        else if (!tx_end_known) thre_at = 0;
-        else                    thre_at = (p >= tx_frame_end) ? 1 : 0;
+        thre_at = (!f_active || (f_thre_edge >= 0 && p > f_thre_edge)) ? 1 : 0;
     endfunction
+
+    task automatic tx_frame_done;
+        begin
+            tx_frames = tx_frames + 1;
+            if (f_d == 1)      tx_frames_by_div[0] = tx_frames_by_div[0] + 1;
+            else if (f_d < 4)  tx_frames_by_div[1] = tx_frames_by_div[1] + 1;
+            else if (f_d < 32) tx_frames_by_div[2] = tx_frames_by_div[2] + 1;
+            else               tx_frames_by_div[3] = tx_frames_by_div[3] + 1;
+            f_active = 1'b0;
+        end
+    endtask
 
     task automatic tx_taken(input [7:0] data, input integer p_first, input integer p);
         integer busy_until, want;
         begin
             tx_writes = tx_writes + 1;
             if (p > p_first) tx_stalls = tx_stalls + 1;
-            if (tx_last_wcyc < 0)   busy_until = 0;
-            else if (!tx_end_known) busy_until = -1;
-            else                    busy_until = tx_frame_end;
+            busy_until = !f_active ? 0 : (f_thre_edge >= 0 ? f_thre_edge + 1 : -1);
             checks = checks + 1;
             if (busy_until < 0)
-                fail($sformatf("THR write taken on edge %0d while the frame written on edge %0d is still going",
-                               p, tx_last_wcyc));
+                fail($sformatf("THR write (%02h) taken on edge %0d while the frame written on edge %0d is still going (tick %0d of 160)",
+                               data, p, f_W, f_ticks));
             else begin
                 want = (p_first > busy_until) ? p_first : busy_until;
                 if (p != want)
-                    fail($sformatf("THR write (%02h) completed on edge %0d, want %0d (requested for %0d, transmitter free from %0d): ready must be low exactly while busy",
+                    fail($sformatf("THR write (%02h) completed on edge %0d, want %0d (requested for %0d, THRE from %0d): ready must be low exactly while busy",
                                    data, p, want, p_first, busy_until));
             end
-            tx_q_data.push_back(data);
-            tx_q_wcyc.push_back(p);
-            tx_q_div.push_back(cur_div());
-            tx_last_wcyc = p;
-            tx_end_known = 1'b0;
+            if (f_active) tx_frame_done;        // its stop bit ends on the next tick
+            f_active = 1'b1; f_W = p; f_ticks = 0; f_d = cur_div(); f_data = data; f_thre_edge = -1;
         end
     endtask
 
-    // Reference receiver. The baud generator free-runs, one 16x tick every
-    // divisor clocks, and the pin changes only on ticks: a frame's start bit
-    // begins on the first tick after the THR write (1 to divisor clocks
-    // later), and every bit, the start bit included, is exactly 16 ticks.
-    // Once a frame has shown where the ticks fall, the next frame's start
-    // must land exactly on one (until the divisor changes). THRE rises one
-    // tick before the stop bit ends on the pin (the pin follows the shift
-    // register a tick late), and a write waiting for it still gets a full
-    // stop bit before its own start bit.
-    integer   mt_state = 0;       // 0 idle, 1 in a frame, 2 lost (after an error)
-    integer   mt_t0, mt_d, mt_q, mt_j, mt_idle, mt_x, mt_want;
-    reg       mt_prev = 1'b1;
-    reg [7:0] mt_byte;
-    integer   pin_free = 0;       // first cycle the next start bit may begin
-    reg       tick_known = 1'b0;  // tick_ref is an edge with a tick, at divisor tick_d
-    integer   tick_ref, tick_d;
-    integer   tx_frames_by_div [0:3];         // coverage: d=1, 2-3, 4-31, >=32
-    initial begin tx_frames_by_div[0] = 0; tx_frames_by_div[1] = 0;
-                  tx_frames_by_div[2] = 0; tx_frames_by_div[3] = 0; end
-
+    integer   mt_bit;
+    reg       mt_exp;
     always @(negedge clk) begin
         if (rst_q) begin
             checks = checks + 1;
             if (tx !== 1'b1) fail("TX is not idle (1) during reset");
-            mt_state = 0;
-            mt_prev  = 1'b1;
-            pin_free = 0;
-            tick_known = 1'b0;
+            if (f_active) tx_writes = tx_writes - 1;      // a frame reset cut off
+            f_active = 1'b0;
+            tick_known = 1'b0; tickp_known = 1'b0; tick_switch = 0;
         end else if (mon_on) begin
             if (tx !== 1'b0 && tx !== 1'b1) fail("TX is X");
-            case (mt_state)
-            0: if (tx === 1'b0) begin
-                   if (tx_q_data.size() == 0) begin
-                       fail("TX start bit with no THR write");
-                       mt_state = 2; mt_idle = 0; mt_d = cur_div();
-                   end else begin
-                       mt_d = tx_q_div[0];
-                       checks = checks + 1;
-                       if (tx_q_data.size() != 1) fail("two THR writes queued behind one frame");
-                       if (cyc < pin_free)
-                           fail($sformatf("TX start bit at cycle %0d, before the previous stop bit ends (%0d)",
-                                          cyc, pin_free));
-                       if (tick_known && tick_d == mt_d) begin
-                           mt_want = tx_q_wcyc[0] + 1;
-                           while ((mt_want - tick_ref) % mt_d != 0) mt_want = mt_want + 1;
-                           if (cyc != mt_want)
-                               fail($sformatf("TX start bit at cycle %0d, want %0d (the first 16x tick after the THR write on %0d)",
-                                              cyc, mt_want, tx_q_wcyc[0]));
-                       end else if (cyc < tx_q_wcyc[0] + 1 || cyc > tx_q_wcyc[0] + mt_d)
-                           fail($sformatf("TX start bit at cycle %0d, want %0d..%0d (within one 16x tick of the THR write)",
-                                          cyc, tx_q_wcyc[0] + 1, tx_q_wcyc[0] + mt_d));
-                       tick_known = 1'b1; tick_ref = cyc; tick_d = mt_d;
-                       mt_t0 = cyc; mt_byte = 8'h00;
-                       tx_frame_end = cyc + 159*mt_d + 1;       // THRE, one tick early
-                       tx_end_known = 1'b1;
-                       mt_state = 1;
-                   end
-               end
-            1: begin
-                   mt_q = cyc - mt_t0;
-                   if (tx !== mt_prev) begin
-                       checks = checks + 1;
-                       if (mt_q % (16*mt_d) != 0) begin
-                           fail($sformatf("TX frame (%0h, divisor %0d): edge %0d clocks into the frame, not a multiple of 16 x divisor",
-                                          tx_q_data[0], mt_d, mt_q));
-                           mt_state = 2; mt_idle = 0;
-                       end
-                   end
-                   if (mt_state == 1) begin
-                       if (mt_q == 8*mt_d && tx !== 1'b0) fail("TX start bit shorter than half a bit");
-                       for (mt_j = 0; mt_j < 8; mt_j = mt_j + 1)
-                           if (mt_q == 16*mt_d*(mt_j + 1) + 8*mt_d) mt_byte[mt_j] = tx;
-                       if (mt_q >= 144*mt_d && tx !== 1'b1) begin
-                           fail($sformatf("TX frame (%0h): stop bit is 0", tx_q_data[0]));
-                           mt_state = 2; mt_idle = 0;
-                       end
-                       if (mt_state == 1 && mt_q == 160*mt_d - 1) begin
-                           chk($sformatf("TX frame %0d byte", tx_frames), mt_byte, tx_q_data[0]);
-                           tx_frames = tx_frames + 1;
-                           if (mt_d == 1)      tx_frames_by_div[0] = tx_frames_by_div[0] + 1;
-                           else if (mt_d < 4)  tx_frames_by_div[1] = tx_frames_by_div[1] + 1;
-                           else if (mt_d < 32) tx_frames_by_div[2] = tx_frames_by_div[2] + 1;
-                           else                tx_frames_by_div[3] = tx_frames_by_div[3] + 1;
-                           mt_x = tx_q_data.pop_front(); mt_x = tx_q_wcyc.pop_front(); mt_x = tx_q_div.pop_front();
-                           pin_free = mt_t0 + 160*mt_d;
-                           mt_state = 0;
-                       end
-                   end
-               end
-            2: begin
-                   // Lost: drop the frame once the line has idled two frames.
-                   mt_idle = (tx === 1'b1) ? mt_idle + 1 : 0;
-                   if (mt_idle > 320*mt_d) begin
-                       if (tx_q_data.size() > 0) begin
-                           mt_x = tx_q_data.pop_front(); mt_x = tx_q_wcyc.pop_front(); mt_x = tx_q_div.pop_front();
-                       end
-                       tx_frame_end = cyc; tx_end_known = 1'b1;
-                       tick_known = 1'b0;
-                       mt_state = 0;
-                   end
-               end
-            endcase
-            mt_prev = tx;
+            if (f_active) begin
+                if (cyc > f_W) begin
+                    if (!grid_known(cyc)) begin
+                        // No grid yet (reset): the start bit shows where it is.
+                        if (tx === 1'b0) begin
+                            checks = checks + 1;
+                            tick_known = 1'b1; tick_ref = cyc; tick_d = f_d; tick_switch = cyc;
+                            f_ticks = 1;
+                        end else if (cyc >= f_W + f_d) begin
+                            fail($sformatf("TX: no start bit within one 16x tick (%0d clocks) of the THR write", f_d));
+                            tick_known = 1'b1; tick_ref = cyc; tick_d = f_d; tick_switch = cyc;
+                        end
+                    end else if (is_tick(cyc))
+                        f_ticks = f_ticks + 1;
+                end
+                if (f_ticks == 160 && f_thre_edge < 0) f_thre_edge = cyc;
+                mt_bit = (f_ticks - 1) / 16;        // 0 start, 1-8 data, 9 stop
+                mt_exp = (f_ticks == 0)  ? 1'b1 :
+                         (mt_bit == 0)   ? 1'b0 :
+                         (mt_bit <= 8)   ? f_data[mt_bit - 1] : 1'b1;
+                checks = checks + 1;
+                if (tx !== mt_exp)
+                    fail($sformatf("TX pin %b, want %b: frame %02h (divisor %0d), 16x tick %0d, %0d clocks after the THR write",
+                                   tx, mt_exp, f_data, f_d, f_ticks, cyc - f_W));
+                if (f_ticks >= 161) tx_frame_done;
+            end else begin
+                checks = checks + 1;
+                if (tx !== 1'b1) fail("TX not idle with no frame written");
+            end
         end
     end
 
@@ -427,19 +402,21 @@ module tb_uart;
         begin
             old_dlab = m_dlab;
             if (!a2) begin
+                if (old_dlab && (b[0] || b[1])) begin
+                    // A divisor latch write restarts the baud generator: the
+                    // receiver's samples may come up to a tick early too.
+                    if (dr_pend) begin dr_lo = dr_lo - cur_div() * T; fr_hi_to = fr_hi_to - cur_div() * T; end
+                    if (oe_pend) oe_lo = oe_lo - cur_div() * T;
+                end
                 if (b[0]) begin
-                    if (old_dlab) begin
-                        if (m_dll != wd[7:0]) tick_known = 1'b0;
-                        m_dll = wd[7:0];
-                    end else tx_taken(wd[7:0], p_first, p);
+                    if (old_dlab) m_dll = wd[7:0];
+                    else          tx_taken(wd[7:0], p_first, p);
                 end
                 if (b[1]) begin
-                    if (old_dlab) begin
-                        if (m_dlm != wd[15:8]) tick_known = 1'b0;
-                        m_dlm = wd[15:8];
-                    end
+                    if (old_dlab) m_dlm = wd[15:8];
                     else begin m_erbfi = wd[8]; m_etbei = wd[9]; end
                 end
+                if (old_dlab && (b[0] || b[1])) tick_restart(p, cur_div());
                 if (b[3]) m_dlab = wd[31];
             end
             if (!(b[0] && !a2 && !old_dlab)) begin
@@ -591,9 +568,6 @@ module tb_uart;
     task automatic model_reset;
         begin
             m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd27; m_dlm = 8'd0;
-            tx_writes = tx_writes - tx_q_data.size();     // frames reset cut off
-            tx_q_data.delete(); tx_q_wcyc.delete(); tx_q_div.delete();
-            tx_last_wcyc = -1; tx_end_known = 1'b1;
             if (dr_val || dr_pend) rx_kept = rx_kept - 1;  // a byte reset threw away
             rxm_reset;
         end
@@ -1323,19 +1297,18 @@ module tb_uart;
         // A 16550 reloads its baud counter when a divisor latch is written
         // (PC16550D: "Upon loading either of the Divisor Latches, a 16-bit
         // baud counter is immediately loaded ... This prevents long counts on
-        // initial load."). Lower the divisor from 1000 to 1 just after a tick
-        // and let the far end send at the new rate at once: the byte must
-        // arrive. Then do the same with a THR write and report how late its
-        // start bit is (latency only: the frame itself is exact).
+        // initial load."). Lower the divisor from 1000 to 1 just after a tick,
+        // when the counter holds nearly all of the old count, and let the far
+        // end send at the new rate at once: the byte must arrive. Then the
+        // same with a THR write: its start bit must begin one clock (a tick at
+        // divisor 1) after the write (the TX model checks the whole frame).
         section("divisor reload");
         wait_tx_idle;
         for (k = 0; k < 2; k = k + 1) begin
             set_div(1000);
-            while (!dut.tick) idle(1);      // right after a tick: the counter holds ~1000
+            while (!dut.tick) idle(1);
             idle(1);
             rxm_on = 1'b0;
-            mon_on = 1'b0;
-            rts_chk_on = 1'b0;              // a lost frame leaves RTS# asserted: reported once, below
             wr8(3, 8'h80); wr8(0, 8'd1); wr8(1, 8'd0); wr8(3, 8'h00);
             if (k == 0) begin
                 rx_frame(8'h5A, bit_ns(1, 0.0), 1, 1'b1, 0.0);
@@ -1353,23 +1326,13 @@ module tb_uart;
                     @(negedge clk);
                     if (tx === 1'b0) t_rise = cyc;
                 end
-                if (t_rise - p0 > 1)
-                    $display("NOTE divisor reload: TX start bit began %0d clocks after the THR write (one tick at the new divisor is 1 clock)",
-                             t_rise - p0);
+                chk("divisor reload: clocks from the THR write to its start bit", t_rise - p0, 1);
             end
-            // Let the old count run out and the frame go, then pick the models up again.
-            repeat (1400) @(negedge clk);
-            @(posedge clk); #1;
-            tx_writes = tx_writes - tx_q_data.size();
-            tx_q_data.delete(); tx_q_wcyc.delete(); tx_q_div.delete();
-            tx_last_wcyc = -1; tx_end_known = 1'b1; tick_known = 1'b0; pin_free = 0;
-            mt_state = 0; mt_prev = 1'b1;
-            mon_on = 1'b1;
-            rd8(5, v8); if (v8[0]) rd8(0, v8);
+            wait_tx_idle;
+            idle(40);
             rxm_reset;
             rx_quiet_from = $realtime;
             rxm_on = 1'b1;
-            rts_chk_on = 1'b1;
         end
         wr8(0, 8'h5A);
         wait_tx_idle;
