@@ -121,13 +121,13 @@ module csr #(
     wire [31:0] csr_new = wdata;
 
     // Counter update model: auto-increment happens every retire/cycle (when not
-    // inhibited). An explicit write to minstret or minstreth is done *instead
-    // of* the increment -- Zicsr: "If a CSR access instruction writes such a
-    // CSR, the explicit write is done instead of the update from the side
-    // effect" -- so the half that is not written keeps its current value, and
-    // a write to minstreth does not bump the low half either. Upstream Spike
-    // does the same since 51835fd7, and riscv-tests rv32mi-instret_overflow
-    // checks it. mcycle still overwrites the *post-increment* half.
+    // inhibited). An explicit write to either half of mcycle or minstret is
+    // done *instead of* that cycle's increment -- Zicsr: "If a CSR access
+    // instruction writes such a CSR, the explicit write is done instead of
+    // the update from the side effect" -- so the half that is not written
+    // keeps its current value, and a write to the high half does not bump the
+    // low half either. Upstream Spike does the same since 51835fd7, and
+    // riscv-tests rv32mi-instret_overflow checks it for minstret.
     wire [63:0] mcycle_next   = (!mcountinhibit[0]) ? mcycle + 64'd1 : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2]) ? minstret + 64'd1 : minstret;
 
@@ -243,9 +243,9 @@ module csr #(
         if (rst)
             mcycle <= 64'b0;
         else if (we && waddr == 12'hB00)
-            mcycle <= {mcycle_next[63:32], csr_new};
+            mcycle <= {mcycle[63:32], csr_new};
         else if (we && waddr == 12'hB80)
-            mcycle <= {csr_new, mcycle_next[31:0]};
+            mcycle <= {csr_new, mcycle[31:0]};
         else
             mcycle <= mcycle_next;
     end
