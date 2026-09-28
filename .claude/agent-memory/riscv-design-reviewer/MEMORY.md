@@ -93,6 +93,9 @@ update after each review with confirmed decisions, findings, and recurring patte
   blind spots (M5-4, no PSRAM reset requirement, CS-before-OE), flash 77h wrap not undone, PSRAM wrap-32 reset
   claim unbacked, SoC tb has no handshake checker, model FLASH_FILE 128-char path. See
   finding_branch_review_2026-09-26_full.md
+- 2026-09-27 peripheral review at 4d04809 (uart/gpio/soc_bus/top): no CRIT. MAJOR: SPI DATA vs OUT (D/C, CS#)
+  ordering race, reproduced + fix verified in scratch. MINOR: OUT reset (CS# low, SCK low), DIV=2@53 MHz zero
+  margin, IO ready in stall path (STA). UART/8250 subset VERIFIED. See finding_periph_review_2026-09-27.md
 
 ## Recurring patterns observed
 
@@ -126,6 +129,9 @@ update after each review with confirmed decisions, findings, and recurring patte
 - To audit a protocol model, DELETE each init step / change each magic byte in the RTL and see if the tb
   notices (2026-09-26: dropping the PSRAM reset and sending mode 0x20 both passed). Self-checking probes need
   an external oracle too (irq-on vs irq-off checksum can be equally wrong; cross-check with Spike).
+- Back-pressure on one register orders only writes to THAT register: sideband GPIO writes (D/C, CS#) race the
+  shifter. Check every "a byte is one store" claim against the pins that frame the byte (2026-09-27).
+- Both tbs switch PMA_IO1 off, so no regression touches UART/GPIO; build a scratch SoC tb with IO1 on.
 - Scratch paths under /tmp/claude-1000/... are ~150 chars: a tb with a reg[1023:0] path buffer truncates
   them (qspi_pmod_model FLASH_FILE). Distinguish that from an RTL failure before reporting.
 
@@ -149,3 +155,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-26 SoC architecture review](finding_soc_arch_review_2026-09-26.md) — fabric/mem_ctrl/qspi_ctrl pre-RTL findings, verified-OK list, perf ranking
 - [2026-09-26 SoC RTL review](finding_soc_rtl_review_2026-09-26.md) — post-RTL verdicts, core-like stress tb + mutations, PMA/timer SoC probes, new-block area
 - [2026-09-26 full-branch review](finding_branch_review_2026-09-26_full.md) — QPI/flash-only verdicts, mutation results (what the Pmod model misses), SoC irq/WFI probes, area delta
+- [2026-09-27 peripheral review](finding_periph_review_2026-09-27.md) — UART/8250 verdicts, SPI D/C race + fix, measured area knobs
