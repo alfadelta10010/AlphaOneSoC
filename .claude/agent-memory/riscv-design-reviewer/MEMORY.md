@@ -20,10 +20,15 @@ update after each review with confirmed decisions, findings, and recurring patte
 - Privilege: M + U (no S), single hart. marchid param default 0, tb overrides to 5 (21fbe65). mstatus has MPRV+TW (7cd1eb6/8485cf0).
 - Memory map (ADOPTED e98761e): PMA_ROM flash 0x20000000 16MB RX; PMA_RAM PSRAM 0x80000000 16MB RWX+LR/SC
   (CS by addr[23]); IO0 CLINT 0x02000000 64KB; IO1 UART/GPIO/syscon 0x10000000-0x1002FFFF; IO takes AMO, not LR/SC.
-  Reset PC = boot_addr INPUT (caa2d10), strap picks flash/PSRAM. No boot ROM. mtvec still resets 0.
-  SoC BUILT (soc-fabric branch, 71a8514): soc_bus stateless decode, mem_ctrl data-first + 1 KB page split,
-  qspi_ctrl EBh/38h SPI mode SCK=clk/2, start-up F5h(QPI)/66h/99h to PSRAMs + 8x1111 to flash, rd_late strap,
-  CS0 masked on writes, registered MTIP, mtime = core clock (no prescaler), no PLIC, UART/GPIO/syscon read 0.
+  Reset PC = boot_addr INPUT (caa2d10); SoC ties it to 0x20000000 — FLASH-ONLY boot (81afe82), no strap,
+  no boot ROM, PSRAM always reset at start-up. mtvec resets 0 (documented as deliberate).
+  SoC BUILT (soc-fabric branch): soc_bus stateless decode, mem_ctrl data-first + 1 KB page split,
+  qspi_ctrl SCK=clk/2: PSRAM in QPI (0Bh 2+6+4 read, 38h 2+6 write, 97010f4); flash quad I/O EBh, cmd on IO0,
+  M=FFh — USER DECISION (d8194db): no flash CRM/QPI, don't re-propose, don't call it "SPI mode".
+  Start-up: F5h(QPI)/66h/99h PSRAMs, 8x1111 + FFh(QPI) flash, 35h PSRAMs. rd_late strap latched in reset,
+  CS0 masked on writes, registered MTIP, mtime = core clock, no PLIC, no TT wrapper (USER DECISION: don't flag).
+  UART (fbdcc03) 16550 subset @0x10000000, reg-shift 0, no FIFOs: THR back-pressure (ready low), RTS# RX flow
+  control, polled (no irq). GPIO (40516d6) OUT/IN + SPI mode-3 TX @0x10010000. soc_bus ANDs IO readies (6a8d4c6).
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on wb_mem_stall
   (2167485); other stalls bubble. Since c579eeb: dmem_req (excl. trapping/failing-SC) + imem_req (constant 1);
   every redirect gated on !stall so pc only moves when imem_ready. Loads still carry NO byte-lane info.
