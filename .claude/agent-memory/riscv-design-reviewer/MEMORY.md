@@ -56,7 +56,8 @@ update after each review with confirmed decisions, findings, and recurring patte
 - **DIV/REM edge cases** — divide-by-zero and INT_MIN/-1 signed overflow return values.
 - **FENCE.I** — must flush instruction fetch so the bootloader/loader sees written code.
 - **LR/SC reservation**: SC-always-clears is load-bearing (Linux's ret_from_exception dummy
-  SC relies on it); the trap clear is optional. See finding_lrsc_policy_2026-09-22.md.
+  SC relies on it); the trap clear is optional. USER DECISION dce9568: own stores/AMOs KEEP the
+  reservation (matches Spike) -- don't re-propose a local-write clear. See finding_lrsc_policy_2026-09-22.md.
 - **Misaligned access** — precise, re-executable trap (or correct hardware support).
 - **Interrupt taken mid-multicycle op** — sampled only at safe boundaries; mepc correct.
 - **PSRAM variable latency** — bus wait-state handling, no dropped/duplicated transfers.
@@ -93,6 +94,9 @@ update after each review with confirmed decisions, findings, and recurring patte
   blind spots (M5-4, no PSRAM reset requirement, CS-before-OE), flash 77h wrap not undone, PSRAM wrap-32 reset
   claim unbacked, SoC tb has no handshake checker, model FLASH_FILE 128-char path. See
   finding_branch_review_2026-09-26_full.md
+- 2026-09-27b review of dce9568/f4e4975/4f4e071 + SoC tb boot_addr force: LR/SC keep-policy LEGAL; counter
+  storage rule correct but MAJOR cross-half read bug (read port uses un-suppressed *_next), reproduced vs
+  Spike; tb force sound. See finding_review_2026-09-27_counters_lrsc.md
 - 2026-09-27 peripheral review at 4d04809 (uart/gpio/soc_bus/top): no CRIT. MAJOR: SPI DATA vs OUT (D/C, CS#)
   ordering race, reproduced + fix verified in scratch. MINOR: OUT reset (CS# low, SCK low), DIV=2@53 MHz zero
   margin, IO ready in stall path (STA). UART/8250 subset VERIFIED. See finding_periph_review_2026-09-27.md
@@ -131,6 +135,9 @@ update after each review with confirmed decisions, findings, and recurring patte
   an external oracle too (irq-on vs irq-off checksum can be equally wrong; cross-check with Spike).
 - Back-pressure on one register orders only writes to THAT register: sideband GPIO writes (D/C, CS#) race the
   shifter. Check every "a byte is one store" claim against the pins that frame the byte (2026-09-27).
+- Changing what a register STORES without changing what its bypass/read port RETURNS: csr.v reads
+  counters from *_next (the old post-increment model) after 4f4e071 changed the store rule (2026-09-27b).
+  Check read port, forwarding and tb export together for every semantic change.
 - Both tbs switch PMA_IO1 off, so no regression touches UART/GPIO; build a scratch SoC tb with IO1 on.
 - Scratch paths under /tmp/claude-1000/... are ~150 chars: a tb with a reg[1023:0] path buffer truncates
   them (qspi_pmod_model FLASH_FILE). Distinguish that from an RTL failure before reporting.
@@ -156,3 +163,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-26 SoC RTL review](finding_soc_rtl_review_2026-09-26.md) — post-RTL verdicts, core-like stress tb + mutations, PMA/timer SoC probes, new-block area
 - [2026-09-26 full-branch review](finding_branch_review_2026-09-26_full.md) — QPI/flash-only verdicts, mutation results (what the Pmod model misses), SoC irq/WFI probes, area delta
 - [2026-09-27 peripheral review](finding_periph_review_2026-09-27.md) — UART/8250 verdicts, SPI D/C race + fix, measured area knobs
+- [2026-09-27b counters + LR/SC review](finding_review_2026-09-27_counters_lrsc.md) — keep-reservation legality, cross-half counter read bug, tb boot_addr force, tile deltas
