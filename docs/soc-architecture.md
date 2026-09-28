@@ -263,10 +263,13 @@ synchronise `rst_n` before it reaches this reset.
   flash/PSRAM model, `tb/qspi_pmod_model.v`), compared against the same Spike
   references. The SoC boots from flash, so for a PSRAM-linked test the
   testbench loads the image into the model's PSRAM through the back door,
-  puts a two-instruction jump to `0x8000_0000` at the start of the model's
-  flash, and traces from `0x8000_0000`. MANIFEST mode `flash` tests are
-  flash images and are traced from reset (`flash_boot`: runs from flash,
-  copies a routine to PSRAM, runs it there). Tests that assume a
+  forces the core's `boot_addr` to `0x8000_0000` and traces from there. The
+  first fetch still goes through the fabric and the QSPI engine, and waits
+  for the start-up sequence; every register is 0 on entry, as on Spike,
+  which starts the hart at `--pc` with no boot ROM. MANIFEST mode `flash`
+  tests are flash images, boot from the real `boot_addr` and are traced
+  from reset (`flash_boot`: runs from flash, copies a routine to PSRAM,
+  runs it there), so they exercise the order silicon uses. Tests that assume a
   fast memory -- 40-clock timer periods, reading `cycle` right after writing
   it -- are listed in `#soc-skip` lines; `t_irq_slow` covers timer interrupts
   at QSPI speed.
