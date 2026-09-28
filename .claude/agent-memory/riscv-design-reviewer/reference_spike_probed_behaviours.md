@@ -19,13 +19,16 @@ Flags used by the flow: `--priv=mu -m0x80000000:0x2000000 --isa=rv32imac_zicntr 
   and NOT logged.
 - mstatus write mask (M+U): MIE, MPIE, MPRV, MPP, TW -> `csrw mstatus,-1` reads 0x00221888.
   MPP=01/10 legalized to 00 (U).
-- mcountinhibit: writable mask 0x5. The toggling instruction's own retire is counted with the
-  NEW inhibit value (bump happens after execute).
-- minstret low write: high half still receives the carry from the writing instruction's increment.
+- mcountinhibit: writable mask 0x5. (09-12 pinned Spike: toggling insn counted per NEW value.
+  SUPERSEDED 2026-09-27: upstream 7ab2efd6 counts it per the OLD value, same as the DUT --
+  `csrwi mcountinhibit,4` is counted, `csrwi mcountinhibit,0` is not. Measured, full-trace MATCH.)
+- Counter writes (upstream 7ab2efd6, since 51835fd7): a write to EITHER half suppresses the whole
+  64-bit increment; the unwritten half keeps its value (no carry). Pinned Feb-2025 Spike carried.
 - Illegal instruction: mtval = raw instruction bits (16-bit parcel for RVC), never forced 0.
 - marchid = 5 (Spike's registered open-source ID), mimpid = 0.
-- minstret includes the 5 boot-ROM instructions, so absolute counter reads never match a DUT
-  that starts at 0.
+- Upstream 7ab2efd6 (installed 2026-09-27 at /tools/rv32-isa-sim): NO boot ROM executed/logged;
+  hart starts at --pc with every GPR 0 (t0, a0, a1 all 0) and minstret 0. Flows set ignore_lines=0.
+  New Spike also logs writes to unimplemented pmpaddr4+ (`c948_pmpaddr4 0x0`) -- csrlog_probe.
 
 Related: [[finding-branch-review-2026-09-12]], [[verification-flow-river-core-riscof]].
 
