@@ -89,6 +89,10 @@ update after each review with confirmed decisions, findings, and recurring patte
 - 2026-09-26 post-RTL SoC review at 71a8514: A1-A4 VERIFIED FIXED; no CRIT/MAJ. MINOR: flash QPI exit not
   framed (QPI+CRM fails in own model), rd_late not latched, CS falls on first OE cycle, stale doc line.
   Q: PSRAM 66/99 vs preloaded data (boot_sel=1), CS pull-ups. See finding_soc_rtl_review_2026-09-26.md
+- 2026-09-26 full-branch review at bc0baec: all 71a8514 Minors VERIFIED FIXED; no CRIT/MAJ. MINOR: Pmod model
+  blind spots (M5-4, no PSRAM reset requirement, CS-before-OE), flash 77h wrap not undone, PSRAM wrap-32 reset
+  claim unbacked, SoC tb has no handshake checker, model FLASH_FILE 128-char path. See
+  finding_branch_review_2026-09-26_full.md
 
 ## Recurring patterns observed
 
@@ -119,6 +123,11 @@ update after each review with confirmed decisions, findings, and recurring patte
   trailing clocks). Check the MODEL against the datasheet, not only the RTL against the model.
 - Spike cannot model read-only memory, so PMA ROM faults (cause 5/7 on flash) never appear in lockstep; they need
   a self-checking or SoC-only test. Likewise the SoC suite soc-skips timer tests — write SoC-speed variants.
+- To audit a protocol model, DELETE each init step / change each magic byte in the RTL and see if the tb
+  notices (2026-09-26: dropping the PSRAM reset and sending mode 0x20 both passed). Self-checking probes need
+  an external oracle too (irq-on vs irq-off checksum can be equally wrong; cross-check with Spike).
+- Scratch paths under /tmp/claude-1000/... are ~150 chars: a tb with a reg[1023:0] path buffer truncates
+  them (qspi_pmod_model FLASH_FILE). Distinguish that from an RTL failure before reporting.
 
 ## Notes index (2026-09-05 review)
 
@@ -139,3 +148,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [QSPI Pmod datasheets + precedents](reference_qspi_pmod_datasheets.md) — W25Q128JV-DTR/APS6404L-3SQR timing, RBX page crossing, TinyQV/KianV QSPI choices
 - [2026-09-26 SoC architecture review](finding_soc_arch_review_2026-09-26.md) — fabric/mem_ctrl/qspi_ctrl pre-RTL findings, verified-OK list, perf ranking
 - [2026-09-26 SoC RTL review](finding_soc_rtl_review_2026-09-26.md) — post-RTL verdicts, core-like stress tb + mutations, PMA/timer SoC probes, new-block area
+- [2026-09-26 full-branch review](finding_branch_review_2026-09-26_full.md) — QPI/flash-only verdicts, mutation results (what the Pmod model misses), SoC irq/WFI probes, area delta
