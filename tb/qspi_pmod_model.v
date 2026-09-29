@@ -42,6 +42,11 @@
 //                  an address, and leaves the mode only on 8 clocks of 1111.
 //   +FLASH_QPI=1   flash in QPI mode (W25Q128JV-DTR): leaves it on 0xFF in QPI
 //                  form.
+//   +FLASH_DCRM=1  flash in dual I/O continuous-read mode (BBh with mode bits
+//                  M5-4 = 10, W25Q128JV-DTR 8.2.11): it takes the first 12
+//                  clocks as an address on IO1:0 and the next 4 as mode bits,
+//                  then drives dual data. A window that ends before the mode
+//                  bits leaves the mode set; mode bits other than 10 end it.
 //   Any other traffic to a device in one of these states stops the run.
 //
 // Also checked: at most one chip selected (bar the PSRAM broadcast above),
@@ -99,16 +104,18 @@ module qspi_pmod_model #(
     reg [7:0] flash [0:FLASH_SIZE-1];
     reg [7:0] ram   [0:RAM_SIZE-1];
 
-    localparam [2:0] P_IDLE = 0, P_CMD = 1, P_ADDR = 2, P_DUMMY = 3, P_RDATA = 4,
-                     P_WDATA = 5, P_IGNORE = 6, P_MODE = 7;
+    localparam [3:0] P_IDLE = 0, P_CMD = 1, P_ADDR = 2, P_DUMMY = 3, P_RDATA = 4,
+                     P_WDATA = 5, P_IGNORE = 6, P_MODE = 7,
+                     P_DCRM = 8,    // flash in dual continuous-read: address + mode
+                     P_DDATA = 9;   // ... and now driving dual data
 
-    reg  [2:0]  phase;
+    reg  [3:0]  phase;
     integer delay_ns;
     // 1024 characters, as tb_rivercore's INIT_FILE: $value$plusargs cuts a
     // longer path short without a word, and $readmemh of the stub only warns.
     reg [8191:0] flash_file;
     integer      flash_fd;
-    reg     psram_wrap, flash_crm, flash_qpi;
+    reg     psram_wrap, flash_crm, flash_qpi, flash_dcrm;
     // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
     reg [1:0] psram_qpi;    // in QPI mode
     reg [1:0] psram_rst;    // reset since power-up: reads, writes and 35h allowed
@@ -124,6 +131,7 @@ module qspi_pmod_model #(
         psram_rsten = 2'b00;
         flash_crm  = $test$plusargs("FLASH_CRM");
         flash_qpi  = $test$plusargs("FLASH_QPI");
+        flash_dcrm = $test$plusargs("FLASH_DCRM");
         for (k = 0; k < FLASH_SIZE; k = k + 1) flash[k] = 8'h00;
         for (k = 0; k < RAM_SIZE; k = k + 1)   ram[k]   = 8'h00;
         if ($value$plusargs("FLASH_FILE=%s", flash_file)) begin
@@ -145,7 +153,7 @@ module qspi_pmod_model #(
         phase  = P_IDLE;
     end
 
-    reg  [3:0]  n;          // bits / nibbles / cycles seen in the phase
+    reg  [4:0]  n;          // bits / nibbles / cycles seen in the phase
     reg  [7:0]  cmd;
     reg  [23:0] addr;
     reg  [7:0]  mode;
@@ -247,7 +255,11 @@ module qspi_pmod_model #(
             // psel, a wire, may not have caught up with chip and both yet.)
             rsten_q     = psram_rsten;
             psram_rsten = psram_rsten & cs_n[2:1];
-            if (chip == 2'd0 && flash_crm) phase = P_MODE;
+            if (chip == 2'd0 && flash_crm)  phase = P_MODE;
+            if (chip == 2'd0 && flash_dcrm) begin
+                phase = P_DCRM;
+                mode  = 8'h00;
+            end
         end else if (!any_sel && phase != P_IDLE) begin
             if (chip != 2'd0 && ($realtime - t_sel) > TCEM_NS)
                 fail("PSRAM chip select held low longer than tCEM");
@@ -257,9 +269,31 @@ module qspi_pmod_model #(
         end
     end
 
+    // Flash in dual continuous-read mode, once its address and mode are in:
+    // the falling edge after them starts dual data. Checked 1 ps later, so a
+    // chip select that rises on that same edge ends the read first.
+    always @(negedge sck) if (phase == P_DDATA) begin
+        #0.001;
+        if (any_sel && phase == P_DDATA)
+            fail("flash in dual continuous-read mode drove read data");
+    end
+
     // Host -> device, on rising SCK
     always @(posedge sck) if (any_sel) begin
         case (phase)
+            P_DCRM: begin
+                // Dual continuous-read: 12 address clocks, then M7-0 two bits
+                // a clock. Undriven mode bits are unknown, so they fail.
+                n = n + 1;
+                if (n > 12)
+                    mode = {mode[5:0], host_oe ? host_io[1:0] : 2'bxx};
+                if (n == 16) begin
+                    if (^mode[5:4] === 1'bx)
+                        fail("flash in dual continuous-read mode got undriven mode bits");
+                    if (mode[5:4] != 2'b10) flash_dcrm = 1'b0;
+                    phase = P_DDATA;
+                end
+            end
             P_MODE: begin
                 // Flash in continuous-read mode: 8 clocks of 1111 end it.
                 allones = allones && host_oe && (host_io == 4'b1111);
