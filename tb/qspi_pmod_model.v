@@ -89,15 +89,17 @@
 // drive and the chip select both reach them through the same output pads.
 //
 // Memory: ram[] is the two PSRAMs back to back (A at 0, B at 8 MB), zero-filled.
-// flash[] holds the first FLASH_SIZE bytes of flash; reads above that return
-// 0, the same as Spike's zero-filled RAM model of the flash window. Load them
-// by hierarchical reference or with +FLASH_FILE=, a path of up to 1023
-// characters; a longer one, or a file that cannot be opened, stops the run.
+// flash[] is the whole 16 MB flash. It is not zero-filled -- that loop would
+// add about 6 s to every run -- so a byte never loaded is X in the array and
+// reads 0 (flash_rd), the same as Spike's zero-filled RAM model of the flash
+// window. Load it by hierarchical reference or with +FLASH_FILE=, a path of
+// up to 1023 characters; a longer one, or a file that cannot be opened,
+// stops the run.
 
 `timescale 1ns / 1ps
 
 module qspi_pmod_model #(
-    parameter FLASH_SIZE = 65536,
+    parameter FLASH_SIZE = 16777216,
     parameter RAM_SIZE   = 16777216,
     parameter TCEM_NS    = 8000,       // PSRAM maximum CS-low time
     parameter TCPH_NS    = 18,         // minimum deselect time
@@ -155,7 +157,6 @@ module qspi_pmod_model #(
         flash_crm  = $test$plusargs("FLASH_CRM");
         flash_qpi  = $test$plusargs("FLASH_QPI");
         flash_dcrm = $test$plusargs("FLASH_DCRM");
-        for (k = 0; k < FLASH_SIZE; k = k + 1) flash[k] = 8'h00;
         for (k = 0; k < RAM_SIZE; k = k + 1)   ram[k]   = 8'h00;
         if ($value$plusargs("FLASH_FILE=%s", flash_file)) begin
             // A path that fills the buffer may have been cut short.
@@ -228,8 +229,13 @@ module qspi_pmod_model #(
         ram_index = {c == 2'd2, a[22:0]};
     endfunction
 
+    // A flash byte as the chip returns it: 0 where nothing was loaded.
+    function [7:0] flash_rd(input [23:0] a);
+        flash_rd = (a >= FLASH_SIZE || ^flash[a] === 1'bx) ? 8'h00 : flash[a];
+    endfunction
+
     function [7:0] rd(input [1:0] c, input [23:0] a);
-        if (c == 2'd0) rd = (a < FLASH_SIZE) ? flash[a] : 8'h00;
+        if (c == 2'd0) rd = flash_rd(a);
         else           rd = ram[ram_index(c, a)];
     endfunction
 

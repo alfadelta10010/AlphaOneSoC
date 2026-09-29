@@ -87,7 +87,7 @@ module tb_qspi;
     // Byte at a system address, straight from the model's arrays.
     function [7:0] mem_byte(input [31:0] a);
         if (a[31]) mem_byte = pmod.ram[a[23:0]];
-        else       mem_byte = (a[23:0] < 65536) ? pmod.flash[a[23:0]] : 8'h00;
+        else       mem_byte = pmod.flash_rd(a[23:0]);
     endfunction
 
     function [31:0] mem_word(input [31:0] a);   // 4 bytes from a, little-endian
