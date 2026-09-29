@@ -13,7 +13,10 @@
 //     write, as a 16550 reloads its counter; learnt from the first start
 //     bit after reset): the start bit begins on the first tick after the
 //     THR write, every bit is exactly 16 ticks, data LSB first, a full
-//     stop bit -- divisors 0 (as 1), 1, 2, 3, 5, 27, 300 and 1000;
+//     stop bit -- divisors 0 (as 1), 1, 2, 3, 5, 27, 300 and 1000; and
+//     LCR's break control (SBC), which holds the pin at 0 from the first
+//     tick after it is set to the first tick after it is cleared, whether
+//     or not a frame is shifting underneath;
 //   * THR back-pressure: THRE rises on the frame's 160th tick, one tick
 //     before the stop bit ends on the pin, and a THR write must complete on
 //     the first edge at which it is requested and THRE is set -- no sooner
@@ -105,6 +108,10 @@ module tb_uart;
 
     // ── Register model ──────────────────────────────────────────────────────
     reg       m_dlab, m_erbfi, m_etbei;
+    // SBC: its value, the value before the last LCR write, and that write's
+    // edge. A tick on edge e applies the value written on an edge before e.
+    reg       m_sbc = 1'b0, m_sbc_old = 1'b0, sbc_pin = 1'b0;
+    integer   sbc_edge = -1;
     reg [7:0] m_dll, m_dlm;
     function integer divisor(input [7:0] lo, input [7:0] hi);
         divisor = ({hi, lo} == 16'd0) ? 1 : {hi, lo};  // 0 counts as 1
@@ -206,8 +213,14 @@ module tb_uart;
             if (f_active) tx_writes = tx_writes - 1;      // a frame reset cut off
             f_active = 1'b0;
             tick_known = 1'b0; tickp_known = 1'b0; tick_switch = 0;
+            sbc_pin = 1'b0;
         end else if (mon_on) begin
             if (tx !== 1'b0 && tx !== 1'b1) fail("TX is X");
+            // SBC reaches the pin on a tick.
+            if (grid_known(cyc) && is_tick(cyc))
+                sbc_pin = (cyc > sbc_edge) ? m_sbc : m_sbc_old;
+            else if (!grid_known(cyc) && m_sbc)
+                tb_bug("SBC set before the tick grid is known");
             if (f_active) begin
                 if (cyc > f_W) begin
                     if (!grid_known(cyc)) begin
@@ -228,14 +241,16 @@ module tb_uart;
                 mt_exp = (f_ticks == 0)  ? 1'b1 :
                          (mt_bit == 0)   ? 1'b0 :
                          (mt_bit <= 8)   ? f_data[mt_bit - 1] : 1'b1;
+                mt_exp = mt_exp && !sbc_pin;
                 checks = checks + 1;
                 if (tx !== mt_exp)
-                    fail($sformatf("TX pin %b, want %b: frame %02h (divisor %0d), 16x tick %0d, %0d clocks after the THR write",
-                                   tx, mt_exp, f_data, f_d, f_ticks, cyc - f_W));
+                    fail($sformatf("TX pin %b, want %b: frame %02h (divisor %0d), 16x tick %0d, %0d clocks after the THR write, SBC %0d",
+                                   tx, mt_exp, f_data, f_d, f_ticks, cyc - f_W, sbc_pin));
                 if (f_ticks >= 161) tx_frame_done;
             end else begin
                 checks = checks + 1;
-                if (tx !== 1'b1) fail("TX not idle with no frame written");
+                if (tx !== !sbc_pin)
+                    fail(sbc_pin ? "TX not held at 0 by SBC" : "TX not idle with no frame written");
             end
         end
     end
@@ -417,7 +432,10 @@ module tb_uart;
                     else begin m_erbfi = wd[8]; m_etbei = wd[9]; end
                 end
                 if (old_dlab && (b[0] || b[1])) tick_restart(p, cur_div());
-                if (b[3]) m_dlab = wd[31];
+                if (b[3]) begin
+                    m_dlab = wd[31];
+                    m_sbc_old = m_sbc; m_sbc = wd[30]; sbc_edge = p;
+                end
             end
             if (!(b[0] && !a2 && !old_dlab)) begin
                 checks = checks + 1;
@@ -451,7 +469,7 @@ module tb_uart;
                         end else begin
                             iir  = (m_erbfi && dh) ? 8'h04 : (m_etbei && thre) ? 8'h02 : 8'h01;
                             rbrv = (dr_pend && dh) ? rbr_pend : m_rbr;
-                            e = {m_dlab, 7'b0, iir, m_dlab ? m_dlm : {6'b0, m_etbei, m_erbfi},
+                            e = {m_dlab, m_sbc, 6'b0, iir, m_dlab ? m_dlm : {6'b0, m_etbei, m_erbfi},
                                  m_dlab ? m_dll : rbrv};
                             m = 32'hFFFF_FFFF;
                             // RBR is only defined while DR is set.
@@ -568,6 +586,7 @@ module tb_uart;
     task automatic model_reset;
         begin
             m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd27; m_dlm = 8'd0;
+            m_sbc = 1'b0; m_sbc_old = 1'b0; sbc_edge = -1;
             if (dr_val || dr_pend) rx_kept = rx_kept - 1;  // a byte reset threw away
             rxm_reset;
         end
@@ -862,6 +881,33 @@ module tb_uart;
         rd8(3, v8); chk("DLAB cleared by that store", v8, 8'h00);
         wait_tx_idle;
         wr8(1, 8'h00);
+
+        // ── Break control (LCR.SBC) ─────────────────────────────────────────
+        // The TX model holds the pin at 0 from the first tick after SBC is
+        // set to the first tick after it is cleared.
+        section("break control");
+        for (k = 0; k < 3; k = k + 1) begin
+            set_div(k == 0 ? 1 : k == 1 ? 3 : 27);
+            d = cur_div();
+            wr8(3, 8'h40);                            // break, line idle
+            idle(40 * d);
+            rd8(3, v8); chk("LCR reads SBC back", v8, 8'h40);
+            wr8(3, 8'h00);
+            idle(20 * d);
+            wr8(0, 8'h5A);                            // a frame under a break:
+            wr8(3, 8'h40);                            //   shifts, the pin stays 0
+            wait_tx_idle;
+            idle(20 * d);
+            wr8(3, 8'h00);
+            wr8(0, 8'hC3);                            // break raised mid-frame,
+            idle(16 * 3 * d);                         //   then cleared mid-frame
+            wr8(3, 8'h40);
+            idle(16 * 3 * d + urand(16 * d));
+            wr8(3, 8'h00);
+            wait_tx_idle;
+            wr8(3, 8'hC0); wr8(3, 8'h00);             // with DLAB too, and back
+            idle(40 * d);
+        end
 
         // ── Receive: random bytes, baud error, every divisor ────────────────
         section("receive");
@@ -1286,7 +1332,7 @@ module tb_uart;
             end
             sender_stop;
             rx_settle;
-            if (m_dlab) wr8(3, 8'h00);
+            wr8(3, 8'h00);                          // DLAB and SBC off
             rd8(5, v8);
             if (dr_val) rd8(0, v8);
             wait_tx_idle;

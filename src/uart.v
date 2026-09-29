@@ -27,10 +27,14 @@
 //
 // What is kept of each register:
 //   IER  bits 0 (ERBFI) and 1 (ETBEI); the rest read 0.
-//   LCR  only DLAB (bit 7) is stored; the other bits read 0. The frame is
-//        fixed, and Linux keeps its own copy of LCR, so it never reads the
-//        word-length bits back. (Its read-modify-writes of LCR only clear
-//        bits.)
+//   LCR  only DLAB (bit 7) and SBC (bit 6, break control) are stored; the
+//        other bits read 0. The frame is fixed, and Linux keeps its own copy
+//        of LCR, so it never reads the word-length bits back. (Its
+//        read-modify-writes of LCR only clear bits.) While SBC is set, TX is
+//        held at 0 from the next 16x tick, as a 16550 forces its serial
+//        output to spacing (Linux's break_ctl, tcsendbreak); the transmitter
+//        keeps shifting underneath, and the pin follows it again from the
+//        first tick after SBC is cleared.
 //   LSR  0 DR, 1 OE, 5 THRE, 6 TEMT. Reading LSR clears OE.
 //   IIR  0x04 when ERBFI && DR, else 0x02 when ETBEI && THRE, else 0x01.
 //        No interrupt line leaves the UART (no PLIC), but Linux's 8250
@@ -96,6 +100,7 @@ module uart #(
 
     // ── Registers ───────────────────────────────────────────────────────────
     reg        dlab;
+    reg        sbc;                  // LCR bit 6: send break
     reg        erbfi, etbei;
     reg [7:0]  dll, dlm;
     reg [7:0]  rbr;
@@ -138,7 +143,7 @@ module uart #(
     wire [7:0] ier = {6'b0, etbei, erbfi};
 
     assign rdata = addr2 ? {8'h00, 8'hB0, lsr, 8'h00}
-                         : {dlab, 7'b0, iir, dlab ? dlm : ier, dlab ? dll : rbr};
+                         : {dlab, sbc, 6'b0, iir, dlab ? dlm : ier, dlab ? dll : rbr};
 
     // ── Baud generator: one 16x tick every divisor clocks ───────────────────
     // A write to DLL or DLM restarts the count, as on a 16550 ("Upon loading
@@ -159,12 +164,16 @@ module uart #(
     always @(posedge clk) begin
         if (rst) begin
             dlab  <= 1'b0;
+            sbc   <= 1'b0;
             erbfi <= 1'b0;
             etbei <= 1'b0;
             dll   <= DIV_RESET[7:0];
             dlm   <= DIV_RESET[15:8];
         end else begin
-            if (wr_lcr) dlab <= wdata[31];
+            if (wr_lcr) begin
+                dlab <= wdata[31];
+                sbc  <= wdata[30];
+            end
             if (wr_ier) begin
                 erbfi <= wdata[8];
                 etbei <= wdata[9];
@@ -190,7 +199,7 @@ module uart #(
                     tx_sh <= {1'b0, tx_sh[9:1]};
             end
             if (tick)
-                tx <= tx_idle || tx_sh[0];
+                tx <= (tx_idle || tx_sh[0]) && !sbc;
         end
     end
 
