@@ -828,9 +828,10 @@ the right wire shapes in simulation but not run against the Pmod model):
 | PSRAM QPI, flash QPI + continuous read (D), *without* the aligned-fetch path | 2,775 | +304 | 55 |
 | B with the flash path tied off (PSRAM only) | 2,539 | | 54 |
 
-As built (A, then the `rd_late` latch and, in `d3cdb07`, the dual-CRM
-step's `again` flop), re-measured 2026-09-29: 2,663 µm², 0.24 tiles, 54
-flops (53 before the dual-CRM step).
+As built (A, then the `rd_late` latch, in `d3cdb07` the dual-CRM step's
+`again` flop, and then the reset wait and SCK-high window ends),
+re-measured 2026-09-30: 2,763 µm², 0.24 tiles, 54 flops (53 before the
+dual-CRM step).
 
 * **About 95 % of the engine is shared by all three chips.** Flash
   support costs 135 µm² over a PSRAM-only engine (2,674 vs 2,539). The

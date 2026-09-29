@@ -333,10 +333,10 @@ synchronise `rst_n` before it reaches this reset.
 Measured with yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`
 (standard-cell area before placement; 1 tile ≈ 11,300 µm² at TinyTapeout's
 60% density), re-measured 2026-09-29 as the mean of four file orders (abc
-varies by about 0.1 tile with the order): the whole SoC is **13.64 tiles,
-2,735 flops**, against about 7 tiles for a 4x2 slot. The SoC blocks added
+varies by about 0.1 tile with the order): the whole SoC is **13.61 tiles,
+2,736 flops**, against about 7 tiles for a 4x2 slot. The SoC blocks added
 here cost about 0.7 tiles flat (qspi_ctrl 0.24, mem_ctrl 0.07, the UART
-0.28 with 76 flops, GPIO with its SPI transmitter 0.12; soc_bus mostly folds
+0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus mostly folds
 away). The excess is in the core: register file 4.50, core glue 2.72, CSR
 2.49, muldiv 1.62 tiles. The measured cuts and what they buy are in
 `docs/area-audit.md`.

@@ -158,14 +158,14 @@ columns).
 | # | Block | Where | Status | Size (measured) | Linux |
 |---|---|---|---|---|---|
 | 1 | TinyTapeout wrapper | `tt_um_*` top | not built | reset synchroniser, wiring | — |
-| 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.28 tiles, 76 flops | `ns16550a` (8250 driver), polled |
+| 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.29 tiles, 77 flops | `ns16550a` (8250 driver), polled |
 | 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
 | 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
 | 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
 block synthesised on its own; 1 tile ≈ 11,300 µm² of standard cells at
-TinyTapeout's 60% density (UART 3,207 µm², GPIO 1,380 µm²). The SoC is
+TinyTapeout's 60% density (UART 3,321 µm², GPIO 1,380 µm²). The SoC is
 already about 1.9x the seven-tile budget (see "Area" in
 `docs/soc-architecture.md`); these two add 0.4 tiles.
 

@@ -79,7 +79,7 @@ The UART and GPIO are already lean:
 - The UART's transmitter needs no bit counter: an all-zeros shift register means done.
 - The SPI shifter uses a marker bit instead of a bit counter.
 - Only DLAB is stored of LCR, and only two bits of IER. (Since 2026-09-29, SBC too,
-  for break support: 76 flops.)
+  for break support: 77 flops with its break detection.)
 
 The one cut left is not storing DLM (the high divisor byte, which Linux leaves at 0 for
 115200 baud), which would save about 0.04 tiles (estimate). That is under the noise
@@ -285,6 +285,7 @@ Same recipe; each figure is the mean of four to six file orders.
 | SoC at b4f3f20 (above: 13.54, one order) | 13.55 | 2,731 |
 | SoC at 4b4ed8b (counter-write fix, LR/SC keep) | 13.61 | 2,731 |
 | SoC with the review fixes (UART break, RBR reset; QSPI dual-I/O step) | 13.64 | 2,735 |
+| ... and the second round (UART break after a framing error; QSPI reset wait, SCK-high window ends) | 13.61 | 2,736 |
 | core + CLINT, main 1535042 → 4b4ed8b | 12.84 → 12.89 | 2,563 → 2,564 |
 
 - Every change since b4f3f20 is inside the noise floor. The counter-write fix costs
@@ -293,7 +294,7 @@ Same recipe; each figure is the mean of four to six file orders.
 - CSR reads 2.49 tiles in the hierarchical run at 4b4ed8b (2.39 above); on its own the
   file is within noise of main's.
 - The SoC blocks this branch added cost 0.71 tiles flat (the hierarchical sum is 0.84;
-  `soc_bus` mostly folds away). The UART is 0.28 tiles and 76 flops (73 before break
+  `soc_bus` mostly folds away). The UART is 0.29 tiles and 77 flops (73 before break
   support), `qspi_ctrl` 0.24 tiles and 54 flops (53 before the dual-I/O step).
   Measured as zero: the `boot_addr` tie-off, the PMA `in_win()` compares against a
   hand-minimised decode (+0.01), the registered MTIP (1 flop) and the UART's own RX
