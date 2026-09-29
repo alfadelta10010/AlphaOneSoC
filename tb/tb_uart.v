@@ -99,8 +99,12 @@ module tb_uart;
             if (got !== want) fail($sformatf("%s: got %h, want %h", what, got, want));
         end
     endtask
+    string cur_section = "start";
     task automatic section(input string m);
-        $display("-- %s (cycle %0d)", m, cyc);
+        begin
+            cur_section = m;
+            $display("-- %s (cycle %0d)", m, cyc);
+        end
     endtask
 
     integer seed = 1;
@@ -1467,6 +1471,20 @@ module tb_uart;
         $finish;
     end
 
+    // A hang (a checker waiting on CTS that never comes, say) shows as no
+    // bus transfer completing. The longest quiet stretch in a passing run is
+    // 0.48 ms (transmit timing at divisor 300; seeds 1-3), and a whole run is
+    // about 10 ms, so 5 ms without a transfer stops it: a hung mutant costs
+    // seconds of wall time, not the 400 ms cap's forty minutes.
+    initial last_pt = 0.0;
+    always begin
+        #(1_000_000);
+        if ($realtime - last_pt > 5_000_000.0) begin
+            $display("TIMEOUT tb_uart: no bus transfer for 5 ms, in section \"%s\" (cycle %0d)",
+                     cur_section, cyc);
+            $finish;
+        end
+    end
     initial begin
         #(400_000_000);
         $display("TIMEOUT tb_uart");
