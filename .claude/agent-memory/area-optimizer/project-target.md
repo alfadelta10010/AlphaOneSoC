@@ -13,8 +13,8 @@ metadata:
   std-cell area at 60% density (2x2 = 45,362 µm² usable reference).
 - ISA today: RV32IMAC + U + Zicsr + Zicntr + Zifencei + 4-entry PMP; 3-stage pipeline
   (IF / EX / WB), no caches. Linux target: NOMMU M-mode; needs I, M, A in hardware.
-- Memory-bound: a QSPI read is 8 cmd + 6 addr + 6 dummy + 8 data SCK at clk/2 ≈ 60 clk per
-  fetch or load; stores ≈ 45 clk. Any EX-side change of a few cycles per instruction
+- Memory-bound: PSRAM QPI read = 20 SCK at clk/2 = 42 clk per fetch or load (measured);
+  flash read 28 SCK ≈ 60 clk; stores 22-34 clk. See [[soc-performance-measured]]. Any EX-side change of a few cycles per instruction
   is hidden behind the next fetch.
 
 **Why:** everything is priced against 79k µm² and the ~60-clock fetch.

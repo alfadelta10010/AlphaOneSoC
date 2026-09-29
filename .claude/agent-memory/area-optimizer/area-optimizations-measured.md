@@ -1,6 +1,6 @@
 ---
 name: area-optimizations-measured
-description: Every area optimization prototyped (2026-09-26/27), flat-SoC delta as mean of two file orders, directed-suite status, kept/rejected and why
+description: Every area optimization prototyped (2026-09-26/27, PR #5 review 2026-09-29), flat-SoC delta, directed-suite status, kept/rejected and why
 metadata:
   type: project
 ---
@@ -40,7 +40,21 @@ REJECTED (measured ~0): PMP NA4-via-NAPOT + TOR lt sharing (−0.05k), AMO singl
 (ABC already shares the 4 comparators), CLINT word-only writes (−0.3k, noise), PMA compares
 (0.2k total), datapath reset removal.
 
+PR #5 review (2026-09-29, vs 4b4ed8b = 13.61 t, 6-order mean; see [[area-baseline]]):
+- Full-ISA stack c_1rp re-measured with 4b4ed8b's counter-write fix + LR/SC keep ported
+  (`localFiles/area-audit/pr5/h2_1rp`): 8.92 t (4 orders) vs 8.87 t unported. 6x2 at 72%.
+- UART divisor 16->8 bit: -0.06 t, -16 ff (standalone; min 12.2 kbaud @50 MHz). Fixed divisor
+  (DLL/DLM writes ignored): -0.09 t, -24 ff (feature trade). Prototypes in pr5/uart8, pr5/uartfix.
+- Zero-cost confirmed: boot_addr tie-off (generic netlist identical), in_win PMA vs hand-minimised
+  bit decode (+0.01 t), counter carry-in reformulation (+0.02 t = noise, so the counter fix's
+  ~+0.06 t is not recoverable by rewriting).
+- Perf fixes mdfix + brhold ([[soc-performance-measured]]): 0.00 t (4 orders); core 106/106 and
+  SoC 66/66 on both mdfix alone and mdfix+brhold (local, 2026-09-29).
+- Duplicate RX synchroniser (UART vs GPIO IN[3]): 2 ff, ~0.004 t, not worth it.
+
 Key insight: in the SoC every instruction waits ~45 clk in EX for the next fetch, so EX-side
 serialization is free IF it runs during that wait. muldiv_start waits for !if_mem_stall, so an
-M op serializes with the fetch and discards/refetches a completed fetch (perf, not area).
+M op serializes with the fetch and discards/refetches a completed fetch (perf, not area) --
+fixed at ~0 area by mdfix. With brhold a CTI has no fetch in flight, so EX stalls on branches
+(e.g. the 1-read-port rs2 phase) are no longer hidden: +1 clk per branch.
 **How to apply:** start new work from c_low-equivalent RTL; don't re-try rejected items.
