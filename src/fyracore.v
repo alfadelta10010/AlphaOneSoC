@@ -50,6 +50,7 @@ module fyracore #(
     // Reset vector: pc is loaded from this on every cycle rst is high, so it
     // only needs to be stable by the last one. The SoC ties it to the start
     // of flash; the core-level testbench starts in PSRAM, where Spike does.
+    // Bit 0 is ignored: the pc, and so imem_addr, is always halfword-aligned.
     input  wire [31:0] boot_addr,
     // Memory interfaces: request/ready handshake.
     //
@@ -1003,7 +1004,7 @@ module fyracore #(
     // ================================================================
     always @(posedge clk) begin
         if (rst) begin
-            pc        <= boot_addr;
+            pc        <= {boot_addr[31:1], 1'b0};
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
