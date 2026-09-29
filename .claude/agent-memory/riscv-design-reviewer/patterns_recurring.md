@@ -54,3 +54,9 @@ Verification blind spots
 - Slow simulated fetch (~57 clk/instr) hides every short hazard (sync lag, back-to-back IO). Probe peripherals
   with a zero-wait unit tb before trusting a "discard one read"-style rule.
 - PR-body claims ("each commit names its mutants", mutant counts) drift from the commit log: grep the log.
+- A device-state model that stops modelling once the exit condition is met (P_IGNORE) cannot check
+  ORDER or LENGTH claims ("the 8-clock window must come first"): swap/remove each init step as a mutant
+  (2026-09-30: swap and drop-QPI-exit both passed). Lenient models (exit despite trailing clocks)
+  make the belt-and-braces step untestable -- ask for a pessimistic model option.
+- Every new sticky status bit needs its own set-vs-clear same-cycle case (BI copied OE's RTL but not
+  OE's test). Every "pins the window" test needs a read just past the window, not only inside it.

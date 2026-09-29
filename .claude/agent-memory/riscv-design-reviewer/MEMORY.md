@@ -23,10 +23,10 @@ update after each review with confirmed decisions, findings, and recurring patte
   SoC BUILT (soc-fabric branch, PR #5): soc_bus stateless decode, mem_ctrl data-first + 1 KB page split,
   qspi_ctrl SCK=clk/2: PSRAM in QPI (0Bh 2+6+4 read, 38h 2+6 write, 97010f4); flash quad I/O EBh, cmd on IO0,
   M=FFh — USER DECISION (d8194db): no flash CRM/QPI, don't re-propose, don't call it "SPI mode".
-  Start-up: F5h(QPI)/66h/99h PSRAMs, 8x1111 + FFh(QPI) flash, 35h PSRAMs. rd_late strap latched in reset,
+  Start-up: F5h(QPI)/66h/99h PSRAMs, 8x1111, 16x1111 (dual CRM, d3cdb07) + FFh(QPI) flash, 35h PSRAMs. rd_late strap latched in reset,
   CS0 masked on writes, registered MTIP, mtime = core clock, no PLIC, no TT wrapper (USER DECISION: don't flag).
   UART (fbdcc03) 16550 subset @0x10000000, reg-shift 0, no FIFOs: THR back-pressure, RTS# RX flow control,
-  polled. GPIO (40516d6) OUT/IN + SPI mode-3 TX @0x10010000. soc_bus ANDs IO readies (6a8d4c6).
+  polled; LCR.SBC + LSR.BI since 805324c/3f0d708, RBR resets 0. GPIO (40516d6) OUT/IN + SPI mode-3 TX @0x10010000. soc_bus ANDs IO readies (6a8d4c6).
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on
   wb_mem_stall (2167485); other stalls bubble. imem_req = in_exec(pc) (not constant 1 any more); every redirect
   gated on !stall so pc only moves when imem_ready. Loads read the whole word (no byte-lane info needed).
@@ -70,6 +70,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   false-fails mixed PSRAM modes — finding_pr5_mempath_review_2026-09-29.md
 - 2026-09-29 PR #5 periph + test-claims slice 4b4ed8b: no CRIT/MAJ; suites reproduce; CLINT-we mutant escapes all
   tests; mutation claim overstated — finding_pr5_review_2026-09-29.md
+- 2026-09-30 PR #5 fix round 3f8a69f: no CRIT/MAJ; model misses step order + QPI-exit step, BI same-cycle,
+  MTIP window upper bound (all PROVEN by mutant) — finding_pr5_fixround_review_2026-09-30.md
 
 ## Notes index
 
@@ -97,3 +99,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-29 PR #5 core](finding_pr5_core_review_2026-09-29.md) — no Crit/Major; registered MTIP stale mip + legal spurious irq; boot_addr[0] unmasked
 - [2026-09-29 PR #5 memory path](finding_pr5_mempath_review_2026-09-29.md) — command/timing verdicts, rd_late sweep, reset stress, model gaps
 - [2026-09-29 PR #5 periph + claims](finding_pr5_review_2026-09-29.md) — reproduced suite numbers, 8250 re-check, CLINT decode gap, keypad lag
+- [2026-09-30 PR #5 fix round](finding_pr5_fixround_review_2026-09-30.md) — dual-CRM step verdict per hand-over state, UART SBC/BI, 4 proven check gaps
