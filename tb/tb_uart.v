@@ -1244,6 +1244,24 @@ module tb_uart;
         rd8(5, v8); chk("(e) cleared", v8, 8'h61);
         rd8(0, v8);
         idle(40);
+        // (f) BI is set on the same edge as an LSR read: the read sees it
+        //     clear, and it stays set for the next read (as OE in (b)).
+        wait_cts;
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                @(posedge clk); #1;
+                while (!(dut.rx_busy && dut.rx_bit == 4'd9 && dut.rx_ph == 4'd7 && dut.tick)) begin
+                    @(posedge clk); #1;
+                end
+                rd8(5, v8);
+                chk("(f) LSR read on the edge BI is set: sees it clear", v8, 8'h60);
+            end
+        join
+        rd8(5, v8); chk("(f) BI and DR set after that read", v8, 8'h71);
+        rd8(5, v8); chk("(f) then BI cleared", v8, 8'h61);
+        rd8(0, v8); chk("(f) the break's zero byte", v8, 8'h00);
+        idle(40);
         rxm_reset;
         rx_quiet_from = $realtime;
         rxm_on = 1'b1;
