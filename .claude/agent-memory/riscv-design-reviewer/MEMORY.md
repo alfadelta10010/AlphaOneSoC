@@ -94,5 +94,6 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-26 full-branch review](finding_branch_review_2026-09-26_full.md) — QPI/flash-only verdicts, Pmod model mutation results
 - [2026-09-27 peripheral review](finding_periph_review_2026-09-27.md) — UART/8250 verdicts, SPI D/C race + fix, area knobs
 - [2026-09-27b counters + LR/SC](finding_review_2026-09-27_counters_lrsc.md) — keep-reservation legality, cross-half counter read bug
+- [2026-09-29 PR #5 core](finding_pr5_core_review_2026-09-29.md) — no Crit/Major; registered MTIP stale mip + legal spurious irq; boot_addr[0] unmasked
 - [2026-09-29 PR #5 memory path](finding_pr5_mempath_review_2026-09-29.md) — command/timing verdicts, rd_late sweep, reset stress, model gaps
 - [2026-09-29 PR #5 periph + claims](finding_pr5_review_2026-09-29.md) — reproduced suite numbers, 8250 re-check, CLINT decode gap, keypad lag
