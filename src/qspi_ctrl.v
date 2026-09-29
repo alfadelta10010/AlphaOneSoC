@@ -95,6 +95,13 @@
 //
 // Chip select is high for at least two clocks between transactions.
 //
+// A start-up window ends with chip select rising while SCK is still high,
+// and SCK falls a clock later. A flash in continuous-read mode starts
+// driving data on the falling edge after its address, mode and dummy clocks;
+// were that edge the one chip select rises on, its pads and ours could
+// overlap for a moment. Every other transaction ends on SCK's falling edge
+// (mode 0), since there the device drives nothing new.
+//
 // Interface. The requester (mem_ctrl) raises `start` and holds cs_sel, addr,
 // we, nbytes_m1 and wdata stable until `done`. They are read combinationally
 // throughout the transaction, so none of them is copied here. `done` is high
@@ -237,6 +244,7 @@ module qspi_ctrl (
                 end
                 S_END: begin
                     state <= S_IDLE;
+                    sck   <= 1'b0;
                     if (init) begin
                         step <= step + 3'd1;
                         if (step == 3'd6)
@@ -260,6 +268,7 @@ module qspi_ctrl (
                                     state <= S_END;
                                     cs_n  <= 3'b111;
                                     io_oe <= 1'b0;
+                                    sck   <= 1'b1;      // SCK falls in S_END
                                 end else begin
                                     state <= S_ADDR;
                                     cnt   <= 3'd5;
