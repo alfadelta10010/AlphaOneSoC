@@ -112,6 +112,10 @@ csrfwd              spike
 csrlog_probe        spike
 cnt_alias           spike
 cnt_xhalf           spike
+cnt_instret         spike
+cnt_instret         spike +DMEM_WAIT=3
+cnt_instret         spike +IMEM_WAIT=2 +DMEM_WAIT=1
+cnt_instret         spike +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 marchid             spike
 mip_ro              spike
 misa_adjacent       spike
