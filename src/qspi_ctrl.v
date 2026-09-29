@@ -32,7 +32,8 @@
 // Start-up sequence. The Pmod is shared, and the demo board does not power
 // cycle it between designs, so the devices can be left in a state this
 // engine does not speak -- TinyQV, for one, leaves the PSRAMs in QPI mode and
-// the flash in continuous-read mode. The PSRAM datasheet also asks for a
+// the flash in quad continuous-read mode; a design using the flash's dual I/O
+// read (BBh) can leave it in dual continuous-read mode. The PSRAM datasheet also asks for a
 // reset after power-up. So before taking its first request the engine sends
 // the following, and leaves the PSRAMs in QPI mode:
 //
@@ -41,12 +42,23 @@
 //                                          of an unfinished command
 //   CS1+CS2   66h, 99h (SPI)               PSRAM: reset enable, reset
 //   CS0       8 clocks of 1111             flash: all-ones mode bits end
-//                                          continuous-read mode
+//                                          quad continuous-read mode (6
+//                                          address + 2 mode clocks)
+//   CS0       16 clocks of 1111            flash: the same for dual
+//                                          continuous-read mode (12 address +
+//                                          4 mode clocks, W25Q128JV-DTR
+//                                          8.2.11: "input FFFFh on IO0 for the
+//                                          next instruction (16 clocks)")
 //   CS0       FFh in QPI form (2 clocks)   flash: Exit QPI on the
 //                                          W25Q128JV-DTR; a flash in SPI mode
 //                                          sees two bits and ignores them
 //   CS1+CS2   35h (SPI)                    PSRAM: Enter Quad (QPI) mode
 //
+// The 8-clock window must come first: a flash in quad continuous-read mode
+// would take a 16-clock window as address, mode and 4 dummy clocks, then
+// drive data from clock 12. A flash in dual continuous-read mode takes the
+// 8-clock window as part of an address and stays in the mode, so the
+// 16-clock window after it is what gets it out.
 // The SoC always boots from flash, so nothing is in the PSRAMs yet and they
 // are always reset. The flash steps sit between the reset and 35h, far more
 // than the PSRAM's 50 ns tRST. The first F5h is what gets a PSRAM we left in
@@ -137,6 +149,7 @@ module qspi_ctrl (
     reg        init;    // start-up sequence still running
     reg [2:0]  step;    // which command of it
     reg        late;    // rd_late, as sampled during reset
+    reg        again;   // start-up step 4: second 8 clocks of its 16
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -145,10 +158,12 @@ module qspi_ctrl (
     assign rdata = {sr[7:0], sr[15:8], sr[23:16], sr[31:24]};
 
     // Start-up steps: 0 = F5h in QPI form, 1 = 66h, 2 = 99h (PSRAMs);
-    // 3 = 8 clocks of 1111, 4 = FFh in QPI form (flash); 5 = 35h (PSRAMs).
-    // After it, PSRAM traffic is QPI form and flash traffic SPI form.
+    // 3 = 8 clocks of 1111, 4 = 16 clocks of 1111, 5 = FFh in QPI form
+    // (flash); 6 = 35h (PSRAMs). Steps 3 and 4 are FFh in SPI form, step 4
+    // sent twice under one chip select. After it, PSRAM traffic is QPI form
+    // and flash traffic SPI form.
     wire       psram    = (cs_sel != 2'd0);
-    wire       qpi_form = init ? (step == 3'd0 || step == 3'd4) : psram;
+    wire       qpi_form = init ? (step == 3'd0 || step == 3'd5) : psram;
     reg  [7:0] cmd;
     always @(*) begin
         if (init)
@@ -156,7 +171,7 @@ module qspi_ctrl (
                 3'd0:    cmd = 8'hF5;
                 3'd1:    cmd = 8'h66;
                 3'd2:    cmd = 8'h99;
-                3'd5:    cmd = 8'h35;
+                3'd6:    cmd = 8'h35;
                 default: cmd = 8'hFF;
             endcase
         else
@@ -189,7 +204,7 @@ module qspi_ctrl (
 
     // Chip selects for a transaction starting now. A write never selects
     // the flash.
-    wire [2:0] sel_now = init ? ((step == 3'd3 || step == 3'd4) ? 3'b001 : 3'b110)
+    wire [2:0] sel_now = init ? ((step == 3'd3 || step == 3'd4 || step == 3'd5) ? 3'b001 : 3'b110)
                               : ((3'b001 << cs_sel) & {2'b11, !we});
 
     always @(posedge clk) begin
@@ -203,6 +218,7 @@ module qspi_ctrl (
             init   <= 1'b1;
             step   <= 3'd0;
             late   <= rd_late;
+            again  <= 1'b0;
         end else begin
             ctl_oe <= 1'b1;
             if (sample)
@@ -223,7 +239,7 @@ module qspi_ctrl (
                     state <= S_IDLE;
                     if (init) begin
                         step <= step + 3'd1;
-                        if (step == 3'd5)
+                        if (step == 3'd6)
                             init <= 1'b0;
                     end
                 end
@@ -236,7 +252,11 @@ module qspi_ctrl (
                             io_oe <= 1'b0;      // mode byte done: release the bus
                         if (state == S_DATA ? (cnt == data_last) : (cnt == 3'd0)) begin
                             case (state)
-                                S_CMD: if (init) begin
+                                S_CMD: if (init && step == 3'd4 && !again) begin
+                                    cnt   <= 3'd7;      // 8 more clocks of 1111
+                                    again <= 1'b1;
+                                end else if (init) begin
+                                    again <= 1'b0;
                                     state <= S_END;
                                     cs_n  <= 3'b111;
                                     io_oe <= 1'b0;
