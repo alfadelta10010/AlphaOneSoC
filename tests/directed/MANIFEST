@@ -92,6 +92,13 @@ t_mulirq            expect x8=0x14
 t_mulirq            expect x8=0x14 -- +IMEM_WAIT=2 +DMEM_WAIT=1 +DMEM_RANDOM=1
 t_ctl               expect x8=0x64 x25=0x64
 t_ctl               expect x8=0x64 x25=0x64 -- +IMEM_WAIT=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
+# An interrupt between an LR and its SC clears the reservation: the SC fails
+# (x10 = 1), where the same sequence with MIE off succeeds (x12 = 0). Placed
+# there by construction, so it holds at any speed and runs through the SoC
+# too. DUT-only: the timer counts clocks.
+lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77
+lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +DMEM_WAIT=3
+lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 # The registered MTIP's stale window (mtip_stale.S says more): after a store
 # moves mtimecmp away, mip.MTIP still reads 1 for two clocks (two
 # instructions with a fast fetch) and 0 on the third instruction, and MIE
@@ -194,7 +201,7 @@ flash_boot          soc spike +FLASH_QPI +FLASH_CRM +PSRAM_QPI
 flash_boot          soc spike +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12 +PSRAM_WRAP
 irq_stress          soc expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12 +PSRAM_WRAP +PSRAM_QPI +FLASH_CRM
 # t_ctl's LR/SC loop at a 2000-clock period (t_ctl_slow.S says why).
-t_ctl_slow          soc expect x8=0x64 x25=0x64 x19=0x1 x20=0x1
+t_ctl_slow          soc expect x8=0x64 x25=0x64 x20=0x1
 
 #soc-skip cnt_alias -- the csrr of `cycle` waits in EX through a QSPI fetch (about 57 clocks) and reads mcycle when it executes, 0x2039 rather than 0x2000; Spike counts one per instruction. The forwarding it checks is the same in both builds.
 #soc-skip cnt_xhalf -- its mcycle cases read the cycle counter, which counts clocks: at QSPI speed each instruction is tens of clocks, while Spike counts one per instruction. The minstret cases are covered at the core level.
