@@ -67,9 +67,14 @@
 //   with a data bit of 1 (a framing error) is dropped and sets nothing. One
 //   whose every bit, stop bit included, reads 0 is a break: it sets BI and,
 //   as a 16550 loads one zero character, DR with RBR = 0 (or OE, if RBR was
-//   full). After either the receiver waits for the line to go high before
-//   it looks for the next start bit. Linux reads BI to count breaks and for
-//   the magic SysRq key.
+//   full). Linux reads BI to count breaks and for the magic SysRq key.
+//   After a framing error the receiver goes back to looking for a start bit
+//   as soon as the line is high; if instead the line stays low for another
+//   whole frame, counted from the bad stop bit, that is a break which began
+//   inside the character, and it is reported as one. After a break the
+//   line must be high for half a bit before the next start bit counts, as
+//   on a 16550, so a short high glitch inside a long break does not report
+//   a second one.
 //
 // Receive sampling: two-flop synchroniser, 16x oversampling on the same
 // divisor as transmit, start bit re-checked at mid-bit (a shorter low pulse
@@ -208,9 +213,11 @@ module uart #(
     end
 
     // ── Receive ─────────────────────────────────────────────────────────────
-    // rx_bit: 0 start, 1-8 data, 9 stop, 10 waiting for the line to go high
-    // after a frame whose stop bit read 0. rx_keep: RBR was empty when the
-    // frame started, so its bits go into RBR.
+    // rx_bit: 0 start, 1-8 data, 9 stop, 10 after a break, waiting for half
+    // a bit of high line (rx_ph counts its ticks). rx_keep: RBR was empty
+    // when the frame started, so its bits go into RBR. rx_chk: after a
+    // framing error, bits 1-9 count one more frame of low line, the bad stop
+    // bit standing in for its start bit; a high line ends it at once.
     reg [1:0]  rx_sync;
     wire       rx_s = rx_sync[1];
     reg        rx_busy;
@@ -218,10 +225,11 @@ module uart #(
     reg [3:0]  rx_ph;
     reg        rx_keep;
     reg        rx_zero;             // every bit of the frame so far read 0
+    reg        rx_chk;              // counting a framing error's low line
     wire       rx_mid = tick && (rx_ph == 4'd7);
     // The stop bit's sample: a frame to keep or drop (a good stop bit, or a
-    // break), and whether it is a break.
-    wire       rx_end = rx_mid && rx_busy && rx_bit == 4'd9 && (rx_s || rx_zero);
+    // break), and whether it is a break. While rx_chk, only a break counts.
+    wire       rx_end = rx_mid && rx_busy && rx_bit == 4'd9 && (rx_s ? !rx_chk : rx_zero);
     wire       rx_brk = rx_end && !rx_s;
 
     always @(posedge clk) begin
@@ -232,6 +240,7 @@ module uart #(
             rx_ph   <= 4'd0;
             rx_keep <= 1'b0;
             rx_zero <= 1'b0;
+            rx_chk  <= 1'b0;
             dr      <= 1'b0;
             oe      <= 1'b0;
             bi      <= 1'b0;
@@ -247,8 +256,16 @@ module uart #(
                     rx_keep <= !dr;
                     rx_zero <= 1'b1;
                 end
-            end else if (rx_bit == 4'd10) begin
-                if (rx_s) rx_busy <= 1'b0;             // line back to idle
+            end else if (rx_bit == 4'd10) begin        // after a break
+                if (!rx_s)
+                    rx_ph <= 4'd0;
+                else if (tick) begin
+                    rx_ph <= rx_ph + 4'd1;
+                    if (rx_ph == 4'd7) rx_busy <= 1'b0;   // half a bit of high line
+                end
+            end else if (rx_chk && rx_s) begin
+                rx_busy <= 1'b0;                       // not a break: line idle
+                rx_chk  <= 1'b0;
             end else if (tick) begin
                 rx_ph <= rx_ph + 4'd1;
                 if (rx_ph == 4'd7) begin               // middle of the bit
@@ -257,8 +274,17 @@ module uart #(
                     if (rx_bit == 4'd0 && rx_s)
                         rx_busy <= 1'b0;               // glitch, not a start bit
                     if (rx_bit == 4'd9) begin
-                        if (rx_s) rx_busy <= 1'b0;     // good stop bit
-                        else      rx_bit  <= 4'd10;    // framing error / break
+                        if (rx_s)
+                            rx_busy <= 1'b0;           // good stop bit
+                        else if (rx_zero) begin        // break
+                            rx_bit <= 4'd10;
+                            rx_ph  <= 4'd0;
+                            rx_chk <= 1'b0;
+                        end else begin                 // framing error:
+                            rx_bit  <= 4'd1;           //   count a frame of
+                            rx_zero <= 1'b1;           //   low line from here
+                            rx_chk  <= 1'b1;
+                        end
                     end
                 end
             end

@@ -268,7 +268,9 @@ module tb_uart;
     // pops out of DR windows and start-bit detection windows, and OE-clearing
     // reads out of OE windows while OE is already set, so every frame's fate
     // is certain.
-    localparam integer K_GOOD = 0, K_BAD = 1, K_GLITCH = 2;
+    // K_LATE_BRK: a framing error whose line then stays low for a whole
+    // frame more -- a break that began inside the character.
+    localparam integer K_GOOD = 0, K_BAD = 1, K_GLITCH = 2, K_LATE_BRK = 3;
     reg        rxm_on = 1'b1;
     reg        dr_val = 1'b0, dr_pend = 1'b0;
     real       dr_lo, dr_hi;
@@ -287,6 +289,7 @@ module tb_uart;
     // The frame now on the line, for RTS# and the detection window.
     real       fr_t0 = -1.0e9, fr_hi_from = 1.0e18, fr_hi_to = -1.0e18;
     integer    fr_d = 1;
+    reg        fr_brk = 1'b0;            // the frame on the line is a break
     real       rx_quiet_from = 1.0e18;   // RTS# must be asserted from here, if RBR is empty
     integer    pop_hold_until = -1;      // RTS# still deasserted on this edge (the pop)
     reg        rts_chk_on = 1'b1;
@@ -326,8 +329,11 @@ module tb_uart;
     // and the stop bit's middle is 152 ticks after detection.
     task automatic rxm_start(input real t0, input integer d, input [7:0] data, input integer kind);
         reg brk;
+        real sh;                         // a late break's samples: 144 ticks later
         begin
-            brk = (kind == K_BAD && data == 8'h00);     // every bit 0: a break
+            brk = (kind == K_BAD && data == 8'h00) || kind == K_LATE_BRK;
+            sh  = (kind == K_LATE_BRK) ? 144.0 * d * T : 0.0;
+            fr_brk = brk;
             fr_t0 = t0; fr_d = d;
             fr_hi_from = (kind == K_GLITCH) ? 1.0e18 : t0 + (d + 3) * T;
             // A good frame keeps RTS# deasserted until the stop bit's sample
@@ -336,7 +342,7 @@ module tb_uart;
             rx_quiet_from = (kind == K_GOOD)   ? t0 + (153*d + 4) * T :
                             (kind == K_GLITCH) ? t0 + (9*d + 4) * T : 1.0e18;
             if (kind == K_GLITCH) rx_glitches = rx_glitches + 1;
-            if (kind == K_BAD)    rx_bad = rx_bad + 1;
+            if (kind == K_BAD || kind == K_LATE_BRK) rx_bad = rx_bad + 1;
             if (rxm_on) begin
                 rxm_advance(t0 + 2.0 * T);
                 if (dr_pend) tb_bug("a frame starts inside the previous frame's DR window");
@@ -344,30 +350,31 @@ module tb_uart;
                 if (bi_pend) tb_bug("a frame starts inside the previous frame's BI window");
                 if (kind == K_GOOD || brk) begin
                     if (!dr_val) begin
-                        dr_pend = 1'b1; rbr_pend = data;
-                        dr_lo = t0 + (152*d + 2) * T; dr_hi = t0 + (153*d + 2) * T;
+                        dr_pend = 1'b1; rbr_pend = brk ? 8'h00 : data;
+                        dr_lo = t0 + (152*d + 2) * T + sh; dr_hi = t0 + (153*d + 2) * T + sh;
                         rx_kept = rx_kept + 1;
                         bi_link = 1;
                     end else begin
                         oe_pend = 1'b1;
-                        oe_lo = t0 + (152*d + 2) * T; oe_hi = t0 + (153*d + 2) * T;
+                        oe_lo = t0 + (152*d + 2) * T + sh; oe_hi = t0 + (153*d + 2) * T + sh;
                         rx_dropped = rx_dropped + 1;
                         bi_link = 2;
                     end
                 end
                 if (brk) begin
                     bi_pend = 1'b1;
-                    bi_lo = t0 + (152*d + 2) * T; bi_hi = t0 + (153*d + 2) * T;
+                    bi_lo = t0 + (152*d + 2) * T + sh; bi_hi = t0 + (153*d + 2) * T + sh;
                     rx_breaks = rx_breaks + 1;
                 end
             end
         end
     endtask
-    // The line went high again after a frame whose stop bit was 0.
+    // The line went high again after a frame whose stop bit was 0. After a
+    // break the receiver wants half a bit (8 ticks) of high line first.
     task automatic rxm_line_high(input real th);
         begin
-            fr_hi_to = th + 2.0 * T;
-            rx_quiet_from = th + 4.0 * T;
+            fr_hi_to      = fr_brk ? th + (7*fr_d + 2) * T : th + 2.0 * T;
+            rx_quiet_from = fr_brk ? th + (8*fr_d + 4) * T : th + 4.0 * T;
             if (fr_t0 + (153*fr_d + 4) * T > rx_quiet_from) rx_quiet_from = fr_t0 + (153*fr_d + 4) * T;
         end
     endtask
@@ -647,7 +654,13 @@ module tb_uart;
         begin
             t0 = $realtime;
             rx = 1'b0;
-            rxm_start(t0, d, data, stop ? K_GOOD : K_BAD);
+            // After a framing error the receiver counts one more frame of low
+            // line from the bad stop bit's sample. The tests keep extra_low
+            // either at most 3 bits (no break) or at least 11 (a break): in
+            // between, whether it is one depends on the sampling phase.
+            if (!stop && data != 8'h00 && extra_low > 3.5 * tb && extra_low < 11.0 * tb)
+                tb_bug("framing error with an ambiguous low tail");
+            rxm_start(t0, d, data, stop ? K_GOOD : (data != 8'h00 && extra_low >= 11.0 * tb) ? K_LATE_BRK : K_BAD);
             #(tb);
             for (i = 0; i < 8; i = i + 1) begin rx = data[i]; #(tb); end
             rx = stop;
@@ -672,6 +685,21 @@ module tb_uart;
             rx = 1'b0;
             rxm_start($realtime, d, 8'h00, K_BAD);
             #(len);
+            rx = 1'b1;
+            rxm_line_high($realtime);
+        end
+    endtask
+    // A break of len1, a high glitch of g, then len2 more of low line: one
+    // break, since the glitch is under half a bit.
+    task automatic rx_break_glitch(input real len1, input real g, input real len2, input integer d);
+        begin
+            rx = 1'b0;
+            rxm_start($realtime, d, 8'h00, K_BAD);
+            #(len1);
+            rx = 1'b1;
+            #(g);
+            rx = 1'b0;
+            #(len2);
             rx = 1'b1;
             rxm_line_high($realtime);
         end
@@ -1089,13 +1117,28 @@ module tb_uart;
         rd8(5, v8); chk("then BI and OE cleared", v8, 8'h61);
         rd8(0, v8); chk("RBR keeps the byte before the break", v8, 8'h6B);
         rd8(5, v8);
+        // A break that begins inside a character: the character ends in a
+        // framing error, and the line stays low for a whole frame more.
+        wait_cts;
+        rx_frame(8'hF7, tb, d, 1'b0, 14.0 * tb); rx_settle;
+        rd8(5, v8); chk("LSR after a break that began mid-character", v8, 8'h71);
+        rd8(0, v8); chk("mid-character break: RBR", v8, 8'h00);
+        rd8(5, v8);
+        // A high glitch of a quarter bit inside a long break is not the end
+        // of it: the receiver wants half a bit of high line first, so there
+        // is one break, not two (a second would set OE, RBR being full).
+        wait_cts;
+        rx_break_glitch(15.0 * tb, 0.25 * tb, 12.0 * tb, d); rx_settle;
+        rd8(5, v8); chk("LSR after a break with a glitch inside", v8, 8'h71);
+        rd8(0, v8); chk("glitched break: RBR", v8, 8'h00);
+        rd8(5, v8); chk("glitched break: one break only", v8, 8'h60);
         // A framing error is not a break: one data bit of 1 is enough.
         fork
             begin wait_cts; rx_frame(8'h80, tb, d, 1'b0, 3.0 * tb); end
         join
         rx_settle;
         rd8(5, v8); chk("LSR after a framing error on 0x80", v8, 8'h60);
-        if (rx_bad < 9) fail("framing: too few bad frames sent");
+        if (rx_bad < 11) fail("framing: too few bad frames sent");
 
         // ── Overrun ─────────────────────────────────────────────────────────
         section("overrun");
