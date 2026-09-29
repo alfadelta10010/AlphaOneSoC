@@ -460,8 +460,10 @@ EID[47:0] with the density in EID[47:45].
 | CL | system load | | **15 pF** |
 
 * For reads the datasheet *recommends* tCHD > tACLK + tCLK, so the last
-  nibble is still there when the controller latches it (Figure 3) — our
-  `rd_late` `S_TAIL` state does exactly this.
+  nibble is still there when the controller latches it (Figure 3). Our
+  engine does not need it: it samples the last nibble on or before the
+  edge where CS rises. `rd_late`'s `S_TAIL` state holds CS one extra core
+  clock, which makes tCHD 2T — one SCK period, not tACLK + tCLK.
 * Above 84 MHz it recommends sampling read data on the falling edge or
   training the sampling point. Irrelevant at our SCK.
 
@@ -517,7 +519,7 @@ launched it. T = 20 ns at 50 MHz, 15 ns at 66 MHz.
 | Data setup before SCK ↑ | 2 ns (PSRAM), 1 ns (flash) | ≈ T − pad skew | 20 ns ✓ | 15 ns ✓ |
 | Data hold after SCK ↑ | 2 ns | ≈ T | ✓ | ✓ |
 | CS setup before first SCK ↑ | 2.5 / 3 ns | T | ✓ | ✓ |
-| CS hold after last SCK ↑ | 3 ns | ≥ T (3T with `S_TAIL`) | ✓ | ✓ |
+| CS hold after last SCK ↑ | 3 ns | ≥ T (2T with `S_TAIL`) | ✓ | ✓ |
 | SCK duty | 45–55 % | 50 % (registered toggle) | ✓ | ✓ |
 | CS high between transactions | 18 ns (PSRAM), 10 ns (flash read) | ≥ 2T | 40 ns ✓ | 30 ns ✓ |
 | SCK ceiling, current commands | PSRAM QPI `0Bh` 66 MHz, flash `EBh` 133 | clk/2 | 25 MHz | 33 MHz |
@@ -541,10 +543,12 @@ with 2 dummy clocks **50 MHz**, with 4 dummy 80 MHz.
 | PSRAM | QPI mode | TinyQV (expects PSRAM in QPI), any QPI user | `F5h` in QPI form |
 | PSRAM | Wrap-32 | anyone who toggled `C0h` | reset (`66h`+`99h`) |
 | Flash | SPI-CRM | TinyQV (runs flash in CRM, M = `A0h`) | 8 clocks of `1111` |
+| Flash | dual-I/O CRM (`BBh`, M5-4 = `10`) | a design using the dual I/O read | 16 clocks of `1111` (12 address + 4 mode clocks on IO1:0; -DTR datasheet §8.2.11), after the 8-clock window |
 | Flash | QPI (± CRM, any P) | a QPI user | CRM exit, then `FFh` in QPI form |
 | Flash | `77h` wrap on | a cache-line user | `77h` with W4 = 1, or reset (30 µs) |
 | Flash | power-down (`B9h`) | a low-power user | `ABh`, then 3 µs |
 | Flash | QE = 0 | a fresh -IM part | `06h`, `31h 02h` — a programming job, not ours |
+| Flash | BUSY (program, erase or status write running) or an erase/program suspended | a design switched out mid-write | none from us: while BUSY the flash ignores every instruction but `05h`/`35h`/`15h` and `75h` (-DTR §7.1.1), and a sector erase takes up to 400 ms. **Board prerequisite:** the flash is idle and nothing is suspended when the chip leaves reset. The engine has no 1-bit read path to poll `05h`. |
 
 ### 7.2 Today's sequence (PSRAM in QPI, flash in SPI; since `97010f4`)
 
@@ -552,12 +556,18 @@ with 2 dummy clocks **50 MHz**, with 4 dummy 80 MHz.
 |---|---|---|---|
 | 0 | CS1+CS2 | `F5h` QPI form (2 clk) | PSRAM leaves QPI; SPI-mode PSRAM sees 2 bits of nothing |
 | 1–2 | CS1+CS2 | `66h`, `99h` SPI | PSRAM reset (always: the SoC boots from flash only, so nothing is in PSRAM yet) |
-| 3 | CS0 | 8 clk of `1111` | flash leaves CRM (SPI or QPI) |
-| 4 | CS0 | `FFh` QPI form (2 clk) | flash leaves QPI; SPI-mode flash sees 2 bits of nothing |
-| 5 | CS1+CS2 | `35h` SPI | PSRAM enters QPI |
+| 3 | CS0 | 8 clk of `1111` | flash leaves quad CRM (SPI or QPI) |
+| 4 | CS0 | 16 clk of `1111`, one CS | flash leaves dual-I/O CRM (since `d3cdb07`); a flash in SPI mode sees `FFh` and 8 idle clocks |
+| 5 | CS0 | `FFh` QPI form (2 clk) | flash leaves QPI; SPI-mode flash sees 2 bits of nothing |
+| 6 | CS1+CS2 | `35h` SPI | PSRAM enters QPI |
 
-The flash steps sit between the PSRAM reset and `35h`, well over tRST =
-50 ns. This is §7.3's sequence without its flash-QPI steps 5–6.
+Step 3 must come before step 4: a flash in quad CRM would take a 16-clock
+window as address, mode and dummy clocks and drive data from clock 12. A
+flash in dual CRM takes the 8-clock window as part of an address and
+stays in the mode, so step 4 is what gets it out. The flash steps sit
+between the PSRAM reset and `35h`, well over tRST = 50 ns (the Pmod model
+checks tRST). This is §7.3's sequence plus step 4, without §7.3's
+flash-QPI steps.
 
 ### 7.3 Start-up for flash QPI (option not taken)
 
@@ -773,7 +783,7 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
 
 Costs the full recommendation would have carried (items 2–3, not taken):
 
-* Start-up would grow from 6 to 8 steps (§7.3).
+* Start-up would grow from 7 to 9 steps (§7.3, plus today's dual-CRM step).
 * `mem_ctrl`: the 6-byte aligned flash fetch; `qspi_ctrl`: a 3-bit byte
   count, a continuous-read flop, and a preamble that depends on the chip
   (flash, once armed: 6 address + 2 mode = 8 SCK; PSRAM: 2 command +
@@ -810,6 +820,10 @@ the right wire shapes in simulation but not run against the Pmod model):
 | PSRAM QPI, flash SPI continuous read (B) | 2,674 | **+203** | 55 |
 | PSRAM QPI, flash QPI + continuous read (D), *without* the aligned-fetch path | 2,775 | +304 | 55 |
 | B with the flash path tied off (PSRAM only) | 2,539 | | 54 |
+
+As built (A, then the `rd_late` latch and, in `d3cdb07`, the dual-CRM
+step's `again` flop), re-measured 2026-09-29: 2,663 µm², 0.24 tiles, 54
+flops (53 before the dual-CRM step).
 
 * **About 95 % of the engine is shared by all three chips.** Flash
   support costs 135 µm² over a PSRAM-only engine (2,674 vs 2,539). The
