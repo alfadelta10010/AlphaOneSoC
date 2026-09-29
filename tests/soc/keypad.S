@@ -8,9 +8,14 @@
 # testbench checks it. The SPI transmitter stays off (EN = 0), so out[1]
 # and out[3] are plain GPIO.
 #
-# After driving a column the program reads IN once and discards it before
-# the read it uses: IN is two flops behind the pins, and a load can issue
-# the clock after the store that drove the column.
+# After driving a column the program reads IN twice and discards both
+# reads before the one it uses. The column pin changes on the edge the OUT
+# store completes, and IN is two synchroniser flops behind the pins, so a
+# load must complete at least three clocks after the store to see the new
+# rows. Back-to-back loads complete a clock apart when memory is fast: the
+# first two would read the old rows (measured with a zero-wait bench by
+# the PR #5 review). At QSPI speed one discard would do, but a driver
+# written from this must not depend on the memory being slow.
 #include "periph.h"
 #define NSETS 28
     .section .text.init
@@ -36,6 +41,7 @@ scan:
     srl  t1, t1, t0              # COLc is out[3 - c]
     xori t1, t1, 0x0F            # that column low, the others high
     sw   t1, G_OUT(s1)
+    lw   t2, G_IN(s1)            # settle: discarded
     lw   t2, G_IN(s1)            # settle: discarded
     lw   t2, G_IN(s1)
     srli t2, t2, 4

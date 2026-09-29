@@ -375,6 +375,10 @@ writing the driver.
 6. **Stall path timing:** the IO `ready` now sits in the core's global stall
    path (request decode → UART/GPIO ready → `wb_mem_stall`); check it in
    STA once the design is hardened.
-7. **Keypad reads:** GPIO IN lags two clocks, so a load right after the
-   column store can read the old rows; software discards one IN read after
-   each column write (`tests/soc/keypad.S`), and a Linux driver must too.
+7. **Keypad reads:** a column write reaches the pin on the edge the store
+   completes, and IN is two synchroniser flops behind the pins, so only a
+   load completing three or more clocks after the column store sees the new
+   rows. With fast memory two back-to-back loads still read the old rows.
+   Software discards two IN reads after each column write
+   (`tests/soc/keypad.S`), or waits three clocks; a Linux driver must too,
+   and must not rely on the QSPI memory making one discard enough.
