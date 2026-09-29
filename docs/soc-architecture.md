@@ -54,7 +54,12 @@ in PSRAM.)
 `mtvec` resets to 0. The spec leaves it unspecified, boot code must set it
 before it can take a trap, and 0 matches Spike, so lockstep traces agree from
 reset. A trap taken before `mtvec` is written jumps to 0, which is unmapped,
-and faults there repeatedly — a visible dead end (`pc=0`, `mcause=1`).
+and faults there over and over: a cause-1 loop at 0 that rewrites mepc,
+mcause and mtval on every pass, so the first trap's cause is lost, and the
+QSPI bus goes quiet, since 0 is outside every window. Erased flash
+(`0xFFFFFFFF`, an illegal instruction) at the reset vector ends this way.
+Kept at 0 by decision (2026-09-29); the first thing boot code does is set
+`mtvec`.
 
 ## Bus fabric
 
@@ -181,7 +186,8 @@ PSRAMs in QPI mode:
 |---|---|---|
 | CS1+CS2 | `F5h` in QPI form (2 clocks) | PSRAM exits QPI; a PSRAM in SPI mode sees an unfinished command |
 | CS1+CS2 | `66h`, `99h` | PSRAM reset enable, reset (back to SPI mode, linear burst) |
-| CS0 | 8 clocks of `1111` | flash leaves continuous-read mode |
+| CS0 | 8 clocks of `1111` | flash leaves quad continuous-read mode |
+| CS0 | 16 clocks of `1111` | flash leaves dual-I/O continuous-read mode (12 address + 4 mode clocks); must come after the 8-clock window, which a flash in quad continuous read needs first |
 | CS0 | `FFh` in QPI form (2 clocks) | flash exits QPI (-DTR part); a flash in SPI mode sees an unfinished command |
 | CS1+CS2 | `35h` | PSRAM enters QPI mode |
 
@@ -209,6 +215,12 @@ synchronise `rst_n` before it reaches this reset.
 * PSRAM maximum chip-select-low time (tCEM) is 8 µs for the standard grade
   the Pmod carries (APS6404L-3SQR-SN). The longest transaction is about 60
   clocks, so the core clock must be above about 8 MHz.
+* The flash is idle when reset is released: no program, erase or status
+  write still running, and no erase or program suspended. While BUSY the
+  flash ignores everything but status reads and suspend (a sector erase
+  takes up to 400 ms), and the engine has no 1-bit read path to poll it,
+  so a flash handed over mid-write would be fetched from as floating
+  lines.
 
 ## Timer and interrupts
 
@@ -257,7 +269,8 @@ synchronise `rst_n` before it reaches this reset.
   **Spike has no read-only memory**, so a store to flash succeeds on Spike and
   faults on the core. That is a known, spec-legal divergence. No
   Spike-compared test stores to flash; `pma_flash` checks the flash faults
-  DUT-only (LR cause 5; SC, AMO, store cause 7; mtval = the address).
+  DUT-only (LR cause 5; SC, AMO and stores of every width cause 7; mtval =
+  the address).
 * `tests/directed/run.sh soc` runs the same directed suite through the real
   memory path (bus fabric, memory controller, QSPI engine and a behavioural
   flash/PSRAM model, `tb/qspi_pmod_model.v`), compared against the same Spike
@@ -269,16 +282,23 @@ synchronise `rst_n` before it reaches this reset.
   which starts the hart at `--pc` with no boot ROM. MANIFEST mode `flash`
   tests are flash images, boot from the real `boot_addr` and are traced
   from reset (`flash_boot`: runs from flash, copies a routine to PSRAM,
-  runs it there), so they exercise the order silicon uses. Tests that assume a
-  fast memory -- 40-clock timer periods, reading `cycle` right after writing
-  it -- are listed in `#soc-skip` lines; `t_irq_slow` covers timer interrupts
-  at QSPI speed.
+  runs it there; `straddle_flash_end`: a 32-bit instruction at the last
+  halfword of flash), so they exercise the order silicon uses. Tests that
+  assume a fast memory -- timer periods of 37-100 clocks, reading `cycle`
+  right after writing it -- are listed in `#soc-skip` lines; `t_irq_slow`,
+  `irq_stress` and `t_ctl_slow` (LR/SC under timer interrupts) cover
+  interrupts at QSPI speed. MANIFEST `soc` lines run `flash_boot` and
+  `irq_stress` again with the Pmod model's hostile hand-over states and with
+  late sampling (`+RD_LATE`, a 25 ns round trip) on page-wrapping PSRAM.
 * `make test-qspi` runs `tb_qspi` (every transfer shape, page and chip
   boundaries, arbitration) across device delays, the `rd_late` strap, a
-  page-wrapping PSRAM and devices handed over in QPI / continuous-read
-  modes, then `tb_qspi_stress` (core-shaped request streams, 400k clocks of
-  random traffic against a shadow memory). The Pmod model checks protocol,
-  bus contention, tCEM and tCPH as it goes.
+  page-wrapping PSRAM and devices handed over in QPI / quad and dual
+  continuous-read modes (one PSRAM in QPI and the other not, too), then
+  `tb_qspi_stress` (core-shaped request streams, 400k clocks of random
+  traffic against a shadow memory), twice more with resets dropped into
+  the traffic. The Pmod model checks protocol, bus contention, tCEM, tCPH,
+  tRST and SCK's period and duty per command as it goes, and closes the
+  read data eye between its hold (`+QSPI_HOLD`) and delay.
 * The peripherals are not reachable from the directed suite (its IO window
   is off, since Spike has no such devices), and Spike could not lockstep
   them anyway. They are checked self-checking instead:
@@ -297,18 +317,22 @@ synchronise `rst_n` before it reaches this reset.
     `req_hold_check` on both core ports: hello-world with and without
     polling, echo under flow control, a replay of the Linux 8250 driver's
     polled accesses, OLED bring-up, keypad scan, timer interrupts while a
-    peripheral holds a store, and every access width and AMO on the IO.
+    peripheral holds a store, every access width and AMO on the IO, and
+    stores to every other target at the CLINT's offsets (`clint_decode`:
+    only a CLINT store may write the CLINT).
 
 ## Area
 
 Measured with yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`
-(standard-cell area before placement): the core is about 138,600 µm² and the
-whole SoC about 148,700 µm², roughly 1.9x the ~79,000 µm² seven tiles
-provide. The SoC blocks added here are about 8% of it (qspi_ctrl ~2,400,
-mem_ctrl ~750, clint ~7,600 µm²; soc_bus mostly folds away). The UART
-(~3,100 µm², 0.28 tiles) and the GPIO block with its SPI transmitter
-(~1,400 µm², 0.12 tiles), measured on their own, come on top of that. The excess is in
-the core: register file ~51k, CSR ~28k, pipeline ~30k, muldiv ~18k.
+(standard-cell area before placement; 1 tile ≈ 11,300 µm² at TinyTapeout's
+60% density), re-measured 2026-09-29 as the mean of four file orders (abc
+varies by about 0.1 tile with the order): the whole SoC is **13.64 tiles,
+2,735 flops**, against about 7 tiles for a 4x2 slot. The SoC blocks added
+here cost about 0.7 tiles flat (qspi_ctrl 0.24, mem_ctrl 0.07, the UART
+0.28 with 76 flops, GPIO with its SPI transmitter 0.12; soc_bus mostly folds
+away). The excess is in the core: register file 4.50, core glue 2.72, CSR
+2.49, muldiv 1.62 tiles. The measured cuts and what they buy are in
+`docs/area-audit.md`.
 
 ## Performance
 
@@ -321,8 +345,13 @@ complete.
 Measured through the whole SoC (`tests/directed/run.sh soc`, clocks per
 traced instruction, every test with at least 40 instructions): **77.3
 before PSRAM QPI, 57.1 after, −26%**; the longest test, t_memstress (3,027
-instructions of loads and stores), went from 77.0 to 55.8. That is about
-0.88 MIPS at 50 MHz. flash_boot, which runs from flash, moved only 5%.
+instructions of loads and stores), went from 77.0 to 55.8. flash_boot,
+which runs from flash, moved only 5%. Re-measured by the 2026-09-29 area
+review at `4b4ed8b`, the same suite gives 59.2 in aggregate (63.9 as a
+mean of per-test figures, wfi_slow alone at 136), and a compiled-C
+benchmark 56.1: about 0.89 MIPS at 50 MHz, a clock no timing analysis has
+confirmed yet (0.53 MIPS at 30 MHz). Per instruction: ALU 42 clocks; `lw`,
+a taken branch and every M op 84; `sw` 76; `sb` 64.
 
 Options not yet taken, roughly in order of payoff per gate:
 
@@ -332,10 +361,17 @@ Options not yet taken, roughly in order of payoff per gate:
    bus, for about 0.5–0.7 kGE. It also ends the refetching during WFI and
    M-op stalls. It must close the stream at every 1 KB PSRAM page and within
    tCEM, and it is the heaviest to verify.
-2. **Abort the fall-through fetch on a taken branch.** A redirect waits for
-   the fetch already in flight, about 44 clocks wasted per taken branch. An
-   abort would need a change to the request/ready contract (today a request
-   is held until ready).
+2. **Stop the two wasted fetches (prototyped, for a follow-up branch).**
+   A taken branch pays for the fall-through fetch already in flight, and an
+   M op starts only after a fetch completes and then discards it, so both
+   cost one extra QSPI read (about 42 clocks). Holding `imem_req` low while
+   a branch or jump is in EX, and letting `muldiv_start` ignore only a
+   pending fetch, fix both at 0.00 tiles with no change to the
+   request/ready contract: a taken branch drops from 84 to 43 clocks, an M
+   op from 84 to 42, a not-taken branch rises from 42 to 43, and the
+   compiled-C benchmark goes from 56.1 to 48.3 clocks per instruction
+   (−14%). Prototypes in `localFiles/area-audit/pr5/`; kept off this branch
+   by decision (2026-09-29).
 
 3. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
    core or the pads limit the clock. With a round trip over 20 ns it needs
