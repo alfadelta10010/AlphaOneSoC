@@ -183,7 +183,7 @@ test-gpio: $(BUILD_DIR)
 # from the QSPI Pmod model's flash with the demo board's devices on the pins
 # (RP2350 UART with CTS, SSD1331, keypad) -- tb/tb_soc_periph.v. A run fails
 # on a FAIL, ERROR or TIMEOUT line or a missing PASS; all runs go first.
-SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access
+SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
 	@echo "=== Testing the peripherals through the SoC ==="
