@@ -148,7 +148,7 @@ Verification runs the core on this map (boot from PSRAM). Spike gets `-m0x200000
 - **PMP locked entries:** TOR lock propagates downward (entry i with TOR+L locks pmpaddr[i-1]). Implemented once, in `wval`.
 - **pmpcfg A=2'b10 (NA4) is LEGAL and is stored as written.** Bits [6:5] of each byte are reserved and read 0.
 - **mstatus:** resets to 0 (MPP=U, matching Spike); a write of MPP=01/10 is legalised to U.
-- **mip has no writable bits** on this M+U core; it reads the MSIP/MTIP/MEIP wires. MTIP is registered in the CLINT, so it lags an mtimecmp store by two instructions (a legal spurious interrupt; `mtip_stale` pins it).
+- **mip has no writable bits** on this M+U core; it reads the MSIP/MTIP/MEIP wires. MTIP is registered in the CLINT, so it lags an mtimecmp store by two clocks -- two instructions when the fetch is fast (a legal spurious interrupt; `mtip_stale` pins it).
 - **mtvec resets to 0** (as Spike), which is unmapped on the SoC: boot code must set it before anything can trap.
 
 ## Verilog Conventions

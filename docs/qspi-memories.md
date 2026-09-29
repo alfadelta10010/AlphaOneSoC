@@ -548,7 +548,7 @@ with 2 dummy clocks **50 MHz**, with 4 dummy 80 MHz.
 | Flash | `77h` wrap on | a cache-line user | `77h` with W4 = 1, or reset (30 µs) |
 | Flash | power-down (`B9h`) | a low-power user | `ABh`, then 3 µs |
 | Flash | QE = 0 | a fresh -IM part | `06h`, `31h 02h` — a programming job, not ours |
-| Flash | BUSY (program, erase or status write running) or an erase/program suspended | a design switched out mid-write | none from us: while BUSY the flash ignores every instruction but `05h`/`35h`/`15h` and `75h` (-DTR §7.1.1), and a sector erase takes up to 400 ms. **Board prerequisite:** the flash is idle and nothing is suspended when the chip leaves reset. The engine has no 1-bit read path to poll `05h`. |
+| Flash | BUSY (program, erase or status write running) or an erase/program suspended | a design switched out mid-write | none from us: while BUSY the flash ignores every instruction but the status reads (`05h`/`35h`/`15h`) and suspend (`75h`) (-DTR §7.1.1) -- though §8.2.45 has a software reset (`66h`, `99h`) end a running erase, corrupting it -- and BUSY lasts up to 400 ms for a 4 KB sector erase, 2 s for a 64 KB block, 200 s for a chip erase (§9.6). **Board prerequisite:** the flash is idle and nothing is suspended when the chip leaves reset. The engine has no 1-bit read path to poll `05h`. |
 
 ### 7.2 Today's sequence (PSRAM in QPI, flash in SPI; since `97010f4`)
 
@@ -566,8 +566,15 @@ window as address, mode and dummy clocks and drive data from clock 12. A
 flash in dual CRM takes the 8-clock window as part of an address and
 stays in the mode, so step 4 is what gets it out. The flash steps sit
 between the PSRAM reset and `35h`, well over tRST = 50 ns (the Pmod model
-checks tRST). This is §7.3's sequence plus step 4, without §7.3's
-flash-QPI steps.
+checks tRST), and the sequence starts 8 clocks after reset, so a reset
+landing just after `99h` cannot restart it inside tRST. Every step ends
+with CS rising while SCK is still high (SCK falls a clock later): a flash
+in continuous read starts driving on the falling edge after its address,
+mode and dummy clocks, and a CS rising on that edge would let its pads and
+ours overlap. Step 5 is a clean two-clock `FFh` because the datasheet draws
+Exit QPI that way (Figure 52) and does not say whether extra clocks cancel
+it; the model takes the pessimistic reading. This is §7.3's sequence plus
+step 4, without §7.3's flash-QPI steps.
 
 ### 7.3 Start-up for flash QPI (option not taken)
 

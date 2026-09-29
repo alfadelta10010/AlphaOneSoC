@@ -281,7 +281,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 | 0x341 | mepc | Bit 0 always 0; bit 1 stored but reads 0 while misa.C = 0 |
 | 0x342 | mcause | Trap cause (bit 31 = interrupt) |
 | 0x343 | mtval | Faulting address, faulting instruction encoding, or 0 |
-| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the interrupt wires; nothing is writable. MTIP comes registered from the CLINT: after a store moves mtimecmp, it keeps its old value for the next two instructions (section 8.4) |
+| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the interrupt wires; nothing is writable. MTIP comes registered from the CLINT: after a store moves mtimecmp, it keeps its old value for two clocks, which is the next two instructions when the fetch is fast (section 8.4) |
 
 ### 7.5 Counters
 
@@ -363,7 +363,7 @@ LR/SC to an IO window is an access fault (no reservation set there); an AMO to a
 
 - Sources: MEIP (cause 11) > MSIP (3) > MTIP (7).
 - Enable: `irq_global_en = !priv_mode || mstatus.MIE`, with per-source `mie` bits. Both are the post-write values, so the instruction after `csrc mstatus, 8` or `csrc mie, …` is already masked, and the one after `csrs mie, …` is already interruptible.
-- MTIP lags mtimecmp: the CLINT registers it, so after a store moves mtimecmp into the future `mip.MTIP` still reads 1 for the next two instructions (the store commits in WB, then the register updates), and MIE set in that window takes a timer interrupt whose handler finds nothing pending. Priv 3.2.1 allows it ("reflected in MTIP eventually, but not necessarily immediately. A spurious timer interrupt might occur"); Linux programs mtimecmp with MIE = 0 several instructions before re-enabling, and MRET always leaves a bubble. `tests/directed/mtip_stale.S` pins the window.
+- MTIP lags mtimecmp: the CLINT registers it, so after a store moves mtimecmp into the future `mip.MTIP` still reads 1 for two clocks (the store commits in WB, then the register updates) -- the next two instructions when the fetch is fast, fewer or none behind fetch waits -- and MIE set in that window takes a timer interrupt whose handler finds nothing pending. Priv 3.2.1 allows it ("reflected in MTIP eventually, but not necessarily immediately. A spurious timer interrupt might occur"); Linux programs mtimecmp with MIE = 0 several instructions before re-enabling, and MRET always leaves a bubble. `tests/directed/mtip_stale.S` pins the window at both ends.
 - Injection: `irq_inject = any_irq_pend && ifex_valid && !ex_trap && !muldiv_want && !stall_other`. It is never taken during a stall or while any M instruction is in EX, and a synchronous trap wins.
 - Entry: the EX instruction's side effects are suppressed and its PC becomes mepc, so it re-executes after MRET.
 

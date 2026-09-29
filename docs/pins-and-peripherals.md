@@ -249,9 +249,13 @@ As built (`src/uart.v`):
   error) is dropped and sets nothing; there is no FE bit. **A frame whose
   every bit reads 0**, stop bit included, is a **break**: it sets BI and,
   as a 16550 loads one zero character, DR with RBR = 0 (or OE if RBR was
-  full). Either way the receiver then waits for the line to go high before
-  it looks for the next start bit. Linux counts breaks and takes the magic
-  SysRq key from BI.
+  full). Linux counts breaks and takes the magic SysRq key from BI. After
+  a framing error the receiver looks for a start bit again as soon as the
+  line is high; if the line instead stays low a whole frame more, counted
+  from the bad stop bit, that is a break that began inside a character and
+  is reported as one. After a break the line must be high for half a bit
+  before a start bit counts, as on a 16550, so a short glitch inside a long
+  break is not a second break.
 * **Reading LSR clears OE and BI**, as on a 16550. RBR pops, and OE and BI
   clear, only on the cycle the load completes.
 * **LCR stores only DLAB and SBC**; its other bits read 0. Linux keeps its

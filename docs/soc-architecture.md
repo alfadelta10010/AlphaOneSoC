@@ -193,9 +193,14 @@ PSRAMs in QPI mode:
 
 The flash steps separate the PSRAM reset from `35h` by far more than the
 PSRAM's 50 ns tRST. The first step is also what takes a PSRAM we left in QPI
-mode ourselves back to SPI at the next reset. The engine drives SCK and the
-chip selects idle for one cycle after reset before the first chip select
-falls.
+mode ourselves back to SPI at the next reset. The sequence starts 8 clocks
+after reset is released, so a reset that lands just after the `99h` cannot
+bring the restarted sequence's first command inside tRST. Each start-up
+window ends with chip select rising while SCK is still high, SCK falling a
+clock later: for a flash in continuous read the next falling edge would
+start its data, and the two sides' pads would overlap for a moment. The
+single two-clock `FFh` is the one Exit QPI that counts whether or not a
+flash cancels Exit QPI on extra clocks (the datasheet does not say).
 
 Not undone, and so the job of whatever programs the flash: a flash burst
 wrap set with `77h`, deep power-down (`B9h`), and a cleared Quad Enable bit
@@ -217,10 +222,11 @@ synchronise `rst_n` before it reaches this reset.
   clocks, so the core clock must be above about 8 MHz.
 * The flash is idle when reset is released: no program, erase or status
   write still running, and no erase or program suspended. While BUSY the
-  flash ignores everything but status reads and suspend (a sector erase
-  takes up to 400 ms), and the engine has no 1-bit read path to poll it,
-  so a flash handed over mid-write would be fetched from as floating
-  lines.
+  flash ignores everything but status reads and suspend (-DTR §7.1.1; a
+  software reset would end the operation and corrupt it, §8.2.45), for up
+  to 400 ms after a sector erase, 2 s after a 64 KB block erase and 200 s
+  after a chip erase. The engine has no 1-bit read path to poll it, so a
+  flash handed over mid-write would be fetched from as floating lines.
 
 ## Timer and interrupts
 
@@ -286,8 +292,8 @@ synchronise `rst_n` before it reaches this reset.
   halfword of flash), so they exercise the order silicon uses. Tests that
   assume a fast memory -- timer periods of 37-100 clocks, reading `cycle`
   right after writing it -- are listed in `#soc-skip` lines; `t_irq_slow`,
-  `irq_stress` and `t_ctl_slow` (LR/SC under timer interrupts) cover
-  interrupts at QSPI speed. MANIFEST `soc` lines run `flash_boot` and
+  `irq_stress`, `t_ctl_slow` and `lrsc_trap_clear` (LR/SC under timer
+  interrupts) cover interrupts at QSPI speed. MANIFEST `soc` lines run `flash_boot` and
   `irq_stress` again with the Pmod model's hostile hand-over states and with
   late sampling (`+RD_LATE`, a 25 ns round trip) on page-wrapping PSRAM.
 * `make test-qspi` runs `tb_qspi` (every transfer shape, page and chip
@@ -296,7 +302,8 @@ synchronise `rst_n` before it reaches this reset.
   continuous-read modes (one PSRAM in QPI and the other not, too), then
   `tb_qspi_stress` (core-shaped request streams, 400k clocks of random
   traffic against a shadow memory), twice more with resets dropped into
-  the traffic. The Pmod model checks protocol, bus contention, tCEM, tCPH,
+  the traffic and aimed at the start-up sequence (each run requires resets
+  landing in it and in its 16-clock step). The Pmod model checks protocol, bus contention, tCEM, tCPH,
   tRST and SCK's period and duty per command as it goes, and closes the
   read data eye between its hold (`+QSPI_HOLD`) and delay.
 * The peripherals are not reachable from the directed suite (its IO window
