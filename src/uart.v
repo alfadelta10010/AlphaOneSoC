@@ -35,7 +35,7 @@
 //        output to spacing (Linux's break_ctl, tcsendbreak); the transmitter
 //        keeps shifting underneath, and the pin follows it again from the
 //        first tick after SBC is cleared.
-//   LSR  0 DR, 1 OE, 5 THRE, 6 TEMT. Reading LSR clears OE.
+//   LSR  0 DR, 1 OE, 4 BI, 5 THRE, 6 TEMT. Reading LSR clears OE and BI.
 //   IIR  0x04 when ERBFI && DR, else 0x02 when ETBEI && THRE, else 0x01.
 //        No interrupt line leaves the UART (no PLIC), but Linux's 8250
 //        driver polls by calling its interrupt handler from a timer, and the
@@ -63,9 +63,13 @@
 //   RBR -- a frame only starts while RBR is empty, so there is nothing in it
 //   to overwrite. A frame that starts while RBR is still full (a sender
 //   ignoring CTS) is not shifted in; at its stop bit it sets OE and is
-//   dropped, and RBR keeps the older byte. A frame whose stop bit reads 0 (a
-//   framing error, or a break) is dropped too, and the receiver waits for
-//   the line to go high before it looks for the next start bit.
+//   dropped, and RBR keeps the older byte. A frame whose stop bit reads 0
+//   with a data bit of 1 (a framing error) is dropped and sets nothing. One
+//   whose every bit, stop bit included, reads 0 is a break: it sets BI and,
+//   as a 16550 loads one zero character, DR with RBR = 0 (or OE, if RBR was
+//   full). After either the receiver waits for the line to go high before
+//   it looks for the next start bit. Linux reads BI to count breaks and for
+//   the magic SysRq key.
 //
 // Receive sampling: two-flop synchroniser, 16x oversampling on the same
 // divisor as transmit, start bit re-checked at mid-bit (a shorter low pulse
@@ -104,7 +108,7 @@ module uart #(
     reg        erbfi, etbei;
     reg [7:0]  dll, dlm;
     reg [7:0]  rbr;
-    reg        dr, oe;
+    reg        dr, oe, bi;
 
     // ── Transmitter ─────────────────────────────────────────────────────────
     // tx_sh holds the frame still to send, LSB first: {stop, data, start} on
@@ -137,7 +141,7 @@ module uart #(
     wire rd_rbr  = rd && be[0] && !addr2 && !dlab;
     wire rd_lsr  = rd && be[1] &&  addr2;
 
-    wire [7:0] lsr = {1'b0, tx_idle, tx_idle, 3'b000, oe, dr};
+    wire [7:0] lsr = {1'b0, tx_idle, tx_idle, bi, 2'b00, oe, dr};
     wire [7:0] iir = (erbfi && dr)      ? 8'h04 :
                      (etbei && tx_idle) ? 8'h02 : 8'h01;
     wire [7:0] ier = {6'b0, etbei, erbfi};
@@ -213,7 +217,12 @@ module uart #(
     reg [3:0]  rx_bit;
     reg [3:0]  rx_ph;
     reg        rx_keep;
+    reg        rx_zero;             // every bit of the frame so far read 0
     wire       rx_mid = tick && (rx_ph == 4'd7);
+    // The stop bit's sample: a frame to keep or drop (a good stop bit, or a
+    // break), and whether it is a break.
+    wire       rx_end = rx_mid && rx_busy && rx_bit == 4'd9 && (rx_s || rx_zero);
+    wire       rx_brk = rx_end && !rx_s;
 
     always @(posedge clk) begin
         if (rst) begin
@@ -222,8 +231,10 @@ module uart #(
             rx_bit  <= 4'd0;
             rx_ph   <= 4'd0;
             rx_keep <= 1'b0;
+            rx_zero <= 1'b0;
             dr      <= 1'b0;
             oe      <= 1'b0;
+            bi      <= 1'b0;
             rts_n   <= 1'b1;
         end else begin
             rx_sync <= {rx_sync[0], rx};
@@ -234,6 +245,7 @@ module uart #(
                     rx_bit  <= 4'd0;
                     rx_ph   <= 4'd0;
                     rx_keep <= !dr;
+                    rx_zero <= 1'b1;
                 end
             end else if (rx_bit == 4'd10) begin
                 if (rx_s) rx_busy <= 1'b0;             // line back to idle
@@ -241,6 +253,7 @@ module uart #(
                 rx_ph <= rx_ph + 4'd1;
                 if (rx_ph == 4'd7) begin               // middle of the bit
                     rx_bit <= rx_bit + 4'd1;
+                    if (rx_s) rx_zero <= 1'b0;
                     if (rx_bit == 4'd0 && rx_s)
                         rx_busy <= 1'b0;               // glitch, not a start bit
                     if (rx_bit == 4'd9) begin
@@ -250,17 +263,23 @@ module uart #(
                 end
             end
 
-            // DR: set by a good frame that was kept, cleared by an RBR pop.
-            // A kept frame only starts while DR is 0, so the two never meet.
-            if (rx_mid && rx_busy && rx_bit == 4'd9 && rx_s && rx_keep)
+            // DR: set by a good frame or a break that was kept, cleared by an
+            // RBR pop. A kept frame only starts while DR is 0, so the two
+            // never meet.
+            if (rx_end && rx_keep)
                 dr <= 1'b1;
             else if (rd_rbr)
                 dr <= 1'b0;
 
-            if (rx_mid && rx_busy && rx_bit == 4'd9 && rx_s && !rx_keep)
+            if (rx_end && !rx_keep)
                 oe <= 1'b1;
             else if (rd_lsr)
                 oe <= 1'b0;
+
+            if (rx_brk)
+                bi <= 1'b1;
+            else if (rd_lsr)
+                bi <= 1'b0;
 
             rts_n <= !(!rx_busy && !dr);
         end

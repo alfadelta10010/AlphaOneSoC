@@ -23,10 +23,12 @@
 //     and no later;
 //   * a reference transmitter on RX, asynchronous to clk (any phase, baud off
 //     by up to +/-3%), that can honour CTS (= RTS#) or ignore it, and that
-//     sends glitches, framing errors and breaks. Its model predicts when DR
-//     or OE may rise -- a window derived from the documented sampling (two-
-//     flop synchroniser, 16x ticks, start bit re-checked at mid-bit, each bit
-//     sampled at its middle) -- and a read inside the window accepts either;
+//     sends glitches, framing errors and breaks. Its model predicts when DR,
+//     OE and BI may rise -- a window derived from the documented sampling
+//     (two-flop synchroniser, 16x ticks, start bit re-checked at mid-bit,
+//     each bit sampled at its middle) -- and a read inside the window
+//     accepts either. A frame whose bits all read 0, stop bit included, is
+//     a break: BI rises with the DR (RBR = 0) or OE it brings;
 //   * an RTS# checker: deasserted during reset, while a frame is being
 //     received and while RBR holds a byte; asserted exactly one clock after
 //     the pop that empties RBR, and whenever the receiver is idle and empty.
@@ -269,6 +271,11 @@ module tb_uart;
     reg  [7:0] rbr_pend;
     reg        oe_val = 1'b0, oe_pend = 1'b0;
     real       oe_lo, oe_hi;
+    // BI: pending from a break's start to its stop-bit sample, rising with
+    // that frame's DR (bi_link 1) or OE (bi_link 2).
+    reg        bi_val = 1'b0, bi_pend = 1'b0;
+    real       bi_lo, bi_hi;
+    integer    bi_link = 0, rx_breaks = 0, bi_seen = 0;
     reg  [7:0] m_rbr;
     reg        m_rbr_known = 1'b0;
     integer    rx_kept = 0, rx_dropped = 0, rx_popped = 0, rx_bad = 0, rx_glitches = 0;
@@ -288,6 +295,9 @@ module tb_uart;
             if (oe_pend && t > oe_hi) begin
                 oe_pend = 1'b0; oe_val = 1'b1;
             end
+            if (bi_pend && t > bi_hi) begin
+                bi_pend = 1'b0; bi_val = 1'b1;
+            end
         end
     endtask
     function integer dr_at(input real t);   // 0, 1, or 2 = either
@@ -299,6 +309,11 @@ module tb_uart;
         else if (oe_pend) oe_at = (t <= oe_lo) ? 0 : 2;
         else              oe_at = 0;
     endfunction
+    function integer bi_at(input real t);
+        if (bi_val)       bi_at = 1;
+        else if (bi_pend) bi_at = (t <= bi_lo) ? 0 : 2;
+        else              bi_at = 0;
+    endfunction
 
     // A falling edge on RX at t0 (the reference transmitter calls this).
     // Sampling bounds, for divisor d and clock period T: the start bit is
@@ -306,7 +321,9 @@ module tb_uart;
     // a 16x tick at least two edges later -- in (t0 + 2T, t0 + (d + 2)T] --
     // and the stop bit's middle is 152 ticks after detection.
     task automatic rxm_start(input real t0, input integer d, input [7:0] data, input integer kind);
+        reg brk;
         begin
+            brk = (kind == K_BAD && data == 8'h00);     // every bit 0: a break
             fr_t0 = t0; fr_d = d;
             fr_hi_from = (kind == K_GLITCH) ? 1.0e18 : t0 + (d + 3) * T;
             // A good frame keeps RTS# deasserted until the stop bit's sample
@@ -320,16 +337,24 @@ module tb_uart;
                 rxm_advance(t0 + 2.0 * T);
                 if (dr_pend) tb_bug("a frame starts inside the previous frame's DR window");
                 if (oe_pend) tb_bug("a frame starts inside the previous frame's OE window");
-                if (kind == K_GOOD) begin
+                if (bi_pend) tb_bug("a frame starts inside the previous frame's BI window");
+                if (kind == K_GOOD || brk) begin
                     if (!dr_val) begin
                         dr_pend = 1'b1; rbr_pend = data;
                         dr_lo = t0 + (152*d + 2) * T; dr_hi = t0 + (153*d + 2) * T;
                         rx_kept = rx_kept + 1;
+                        bi_link = 1;
                     end else begin
                         oe_pend = 1'b1;
                         oe_lo = t0 + (152*d + 2) * T; oe_hi = t0 + (153*d + 2) * T;
                         rx_dropped = rx_dropped + 1;
+                        bi_link = 2;
                     end
+                end
+                if (brk) begin
+                    bi_pend = 1'b1;
+                    bi_lo = t0 + (152*d + 2) * T; bi_hi = t0 + (153*d + 2) * T;
+                    rx_breaks = rx_breaks + 1;
                 end
             end
         end
@@ -346,6 +371,7 @@ module tb_uart;
     task automatic rxm_reset;
         begin
             dr_val = 1'b0; dr_pend = 1'b0; oe_val = 1'b0; oe_pend = 1'b0; m_rbr_known = 1'b0;
+            bi_val = 1'b0; bi_pend = 1'b0;
             fr_t0 = -1.0e9; fr_hi_from = 1.0e18; fr_hi_to = -1.0e18;
             pop_hold_until = -1;
         end
@@ -359,7 +385,7 @@ module tb_uart;
               && !(tp >= snd_next_fall - 2.0 * T && tp <= snd_next_fall + (fr_d + 4) * T);
     endfunction
     function integer oeclr_ok(input real tp);
-        oeclr_ok = !(oe_pend && oe_val && tp > oe_lo);
+        oeclr_ok = !(oe_pend && oe_val && tp > oe_lo) && !(bi_pend && bi_val && tp > bi_lo);
     endfunction
 
     // RTS# checker.
@@ -446,11 +472,11 @@ module tb_uart;
 
     task automatic model_read(input [3:0] b, input a2, input [31:0] got,
                               input integer p, input integer p_first, input real tp);
-        integer    dpos, opos, thre, dh, oh, nm, first;
-        reg  [3:0] mt;
+        integer    dpos, opos, bpos, thre, dh, oh, bh, nm, first;
+        reg  [7:0] mt;
         reg [31:0] e, m, e0, m0;
         reg  [7:0] iir, rbrv;
-        reg        all_d1, all_d0, all_o1, all_o0;
+        reg        all_d1, all_d0, all_o1, all_o0, all_b1;
         begin
             checks = checks + 1;
             if (p != p_first) fail("a read stalled");
@@ -458,13 +484,20 @@ module tb_uart;
             thre = thre_at(p);
             dpos = rxm_on ? dr_at(tp) : 2;
             opos = rxm_on ? oe_at(tp) : 2;
+            bpos = rxm_on ? bi_at(tp) : 2;
             nm = 0; first = 1;
             for (dh = 0; dh < 2; dh = dh + 1)
-                for (oh = 0; oh < 2; oh = oh + 1) begin
-                    mt[dh*2+oh] = 1'b0;
-                    if ((dpos == 2 || dpos == dh) && (opos == 2 || opos == oh)) begin
+                for (oh = 0; oh < 2; oh = oh + 1)
+                  for (bh = 0; bh < 2; bh = bh + 1) begin
+                    mt[dh*4+oh*2+bh] = 1'b0;
+                    // A pending break's BI rises on the same edge as the DR or
+                    // OE it brings, when that one is still pending too.
+                    if ((dpos == 2 || dpos == dh) && (opos == 2 || opos == oh) &&
+                        (bpos == 2 || bpos == bh) &&
+                        !(rxm_on && bi_pend && bi_link == 1 && dr_pend && bh != dh) &&
+                        !(rxm_on && bi_pend && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
                         if (a2) begin
-                            e = {8'h00, 8'hB0, 1'b0, thre[0], thre[0], 3'b000, oh[0], dh[0], 8'h00};
+                            e = {8'h00, 8'hB0, 1'b0, thre[0], thre[0], bh[0], 2'b00, oh[0], dh[0], 8'h00};
                             m = 32'hFFFF_FFFF;
                         end else begin
                             iir  = (m_erbfi && dh) ? 8'h04 : (m_etbei && thre) ? 8'h02 : 8'h01;
@@ -476,21 +509,25 @@ module tb_uart;
                             if (!m_dlab && !(rxm_on && dh && (dr_pend || m_rbr_known))) m[7:0] = 8'h00;
                         end
                         if (first) begin e0 = e; m0 = m; first = 0; end
-                        if ((got & m) === (e & m)) begin mt[dh*2+oh] = 1'b1; nm = nm + 1; end
+                        if ((got & m) === (e & m)) begin mt[dh*4+oh*2+bh] = 1'b1; nm = nm + 1; end
                     end
-                end
+                  end
             if (nm == 0)
                 fail($sformatf("read offsets %0d-%0d be %b (DLAB %0d): got %h, want %h (mask %h)",
                                a2 ? 4 : 0, a2 ? 7 : 3, b, m_dlab, got, e0, m0));
             else if (rxm_on) begin
-                all_d1 = !(mt[0] || mt[1]); all_d0 = !(mt[2] || mt[3]);
-                all_o1 = !(mt[0] || mt[2]); all_o0 = !(mt[1] || mt[3]);
+                // mt index = dh*4 + oh*2 + bh
+                all_d1 = !(mt[0] || mt[1] || mt[2] || mt[3]); all_d0 = !(mt[4] || mt[5] || mt[6] || mt[7]);
+                all_o1 = !(mt[0] || mt[1] || mt[4] || mt[5]); all_o0 = !(mt[2] || mt[3] || mt[6] || mt[7]);
+                all_b1 = !(mt[0] || mt[2] || mt[4] || mt[6]);
                 if (dr_pend && all_d1) begin
                     dr_pend = 1'b0; dr_val = 1'b1; m_rbr = rbr_pend; m_rbr_known = 1'b1;
                 end
                 if (a2) begin
                     if (all_o1) oe_seen = oe_seen + 1;
+                    if (all_b1) bi_seen = bi_seen + 1;
                     if (oe_pend && all_o1 && !oe_val) begin oe_pend = 1'b0; oe_val = 1'b1; end
+                    if (bi_pend && all_b1 && !bi_val) begin bi_pend = 1'b0; bi_val = 1'b1; end
                 end
             end
             // Side effects of the completed load.
@@ -506,7 +543,9 @@ module tb_uart;
             end
             if (a2 && b[1] && rxm_on) begin
                 if (oe_pend && oe_val && tp > oe_lo) tb_bug("LSR read inside an OE window while OE is set");
+                if (bi_pend && bi_val && tp > bi_lo) tb_bug("LSR read inside a BI window while BI is set");
                 oe_val = 1'b0;
+                bi_val = 1'b0;
             end
         end
     endtask
@@ -656,7 +695,7 @@ module tb_uart;
     // Wait for the model's windows to close and the line to go quiet.
     task automatic rx_settle;
         begin
-            while ($realtime < rx_quiet_from + 2.0 * T || dr_pend || oe_pend) begin
+            while ($realtime < rx_quiet_from + 2.0 * T || dr_pend || oe_pend || bi_pend) begin
                 idle(1);
                 rxm_advance($realtime);
             end
@@ -691,6 +730,7 @@ module tb_uart;
             t0 = $realtime + lat;
             if (dr_pend && t0 < dr_hi) t0 = dr_hi + T;
             if (oe_pend && t0 < oe_hi) t0 = oe_hi + T;
+            if (bi_pend && t0 < bi_hi) t0 = bi_hi + T;
             snd_next_fall = t0;
             #(t0 - $realtime);
         end
@@ -1013,19 +1053,45 @@ module tb_uart;
             begin rx_settle; get_byte; end
         join
         rx_settle;
-        // Breaks of 1.5 and 4 frames.
+        // Breaks of 1.5 and 4 frames: BI, and DR with a zero byte in RBR.
         for (i = 0; i < 2; i = i + 1) begin
             wait_cts;
             rx_break((i ? 40.0 : 15.0) * tb, d);
             rx_settle;
-            rd8(5, v8);
+            chk("RTS# while the break's zero byte waits", rts_n, 1'b1);
+            rd8(5, v8); chk("LSR after a break", v8, 8'h71);
+            rd8(5, v8); chk("LSR read again: BI cleared", v8, 8'h61);
+            rd8(0, v8); chk("a break loads 0 into RBR", v8, 8'h00);
+            rd8(5, v8); chk("LSR after popping the break", v8, 8'h60);
             fork
                 begin wait_cts; rx_frame(8'h5A, tb, d, 1'b1, 0.0); end
                 get_byte;
             join
             rx_settle;
         end
-        if (rx_bad < 6) fail("framing: too few bad frames sent");
+        // A break the length of one frame exactly: a zero byte with a zero
+        // stop bit.
+        fork
+            begin wait_cts; rx_frame(8'h00, tb, d, 1'b0, 0.0); end
+        join
+        rx_settle;
+        rd8(5, v8); chk("LSR after a frame-long break", v8, 8'h71);
+        rd8(0, v8); chk("frame-long break: RBR", v8, 8'h00);
+        // A break while RBR is full (a sender ignoring CTS): OE and BI, and
+        // RBR keeps the older byte.
+        wait_cts; rx_frame(8'h6B, tb, d, 1'b1, 0.0); rx_settle;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(5, v8); chk("LSR after a break with RBR full", v8, 8'h73);
+        rd8(5, v8); chk("then BI and OE cleared", v8, 8'h61);
+        rd8(0, v8); chk("RBR keeps the byte before the break", v8, 8'h6B);
+        rd8(5, v8);
+        // A framing error is not a break: one data bit of 1 is enough.
+        fork
+            begin wait_cts; rx_frame(8'h80, tb, d, 1'b0, 3.0 * tb); end
+        join
+        rx_settle;
+        rd8(5, v8); chk("LSR after a framing error on 0x80", v8, 8'h60);
+        if (rx_bad < 9) fail("framing: too few bad frames sent");
 
         // ── Overrun ─────────────────────────────────────────────────────────
         section("overrun");
@@ -1246,11 +1312,13 @@ module tb_uart;
             end
         join
         for (i = 0; i < 20; i = i + 1) begin @(posedge clk); #1; noise; sel = urand(2); end
+        rxm_on = 1'b0;                                            // reset throws it away
         rx_break(5.0 * tb, d);                                    // traffic during reset
         rx_frame(8'h99, tb, d, 1'b1, 0.0);
         @(posedge clk); #1;
         sel = 1'b0;
         model_reset;
+        rxm_on = 1'b1;
         rst = 1'b0;
         rx_quiet_from = $realtime + T;
         idle(2);
@@ -1390,8 +1458,9 @@ module tb_uart;
         $display("tb_uart: %0d TX frames (d=1: %0d, d=2-3: %0d, d=4-31: %0d, d>=32: %0d), %0d THR writes stalled",
                  tx_frames, tx_frames_by_div[0], tx_frames_by_div[1], tx_frames_by_div[2],
                  tx_frames_by_div[3], tx_stalls);
-        $display("tb_uart: RX %0d kept, %0d dropped (overrun), %0d popped, %0d bad-stop/break, %0d glitches, OE seen %0d times",
-                 rx_kept, rx_dropped, rx_popped, rx_bad, rx_glitches, oe_seen);
+        $display("tb_uart: RX %0d kept, %0d dropped (overrun), %0d popped, %0d bad-stop/break (%0d breaks), %0d glitches, OE seen %0d times, BI %0d",
+                 rx_kept, rx_dropped, rx_popped, rx_bad, rx_breaks, rx_glitches, oe_seen, bi_seen);
+        if (rx_breaks < 10 || bi_seen < 5) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
         if (tx_frames != tx_writes) fail($sformatf("%0d THR writes but %0d frames", tx_writes, tx_frames));
         if (errors == 0) $display("PASS tb_uart (%0d checks)", checks);
         else             $display("FAIL tb_uart: %0d errors, %0d checks", errors, checks);
