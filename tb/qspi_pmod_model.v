@@ -191,6 +191,7 @@ module qspi_pmod_model #(
     reg  [1:0]  qpi_sel;    // psram_qpi when this transaction began
     reg  [7:0]  cmd_q;      // mixed broadcast: the QPI chip's command
     reg  [1:0]  rst_now;    // PSRAMs reset in this transaction
+    integer     sel_gen;    // counts deselects: cancels a pending output enable
     integer     launch;     // counts read nibbles launched (see below)
     integer     x_from;     // the launch whose X is on the pins
     integer     nib_k;      // the launch being scheduled, and its nibble
@@ -201,6 +202,7 @@ module qspi_pmod_model #(
         t_desel  = -1000.0;
         t_rst[0] = -1000.0;
         t_rst[1] = -1000.0;
+        sel_gen  = 0;
         launch   = 0;
     end
 
@@ -331,6 +333,7 @@ module qspi_pmod_model #(
             if (rst_now[1]) t_rst[1] = $realtime;
             phase   = P_IDLE;
             t_desel = $realtime;
+            sel_gen = sel_gen + 1;
             dev_oe <= #(TCHZ_NS) 1'b0;
         end
     end
@@ -487,6 +490,12 @@ module qspi_pmod_model #(
 
     // The timed parts of a launch, as automatic tasks so that overlapping
     // launches (delay_ns above the SCK period) keep their own arguments.
+    task automatic output_on(input integer g);
+        begin
+            #(delay_ns);
+            if (sel_gen == g) dev_oe = 1'b1;
+        end
+    endtask
     task automatic nibble_x(input integer k);
         begin
             #(hold_ns);
@@ -507,12 +516,13 @@ module qspi_pmod_model #(
     // nibble lands only if no later launch has started its X by then: with
     // delay_ns - hold_ns above the SCK period the data eye is closed, and
     // the pins stay X.
-    // Only the first of a read turns the device's output on; chip select
-    // rising turns it off after TCHZ_NS. So the nibble launched by the falling
-    // edge that deselects the chip -- which lands after the release -- changes
-    // dev_io but never drives the pins.
+    // Only the first of a read turns the device's output on, unless the chip
+    // is deselected first; chip select rising turns it off after TCHZ_NS. So
+    // the nibble launched by the falling edge that deselects the chip -- which
+    // lands after the release -- changes dev_io but never drives the pins.
     always @(negedge sck) if (any_sel && phase == P_RDATA) begin
-        if (first_nib) dev_oe <= #(delay_ns) 1'b1;
+        if (first_nib)
+            fork output_on(sel_gen); join_none
         // A forked task reads its arguments when it starts, after this block
         // has moved hi and addr on, so they go through nib_k and nib_v, which
         // hold until the next falling edge.
