@@ -158,14 +158,14 @@ columns).
 | # | Block | Where | Status | Size (measured) | Linux |
 |---|---|---|---|---|---|
 | 1 | TinyTapeout wrapper | `tt_um_*` top | not built | reset synchroniser, wiring | — |
-| 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.28 tiles, 73 flops | `ns16550a` (8250 driver), polled |
+| 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.28 tiles, 76 flops | `ns16550a` (8250 driver), polled |
 | 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
 | 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
 | 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
 block synthesised on its own; 1 tile ≈ 11,300 µm² of standard cells at
-TinyTapeout's 60% density (UART 3,114 µm², GPIO 1,380 µm²). The SoC is
+TinyTapeout's 60% density (UART 3,207 µm², GPIO 1,380 µm²). The SoC is
 already about 1.9x the seven-tile budget (see "Area" in
 `docs/soc-architecture.md`); these two add 0.4 tiles.
 
@@ -193,9 +193,9 @@ frame is fixed at 8N1, and baud = clk / (16 × divisor).
 | 0 | RBR (pops the received byte) | THR | DLL |
 | 1 | IER: bit 0 ERBFI, bit 1 ETBEI | IER | DLM |
 | 2 | IIR | FCR (ignored) | — |
-| 3 | LCR (read/write; only DLAB, bit 7, has an effect) | LCR | LCR |
+| 3 | LCR (read/write; only DLAB, bit 7, and SBC, bit 6, are kept) | LCR | LCR |
 | 4 | MCR (reads 0) | ignored | — |
-| 5 | LSR: bit 0 DR, 1 OE, 5 THRE, 6 TEMT | — | — |
+| 5 | LSR: bit 0 DR, 1 OE, 4 BI, 5 THRE, 6 TEMT | — | — |
 | 6 | MSR: `0xB0` (CTS, DSR, DCD asserted) | — | — |
 | 7 | SCR (reads 0) | ignored | — |
 
@@ -245,13 +245,22 @@ As built (`src/uart.v`):
   instruction times per character, a few percent of the throughput.
 * **A frame that starts while RBR is full** (a sender ignoring CTS) is not
   shifted in: RBR keeps the older byte, and the frame sets OE at its stop
-  bit. **A frame whose stop bit reads 0** (framing error, break) is dropped,
-  and the receiver waits for the line to go high before it looks for the
-  next start bit. There are no FE or BI bits.
-* **Reading LSR clears OE**, as on a 16550. RBR pops, and OE clears, only on
-  the cycle the load completes.
-* **LCR stores only DLAB**; its other bits read 0. Linux keeps its own copy
-  of LCR, and its read-modify-writes of LCR only clear bits.
+  bit. **A frame whose stop bit reads 0 with any data bit 1** (a framing
+  error) is dropped and sets nothing; there is no FE bit. **A frame whose
+  every bit reads 0**, stop bit included, is a **break**: it sets BI and,
+  as a 16550 loads one zero character, DR with RBR = 0 (or OE if RBR was
+  full). Either way the receiver then waits for the line to go high before
+  it looks for the next start bit. Linux counts breaks and takes the magic
+  SysRq key from BI.
+* **Reading LSR clears OE and BI**, as on a 16550. RBR pops, and OE and BI
+  clear, only on the cycle the load completes.
+* **LCR stores only DLAB and SBC**; its other bits read 0. Linux keeps its
+  own copy of LCR, and its read-modify-writes of LCR only clear bits.
+  **SBC (bit 6) sends a break**: TX is held at 0 from the next 16x tick
+  until SBC is cleared, as `serial8250_break_ctl` (tcsendbreak, TIOCSBRK)
+  expects. The transmitter keeps shifting underneath.
+* **RBR resets to 0.** Linux's startup reads it before any byte has
+  arrived, and an X there would spread in an X-accurate simulation.
 * **The divisor resets to 27**, 115200 baud at a 50 MHz clock (+0.5%), so a
   program in flash can print before it sets the divisor
   (`alphaone_soc`'s `UART_DIV_RESET`). A divisor of 0 behaves as 1.
@@ -261,6 +270,10 @@ As built (`src/uart.v`):
 
 Device tree: `compatible = "ns16550a"`, `reg-shift = <0>`,
 `reg-io-width = <1>`, `clock-frequency` = the core clock, no `interrupts`.
+With no `interrupts`, `__uart_read_properties()` calls `platform_get_irq()`
+(not the `_optional` form), so every boot logs `error -ENXIO: IRQ index 0
+not found` at error level before the driver falls back to polling with
+irq 0, as intended. The line is expected, not a fault.
 
 Early console: `earlycon=uart8250,mmio,0x10000000,115200,<core clock in Hz>`,
 or `earlycon=uart8250,mmio,0x10000000` with no baud at all. The clock
