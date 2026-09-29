@@ -45,7 +45,10 @@
 //                  dummies) -- after which it drives data. Mode bits other than
 //                  10 end the mode; undriven ones fail.
 //   +FLASH_QPI=1   flash in QPI mode (W25Q128JV-DTR): leaves it on 0xFF in QPI
-//                  form.
+//                  form, and only when chip select rises straight after those
+//                  two clocks. The datasheet draws Exit QPI exactly so (figure
+//                  52) and does not say whether more clocks cancel it, so the
+//                  model takes the pessimistic reading.
 //   +FLASH_DCRM=1  flash in dual I/O continuous-read mode (BBh with mode bits
 //                  M5-4 = 10, W25Q128JV-DTR 8.2.11): it takes the first 12
 //                  clocks as an address on IO1:0 and the next 4 as mode bits,
@@ -193,6 +196,7 @@ module qspi_pmod_model #(
     reg         hi;         // next data nibble is the high half of a byte
     reg  [1:0]  chip;       // 0 flash, 1 PSRAM A, 2 PSRAM B
     reg         both;       // both PSRAMs selected (reset broadcast)
+    reg         qpi_exit;   // flash: Exit QPI received, pending chip select rising
     reg         first_nib;  // the next nibble out is the first of the read
     reg  [3:0]  wait_n;     // dummy / wait cycles before read data
     reg         mixed;      // broadcast to PSRAMs in different modes
@@ -320,6 +324,7 @@ module qspi_pmod_model #(
             cmd     = 8'h00;
             chip    = which(cs_n);
             both    = (cs_n == 3'b001);
+            qpi_exit = 1'b0;
             t_sel   = $realtime;
             t_rise  = -1.0;
             t_fall  = -1.0;
@@ -346,6 +351,7 @@ module qspi_pmod_model #(
                 fail("PSRAM chip select held low longer than tCEM");
             if (rst_now[0]) t_rst[0] = $realtime;
             if (rst_now[1]) t_rst[1] = $realtime;
+            if (chip == 2'd0 && qpi_exit) flash_qpi = 1'b0;
             if (chip == 2'd0 && phase == P_DDATA)
                 fork desel_edge_check($realtime); join_none
             phase   = P_IDLE;
@@ -415,6 +421,7 @@ module qspi_pmod_model #(
                 end
                 if (n == (flash_qpi ? 8 : 12)) phase = P_DDATA;
             end
+            P_IGNORE: if (chip == 2'd0) qpi_exit = 1'b0;   // Exit QPI cancelled
             P_CMD: begin
                 if (!host_oe) fail("host not driving IO during the command");
                 if (mixed) begin
@@ -436,7 +443,7 @@ module qspi_pmod_model #(
                         n     = 0;
                         phase = P_IGNORE;
                         if (chip == 2'd0) begin
-                            if (cmd == 8'hFF) flash_qpi = 1'b0;
+                            if (cmd == 8'hFF) qpi_exit = 1'b1;   // at chip select rising
                             else fail("flash in QPI mode got something other than its Exit QPI");
                         end else if (cmd == 8'hF5)
                             psram_qpi = psram_qpi & ~psel;   // Exit QPI
