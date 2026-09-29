@@ -76,7 +76,14 @@
 // the -3SQR). qspi_ctrl must not depend on crossing.
 //
 // Data goes out on each falling SCK edge after +QSPI_DELAY ns (default 2),
-// which stands in for the device's clock-to-output time plus both pad delays.
+// which stands in for the device's clock-to-output time plus both pad delays
+// (tACLK, tCLQV). The nibble it replaces stays on the pins for +QSPI_HOLD ns
+// (default 1, at most QSPI_DELAY), the device's output hold time (tKOH,
+// tCLQX) plus the pads' minimum delays, and the pins read X in between. So a
+// host that samples outside [hold, delay) after the next falling edge reads
+// X. With rd_late = 1 the engine samples one clock after that edge, so its
+// runs need a hold of more than one clock: the strap's premise is a round
+// trip that long.
 // The device lets go of the bus TCHZ_NS after chip select rises, not after
 // that whole round trip: contention happens at the pins, and the host's next
 // drive and the chip select both reach them through the same output pads.
@@ -127,6 +134,7 @@ module qspi_pmod_model #(
     reg [8191:0] flash_file;
     integer      flash_fd;
     reg     psram_wrap, flash_crm, flash_qpi, flash_dcrm;
+    integer hold_ns;
     // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
     reg [1:0] psram_qpi;    // in QPI mode
     reg [1:0] psram_rst;    // reset since power-up: reads, writes and 35h allowed
@@ -136,6 +144,9 @@ module qspi_pmod_model #(
     initial begin
         delay_ns = 2;
         if ($value$plusargs("QSPI_DELAY=%d", delay_ns)) ;
+        hold_ns = 1;
+        if ($value$plusargs("QSPI_HOLD=%d", hold_ns)) ;
+        if (hold_ns > delay_ns) hold_ns = delay_ns;
         psram_wrap = $test$plusargs("PSRAM_WRAP");
         psram_qpi  = {$test$plusargs("PSRAM_QPI") || $test$plusargs("PSRAM_B_QPI"),
                       $test$plusargs("PSRAM_QPI") || $test$plusargs("PSRAM_A_QPI")};
@@ -180,12 +191,17 @@ module qspi_pmod_model #(
     reg  [1:0]  qpi_sel;    // psram_qpi when this transaction began
     reg  [7:0]  cmd_q;      // mixed broadcast: the QPI chip's command
     reg  [1:0]  rst_now;    // PSRAMs reset in this transaction
+    integer     launch;     // counts read nibbles launched (see below)
+    integer     x_from;     // the launch whose X is on the pins
+    integer     nib_k;      // the launch being scheduled, and its nibble
+    reg  [3:0]  nib_v;
     realtime    t_sel, t_desel, t_sck, t_rise, t_fall;
     realtime    t_rst [0:1];
     initial begin
         t_desel  = -1000.0;
         t_rst[0] = -1000.0;
         t_rst[1] = -1000.0;
+        launch   = 0;
     end
 
     // SCK driven low before a chip select falls (see Pins above). Checked
@@ -469,15 +485,44 @@ module qspi_pmod_model #(
         endcase
     end
 
+    // The timed parts of a launch, as automatic tasks so that overlapping
+    // launches (delay_ns above the SCK period) keep their own arguments.
+    task automatic nibble_x(input integer k);
+        begin
+            #(hold_ns);
+            dev_io = 4'bxxxx;
+            x_from = k;
+        end
+    endtask
+    task automatic nibble_land(input integer k, input [3:0] v);
+        begin
+            #(delay_ns);
+            if (x_from == k) dev_io = v;
+        end
+    endtask
+
     // Device -> host, on falling SCK. The first data nibble goes out after the
     // falling edge that ends the last dummy cycle.
-    // Each nibble lands delay_ns later. Only the first of a read turns the
-    // device's output on; chip select rising turns it off after TCHZ_NS. So
-    // the nibble launched by the falling edge that deselects the chip -- which
-    // lands after the release -- changes dev_io but never drives the pins.
+    // Each nibble lands delay_ns later, after hold_ns of X (see Timing). A
+    // nibble lands only if no later launch has started its X by then: with
+    // delay_ns - hold_ns above the SCK period the data eye is closed, and
+    // the pins stay X.
+    // Only the first of a read turns the device's output on; chip select
+    // rising turns it off after TCHZ_NS. So the nibble launched by the falling
+    // edge that deselects the chip -- which lands after the release -- changes
+    // dev_io but never drives the pins.
     always @(negedge sck) if (any_sel && phase == P_RDATA) begin
         if (first_nib) dev_oe <= #(delay_ns) 1'b1;
-        dev_io <= #(delay_ns) (hi ? rd(chip, addr) >> 4 : rd(chip, addr) & 8'h0F);
+        // A forked task reads its arguments when it starts, after this block
+        // has moved hi and addr on, so they go through nib_k and nib_v, which
+        // hold until the next falling edge.
+        launch = launch + 1;
+        nib_k  = launch;
+        nib_v  = hi ? rd(chip, addr) >> 4 : rd(chip, addr) & 8'h0F;
+        fork
+            nibble_x(nib_k);
+            nibble_land(nib_k, nib_v);
+        join_none
         if (!hi) addr = next_addr(chip, addr);
         hi = !hi;
         first_nib = 1'b0;
