@@ -12,7 +12,16 @@
 //     second half must finish before the load starts;
 //   * 400k clocks of random fetches and loads/stores, every result checked
 //     against a shadow copy of memory, and the whole PSRAM compared at the end.
-// Plusargs as tb_qspi (+QSPI_DELAY, +RD_LATE, the model's), plus +SEED=n.
+//   * with +RESETS, resets of 1-4 clocks dropped into the random traffic
+//     (about one per 4,096 clocks), wherever they land -- mid-command,
+//     mid-data, mid-start-up. After each the engine must run its start-up
+//     sequence again, from whatever state the cut-off transaction left the
+//     devices in, and carry on. A store the reset cut off may or may not have
+//     written its bytes; the shadow takes the model's word for those. The
+//     model keeps the PSRAMs' contents across their reset (99h), which the
+//     datasheet does not promise; this checks the engine, not that.
+// Plusargs as tb_qspi (+QSPI_DELAY, +RD_LATE, the model's), plus +SEED=n and
+// +RESETS.
 // Written by the 2026-09-26 RTL review; it caught both deliberate breakages
 // tried on mem_ctrl (arbitration ignoring a pending split, and splitting only
 // at the A/B boundary).
@@ -159,7 +168,20 @@ module tb_qspi_stress;
         $display("INFO injected d_req during the first half of a split fetch at t=%0t", $time);
     end
 
-    integer i;
+    integer i, nrst = 0, rlen;
+    reg     resets_on;
+    initial resets_on = $test$plusargs("RESETS");
+    always @(negedge clk) if (resets_on && rand_mode && stream_on && !rst && (($random(seed) & 4095) == 0)) begin
+        rlen = 1 + ($random(seed) & 3);
+        if (d_req && d_we) for (lanes = 0; lanes < 4; lanes = lanes + 1) shadow[d_addr[23:0] + lanes] = 8'hxx;
+        rst = 1; nrst = nrst + 1;
+        repeat (rlen) @(negedge clk);
+        // A store the reset cut short may or may not have written each byte.
+        for (lanes = 0; lanes < 4; lanes = lanes + 1)
+            if (shadow[d_addr[23:0] + lanes] === 8'hxx) shadow[d_addr[23:0] + lanes] = pmod.ram[d_addr[23:0] + lanes];
+        d_req = 0; i_addr = 32'h8000_0000 | ($random(seed) & 32'h00FF_FFFE);
+        rst = 0;
+    end
     initial begin
         if (!$value$plusargs("SEED=%d", seed)) seed = 1;
         for (k = 0; k < 256; k = k + 1) pmod.flash[k] = k ^ 8'h5A;
@@ -195,7 +217,10 @@ module tb_qspi_stress;
                 if (errors < 20) $display("FAIL ram[%06h] model %02h shadow %02h", k, pmod.ram[k], shadow[k]);
                 errors = errors + 1;
             end
-        if (errors == 0) $display("PASS tb_qspi_stress fetches=%0d data=%0d (rd_late=%0d delay=%0d)", n_i, n_d, rd_late, pmod.delay_ns);
+        if (resets_on && nrst < 20) begin
+            $display("FAIL tb_qspi_stress: only %0d resets injected", nrst); errors = errors + 1;
+        end
+        if (errors == 0) $display("PASS tb_qspi_stress fetches=%0d data=%0d resets=%0d (rd_late=%0d delay=%0d)", n_i, n_d, nrst, rd_late, pmod.delay_ns);
         else $display("FAIL tb_qspi_stress: %0d errors", errors);
         $finish;
     end

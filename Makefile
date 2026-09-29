@@ -141,11 +141,13 @@ test-muldiv: $(BUILD_DIR)
 #   PSRAM_A_QPI + FLASH_DCRM, PSRAM_B_QPI + FLASH_QPI
 #                     devices handed over in states the start-up sequence
 #                     has to undo
-# then tb_qspi_stress, with core-shaped request streams, twice.
+# then tb_qspi_stress, with core-shaped request streams: plain, late and
+# wrapping, and twice more with resets dropped into the traffic.
 QSPI_LATE := +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12
 QSPI_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+PSRAM_WRAP" \
              "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI" "+FLASH_QPI +FLASH_CRM" "+FLASH_DCRM" \
              "+PSRAM_A_QPI +FLASH_DCRM" "+PSRAM_B_QPI +FLASH_QPI"
+QSPI_STRESS_RUNS := "" "$(QSPI_LATE) +PSRAM_WRAP" "+RESETS +QSPI_DELAY=19" "+RESETS $(QSPI_LATE) +PSRAM_WRAP +SEED=2"
 test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
@@ -156,7 +158,7 @@ test-qspi: $(BUILD_DIR)
 	done
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_stress $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi_stress.v
-	@cd $(BUILD_DIR) && for args in "" "$(QSPI_LATE) +PSRAM_WRAP"; do \
+	@cd $(BUILD_DIR) && for args in $(QSPI_STRESS_RUNS); do \
 		$(VVP) tb_qspi_stress $$args > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
 	done
