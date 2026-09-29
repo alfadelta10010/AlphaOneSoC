@@ -56,9 +56,11 @@
 // Also checked: at most one chip selected (bar the PSRAM broadcast above),
 // the host driving IO through the command and address phases, the host and
 // a device never driving IO at the same time, the PSRAM's maximum
-// chip-select-low time (tCEM), every chip's minimum deselect time (tCPH) and
-// the PSRAM's reset time (tRST: 50 ns from the end of 99h to its next
-// command, APS6404L table 10).
+// chip-select-low time (tCEM), every chip's minimum deselect time (tCPH), the
+// PSRAM's reset time (tRST: 50 ns from the end of 99h to its next command),
+// and SCK against the command in progress: the period (PSRAM 15.1 ns for QPI
+// 0Bh, 7.5 ns otherwise; flash 7.5 ns) and the high and low times (45% of
+// that minimum period). APS6404L table 10; W25Q128JV-DTR AC characteristics.
 //
 // Pins. The model takes the host's pins with their output enable
 // (host_ctl_oe for SCK and the chip selects) and applies what the Pmod does
@@ -94,7 +96,9 @@ module qspi_pmod_model #(
     parameter TCPH_NS    = 18,         // minimum deselect time
     parameter TCHZ_NS    = 7,          // chip select high to output released
     parameter TSCK_CS_NS = 3,          // SCK driven low before chip select falls
-    parameter TRST_NS    = 50          // PSRAM: end of 99h to the next command
+    parameter TRST_NS    = 50,         // PSRAM: end of 99h to the next command
+    parameter real TCLK_0B_NS = 15.1,  // PSRAM QPI 0Bh minimum SCK period (66 MHz)
+    parameter real TCLK_NS    = 7.5    // every other command, both devices (133 MHz)
 )(
     input  wire       host_sck,
     input  wire [2:0] host_cs_n,
@@ -176,7 +180,7 @@ module qspi_pmod_model #(
     reg  [1:0]  qpi_sel;    // psram_qpi when this transaction began
     reg  [7:0]  cmd_q;      // mixed broadcast: the QPI chip's command
     reg  [1:0]  rst_now;    // PSRAMs reset in this transaction
-    realtime    t_sel, t_desel, t_sck;
+    realtime    t_sel, t_desel, t_sck, t_rise, t_fall;
     realtime    t_rst [0:1];
     initial begin
         t_desel  = -1000.0;
@@ -266,6 +270,11 @@ module qspi_pmod_model #(
             fail("both PSRAMs selected for a read or write");
     endtask
 
+    // Minimum SCK period for the command in progress (see the header).
+    function real tclk_min;
+        tclk_min = (chip != 2'd0 && cmd == 8'h0B && phase != P_CMD) ? TCLK_0B_NS : TCLK_NS;
+    endfunction
+
     // Select / deselect
     always @(cs_n) begin
         if (cs_n != 3'b111 && cs_n != 3'b110 && cs_n != 3'b101 && cs_n != 3'b011 &&
@@ -282,6 +291,8 @@ module qspi_pmod_model #(
             both    = (cs_n == 3'b001);
             allones = 1'b1;
             t_sel   = $realtime;
+            t_rise  = -1.0;
+            t_fall  = -1.0;
             qpi_sel = psram_qpi;
             mixed   = both && psram_qpi[0] != psram_qpi[1];
             rst_now = 2'b00;
@@ -306,6 +317,20 @@ module qspi_pmod_model #(
             t_desel = $realtime;
             dev_oe <= #(TCHZ_NS) 1'b0;
         end
+    end
+
+    // SCK period and high / low times, within a transaction.
+    always @(posedge sck) if (any_sel) begin
+        if (t_rise >= 0.0 && ($realtime - t_rise) < tclk_min() - 0.001)
+            fail("SCK period below the minimum for this command");
+        if (t_fall >= 0.0 && ($realtime - t_fall) < 0.45 * tclk_min() - 0.001)
+            fail("SCK low time below 45% of the minimum period");
+        t_rise = $realtime;
+    end
+    always @(negedge sck) if (any_sel) begin
+        if (t_rise >= 0.0 && ($realtime - t_rise) < 0.45 * tclk_min() - 0.001)
+            fail("SCK high time below 45% of the minimum period");
+        t_fall = $realtime;
     end
 
     // Flash in dual continuous-read mode, once its address and mode are in:
