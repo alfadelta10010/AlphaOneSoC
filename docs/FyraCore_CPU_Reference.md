@@ -119,10 +119,12 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. Two instances: fetch (X) and data (R/W/RW). |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
-| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT. Boots from flash (0x2000_0000). |
+| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO. Boots from flash (0x2000_0000). |
 | `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
 | `mem_ctrl.v` | `mem_ctrl` | Joins the fetch and data ports onto the QSPI engine: data-first arbitration, chip select from the address, PSRAM fetch split at 1 KB pages. |
-| `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices. |
+| `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices and takes them out of any QPI or continuous-read mode another design left them in. |
+| `uart.v` | `uart` | 16550-compatible UART at 0x1000_0000: byte registers, fixed 8N1, no FIFOs (TX back-pressure, RTS# flow control), break send (LCR.SBC) and detect (LSR.BI), polled. |
+| `gpio.v` | `gpio` | GPIO OUT/IN at 0x1001_0000 and a mode-3 SPI transmitter for the OLED, with write back-pressure while a byte shifts. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -132,9 +134,12 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 | `tb_rivercore.v` | Lockstep testbench for the verification flow. Emits a Spike-format commit log; CSR values are printed from `cpu.csr_wval`. Watchdogs: `+MAX_INSTR`, `+MAX_CYCLES`, spin detection. |
 | `tb_cpu.v` | Older integration testbench used by `make asm` / `scripts/run_asm_test.sh`. |
 | `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
-| `qspi_pmod_model.v` | Behavioural QSPI Pmod (flash on CS0, PSRAMs on CS1/CS2). Stops the run on any command `qspi_ctrl` should not send, a flash mode byte with M5-4 = 10, PSRAM traffic before its 66h/99h reset, bus contention, or a tCEM/tCPH violation. Takes the raw pins with their output enable and models released ones (chip selects pulled up, SCK floating), so a chip select falling before SCK is driven low fails. `+QSPI_DELAY` device delay. |
+| `qspi_pmod_model.v` | Behavioural QSPI Pmod (16 MB flash on CS0, PSRAMs on CS1/CS2). Stops the run on any command `qspi_ctrl` should not send, a flash mode byte with M5-4 = 10, PSRAM traffic before its 66h/99h reset or within tRST of it, bus contention, a tCEM/tCPH violation, or an SCK period or high/low time too short for the command. Takes the raw pins with their output enable and models released ones (chip selects pulled up, SCK floating), so a chip select falling before SCK is driven low fails. `+QSPI_DELAY` device delay and `+QSPI_HOLD` output hold (the pins read X between them); hand-over states `+PSRAM_QPI`, `+PSRAM_A_QPI`/`+PSRAM_B_QPI`, `+FLASH_CRM`, `+FLASH_DCRM`, `+FLASH_QPI`; `+PSRAM_WRAP`. |
 | `req_hold_check.v` | Hold-until-done checker for a request handshake. The SoC build (`-DSOC_TB`) checks the core's two ports, the data port at `mem_ctrl` and `mem_ctrl`'s requests to `qspi_ctrl`; `tb_qspi*` check the last. |
-| `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model, including a store aimed at flash that must select no chip; `tb_qspi_stress.v` drives core-shaped request streams (`make test-qspi`). |
+| `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model, including a store aimed at flash that must select no chip; `tb_qspi_stress.v` drives core-shaped request streams, with `+RESETS` dropping resets into them (`make test-qspi`). |
+| `tb_uart.v` | `uart` against spec models: a register scoreboard, the TX pin predicted on every clock (break control included), a reference transmitter on RX (baud error, glitches, framing errors, breaks, overruns), RTS# (`make test-uart`). |
+| `tb_gpio.v` | `gpio`: every pin on every clock, a mode-3 SPI checker at each DIV, the IN synchroniser's latency, write back-pressure (`make test-gpio`). |
+| `tb_soc_periph.v` | The SoC booting `tests/soc/*.S` from the Pmod model's flash with the demo board's devices on its pins: `rp2350_uart_model.v`, `ssd1331_model.v` (PmodOLEDrgb), `keypad_model.v` (PmodKYPD) (`make test-soc-periph`). |
 | `tb_alu.v` … `tb_signExt.v` | Component unit testbenches (`make test-components`). A FAIL line fails the make target. |
 
 ### 3.3 Test Programs
@@ -153,8 +158,8 @@ Address Range               Device      Size    Attributes
 0x8000_0000 - 0x80FF_FFFF   PSRAM       16 MB   read, write, execute, LR/SC (QSPI CS1 / CS2)
 0x0200_0000 - 0x0200_FFFF   CLINT       64 KB   data only
 0x0C00_0000                 PLIC        -       reserved, not implemented (faults)
-0x1000_0000 - 0x1000_FFFF   UART        64 KB   data only, reserved (reads 0)
-0x1001_0000 - 0x1001_FFFF   GPIO        64 KB   data only, reserved (reads 0)
+0x1000_0000 - 0x1000_FFFF   UART        64 KB   data only (src/uart.v)
+0x1001_0000 - 0x1001_FFFF   GPIO        64 KB   data only (src/gpio.v)
 0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only, reserved (reads 0)
 ```
 
@@ -262,7 +267,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 | 0x300 | mstatus | MIE[3], MPIE[7], MPP[12:11], MPRV[17], TW[21] | MPP is legalised to U unless written 11. Resets to 0. |
 | 0x310 | mstatush | none | Reads 0 (little-endian only) |
 | 0x304 | mie | MSIE[3], MTIE[7], MEIE[11] | |
-| 0x305 | mtvec | [31:2] | Direct mode only |
+| 0x305 | mtvec | [31:2] | Direct mode only. Resets to 0, as on Spike; 0 is unmapped on this SoC, so a trap before software writes mtvec -- erased flash (0xFFFFFFFF) at the reset vector, say -- becomes a silent cause-1 loop at 0 that rewrites mepc, mcause and mtval each time. Boot code sets mtvec first. |
 | 0x306 | mcounteren | CY[0], TM[1], IR[2] | |
 | 0x30A / 0x31A | menvcfg / menvcfgh | none | Read 0 (FIOM read-only zero without S-mode) |
 | 0x320 | mcountinhibit | CY[0], IR[2] | TM reads 0 |
@@ -276,7 +281,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 | 0x341 | mepc | Bit 0 always 0; bit 1 stored but reads 0 while misa.C = 0 |
 | 0x342 | mcause | Trap cause (bit 31 = interrupt) |
 | 0x343 | mtval | Faulting address, faulting instruction encoding, or 0 |
-| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the live interrupt wires; nothing is writable |
+| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the interrupt wires; nothing is writable. MTIP comes registered from the CLINT: after a store moves mtimecmp, it keeps its old value for the next two instructions (section 8.4) |
 
 ### 7.5 Counters
 
@@ -358,6 +363,7 @@ LR/SC to an IO window is an access fault (no reservation set there); an AMO to a
 
 - Sources: MEIP (cause 11) > MSIP (3) > MTIP (7).
 - Enable: `irq_global_en = !priv_mode || mstatus.MIE`, with per-source `mie` bits. Both are the post-write values, so the instruction after `csrc mstatus, 8` or `csrc mie, …` is already masked, and the one after `csrs mie, …` is already interruptible.
+- MTIP lags mtimecmp: the CLINT registers it, so after a store moves mtimecmp into the future `mip.MTIP` still reads 1 for the next two instructions (the store commits in WB, then the register updates), and MIE set in that window takes a timer interrupt whose handler finds nothing pending. Priv 3.2.1 allows it ("reflected in MTIP eventually, but not necessarily immediately. A spurious timer interrupt might occur"); Linux programs mtimecmp with MIE = 0 several instructions before re-enabling, and MRET always leaves a bubble. `tests/directed/mtip_stale.S` pins the window.
 - Injection: `irq_inject = any_irq_pend && ifex_valid && !ex_trap && !muldiv_want && !stall_other`. It is never taken during a stall or while any M instruction is in EX, and a synchronous trap wins.
 - Entry: the EX instruction's side effects are suppressed and its PC becomes mepc, so it re-executes after MRET.
 
@@ -434,7 +440,7 @@ module fyracore #(
     parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF   // BASE > TOP disables a window
 )(
     input  wire        clk, rst,
-    input  wire [31:0] boot_addr,      // reset PC, loaded every cycle rst is high
+    input  wire [31:0] boot_addr,      // reset PC, loaded every cycle rst is high; bit 0 ignored
     // Instruction port (section 5.1)
     output wire [31:0] imem_addr,
     output wire        imem_req,
@@ -477,7 +483,10 @@ cd tests/directed
 ./run.sh one <name> [+PLUSARGS]      # a single test
 ./run.sh refs                        # regenerate the Spike references
 ./run.sh soc                         # the same suite through the whole SoC (QSPI path)
+./run.sh soc build | soc one <name>  # the SoC build, and one test through it
 ```
+
+`make test-all` includes `test-qspi`, `test-uart`, `test-gpio` and `test-soc-periph` (the `tests/soc/` programs through the SoC). MANIFEST lines marked `soc` run only through the SoC, with the QSPI Pmod model's plusargs (hand-over states, delays, `+RD_LATE`); `flash` tests boot from flash and run only there.
 
 Memory-timing plusargs for the lockstep sim: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2`. Different settings expose different bugs; sweep them independently.
 
