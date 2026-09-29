@@ -180,6 +180,8 @@ irq_stress          expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +IMEM_WAIT=3 +IMEM_R
 # Boots from flash (SoC only): runs from flash, copies a routine into PSRAM
 # and runs it there after FENCE.I, the way a boot loader hands over.
 flash_boot          flash
+# The flash-end twin of straddle_top (SoC only: boots from flash).
+straddle_flash_end  flash
 
 # ---- SoC only: hostile hand-over, late sampling, SoC-speed variants ---------
 # The QSPI Pmod handed over in states the start-up sequence must undo, and

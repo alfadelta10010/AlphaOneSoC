@@ -94,8 +94,9 @@ asm() { # asm <name>
     -nostartfiles -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
     -T "$(ld_for "$n")" "$HERE/$n.S" -o "$OUT/$n.elf" 2>"$OUT/$n.asm.log" || return 1
   if is_flash "$n"; then
-    # Only what lives in flash; the PSRAM side starts zeroed.
-    riscv64-unknown-elf-objcopy -O verilog -j .text.init -j .text -j .rodata \
+    # Only what lives in flash; the PSRAM side starts zeroed. (.straddle
+    # is straddle_flash_end's last halfword of flash.)
+    riscv64-unknown-elf-objcopy -O verilog -j .text.init -j .text -j .rodata -j .straddle \
       --change-addresses=-0x20000000 "$OUT/$n.elf" "$OUT/$n.hex"
   else
     riscv64-unknown-elf-objcopy -O verilog --change-addresses=-0x80000000 \
