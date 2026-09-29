@@ -56,7 +56,9 @@
 // Also checked: at most one chip selected (bar the PSRAM broadcast above),
 // the host driving IO through the command and address phases, the host and
 // a device never driving IO at the same time, the PSRAM's maximum
-// chip-select-low time (tCEM) and every chip's minimum deselect time (tCPH).
+// chip-select-low time (tCEM), every chip's minimum deselect time (tCPH) and
+// the PSRAM's reset time (tRST: 50 ns from the end of 99h to its next
+// command, APS6404L table 10).
 //
 // Pins. The model takes the host's pins with their output enable
 // (host_ctl_oe for SCK and the chip selects) and applies what the Pmod does
@@ -91,7 +93,8 @@ module qspi_pmod_model #(
     parameter TCEM_NS    = 8000,       // PSRAM maximum CS-low time
     parameter TCPH_NS    = 18,         // minimum deselect time
     parameter TCHZ_NS    = 7,          // chip select high to output released
-    parameter TSCK_CS_NS = 3           // SCK driven low before chip select falls
+    parameter TSCK_CS_NS = 3,          // SCK driven low before chip select falls
+    parameter TRST_NS    = 50          // PSRAM: end of 99h to the next command
 )(
     input  wire       host_sck,
     input  wire [2:0] host_cs_n,
@@ -172,8 +175,14 @@ module qspi_pmod_model #(
     reg         mixed;      // broadcast to PSRAMs in different modes
     reg  [1:0]  qpi_sel;    // psram_qpi when this transaction began
     reg  [7:0]  cmd_q;      // mixed broadcast: the QPI chip's command
+    reg  [1:0]  rst_now;    // PSRAMs reset in this transaction
     realtime    t_sel, t_desel, t_sck;
-    initial t_desel = -1000.0;
+    realtime    t_rst [0:1];
+    initial begin
+        t_desel  = -1000.0;
+        t_rst[0] = -1000.0;
+        t_rst[1] = -1000.0;
+    end
 
     // SCK driven low before a chip select falls (see Pins above). Checked
     // 1 ps after the select, once every update of that time step has landed:
@@ -238,6 +247,7 @@ module qspi_pmod_model #(
         else begin
             psram_qpi = psram_qpi & ~(rsten_q & m);
             psram_rst = psram_rst |  (rsten_q & m);
+            rst_now   = rst_now   |  (rsten_q & m);
         end
     endtask
 
@@ -274,6 +284,10 @@ module qspi_pmod_model #(
             t_sel   = $realtime;
             qpi_sel = psram_qpi;
             mixed   = both && psram_qpi[0] != psram_qpi[1];
+            rst_now = 2'b00;
+            if ((!cs_n[1] && ($realtime - t_rst[0]) < TRST_NS) ||
+                (!cs_n[2] && ($realtime - t_rst[1]) < TRST_NS))
+                fail("PSRAM selected within tRST of its reset");
             // Any command ends a reset enable; 66h sets it again. (From cs_n:
             // psel, a wire, may not have caught up with chip and both yet.)
             rsten_q     = psram_rsten;
@@ -286,6 +300,8 @@ module qspi_pmod_model #(
         end else if (!any_sel && phase != P_IDLE) begin
             if (chip != 2'd0 && ($realtime - t_sel) > TCEM_NS)
                 fail("PSRAM chip select held low longer than tCEM");
+            if (rst_now[0]) t_rst[0] = $realtime;
+            if (rst_now[1]) t_rst[1] = $realtime;
             phase   = P_IDLE;
             t_desel = $realtime;
             dev_oe <= #(TCHZ_NS) 1'b0;
