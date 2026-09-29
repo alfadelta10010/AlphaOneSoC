@@ -3,7 +3,8 @@
 # reservation, so a period that phase-locks with the loop can starve the SC
 # forever -- measured at PERIOD 6-12 ticks. Linux never programs a timer
 # delta below 100 ticks (timer-clint.c), so the default is 100: the loop must
-# complete. Sweep with -DPERIOD=n -DITERS=n -DATOMIC=0|1.
+# complete. Sweep with -DPERIOD=n -DITERS=n -DATOMIC=0|1 -DPAD=n (nops between
+# the LR and the SC; t_ctl_slow.S says why).
 #ifndef PERIOD
 #define PERIOD 100
 #endif
@@ -12,6 +13,9 @@
 #endif
 #ifndef ATOMIC
 #define ATOMIC 1
+#endif
+#ifndef PAD
+#define PAD 0
 #endif
   .option norvc
   .section .text.init
@@ -44,6 +48,9 @@ outer:
 inner:
   lr.w  a1, (a0)
   addi  a2, a1, 1
+  .rept PAD
+  nop
+  .endr
   sc.w  a4, a2, (a0)
   beqz  a4, ok
   addi  s2, s2, 1
@@ -58,6 +65,8 @@ ok:
 #endif
   addi s0, s0, 1
   blt  s0, s1, outer
+  snez s3, s2                # an SC failed at least once (x19)
+  snez s4, s11               # an interrupt was taken at least once (x20)
   lw   s9, 0(a0)
   li   t0, 0x80180000
   sw   s0, 0(t0)
