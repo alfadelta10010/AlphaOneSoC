@@ -47,6 +47,10 @@
 //                  clocks as an address on IO1:0 and the next 4 as mode bits,
 //                  then drives dual data. A window that ends before the mode
 //                  bits leaves the mode set; mode bits other than 10 end it.
+//   +PSRAM_A_QPI=1, +PSRAM_B_QPI=1
+//                  only that PSRAM in QPI mode, as a design that used one chip
+//                  leaves them. A broadcast then reaches the two chips in
+//                  different forms, and each decodes it as its own mode does.
 //   Any other traffic to a device in one of these states stops the run.
 //
 // Also checked: at most one chip selected (bar the PSRAM broadcast above),
@@ -126,7 +130,8 @@ module qspi_pmod_model #(
         delay_ns = 2;
         if ($value$plusargs("QSPI_DELAY=%d", delay_ns)) ;
         psram_wrap = $test$plusargs("PSRAM_WRAP");
-        psram_qpi  = $test$plusargs("PSRAM_QPI") ? 2'b11 : 2'b00;
+        psram_qpi  = {$test$plusargs("PSRAM_QPI") || $test$plusargs("PSRAM_B_QPI"),
+                      $test$plusargs("PSRAM_QPI") || $test$plusargs("PSRAM_A_QPI")};
         psram_rst  = 2'b00;
         psram_rsten = 2'b00;
         flash_crm  = $test$plusargs("FLASH_CRM");
@@ -164,6 +169,9 @@ module qspi_pmod_model #(
     reg         allones;    // every nibble so far was 1111 (flash CRM exit)
     reg         first_nib;  // the next nibble out is the first of the read
     reg  [3:0]  wait_n;     // dummy / wait cycles before read data
+    reg         mixed;      // broadcast to PSRAMs in different modes
+    reg  [1:0]  qpi_sel;    // psram_qpi when this transaction began
+    reg  [7:0]  cmd_q;      // mixed broadcast: the QPI chip's command
     realtime    t_sel, t_desel, t_sck;
     initial t_desel = -1000.0;
 
@@ -210,27 +218,42 @@ module qspi_pmod_model #(
     // The PSRAMs selected, as a psram_* mask.
     wire [1:0] psel = both ? 2'b11 : (chip == 2'd1) ? 2'b01 : (chip == 2'd2) ? 2'b10 : 2'b00;
 
-    // Is the selected device in a state where it only reads nibbles? The
-    // PSRAMs are only ever broadcast to in the same mode (checked at select).
+    // Is the selected device in a state where it only reads nibbles? (A
+    // broadcast to PSRAMs in different modes is decoded per chip: `mixed`.)
     wire in_qpi = (chip == 2'd0) ? flash_qpi : |(psram_qpi & psel);
 
     // A PSRAM command other than 66h, 99h and Exit QPI: the chip must have
     // had its power-up reset.
-    task need_reset;
-        if ((psram_rst & psel) != psel)
+    task need_reset(input [1:0] m);
+        if ((psram_rst & m) != m)
             fail("PSRAM command before its power-up reset (66h, 99h)");
     endtask
 
     // 66h: reset enable, for the next command only. 99h right after it:
     // reset, which also returns the chip to SPI mode. A 99h not preceded by
     // 66h is ignored, as on the chip.
-    task psram_reset_cmd(input [7:0] c);
+    task psram_reset_cmd(input [7:0] c, input [1:0] m);
         if (c == 8'h66)
-            psram_rsten = psram_rsten | psel;
+            psram_rsten = psram_rsten | m;
         else begin
-            psram_qpi = psram_qpi & ~(rsten_q & psel);
-            psram_rst = psram_rst |  (rsten_q & psel);
+            psram_qpi = psram_qpi & ~(rsten_q & m);
+            psram_rst = psram_rst |  (rsten_q & m);
         end
+    endtask
+
+    // A command broadcast to both PSRAMs, as the chips in mask m decode it:
+    // Exit QPI (a QPI-form command), reset enable, reset, Enter QPI (an
+    // SPI-form command). Anything else would make both drive the bus.
+    task broadcast_cmd(input [7:0] c, input [1:0] m, input qpi);
+        if (qpi && c == 8'hF5)
+            psram_qpi = psram_qpi & ~m;
+        else if (c == 8'h66 || c == 8'h99)
+            psram_reset_cmd(c, m);
+        else if (!qpi && c == 8'h35) begin
+            need_reset(m);
+            psram_qpi = psram_qpi | m;
+        end else
+            fail("both PSRAMs selected for a read or write");
     endtask
 
     // Select / deselect
@@ -249,8 +272,8 @@ module qspi_pmod_model #(
             both    = (cs_n == 3'b001);
             allones = 1'b1;
             t_sel   = $realtime;
-            if (both && psram_qpi[0] != psram_qpi[1])
-                fail("both PSRAMs selected while in different modes");
+            qpi_sel = psram_qpi;
+            mixed   = both && psram_qpi[0] != psram_qpi[1];
             // Any command ends a reset enable; 66h sets it again. (From cs_n:
             // psel, a wire, may not have caught up with chip and both yet.)
             rsten_q     = psram_rsten;
@@ -306,7 +329,18 @@ module qspi_pmod_model #(
             end
             P_CMD: begin
                 if (!host_oe) fail("host not driving IO during the command");
-                if (in_qpi) begin
+                if (mixed) begin
+                    // Broadcast to PSRAMs in different modes: the QPI chip
+                    // takes two nibbles, the SPI chip eight bits on IO0.
+                    cmd_q = {cmd_q[3:0], host_io};
+                    cmd   = {cmd[6:0], host_io[0]};
+                    n     = n + 1;
+                    if (n == 2) broadcast_cmd(cmd_q, qpi_sel, 1'b1);
+                    if (n == 8) begin
+                        broadcast_cmd(cmd, ~qpi_sel, 1'b0);
+                        phase = P_IGNORE;
+                    end
+                end else if (in_qpi) begin
                     // Two nibbles make the command.
                     cmd = {cmd[3:0], host_io};
                     n   = n + 1;
@@ -319,11 +353,11 @@ module qspi_pmod_model #(
                         end else if (cmd == 8'hF5)
                             psram_qpi = psram_qpi & ~psel;   // Exit QPI
                         else if (cmd == 8'h66 || cmd == 8'h99)
-                            psram_reset_cmd(cmd);
+                            psram_reset_cmd(cmd, psel);
                         else if (both)
                             fail("both PSRAMs selected for a read or write");
                         else if (cmd == 8'h0B || cmd == 8'h38 || cmd == 8'h02) begin
-                            need_reset;
+                            need_reset(psel);
                             phase = P_ADDR;
                         end else
                             fail("unsupported QPI command for the PSRAM");
@@ -334,10 +368,10 @@ module qspi_pmod_model #(
                     if (n == 8) begin
                         n = 0;
                         if (chip != 2'd0 && (cmd == 8'h66 || cmd == 8'h99)) begin
-                            psram_reset_cmd(cmd);      // PSRAM reset enable / reset
+                            psram_reset_cmd(cmd, psel); // PSRAM reset enable / reset
                             phase = P_IGNORE;
                         end else if (chip != 2'd0 && cmd == 8'h35) begin
-                            need_reset;
+                            need_reset(psel);
                             psram_qpi = psram_qpi | psel;   // PSRAM Enter Quad mode
                             phase = P_IGNORE;
                         end
@@ -346,7 +380,7 @@ module qspi_pmod_model #(
                         else if (both)
                             fail("both PSRAMs selected for a read or write");
                         else if (cmd == 8'hEB || (cmd == 8'h38 && chip != 2'd0)) begin
-                            if (chip != 2'd0) need_reset;
+                            if (chip != 2'd0) need_reset(psel);
                             phase = P_ADDR;
                         end
                         else
