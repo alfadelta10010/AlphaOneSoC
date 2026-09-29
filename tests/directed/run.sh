@@ -6,6 +6,8 @@
 #   ./run.sh one <name> [+PLUSARG...]
 #   ./run.sh refs               regenerate the Spike reference of every test
 #   ./run.sh soc                every test in MANIFEST through the whole SoC
+#   ./run.sh soc build | soc one <name> [+PLUSARG...]
+#                               the same two, for the SoC build
 #
 # `soc` builds tb_rivercore with -DSOC_TB: the core runs through the bus
 # fabric, memory controller and QSPI engine against a behavioural QSPI Pmod
@@ -36,6 +38,13 @@
 #       testbench forces the core's boot_addr to 0x8000_0000.) The
 #       core-level run skips it.
 #
+#   <name> soc <spike|expect ...>
+#       SoC only, and run there even when an earlier line already ran the
+#       test: the rest of the line is a `spike` or `expect` line as above.
+#       For the SoC's own plusargs -- the QSPI Pmod model's hand-over states
+#       and delays, the rd_late strap -- and for SoC-speed variants of
+#       tests the SoC run otherwise skips. The core-level run skips it.
+#
 #   #soc-skip <name>... -- <reason>
 #       The SoC-level run skips these tests. For tests whose point depends on
 #       a fast memory (a timer period shorter than a QSPI-speed handler).
@@ -51,7 +60,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
 SOC=0
-[ "${1:-}" = soc ] && SOC=1
+[ "${1:-}" = soc ] && { SOC=1; shift; }
 OUT="$HERE/out"
 [ $SOC = 1 ] && OUT="$HERE/out/soc"
 mkdir -p "$OUT"
@@ -196,7 +205,10 @@ suite() {
   [ $SOC = 1 ] && skip=" $(sed -n 's/^#soc-skip \([^-]*\).*/\1/p' "$HERE/MANIFEST" | tr '\n' ' ') "
   while read -r name mode rest; do
     case "$name" in ''|\#*) continue ;; esac
-    if [ $SOC = 1 ]; then
+    if [ "$mode" = soc ]; then
+      [ $SOC = 1 ] || continue
+      read -r mode rest <<< "$rest"
+    elif [ $SOC = 1 ]; then
       case "$ran$skip" in *" $name "*) continue ;; esac
       ran="$ran$name "
     elif [ "$mode" = flash ]; then
