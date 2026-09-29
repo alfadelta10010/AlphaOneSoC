@@ -38,8 +38,12 @@
 // start-up sequence gets it out:
 //
 //   +PSRAM_QPI=1   both PSRAMs in QPI mode (commands in QPI form only).
-//   +FLASH_CRM=1   flash in continuous-read mode: it takes the first clocks as
-//                  an address, and leaves the mode only on 8 clocks of 1111.
+//   +FLASH_CRM=1   flash in quad continuous-read mode (EBh with M5-4 = 10): each
+//                  chip select window is a quad I/O read without its command --
+//                  6 address clocks, the mode byte on clocks 7-8, then 4 dummy
+//                  clocks (none in QPI mode, where the mode clocks are the
+//                  dummies) -- after which it drives data. Mode bits other than
+//                  10 end the mode; undriven ones fail.
 //   +FLASH_QPI=1   flash in QPI mode (W25Q128JV-DTR): leaves it on 0xFF in QPI
 //                  form.
 //   +FLASH_DCRM=1  flash in dual I/O continuous-read mode (BBh with mode bits
@@ -47,6 +51,10 @@
 //                  clocks as an address on IO1:0 and the next 4 as mode bits,
 //                  then drives dual data. A window that ends before the mode
 //                  bits leaves the mode set; mode bits other than 10 end it.
+//   In either continuous-read mode, a chip select still low when the flash
+//   starts driving data stops the run, and so does one that rises on the very
+//   falling SCK edge that starts it: the host's pads and the flash's would
+//   overlap for a moment. End such a window with SCK high.
 //   +PSRAM_A_QPI=1, +PSRAM_B_QPI=1
 //                  only that PSRAM in QPI mode, as a design that used one chip
 //                  leaves them. A broadcast then reaches the two chips in
@@ -127,7 +135,7 @@ module qspi_pmod_model #(
     localparam [3:0] P_IDLE = 0, P_CMD = 1, P_ADDR = 2, P_DUMMY = 3, P_RDATA = 4,
                      P_WDATA = 5, P_IGNORE = 6, P_MODE = 7,
                      P_DCRM = 8,    // flash in dual continuous-read: address + mode
-                     P_DDATA = 9;   // ... and now driving dual data
+                     P_DDATA = 9;   // flash in continuous read: its data is next
 
     reg  [3:0]  phase;
     integer delay_ns;
@@ -185,7 +193,6 @@ module qspi_pmod_model #(
     reg         hi;         // next data nibble is the high half of a byte
     reg  [1:0]  chip;       // 0 flash, 1 PSRAM A, 2 PSRAM B
     reg         both;       // both PSRAMs selected (reset broadcast)
-    reg         allones;    // every nibble so far was 1111 (flash CRM exit)
     reg         first_nib;  // the next nibble out is the first of the read
     reg  [3:0]  wait_n;     // dummy / wait cycles before read data
     reg         mixed;      // broadcast to PSRAMs in different modes
@@ -313,7 +320,6 @@ module qspi_pmod_model #(
             cmd     = 8'h00;
             chip    = which(cs_n);
             both    = (cs_n == 3'b001);
-            allones = 1'b1;
             t_sel   = $realtime;
             t_rise  = -1.0;
             t_fall  = -1.0;
@@ -327,7 +333,10 @@ module qspi_pmod_model #(
             // psel, a wire, may not have caught up with chip and both yet.)
             rsten_q     = psram_rsten;
             psram_rsten = psram_rsten & cs_n[2:1];
-            if (chip == 2'd0 && flash_crm)  phase = P_MODE;
+            if (chip == 2'd0 && flash_crm) begin
+                phase = P_MODE;
+                mode  = 8'h00;
+            end
             if (chip == 2'd0 && flash_dcrm) begin
                 phase = P_DCRM;
                 mode  = 8'h00;
@@ -337,6 +346,8 @@ module qspi_pmod_model #(
                 fail("PSRAM chip select held low longer than tCEM");
             if (rst_now[0]) t_rst[0] = $realtime;
             if (rst_now[1]) t_rst[1] = $realtime;
+            if (chip == 2'd0 && phase == P_DDATA)
+                fork desel_edge_check($realtime); join_none
             phase   = P_IDLE;
             t_desel = $realtime;
             sel_gen = sel_gen + 1;
@@ -358,14 +369,22 @@ module qspi_pmod_model #(
         t_fall = $realtime;
     end
 
-    // Flash in dual continuous-read mode, once its address and mode are in:
-    // the falling edge after them starts dual data. Checked 1 ps later, so a
-    // chip select that rises on that same edge ends the read first.
+    // Flash in continuous read, once its address, mode and dummy clocks are
+    // in: the falling edge after them starts data. Checked 1 ps later, once
+    // every update of that time step has landed; a chip select rising on
+    // that same edge is caught by desel_edge_check instead.
     always @(negedge sck) if (phase == P_DDATA) begin
         #0.001;
         if (any_sel && phase == P_DDATA)
-            fail("flash in dual continuous-read mode drove read data");
+            fail("flash in continuous-read mode drove read data into the window");
     end
+    task automatic desel_edge_check(input realtime td);
+        begin
+            #0.001;
+            if (sck === 1'b0 && t_sck == td)
+                fail("flash in continuous-read mode deselected on the SCK edge that starts its data");
+        end
+    endtask
 
     // Host -> device, on rising SCK
     always @(posedge sck) if (any_sel) begin
@@ -384,14 +403,17 @@ module qspi_pmod_model #(
                 end
             end
             P_MODE: begin
-                // Flash in continuous-read mode: 8 clocks of 1111 end it.
-                allones = allones && host_oe && (host_io == 4'b1111);
+                // Quad continuous read: 6 address clocks, the mode byte on
+                // clocks 7-8, then the dummy clocks (see the header).
                 n = n + 1;
+                if (n > 6 && n <= 8)
+                    mode = {mode[3:0], host_oe ? host_io : 4'bxxxx};
                 if (n == 8) begin
-                    if (!allones) fail("flash in continuous-read mode got a command");
-                    flash_crm = 1'b0;
-                    phase = P_IGNORE;
+                    if (^mode[5:4] === 1'bx)
+                        fail("flash in continuous-read mode got undriven mode bits");
+                    if (mode[5:4] != 2'b10) flash_crm = 1'b0;
                 end
+                if (n == (flash_qpi ? 8 : 12)) phase = P_DDATA;
             end
             P_CMD: begin
                 if (!host_oe) fail("host not driving IO during the command");
