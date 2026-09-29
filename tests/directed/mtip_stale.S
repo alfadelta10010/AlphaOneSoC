@@ -1,18 +1,20 @@
 # The CLINT registers MTIP (src/clint.v), so it lags a change of mtimecmp:
 # after a store moves mtimecmp into the future, mip.MTIP still reads 1 for
-# the next two instructions -- one cycle for the store to commit in WB, one
-# for the register -- and an interrupt enabled in that window is taken
+# two clocks -- one for the store to commit in WB, one for the register;
+# with a fast fetch that is the next two instructions -- and an interrupt
+# enabled in that window is taken
 # although nothing is pending by the time the handler reads mip. Priv
 # 3.2.1 allows it ("... reflected in MTIP eventually, but not necessarily
 # immediately. A spurious timer interrupt might occur"), and Linux never
 # meets it: clint_clock_next_event runs with MIE = 0, several instructions
 # before interrupts come back on, and MRET always leaves a bubble. Spike
-# updates MTIP at once, so this is DUT-only; it pins the window so that a
-# change to it shows.
+# updates MTIP at once, so this is DUT-only; it pins the window at both
+# ends so that a change to it shows.
 #
 #   x19  mip with mtimecmp = 0: 0x80
 #   x22  mip on the instruction after the store to mtimecmp_hi
 #   x23  mip on the one after that
+#   x24  mip on the third: 0, the window has closed
 #   x20  mip two instructions after MIE is set: 0
 #   x18  timer interrupts taken after MIE was set (spurious ones)
 #   x12  mip as the handler read it: 0 if it was spurious (-1 if none)
@@ -39,6 +41,7 @@ rvtest_entry_point:
   sw   t1, 4(s0)              # mtimecmp = far future
   csrr s6, mip
   csrr s7, mip
+  csrr s8, mip
   # (b) MIE set on the instruction right after the store
   sw   zero, 4(s0)            # pending again
   nop
