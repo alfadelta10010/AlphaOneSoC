@@ -59,6 +59,12 @@
 // drive data from clock 12. A flash in dual continuous-read mode takes the
 // 8-clock window as part of an address and stays in the mode, so the
 // 16-clock window after it is what gets it out.
+// The sequence starts 8 clocks after reset is released. A reset can land
+// in the middle of the sequence -- a glitch, or the RP2040 pulsing it --
+// and if it lands just after a PSRAM reset (99h), the restarted sequence's
+// first command must still come after the PSRAM's 50 ns tRST: the reset
+// lasts at least a clock, and 8 more make over 50 ns at any clock up to
+// 160 MHz. The existing phase counter counts them, so it costs no flop.
 // The SoC always boots from flash, so nothing is in the PSRAMs yet and they
 // are always reset. The flash steps sit between the reset and 35h, far more
 // than the PSRAM's 50 ns tRST. The first F5h is what gets a PSRAM we left in
@@ -231,13 +237,16 @@ module qspi_ctrl (
             if (sample)
                 sr <= {sr[27:0], io_in};
             case (state)
-                // ctl_oe: the pins have been driven idle for a cycle.
-                S_IDLE: if (ctl_oe && (init || start)) begin
+                // ctl_oe: the pins have been driven idle for a cycle. The
+                // start-up sequence waits 8 clocks after reset first (cnt
+                // counts them; see Start-up sequence).
+                S_IDLE: if (ctl_oe && (init ? (step != 3'd0 || cnt == 3'd7) : start)) begin
                     state <= S_CMD;
                     cnt   <= qpi_form ? 3'd1 : 3'd7;
                     cs_n  <= ~sel_now;
                     io_oe <= 1'b1;
-                end
+                end else if (init)
+                    cnt <= cnt + 3'd1;
                 S_TAIL: begin
                     state <= S_END;
                     cs_n  <= 3'b111;
