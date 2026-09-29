@@ -739,6 +739,7 @@ module tb_uart;
         rd8(4, v8); chk("MCR after reset", v8, 8'h00);
         rd8(6, v8); chk("MSR after reset", v8, 8'hB0);
         rd8(7, v8); chk("SCR after reset", v8, 8'h00);
+        rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
         wr8(3, 8'h80);
         rd8(0, v8); chk("DLL after reset", v8, 8'd27);
         rd8(1, v8); chk("DLM after reset", v8, 8'd0);
@@ -1212,6 +1213,7 @@ module tb_uart;
         rd8(2, v8); chk("IIR after reset", v8, 8'h01);
         rd8(1, v8); chk("IER after reset", v8, 8'h00);
         rd8(3, v8); chk("LCR after reset", v8, 8'h00);
+        rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
         wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd27); wr8(3, 8'h00);
         wr8(0, 8'h3E);                                            // at divisor 27
         fork

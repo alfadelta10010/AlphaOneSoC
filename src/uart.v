@@ -73,7 +73,7 @@
 // for real loads, and holds it for exactly one ready cycle.
 //
 // Reset: TX idle (1), RTS# deasserted (1) -- both registered, so the pins
-// hold those values while rst is high and never glitch.
+// hold those values while rst is high and never glitch. RBR resets to 0.
 
 module uart #(
     parameter [15:0] DIV_RESET = 16'd27    // 115200 baud at 50 MHz
@@ -258,9 +258,13 @@ module uart #(
     end
 
     // RBR is the receive shift register: data bits arrive LSB first and
-    // shift in at the top.
+    // shift in at the top. It resets to 0: Linux's startup reads RX before
+    // any byte has arrived (serial8250_clear_interrupts), and an unreset
+    // register would carry X into an X-accurate simulation from there.
     always @(posedge clk) begin
-        if (rx_mid && rx_busy && rx_keep && rx_bit >= 4'd1 && rx_bit <= 4'd8)
+        if (rst)
+            rbr <= 8'h00;
+        else if (rx_mid && rx_busy && rx_keep && rx_bit >= 4'd1 && rx_bit <= 4'd8)
             rbr <= {rx_s, rbr[7:1]};
     end
 
