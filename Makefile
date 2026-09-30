@@ -37,7 +37,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv asm \
+        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -55,6 +55,10 @@ help:
 	@echo "  make test-regfile      Run register file testbench"
 	@echo "  make test-csr          Run CSR testbench"
 	@echo "  make test-compressed   Run compressed decoder testbench"
+	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
+	@echo "  make test-uart         Run UART testbench"
+	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
+	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -127,7 +131,80 @@ test-muldiv: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
 	@$(call run_tb,tb_muldiv)
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv
+# The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model:
+#   default           2 ns device delay, 1 ns hold
+#   QSPI_DELAY=19     just under one SCK period, which rd_late = 0 must take
+#   RD_LATE, 25 ns    past one SCK period, which needs the rd_late strap and
+#                     a round trip of more than one clock (hold 12 ns)
+#   PSRAM_WRAP        a PSRAM that wraps at 1 KB pages (no row crossing)
+#   PSRAM_QPI + FLASH_CRM, FLASH_QPI, FLASH_QPI + FLASH_CRM, FLASH_DCRM,
+#   PSRAM_A_QPI + FLASH_DCRM, PSRAM_B_QPI + FLASH_QPI
+#                     devices handed over in states the start-up sequence
+#                     has to undo
+# then tb_qspi_stress, with core-shaped request streams: plain, late and
+# wrapping, and twice more with resets dropped into the traffic.
+QSPI_LATE := +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12
+QSPI_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+PSRAM_WRAP" \
+             "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI" "+FLASH_QPI +FLASH_CRM" "+FLASH_DCRM" \
+             "+PSRAM_A_QPI +FLASH_DCRM" "+PSRAM_B_QPI +FLASH_QPI"
+QSPI_STRESS_RUNS := "" "$(QSPI_LATE) +PSRAM_WRAP" "+RESETS +QSPI_DELAY=19" "+RESETS $(QSPI_LATE) +PSRAM_WRAP +SEED=2"
+test-qspi: $(BUILD_DIR)
+	@echo "=== Testing QSPI memory path ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
+	@cd $(BUILD_DIR) && for args in $(QSPI_RUNS); do \
+		$(VVP) tb_qspi $$args > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
+		grep -q '^PASS' tb_qspi.log || exit 1; \
+	done
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_stress $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi_stress.v
+	@cd $(BUILD_DIR) && for args in $(QSPI_STRESS_RUNS); do \
+		$(VVP) tb_qspi_stress $$args > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
+		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
+	done
+
+# The UART against spec-derived models: register/lane scoreboard, a
+# reference receiver on TX, an asynchronous reference transmitter on RX
+# (baud error, glitches, framing errors, overruns), RTS# and back-pressure
+# checks, and a constrained-random run (+SEED=, +NRAND= for more).
+test-uart: $(BUILD_DIR)
+	@echo "=== Testing UART ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart.v
+	@$(call run_tb,tb_uart)
+
+# GPIO OUT/IN and the SPI shifter: register and pin model, a mode-3 SPI
+# checker at every DIV, back-pressure, and a random run.
+test-gpio: $(BUILD_DIR)
+	@echo "=== Testing GPIO + SPI transmitter ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(TB_DIR)/tb_gpio.v
+	@$(call run_tb,tb_gpio)
+
+# The peripherals through the whole SoC: each tests/soc/*.S program boots
+# from the QSPI Pmod model's flash with the demo board's devices on the pins
+# (RP2350 UART with CTS, SSD1331, keypad) -- tb/tb_soc_periph.v. A run fails
+# on a FAIL, ERROR or TIMEOUT line or a missing PASS; all runs go first.
+SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode
+SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
+test-soc-periph: $(BUILD_DIR)
+	@echo "=== Testing the peripherals through the SoC ==="
+	@mkdir -p $(SOC_PERIPH_DIR)
+	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_soc_periph.v
+	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf || { bad=1; continue; }; \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 $$t.elf $$t.hex; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex > $$t.log 2>&1; \
+		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_]+: ' $$t.log | head -6; \
+		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
+	done; exit $$bad
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph
 	@echo ""
 	@echo "=== All component tests completed ==="
 

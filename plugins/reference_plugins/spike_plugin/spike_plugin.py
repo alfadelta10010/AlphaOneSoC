@@ -77,8 +77,8 @@ class spike_plugin(object):
         self.max_dump_mb = int(ini_config.get('max_dump_mb', 64))
 
         # Retire budget, matched to the DUT's +MAX_INSTR. It bounds the
-        # COMPARISON -- ref.dump is cut to this many commit-log lines once the
-        # boot-ROM prologue has been stripped -- so both models present the
+        # COMPARISON -- ref.dump is cut to this many commit-log lines once any
+        # ignore_lines prologue has been stripped -- so both models present the
         # same number of retired instructions. 0 disables the cut.
         #
         # It is deliberately NOT passed to spike as --instructions. That flag
@@ -228,8 +228,8 @@ class spike_plugin(object):
             target_cmd += "([ -f ref.dump ]"
             if n_skip:
                 target_cmd += f" && sed -i '1,{n_skip}d' ref.dump"
-            # Cut to the DUT's retire budget, after the boot-ROM lines are gone
-            # so both sides count the same thing. This is what actually keeps
+            # Cut to the DUT's retire budget, after any ignore_lines prologue is
+            # gone so both sides count the same thing. This is what actually keeps
             # the two traces comparable on a program that does not terminate.
             if self.max_instr > 0:
                 target_cmd += (f" && head -n {self.max_instr} ref.dump"

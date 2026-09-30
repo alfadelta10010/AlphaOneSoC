@@ -5,6 +5,6 @@ SECTIONS { . = 0x80000000;
   .tohost : { *(.tohost) } . = ALIGN(0x1000);
   .text : { *(.text) *(.text.*) } . = ALIGN(0x1000);
   .data : { *(.data) *(.data.*) } .bss : { *(.bss) }
-  . = 0x81FFFFFE;
+  . = 0x80FFFFFE;
   .straddle : { *(.straddle) }
   _end = .; }

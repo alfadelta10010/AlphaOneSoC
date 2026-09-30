@@ -107,7 +107,7 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 
 | File | Module | Description |
 |---|---|---|
-| `fyracore.v` | `fyracore` | Top-level 3-stage pipeline (~1250 lines). Instantiates everything below except `clint`, `memController` and `regs`. |
+| `fyracore.v` | `fyracore` | Top-level 3-stage pipeline (~1280 lines). Instantiates the modules from `alu` to `pmp` below. |
 | `alu.v` | `alu` | RV32I ALU (ADD, SUB, SLL, SRL, SRA, SLT, SLTU, XOR, OR, AND). |
 | `muldiv.v` | `muldiv` | Iterative multiply/divide unit: shift-add multiplier (33-34 cycles), restoring divider (34 cycles). |
 | `controller.v` | `controller` | Combinational decode of opcode/funct3/funct7 into control signals. Rejects illegal LOAD/STORE/JALR encodings without requesting side effects; the pipeline completes the rs2/rd/rs1 checks for SYSTEM and LR. |
@@ -118,8 +118,13 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 | `compressed_decoder.v` | `compressed_decoder` | RV32C expansion. Its legal/illegal verdict matches the RV32IMAC rules on all 49,152 16-bit encodings. |
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. Two instances: fetch (X) and data (R/W/RW). |
-| `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the memory model (simulation) or memory controller, not by the core. |
-| `memController.v` | `memController` | Dual-mode memory controller sketch. **Not instantiated by anything.** Its hardware path predates the request/ready contract (it infers reads from byte lanes and has no request strobe) and needs rework once the SoC bus is chosen. |
+| `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
+| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO. Boots from flash (0x2000_0000). |
+| `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
+| `mem_ctrl.v` | `mem_ctrl` | Joins the fetch and data ports onto the QSPI engine: data-first arbitration, chip select from the address, PSRAM fetch split at 1 KB pages. |
+| `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices and takes them out of any QPI or continuous-read mode another design left them in. |
+| `uart.v` | `uart` | 16550-compatible UART at 0x1000_0000: byte registers, fixed 8N1, no FIFOs (TX back-pressure, RTS# flow control), break send (LCR.SBC) and detect (LSR.BI), polled. |
+| `gpio.v` | `gpio` | GPIO OUT/IN at 0x1001_0000 and a mode-3 SPI transmitter for the OLED, with write back-pressure while a byte shifts. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -128,12 +133,18 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 |---|---|
 | `tb_rivercore.v` | Lockstep testbench for the verification flow. Emits a Spike-format commit log; CSR values are printed from `cpu.csr_wval`. Watchdogs: `+MAX_INSTR`, `+MAX_CYCLES`, spin detection. |
 | `tb_cpu.v` | Older integration testbench used by `make asm` / `scripts/run_asm_test.sh`. |
-| `memory_model.v` | 32 MB flat array + CLINT + a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
+| `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
+| `qspi_pmod_model.v` | Behavioural QSPI Pmod (16 MB flash on CS0, PSRAMs on CS1/CS2). Stops the run on any command `qspi_ctrl` should not send, a flash mode byte with M5-4 = 10, PSRAM traffic before its 66h/99h reset or within tRST of it, bus contention, a tCEM/tCPH violation, or an SCK period or high/low time too short for the command. Takes the raw pins with their output enable and models released ones (chip selects pulled up, SCK floating), so a chip select falling before SCK is driven low fails. `+QSPI_DELAY` device delay and `+QSPI_HOLD` output hold (the pins read X between them); hand-over states `+PSRAM_QPI`, `+PSRAM_A_QPI`/`+PSRAM_B_QPI`, `+FLASH_CRM`, `+FLASH_DCRM`, `+FLASH_QPI`; `+PSRAM_WRAP`. |
+| `req_hold_check.v` | Hold-until-done checker for a request handshake. The SoC build (`-DSOC_TB`) checks the core's two ports, the data port at `mem_ctrl` and `mem_ctrl`'s requests to `qspi_ctrl`; `tb_qspi*` check the last. |
+| `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model, including a store aimed at flash that must select no chip; `tb_qspi_stress.v` drives core-shaped request streams, with `+RESETS` dropping resets into them (`make test-qspi`). |
+| `tb_uart.v` | `uart` against spec models: a register scoreboard, the TX pin predicted on every clock (break control included), a reference transmitter on RX (baud error, glitches, framing errors, breaks, overruns), RTS# (`make test-uart`). |
+| `tb_gpio.v` | `gpio`: every pin on every clock, a mode-3 SPI checker at each DIV, the IN synchroniser's latency, write back-pressure (`make test-gpio`). |
+| `tb_soc_periph.v` | The SoC booting `tests/soc/*.S` from the Pmod model's flash with the demo board's devices on its pins: `rp2350_uart_model.v`, `ssd1331_model.v` (PmodOLEDrgb), `keypad_model.v` (PmodKYPD) (`make test-soc-periph`). |
 | `tb_alu.v` … `tb_signExt.v` | Component unit testbenches (`make test-components`). A FAIL line fails the make target. |
 
 ### 3.3 Test Programs
 
-- `tests/*.S`: legacy self-checking programs for `make asm`, linked at 0x0.
+- `tests/*.S`: legacy self-checking programs for `make asm`, linked and booted at 0x8000_0000.
 - `tests/directed/`: the directed regression suite, run against Spike with full-trace comparison. See section 11.
 
 ---
@@ -141,16 +152,20 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 ## 4. Memory Map
 
 ```
-Address Range               Device      Size    Description
+Address Range               Device      Size    Attributes
 -----------------------------------------------------------------
-0x0000_0000 - 0x00FF_FFFF   Flash       16 MB   XIP code, read-only data (QSPI CS0)
-0x0100_0000 - 0x01FF_FFFF   RAM         16 MB   Stack, heap, .data/.bss (QSPI CS1)
-0x0200_0000 - 0x0200_BFFF   CLINT       48 KB   Timer and software interrupt registers
-0x0300_0000 - 0x0300_0007   GPO         8 B     GPIO output
-0x0300_0008 - 0x0300_000F   GPI         8 B     GPIO input
+0x2000_0000 - 0x20FF_FFFF   Flash       16 MB   read, execute (QSPI CS0)
+0x8000_0000 - 0x80FF_FFFF   PSRAM       16 MB   read, write, execute, LR/SC (QSPI CS1 / CS2)
+0x0200_0000 - 0x0200_FFFF   CLINT       64 KB   data only
+0x0C00_0000                 PLIC        -       reserved, not implemented (faults)
+0x1000_0000 - 0x1000_FFFF   UART        64 KB   data only (src/uart.v)
+0x1001_0000 - 0x1001_FFFF   GPIO        64 KB   data only (src/gpio.v)
+0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only, reserved (reads 0)
 ```
 
-The map is provisional (the SoC bus and peripheral set are not settled). The core only knows it through the PMA parameters: `PMA_MEM_*` (fetch and data allowed; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). The testbench overrides the windows to Spike's map (RAM at 0x8000_0000, CLINT aperture 0x0200_0000-0x020B_FFFF).
+The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC ties it to 0x2000_0000, so it always boots from flash. SoC design, boot and QSPI details: `docs/soc-architecture.md`.
+
+The verification testbench uses these windows for flash and PSRAM and boots from PSRAM. It still overrides the CLINT window to Spike's 0xC0000 aperture (0x0200_0000-0x020B_FFFF) and switches IO1 off, because Spike has no device there.
 
 ### CLINT Register Map (offsets from 0x0200_0000)
 
@@ -162,9 +177,9 @@ The map is provisional (the SoC bus and peripheral set are not settled). The cor
 | 0xBFF8 | mtime_lo | Low 32 bits of mtime (increments every clock) |
 | 0xBFFC | mtime_hi | High 32 bits of mtime |
 
-- `timer_irq` = `mtime >= mtimecmp`; `sw_irq` = `msip[0]`
+- `timer_irq` = `mtime >= mtimecmp`, registered (one cycle late), so the 64-bit compare is not in front of the core's interrupt and next-PC logic; `sw_irq` = `msip[0]`
 - mtimecmp resets to all ones so no timer interrupt is pending out of reset (Spike resets it to 0).
-- mtime ticks at the core clock. A prescaler is an open design decision.
+- mtime ticks at the core clock, with no prescaler: the device tree's `timebase-frequency` is the core clock.
 
 ---
 
@@ -178,15 +193,15 @@ Both ports follow the same contract:
 - From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `be`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
 - Nothing transfers while `*_req` is low, whatever `*_ready` is.
 
-`imem_req` is high whenever PC lies in `PMA_MEM_*`. Outside it no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
+`imem_req` is high whenever PC lies in `PMA_ROM_*` or `PMA_RAM_*`. Outside it no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
 
 `dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. `dmem_be` gives the byte lanes of every request, loads included; `dmem_we` says whether it is a write. An AMO is a read followed by a write, back to back.
 
-For a memory controller: while a data request waits, the pipeline is stalled and `imem_req` stays up with the same address, so a controller sharing one bus must not starve the data port (serve data first or alternate) and should keep the last fetched word so a repeated request completes without a new transfer. A 32-bit fetch at the last halfword of the window asks for bytes past its end; anything may be returned for them.
+For a memory controller: while a data request waits, the pipeline is stalled and `imem_req` stays up with the same address, so a controller sharing one bus must not starve the data port (serve data first or alternate) and should keep the last fetched word so a repeated request completes without a new transfer. A 32-bit fetch at the last halfword of a window asks for bytes past its end; anything may be returned for them. `imem_addr` is the halfword-aligned PC and the four bytes from it are wanted (`imem_rdata[7:0]` is the byte at `imem_addr`). Store data is replicated across the lanes (`{4{byte}}`, `{2{half}}`), so the first enabled byte of any store is also in `dmem_wdata[7:0]`.
 
-### 5.2 memController.v
+### 5.2 Memory controller and QSPI engine
 
-`memController.v` (SIM_MODE=1 flat array, SIM_MODE=0 QSPI FSM with an address-tagged fetch buffer) is not instantiated and does not implement section 5.1. Treat it as a sketch until the SoC bus is chosen.
+`src/mem_ctrl.v` serves both ports from one QSPI engine (`src/qspi_ctrl.v`): data first; a fetch reads 4 bytes from the halfword PC; a load reads the whole aligned word; a store sends only its enabled bytes; a PSRAM fetch that crosses a 1 KB page (which includes PSRAM A into B at 0x807F_FFFE) is split into two 2-byte reads, because PSRAM parts without row-boundary crossing wrap within the page. `qspi_ctrl` resets the Pmod's devices before its first request and puts the PSRAMs in QPI mode (a 4-byte PSRAM read is 20 SCK cycles, a flash read 28), never selects the flash for a write, and has a read-latency strap (`rd_late`). It does not keep the last fetched word, so a pipeline stalled with a fetch outstanding (M ops, WFI) refetches. See `docs/soc-architecture.md`.
 
 ---
 
@@ -252,7 +267,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 | 0x300 | mstatus | MIE[3], MPIE[7], MPP[12:11], MPRV[17], TW[21] | MPP is legalised to U unless written 11. Resets to 0. |
 | 0x310 | mstatush | none | Reads 0 (little-endian only) |
 | 0x304 | mie | MSIE[3], MTIE[7], MEIE[11] | |
-| 0x305 | mtvec | [31:2] | Direct mode only |
+| 0x305 | mtvec | [31:2] | Direct mode only. Resets to 0, as on Spike; 0 is unmapped on this SoC, so a trap before software writes mtvec -- erased flash (0xFFFFFFFF) at the reset vector, say -- becomes a silent cause-1 loop at 0 that rewrites mepc, mcause and mtval each time. Boot code sets mtvec first. |
 | 0x306 | mcounteren | CY[0], TM[1], IR[2] | |
 | 0x30A / 0x31A | menvcfg / menvcfgh | none | Read 0 (FIOM read-only zero without S-mode) |
 | 0x320 | mcountinhibit | CY[0], IR[2] | TM reads 0 |
@@ -266,7 +281,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 | 0x341 | mepc | Bit 0 always 0; bit 1 stored but reads 0 while misa.C = 0 |
 | 0x342 | mcause | Trap cause (bit 31 = interrupt) |
 | 0x343 | mtval | Faulting address, faulting instruction encoding, or 0 |
-| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the live interrupt wires; nothing is writable |
+| 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the interrupt wires; nothing is writable. MTIP comes registered from the CLINT: after a store moves mtimecmp, it keeps its old value for two clocks, which is the next two instructions when the fetch is fast (section 8.4) |
 
 ### 7.5 Counters
 
@@ -348,6 +363,7 @@ LR/SC to an IO window is an access fault (no reservation set there); an AMO to a
 
 - Sources: MEIP (cause 11) > MSIP (3) > MTIP (7).
 - Enable: `irq_global_en = !priv_mode || mstatus.MIE`, with per-source `mie` bits. Both are the post-write values, so the instruction after `csrc mstatus, 8` or `csrc mie, …` is already masked, and the one after `csrs mie, …` is already interruptible.
+- MTIP lags mtimecmp: the CLINT registers it, so after a store moves mtimecmp into the future `mip.MTIP` still reads 1 for two clocks (the store commits in WB, then the register updates) -- the next two instructions when the fetch is fast, fewer or none behind fetch waits -- and MIE set in that window takes a timer interrupt whose handler finds nothing pending. Priv 3.2.1 allows it ("reflected in MTIP eventually, but not necessarily immediately. A spurious timer interrupt might occur"); Linux programs mtimecmp with MIE = 0 several instructions before re-enabling, and MRET always leaves a bubble. `tests/directed/mtip_stale.S` pins the window at both ends.
 - Injection: `irq_inject = any_irq_pend && ifex_valid && !ex_trap && !muldiv_want && !stall_other`. It is never taken during a stall or while any M instruction is in EX, and a synchronous trap wins.
 - Entry: the EX instruction's side effects are suppressed and its PC becomes mepc, so it re-executes after MRET.
 
@@ -383,14 +399,15 @@ AMOs (SWAP, ADD, XOR, AND, OR, MIN, MAX, MINU, MAXU): phase 0 reads (`wb_busy`),
 |---|---|
 | LR.W retires in WB | reservation set; the reservation set is the aligned word (`reservation_addr` = addr[31:2]) |
 | SC.W retires (success or failure) | cleared |
-| A local store or AMO retires to the reserved word (any width) | cleared |
+| A local store or AMO retires, even to the reserved word | **no effect** |
 | A trap or interrupt commits in WB | cleared |
 | Reset | cleared |
 
 - SC succeeds iff the reservation is valid and the word matches; rd = 0 on success, 1 on failure. A failing SC issues no bus transaction.
-- LR/SC outside `PMA_MEM_*` fault (cause 5/7). Misaligned LR/SC trap (cause 4/6).
+- LR/SC outside `PMA_RAM_*` (PSRAM) fault (cause 5/7). Misaligned LR/SC trap (cause 4/6).
 - There is no external-agent clear: one hart, no DMA, no debug system-bus access. Add one if any of those appear.
-- Same-hart stores and traps are not required to clear the reservation. Clearing on them is permitted, and cannot break the forward-progress guarantee, because a constrained LR/SC loop contains no loads, stores, AMOs or SYSTEM instructions.
+- The spec's must-fail list covers stores by other harts and writes by other devices; what a hart's own store does is left to the implementation. Keeping the reservation across it is what Spike does, so the lockstep comparison stays aligned past the SC (clearing it made every unconstrained LR..store..SC sequence in the random suites diverge there). Forward progress is unaffected: a constrained LR/SC loop contains no loads, stores, AMOs or SYSTEM instructions.
+- Traps are not required to clear the reservation either; clearing on them is permitted and kept as defence in depth.
 
 ### 9.4 C Extension
 
@@ -399,6 +416,8 @@ Quadrants 0-2 of RV32C. Reserved encodings (illegal): C.ADDI4SPN with nzuimm=0, 
 ### 9.5 Zicsr / Zicntr
 
 See section 7. `CSRRW` with rd=x0 still reads the CSR; no CSR here has read side effects.
+
+An explicit write to either half of `mcycle` or `minstret` is done instead of that cycle's increment (Zicsr: "the explicit write is done instead of the update from the side effect"): the half not written keeps its current value, and writing the high half does not bump the low half. So the value written to `minstret`/`minstreth` is exactly what the next instruction reads (riscv-tests `rv32mi-instret_overflow`; Spike since 51835fd7).
 
 ### 9.6 Zifencei
 
@@ -410,16 +429,18 @@ FENCE.I asserts `fencei_flush` for one cycle (a fetch-buffer invalidate for a me
 
 ```verilog
 module fyracore #(
-    parameter [31:0] RESET_PC     = 32'h0000_0000,
     parameter [31:0] MARCHID      = 32'h0000_0000,
-    parameter [31:0] PMA_MEM_BASE = 32'h0000_0000,  // fetch + data
-    parameter [31:0] PMA_MEM_TOP  = 32'h01FF_FFFF,
+    parameter [31:0] PMA_ROM_BASE = 32'h2000_0000,  // flash: fetch + plain loads
+    parameter [31:0] PMA_ROM_TOP  = 32'h20FF_FFFF,
+    parameter [31:0] PMA_RAM_BASE = 32'h8000_0000,  // PSRAM: everything, LR/SC
+    parameter [31:0] PMA_RAM_TOP  = 32'h80FF_FFFF,
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // data only (CLINT)
-    parameter [31:0] PMA_IO0_TOP  = 32'h0200_BFFF,
-    parameter [31:0] PMA_IO1_BASE = 32'h0300_0000,  // data only (GPIO)
-    parameter [31:0] PMA_IO1_TOP  = 32'h0300_000F   // BASE > TOP disables a window
+    parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
+    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // data only (UART, GPIO, syscon)
+    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF   // BASE > TOP disables a window
 )(
     input  wire        clk, rst,
+    input  wire [31:0] boot_addr,      // reset PC, loaded every cycle rst is high; bit 0 ignored
     // Instruction port (section 5.1)
     output wire [31:0] imem_addr,
     output wire        imem_req,
@@ -461,7 +482,11 @@ cd tests/directed
 ./run.sh                             # every test in MANIFEST, full-trace compare with Spike
 ./run.sh one <name> [+PLUSARGS]      # a single test
 ./run.sh refs                        # regenerate the Spike references
+./run.sh soc                         # the same suite through the whole SoC (QSPI path)
+./run.sh soc build | soc one <name>  # the SoC build, and one test through it
 ```
+
+`make test-all` includes `test-qspi`, `test-uart`, `test-gpio` and `test-soc-periph` (the `tests/soc/` programs through the SoC). MANIFEST lines marked `soc` run only through the SoC, with the QSPI Pmod model's plusargs (hand-over states, delays, `+RD_LATE`); `flash` tests boot from flash and run only there.
 
 Memory-timing plusargs for the lockstep sim: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2`. Different settings expose different bugs; sweep them independently.
 
@@ -510,6 +535,6 @@ EX computes the read-modify-write value, so the CSR unit only ever writes and th
 8. Single hart; no external reservation-clear path.
 9. No debug module and no trigger CSRs (Sdtrig); `tselect` traps.
 10. No Zihpm: `hpmcounter3-31` trap; `mhpmcounter3-31`/`mhpmevent3-31` read 0.
-11. mtime ticks every clock and mtimecmp is compared combinationally; a prescaler is an open decision.
+11. mtime ticks every clock (no prescaler); MTIP is registered, one cycle behind the compare.
 12. One external interrupt input and no PLIC.
-13. `memController.v` is not integrated and does not implement the request/ready contract.
+13. The memory controller keeps no fetch buffer: a stall with a fetch outstanding refetches, and every access costs a full QSPI transaction (about 60 clocks).

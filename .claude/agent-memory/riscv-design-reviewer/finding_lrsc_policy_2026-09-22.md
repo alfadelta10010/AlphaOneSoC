@@ -102,3 +102,11 @@ wrong (other-hart stores are a SATISFYING event in `norm:constrained_lrsc_forwar
 See [[finding-branch-review-2026-09-24]].
 
 Related: [[finding-branch-review-2026-09-22]], [[reference-spike-probed-behaviours]].
+
+## 2026-09-27: policy CHANGED by user decision (dce9568)
+
+Same-hart stores and AMOs no longer clear the reservation (only SC, trap commit, reset). Legal
+(must-fail list + RVWMO atomicity-axiom commentary: same-hart stores between LR/SC "may (but are
+not guaranteed to) succeed"). Chosen to match Spike: the old clear made 1594/1594 rrag failures
+diverge at the SC. The "Recommended policy" signal list above is superseded on the local-write
+term; the trap clear stays. See [[finding-review-2026-09-27-counters-lrsc]].

@@ -81,10 +81,10 @@ class fyracore_iverilog_plugin(object):
         self.max_cycles = int(ini_config.get('max_cycles', 3000000))
 
         # Retire budget. This is the bound that normally fires, and it is the
-        # one that keeps the reference comparable: the spike plugin passes
-        # --instructions = max_instr + ignore_lines so both models stop on the
-        # same retired instruction. max_cycles above is only the backstop for a
-        # hung pipeline that retires nothing.
+        # one that keeps the reference comparable: the spike plugin cuts
+        # ref.dump to max_instr lines so both models present the same retired
+        # instructions. max_cycles above is only the backstop for a hung
+        # pipeline that retires nothing.
         self.max_instr = int(ini_config.get('max_instr', 200000))
 
         # Hard ceiling on any file the simulation writes, in MiB. A core that

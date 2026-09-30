@@ -34,6 +34,10 @@ make test-decoder
 make test-signext
 make test-branchctrl
 make test-regfile
+make test-qspi          # memory controller + QSPI engine vs the QSPI Pmod model
+make test-uart          # UART unit testbench (scoreboard + reference TX/RX)
+make test-gpio          # GPIO + SPI transmitter unit testbench
+make test-soc-periph    # tests/soc/ programs through the SoC vs UART/OLED/keypad models (and the CLINT decode)
 
 # Clean build artifacts
 make clean
@@ -47,6 +51,8 @@ The directed regression against Spike lives in `tests/directed/` (full-trace com
 cd tests/directed && ./run.sh build && ./run.sh      # all runs
 ./run.sh one <name> +DMEM_WAIT=3                      # one test, any plusargs
 ./run.sh refs                                         # regenerate Spike references
+./run.sh soc                                          # the suite through the whole SoC
+./run.sh soc one <name> +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12   # one test through the SoC
 ```
 
 Memory-timing plusargs: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2` (read data while not ready: X, zeros, garbage). Deterministic waits, random waits, zero waits and garbage data each expose different bugs; sweep them independently. A pipeline change is not verified until the directed suite and the relevant riscv-arch-test tests pass.
@@ -115,18 +121,22 @@ The pipeline top-level is `src/fyracore.v` (~1250 lines). It instantiates all ot
 
 **PMP:** `pmp_ifetch` checks `ifex_pc` (X), plus the upper half of a straddling 32-bit instruction during one extra EX cycle when PMP could deny it; `pmp_data` checks `ex_alu_result` with R/W/R+W (AMO R+W), at MPP's privilege when MPRV=1. Compares are on PA[33:2] (pmpaddr holds 34-bit addresses on RV32).
 
-**LR/SC:** the reservation set is the aligned word. Set on LR retire; cleared on any SC retire, a local store/AMO to the word, a trap/interrupt commit in WB, and reset. No external-agent clear (one hart, no other master).
+**LR/SC:** the reservation set is the aligned word. Set on LR retire; cleared on any SC retire, a trap/interrupt commit in WB, and reset. A local store/AMO leaves it alone, even to the reserved word (legal, and what Spike does, so lockstep stays aligned past the SC). No external-agent clear (one hart, no other master).
 
-### Memory Map (unified Von Neumann)
+### Memory Map and SoC
 
 ```
-0x0000_0000 – 0x00FF_FFFF : Flash (16 MB, QSPI CS0)
-0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB, QSPI CS1)
-0x0200_0000 – 0x0200_BFFF : CLINT
-0x0300_0000 – 0x0300_000F : GPIO
+0x2000_0000 – 0x20FF_FFFF : flash (16 MB, read + execute, QSPI CS0)
+0x8000_0000 – 0x80FF_FFFF : PSRAM (16 MB, rwx + LR/SC, QSPI CS1 = A, CS2 = B by addr[23])
+0x0200_0000 – 0x0200_FFFF : CLINT
+0x1000_0000 – 0x1000_FFFF : UART (src/uart.v, 16550 subset, byte registers, polled)
+0x1001_0000 – 0x1001_FFFF : GPIO OUT/IN + OLED SPI transmitter (src/gpio.v)
+0x1002_0000 – 0x1002_FFFF : syscon (reserved, reads 0)
 ```
 
-Provisional. The core only knows the map through its PMA parameters (`PMA_MEM_*` fetch+data, `PMA_IO0/1_*` data only; anything else faults). In simulation the CLINT lives in `tb/memory_model.v`. `memController.v` is not instantiated and predates the request/ready contract.
+The core knows the map only through its PMA parameters (`PMA_ROM_*` fetch + plain loads, `PMA_RAM_*` everything, `PMA_IO0/1_*` data only, anything else faults). Stores/AMO/SC to flash fault (cause 7), LR to flash cause 5. The SoC boots from flash only: `src/alphaone_soc.v` ties the core's `boot_addr` input to 0x2000_0000 (the core-level testbench starts it at 0x8000_0000 instead, where Spike starts). There is no boot ROM, and the QSPI pins are released while `rst` is high so an external master can program the flash. SoC: `alphaone_soc.v` = core + `soc_bus.v` (stateless decode, the core's own req/ready, not APB) + `mem_ctrl.v` (data-first arbitration, PSRAM fetch split at every 1 KB page) + `qspi_ctrl.v` (PSRAM in QPI mode: 0x0B read / 0x38 write; flash unchanged: 0xEB quad I/O read, command on IO0, address/data on all four lines; SCK = clk/2, late sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices and puts the PSRAMs in QPI, never selects the flash for a write) + `clint.v` (registered MTIP, mtime = core clock) + `uart.v` (TX back-pressure: a THR write stalls `ready` until the transmitter is free; RTS# flow control; break send/detect via LCR.SBC and LSR.BI; no FIFOs, no interrupt) + `gpio.v` (OUT/IN, SPI mode-3 transmitter for the OLED with the same back-pressure). An IO target may drop `ready` only while its own select is high; `soc_bus` ANDs them. Design notes: `docs/soc-architecture.md`. Chip pinout and peripherals: `docs/pins-and-peripherals.md` (the tt_um wrapper is not built; no PLIC).
+
+Verification runs the core on this map (boot from PSRAM). Spike gets `-m0x20000000:0x1000000,0x80000000:0x1000000`; Spike has no read-only memory, so a store to flash is a known legal divergence. `tests/directed/run.sh soc` runs the directed suite through the whole SoC against a behavioural QSPI Pmod (`tb/qspi_pmod_model.v`): the testbench loads the test into the model's PSRAM and forces the core's `boot_addr` to 0x8000_0000, so every register is 0 on entry as in Spike, and traces from there; `flash` tests boot from the model's flash instead. MANIFEST `soc` lines rerun tests through the SoC with the model's hostile hand-over states and late sampling. Flash/PSRAM protocol details: `docs/qspi-memories.md`.
 
 ## Critical Invariants
 
@@ -138,7 +148,8 @@ Provisional. The core only knows the map through its PMA parameters (`PMA_MEM_*`
 - **PMP locked entries:** TOR lock propagates downward (entry i with TOR+L locks pmpaddr[i-1]). Implemented once, in `wval`.
 - **pmpcfg A=2'b10 (NA4) is LEGAL and is stored as written.** Bits [6:5] of each byte are reserved and read 0.
 - **mstatus:** resets to 0 (MPP=U, matching Spike); a write of MPP=01/10 is legalised to U.
-- **mip has no writable bits** on this M+U core; it reads the live MSIP/MTIP/MEIP wires.
+- **mip has no writable bits** on this M+U core; it reads the MSIP/MTIP/MEIP wires. MTIP is registered in the CLINT, so it lags an mtimecmp store by two clocks -- two instructions when the fetch is fast (a legal spurious interrupt; `mtip_stale` pins it).
+- **mtvec resets to 0** (as Spike), which is unmapped on the SoC: boot code must set it before anything can trap.
 
 ## Verilog Conventions
 

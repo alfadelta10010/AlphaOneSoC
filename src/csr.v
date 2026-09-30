@@ -121,11 +121,25 @@ module csr #(
     wire [31:0] csr_new = wdata;
 
     // Counter update model: auto-increment happens every retire/cycle (when not
-    // inhibited), and the CSR write — if any — overwrites the *post-increment*
-    // half. This matches Spike's ordering: a write to the low half doesn't
-    // discard a 64-bit carry into the high half from this cycle's increment.
-    wire [63:0] mcycle_next   = (!mcountinhibit[0]) ? mcycle + 64'd1 : mcycle;
-    wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2]) ? minstret + 64'd1 : minstret;
+    // inhibited). An explicit write to either half of mcycle or minstret is
+    // done *instead of* that cycle's increment -- Zicsr: "If a CSR access
+    // instruction writes such a CSR, the explicit write is done instead of
+    // the update from the side effect" -- so the half that is not written
+    // keeps its current value, and a write to the high half does not bump the
+    // low half either. Upstream Spike does the same since 51835fd7, and
+    // riscv-tests rv32mi-instret_overflow checks it for minstret.
+    //
+    // *_next is both the register's next value and what the EX read port
+    // returns, so the increment is suppressed at its enable: while WB writes
+    // either half, an adjacent read of the *other* half sees it unchanged.
+    // (The written half itself reaches EX through fyracore's csr_fwd.)
+    // Suppressing it only on the register's input made that read return the
+    // discarded increment.
+    wire        mcycle_we     = we && (waddr == 12'hB00 || waddr == 12'hB80);
+    wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
+    wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we) ? mcycle + 64'd1 : mcycle;
+    wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
+                                minstret + 64'd1 : minstret;
 
     // mstatus as it will stand after a CSR write in WB commits this cycle.
     // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
@@ -239,9 +253,9 @@ module csr #(
         if (rst)
             mcycle <= 64'b0;
         else if (we && waddr == 12'hB00)
-            mcycle <= {mcycle_next[63:32], csr_new};
+            mcycle <= {mcycle[63:32], csr_new};
         else if (we && waddr == 12'hB80)
-            mcycle <= {csr_new, mcycle_next[31:0]};
+            mcycle <= {csr_new, mcycle[31:0]};
         else
             mcycle <= mcycle_next;
     end
@@ -250,9 +264,9 @@ module csr #(
         if (rst)
             minstret <= 64'b0;
         else if (we && waddr == 12'hB02)
-            minstret <= {minstret_next[63:32], csr_new};
+            minstret <= {minstret[63:32], csr_new};
         else if (we && waddr == 12'hB82)
-            minstret <= {csr_new, minstret_next[31:0]};
+            minstret <= {csr_new, minstret[31:0]};
         else
             minstret <= minstret_next;
     end

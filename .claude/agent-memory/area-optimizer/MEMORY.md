@@ -1,71 +1,9 @@
 # area-optimizer memory
 
-Living logbook for area / PPA work on this RISC-V CPU + SoC. Keep it concise.
-Update after meaningful work; consult before starting new work.
-
-## Project target (confirmed)
-
-- PDK: SkyWater **sky130**, standard-cell library `sky130_fd_sc_hd` (high density).
-- Fabrication path: **TinyTapeout**. Tile ≈ 160 × 100 µm ≈ ~1000 logic gates. Metal5
-  reserved for the TT power grid (off-limits for routing).
-- Flow: OpenLane / LibreLane (yosys + OpenROAD). Area + instance counts come from the
-  run's `metrics.json` and synthesis reports.
-- On-chip RAM is area-prohibitive; flash + PSRAM live off-chip over QSPI.
-
-## Governing constraint
-
-The SoC is **memory-bound** (~30 MHz, QSPI-limited in the KianV reference; ~2 min Linux
-boot). Trading core area for extra cycles is usually nearly free in real throughput.
-Default to area-cheap iterative hardware; justify any larger/faster unit against the
-memory bottleneck.
-
-## Reference design (KianV uLinux SoC) — validated facts
-
-- Boots **mainline NOMMU Linux** on sky130 silicon via TinyTapeout (TT05 + TT06,
-  independently confirmed; Linux 6.8.0-rc1, riscv32). Featured at Linux Plumbers 2025
-  noMMU BoF and FOSSI El Correo Libre #82.
-- Multicycle (Harris-style) core, **no caches, no on-chip RAM**.
-- ISA: TT chip is **RV32IMA** (FPGA repo) / earliest TT was **rv32ia** — note it dropped
-  the **C** extension, and the earliest chip even dropped hardware **M**.
-- Reference memory map: SPI flash @ 0x20000000 (16 MiB), PSRAM @ 0x80000000 (16 MiB,
-  8 MiB/bank), UART/SPI/GPIO peripherals low. Reset PC = 0x20100000 (1 MiB into flash =
-  bootloader, executed in place from QSPI). Kernel runs from PSRAM.
-- Repos: github.com/splinedrive/kianRiscV (main),
-  github.com/splinedrive/KianV-RV32IMA-RISC-V-uLinux-SoC (TT SoC RTL).
-- Bring-up gotcha noted by the author: 22 pF cap on NOR flash clk line for signal
-  integrity on TT05.
-
-## This project's current decisions
-
-<!-- Fill in as confirmed. Examples to capture:
-- ISA actually implemented (e.g. rv32imac_zicsr_zifencei) and why.
-- Hardware M present, or trap-emulated?
-- Memory map / reset vector chosen.
-- Pipeline vs multicycle.
-- Verification flow (Spike lockstep, riscv-dv, RTL testbench location).
--->
-- (none recorded yet — confirm and fill in)
-
-## Area baseline
-
-<!-- Record after first synthesis run: date, total cell area / instance count, and
-     a per-block breakdown (mul/div, ALU+adder, shifter, regfile, decoder, CSRs, glue).
-     Flops are usually the dominant sink — track flop count separately. -->
-- (no baseline measured yet)
-
-## Optimizations tried
-
-<!-- One line each: what, measured area delta, cycle cost, kept/reverted, why. -->
-- (none yet)
-
-## Candidate optimizations (not yet tried)
-
-- Iterative 1-bit/cycle shift-add multiplier (vs array/Wallace).
-- Non-restoring iterative divider; combine MUL+DIV into one add/sub + shift datapath.
-- Single muxed adder for arithmetic / address / branch-target / branch-compare / PC+.
-- Compact register file structure (avoid flat 32×32 flop array). RV32E is off the table
-  if Linux must boot.
-- Trap-and-emulate misaligned accesses instead of a hardware aligner.
-- Minimal M-mode CSR set; hardwire unused/WARL bits to zero.
-- Drop C-extension decode path if image-size cost is acceptable.
-- Area-oriented synth strategy; avoid async set/reset flops.
+- [Project target](project-target.md) — sky130 hd / TinyTapeout, ~79k µm² (7 tiles @60%), memory-bound: 42 clk per PSRAM fetch.
+- [Area baseline](area-baseline.md) — 4b4ed8b (2026-09-29): SoC 13.61 t, 2,731 ff (6-order mean); per-block; ABC noise up to 0.11 t/run.
+- [Optimizations measured](area-optimizations-measured.md) — low-risk combo 10.31/9.14/8.75 t; full-ISA stack 8.92 t at 4b4ed8b; UART trims; rejected items.
+- [Report in tiles](feedback-report-in-tiles.md) — user wants every area figure in TT tiles, 1 tile = 11,300 µm², factor stated once.
+- [Spec legality notes](spec-legality-notes.md) — mandatory 64-bit mcycle/minstret, PMP0 legal, M/A not trap-emulable for M-mode Linux.
+- [KianV reference](kianv-reference.md) — TT05/TT06 were 8x2 (not 6x2): 163.9k µm² synth, 2,554 flops; TT latch-RAM precedent.
+- [SoC performance measured](soc-performance-measured.md) — 42 clk/fetch floor; M op and taken branch 84; two ~0-area fixes = -14% cycles.

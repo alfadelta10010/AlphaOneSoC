@@ -1,43 +1,34 @@
-/* The intended FyraCore hardware memory map. NOT used by the verification
- * flow, which links at 0x8000_0000 with link.ld so Spike can agree about
- * which addresses exist.
+/* Linker script for AlphaOneSoC programs. The SoC always boots from flash.
  *
- *   0x0000_0000 – 0x00FF_FFFF : Flash (16 MB) — code, XIP from QSPI CS0
- *   0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB) — data, stack (QSPI CS1,
- *                               2x8 MB PSRAM used contiguously)
- *   0x0200_0000 – 0x0200_BFFF : CLINT
+ *   0x2000_0000 – 0x20FF_FFFF : flash (16 MB, read + execute, QSPI CS0)
+ *                               reset vector, code, read-only data, and the
+ *                               initial image of .data
+ *   0x8000_0000 – 0x80FF_FFFF : PSRAM (16 MB, QSPI CS1 / CS2)
+ *                               .data, .bss, stack
  *
- * NOT yet bootable as written: .data is given a load address in flash and a
- * virtual address in RAM, and plugins/helpers/boot.S copies neither it nor
- * clears .bss, so a program linked with this reads uninitialised RAM. .tohost
- * also lands in read-only flash. The map itself is provisional — there is no
- * SoC top level yet, the interconnect may become AHB, and the peripheral set
- * is unsettled.
+ * Link with boot_flash.S, which runs first (_boot_start is at the reset
+ * vector): it copies .data from its load address in flash to PSRAM, clears
+ * .bss, sets sp to _stack_top and jumps to _start. Flash cannot be written
+ * (the core faults every store to it), so anything a program writes has to
+ * be in PSRAM.
+ *
+ * link.ld is for the verification flow only, which starts the core straight
+ * in PSRAM at 0x8000_0000.
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_boot_start)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 16M
-    RAM   (rwx) : ORIGIN = 0x01000000, LENGTH = 16M
+    FLASH (rx)  : ORIGIN = 0x20000000, LENGTH = 16M
+    RAM   (rwx) : ORIGIN = 0x80000000, LENGTH = 16M
 }
 
 SECTIONS
 {
-    . = 0x00000000;
-
     .text.init : {
         *(.text.init)
     } > FLASH
-
-    . = ALIGN(0x1000);
-
-    .tohost : {
-        *(.tohost)
-    } > FLASH
-
-    . = ALIGN(0x1000);
 
     .text : {
         *(.text)
@@ -47,26 +38,38 @@ SECTIONS
     .rodata : {
         *(.rodata)
         *(.rodata.*)
+        *(.srodata)
+        *(.srodata.*)
     } > FLASH
 
-    . = ALIGN(0x1000);
+    .tohost (NOLOAD) : ALIGN(0x1000) {
+        *(.tohost)
+    } > RAM
 
-    .data : {
+    .data : ALIGN(4) {
+        _data_start = .;
         *(.data)
         *(.data.*)
         *(.sdata)
         *(.sdata.*)
+        . = ALIGN(4);
+        _data_end = .;
     } > RAM AT > FLASH
+    _data_load = LOADADDR(.data);
 
-    .bss : {
+    .bss (NOLOAD) : ALIGN(4) {
+        _bss_start = .;
         *(.bss)
         *(.bss.*)
         *(.sbss)
         *(.sbss.*)
-    } > RAM AT > FLASH
+        *(COMMON)
+        . = ALIGN(4);
+        _bss_end = .;
+    } > RAM
 
     _end = .;
 
-    /* Stack at top of RAM */
+    /* Stack at the top of PSRAM, 16-byte aligned. */
     _stack_top = ORIGIN(RAM) + LENGTH(RAM) - 16;
 }

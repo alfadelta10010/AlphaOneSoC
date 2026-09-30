@@ -12,42 +12,46 @@
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
-    parameter [31:0] RESET_PC = 32'h0000_0000,
     // See csr.v: 0 means "no registered architecture ID". The testbench
     // overrides this to 5 so the Spike lockstep trace matches.
     parameter [31:0] MARCHID  = 32'h0000_0000,
     // Physical memory attributes -- the implemented address map.
     //
     // Anything outside these windows has no device behind it, so an access
-    // must raise an access fault rather than silently succeeding.
+    // raises an access fault (cause 1 / 5 / 7) rather than reaching the bus.
+    // The defaults are the SoC's map (docs/soc-architecture.md):
     //
-    // The defaults are the SoC's real map, matching src/memController.v and
-    // docs/FyraCore_CPU_Reference.md:
+    //   0x2000_0000 - 0x20FF_FFFF  flash   16 MB  read, execute (QSPI CS0)
+    //   0x8000_0000 - 0x80FF_FFFF  PSRAM   16 MB  read, write, execute,
+    //                                             LR/SC (QSPI CS1 / CS2)
+    //   0x0200_0000 - 0x0200_FFFF  CLINT   64 KB  data only
+    //   0x1000_0000 - 0x1002_FFFF  UART / GPIO / syscon, data only
     //
-    //   0x0000_0000 - 0x00FF_FFFF  Flash  16 MB  XIP code (QSPI CS0)
-    //   0x0100_0000 - 0x01FF_FFFF  RAM    16 MB  stack/heap/.data (QSPI CS1)
-    //   0x0200_0000 - 0x0200_BFFF  CLINT  48 KB
-    //   0x0300_0000 - 0x0300_000F  GPIO   16 B   GPO 0x00-0x07, GPI 0x08-0x0F
+    // Flash is read-only: a store, AMO or SC to it is a store access fault
+    // and an LR a load access fault, because the QSPI engine has no flash
+    // write path and flash has no reservation set. LR/SC need a reservation
+    // set, which only PSRAM provides; IO windows take loads, stores and AMOs.
+    // Fetch is allowed from flash and PSRAM only.
     //
-    // Flash and RAM are contiguous, so one window covers both. Fetch is
-    // allowed anywhere in it and nowhere else: the design is Von Neumann, so
-    // XIP from flash and executing from RAM must both work, but fetching out
-    // of CLINT or GPIO is an instruction access fault.
-    //
-    // The verification flow cannot use this map. Spike's boot ROM is fixed at
-    // 0x1000 and cannot be disabled, so it would sit inside flash, and Spike
-    // only places RAM at DRAM_BASE 0x8000_0000. tb/tb_rivercore.v therefore
-    // overrides these to a Spike-compatible window; the remap lives in the
-    // testbench so the core keeps describing the hardware being built.
-    parameter [31:0] PMA_MEM_BASE = 32'h0000_0000,
-    parameter [31:0] PMA_MEM_TOP  = 32'h01FF_FFFF,  // Flash + RAM, 32 MB
+    // A window with BASE > TOP matches nothing. The testbench uses that to
+    // switch off the IO window the reference model has no device behind, and
+    // widens the CLINT window to the aperture the reference model maps.
+    parameter [31:0] PMA_ROM_BASE = 32'h2000_0000,  // flash
+    parameter [31:0] PMA_ROM_TOP  = 32'h20FF_FFFF,
+    parameter [31:0] PMA_RAM_BASE = 32'h8000_0000,  // PSRAM
+    parameter [31:0] PMA_RAM_TOP  = 32'h80FF_FFFF,
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // CLINT
-    parameter [31:0] PMA_IO0_TOP  = 32'h0200_BFFF,
-    parameter [31:0] PMA_IO1_BASE = 32'h0300_0000,  // GPIO
-    parameter [31:0] PMA_IO1_TOP  = 32'h0300_000F
+    parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
+    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon
+    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF
 )(
     input  wire        clk,
     input  wire        rst,
+    // Reset vector: pc is loaded from this on every cycle rst is high, so it
+    // only needs to be stable by the last one. The SoC ties it to the start
+    // of flash; the core-level testbench starts in PSRAM, where Spike does.
+    // Bit 0 is ignored: the pc, and so imem_addr, is always halfword-aligned.
+    input  wire [31:0] boot_addr,
     // Memory interfaces: request/ready handshake.
     //
     // A request is outstanding on every cycle its *_req is high. From the
@@ -58,8 +62,8 @@ module fyracore #(
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
     //
     // Instruction memory interface (read-only). imem_req is high whenever the
-    // PC lies in the executable PMA window (PMA_MEM_*); outside it no fetch is
-    // requested at all (see imem_req below). When the pipeline is stalled
+    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*); outside them
+    // no fetch is requested at all (see imem_req below). When the pipeline is stalled
     // with a fetch already completed, the same address is requested again.
     //
     // For the memory controller:
@@ -68,9 +72,14 @@ module fyracore #(
     //     shares one bus between the ports must not starve the data port --
     //     serve data first, or alternate -- and should keep the last fetched
     //     word so a repeated request for it completes without a new transfer.
-    //   - A 32-bit fetch at the last halfword of the window asks for bytes
+    //   - A 32-bit fetch at the last halfword of a window asks for bytes
     //     past its end; any data may be returned for them (the core faults
     //     that instruction on the upper half).
+    //   - imem_addr is the pc, so it is halfword-aligned, and the 4 bytes
+    //     from it are wanted: imem_rdata[7:0] is the byte at imem_addr.
+    //   - Store data is replicated across the byte lanes ({4{byte}},
+    //     {2{half}}), so the first enabled byte of any store is also in
+    //     dmem_wdata[7:0].
     output wire [31:0] imem_addr,
     output wire        imem_req,      // Fetch request
     input  wire [31:0] imem_rdata,
@@ -118,12 +127,20 @@ module fyracore #(
     wire [31:0] if_instr      = if_compressed ? if_instr_decompressed : if_fetched;
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
 
+    // Is an address inside [base, top]? A window with base > top is empty.
+    function automatic in_win(input [31:0] a, input [31:0] base, input [31:0] top);
+        in_win = (a >= base) && (a <= top);
+    endfunction
+    function automatic in_exec(input [31:0] a);
+        in_exec = in_win(a, PMA_ROM_BASE, PMA_ROM_TOP) || in_win(a, PMA_RAM_BASE, PMA_RAM_TOP);
+    endfunction
+
     assign imem_addr = pc;
-    // A fetch outside PMA_MEM_* can never execute, so it is never requested:
+    // A fetch outside flash and PSRAM can never execute, so it is never requested:
     // a fetch must not read an IO device (a read can have side effects, e.g.
     // popping a UART FIFO), and an address with no device behind it must not
     // wait forever for a ready that nobody will give.
-    assign imem_req  = (pc >= PMA_MEM_BASE) && (pc <= PMA_MEM_TOP);
+    assign imem_req  = in_exec(pc);
 
     compressed_decoder cdec(
         .instr_in (if_fetched[15:0]),
@@ -445,12 +462,12 @@ module fyracore #(
                             !csr_misa_c && ex_branch_target[1];
 
     // PMA check: is there a device at this address at all?
-    // Fetch is restricted to RAM -- executing out of the CLINT is an
+    // Fetch is restricted to flash and PSRAM -- executing out of the CLINT is an
     // instruction access fault here. The reference model does NOT do this: it
     // reads the device and reports an illegal instruction (cause 2) with the
     // fetched bits in mtval. Cause 1 is the defensible hardware behaviour, so
     // this is a deliberate divergence, not an oversight.
-    wire ex_pma_fetch_ok = (ifex_pc >= PMA_MEM_BASE) && (ifex_pc <= PMA_MEM_TOP);
+    wire ex_pma_fetch_ok = in_exec(ifex_pc);
     // A 32-bit instruction whose address has bit 1 set straddles two words,
     // and its upper half is a separate access that the PMA and PMP must
     // allow too. Priv §3.7.1: the matching PMP entry must match all bytes of
@@ -462,20 +479,20 @@ module fyracore #(
     // ifex_pc + 2 with no adder: a 32-bit instruction's ifex_pc_next is
     // ifex_pc + 4, and that word is where the upper half lives.
     wire [31:0] ex_pc_hi = {ifex_pc_next[31:2], 2'b00};
-    wire ex_pma_fetch_hi_ok = (ex_pc_hi >= PMA_MEM_BASE) && (ex_pc_hi <= PMA_MEM_TOP);
-    // A window with BASE > TOP matches nothing, which is how the testbench
-    // switches off the ports the simulation does not model.
-    wire ex_pma_in_mem = (ex_alu_result >= PMA_MEM_BASE) &&
-                         (ex_alu_result <= PMA_MEM_TOP);
-    wire ex_pma_in_io  = ((ex_alu_result >= PMA_IO0_BASE) &&
-                          (ex_alu_result <= PMA_IO0_TOP))  ||
-                         ((ex_alu_result >= PMA_IO1_BASE) &&
-                          (ex_alu_result <= PMA_IO1_TOP));
-    // LR/SC need a reservation set, which only main memory can provide -- an
-    // IO window is not idempotent and has no reservation set to track. The
-    // reference model agrees: its reservable() covers memory only, so lr.w and
-    // sc.w on the CLINT fault while amoadd.w there succeeds.
-    wire ex_pma_data_ok  = ex_pma_in_mem ||
+    wire ex_pma_fetch_hi_ok = in_exec(ex_pc_hi);
+    wire ex_pma_in_rom = in_win(ex_alu_result, PMA_ROM_BASE, PMA_ROM_TOP);
+    wire ex_pma_in_ram = in_win(ex_alu_result, PMA_RAM_BASE, PMA_RAM_TOP);
+    wire ex_pma_in_io  = in_win(ex_alu_result, PMA_IO0_BASE, PMA_IO0_TOP) ||
+                         in_win(ex_alu_result, PMA_IO1_BASE, PMA_IO1_TOP);
+    // LR/SC need a reservation set, which only PSRAM can provide -- an IO
+    // window is not idempotent and has no reservation set to track, and flash
+    // cannot be written. The reference model agrees about IO: its reservable()
+    // covers memory only, so lr.w and sc.w on the CLINT fault while amoadd.w
+    // there succeeds. Flash takes plain loads only: stores, AMOs and SC are
+    // writes (ex_misalign_is_store), and an LR would reserve memory that no SC
+    // could ever write.
+    wire ex_pma_data_ok  = ex_pma_in_ram ||
+                           (ex_pma_in_rom && !ex_misalign_is_store && !ctrl_isLR) ||
                            (ex_pma_in_io && !ctrl_isLR && !ctrl_isSC);
 
     // Access-fault detection. Two independent reasons to refuse an access:
@@ -642,8 +659,8 @@ module fyracore #(
     // LR/SC reservation. The reservation set is the naturally aligned word
     // holding the LR's address -- the smallest set the spec allows -- so only
     // the word address is kept. LR.W/SC.W are always word-aligned (anything
-    // else traps as misaligned), and a byte or halfword store anywhere in the
-    // word overlaps the set and must be seen as such.
+    // else traps as misaligned), so the word address names it exactly. Only
+    // an SC or a trap clears it; see the reservation update in WB.
     reg        reservation_valid;
     reg [29:0] reservation_addr;
     wire       sc_success = reservation_valid &&
@@ -987,7 +1004,7 @@ module fyracore #(
     // ================================================================
     always @(posedge clk) begin
         if (rst) begin
-            pc        <= RESET_PC;
+            pc        <= {boot_addr[31:1], 1'b0};
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
@@ -1229,24 +1246,17 @@ module fyracore #(
                     reservation_addr  <= exwb_alu_result[31:2];
                 end else if (exwb_isSC) begin
                     reservation_valid <= 1'b0;
-                end else if (exwb_memWR) begin
-                    // Any local write overlapping the reservation invalidates
-                    // it -- a plain store and an AMO alike. The `!exwb_isAmo`
-                    // that used to be here made a store clear the reservation
-                    // while an AMO to the same address did not, so two paths
-                    // independently decided the same semantics and disagreed.
-                    //
-                    // Clearing on a same-hart write is not required (the
-                    // must-fail list covers other harts and devices, not this
-                    // one) but is explicitly permitted, and it cannot threaten
-                    // the forward-progress guarantee: a constrained LR/SC
-                    // sequence may not contain loads or stores between the LR
-                    // and the SC, and an AMO is not in the base I set, so
-                    // neither clear is reachable inside a constrained loop.
-                    if (reservation_valid &&
-                        reservation_addr == exwb_alu_result[31:2])
-                        reservation_valid <= 1'b0;
                 end
+                // A store or AMO from this hart leaves the reservation alone,
+                // even one to the reserved word. The spec's must-fail list
+                // covers stores by other harts and writes by other devices,
+                // and this SoC has neither; what a hart's own write does is
+                // left to the implementation. Keeping the reservation is what
+                // Spike does, so the lockstep comparison stays aligned past
+                // the SC -- clearing it made every unconstrained LR..store..SC
+                // sequence diverge there, which hid ~26% of each rrag
+                // program from the comparison. Forward progress is not
+                // affected: a constrained LR/SC loop contains no stores.
             end
 
             // Clear reservation on trap or interrupt. Not required by the

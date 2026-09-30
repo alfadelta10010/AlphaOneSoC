@@ -6,7 +6,7 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
-  li   s0, 0x81000000
+  li   s0, 0x80800000
   li   t1, 0x11
   sw   t1, 0(s0)
   lr.w a0, (s0)

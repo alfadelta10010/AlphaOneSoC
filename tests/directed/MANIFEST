@@ -27,11 +27,9 @@ amo_chase           spike  +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 lrsc_io             spike
 sc_trap             spike
 sc_trap             spike  +DMEM_WAIT=3
-# Same-hart store/AMO to the reserved word clears the reservation here and
-# not on Spike; both are legal (the sequence is unconstrained).
-lrsc_policy         expect x10=0x1 x11=0x1 x12=0x1 x13=0x1 x14=0x0
-lrsc_policy         expect x10=0x1 x11=0x1 x12=0x1 x13=0x1 x14=0x0 -- +DMEM_WAIT=3
-lr_sb_sc            expect x11=0x1 x12=0x1 x13=0x1
+lrsc_policy         spike
+lrsc_policy         spike  +DMEM_WAIT=3
+lr_sb_sc            spike
 
 # ---- multiply / divide --------------------------------------------------------
 mul_chain           spike
@@ -76,9 +74,12 @@ mret_irq            spike
 mret_irq            spike  +IMEM_WAIT=3 +IMEM_RANDOM=1
 mie_enable          spike
 # Spike takes this interrupt before the csrc (its msip store is visible at
-# once); the core takes it after the store lands, by which time mie is off.
-# Both legal; what matters is that it is never taken after the disable.
-mie_disable         expect x14=0x999
+# once); the core takes it after the store lands, by which time mie is off --
+# unless the pipeline is still waiting on a fetch when the store lands, as it
+# is behind the QSPI memory, and then the core takes it before the csrc too
+# (mepc = the csrc, 0x8000002c). Both legal; what matters is that it is never
+# taken after the disable.
+mie_disable         expect x14=0x999|0x8000002c
 # Timer-driven: mtime ticks per clock here and per ~100 retires on Spike, so
 # these cannot be lockstep-compared. They check the program completes with
 # no interrupt landing at a bad mepc; randomised waits are what used to
@@ -91,6 +92,24 @@ t_mulirq            expect x8=0x14
 t_mulirq            expect x8=0x14 -- +IMEM_WAIT=2 +DMEM_WAIT=1 +DMEM_RANDOM=1
 t_ctl               expect x8=0x64 x25=0x64
 t_ctl               expect x8=0x64 x25=0x64 -- +IMEM_WAIT=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
+# An interrupt between an LR and its SC clears the reservation: the SC fails
+# (x10 = 1), where the same sequence with MIE off succeeds (x12 = 0). Placed
+# there by construction, so it holds at any speed and runs through the SoC
+# too. DUT-only: the timer counts clocks.
+lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77
+lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +DMEM_WAIT=3
+lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+# The registered MTIP's stale window (mtip_stale.S says more): after a store
+# moves mtimecmp away, mip.MTIP still reads 1 for two clocks (two
+# instructions with a fast fetch) and 0 on the third instruction, and MIE
+# set straight after the store takes a spurious timer interrupt (the
+# handler's mip, x12, reads 0). Legal (Priv 3.2.1); Spike updates MTIP at
+# once, so DUT-only. Fetch waits close the window before the reads, so the
+# first line (the one the SoC run takes) accepts either outcome; the others
+# pin it where the fetch is fast.
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80|0x0 x23=0x80|0x0 x24=0x0 x18=0x1|0x0 x12=0x0|0xffffffff
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x1 x12=0x0 x10=0x80000007
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x1 x12=0x0 x10=0x80000007 -- +DMEM_WAIT=3 +DMEM_RANDOM=1
 
 # ---- FENCE.I -------------------------------------------------------------------
 fencei_smc          spike
@@ -100,6 +119,11 @@ fencei_smc          spike  +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1
 csrfwd              spike
 csrlog_probe        spike
 cnt_alias           spike
+cnt_xhalf           spike
+cnt_instret         spike
+cnt_instret         spike +DMEM_WAIT=3
+cnt_instret         spike +IMEM_WAIT=2 +DMEM_WAIT=1
+cnt_instret         spike +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 marchid             spike
 mip_ro              spike
 misa_adjacent       spike
@@ -135,3 +159,50 @@ straddle_m_tor      spike
 irq_straddle        spike
 irq_straddle        spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 u_straddle          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+
+# Flash is read-only and not reservable: LR -> cause 5; SC, AMO, sw, sh, sb
+# and c.sw -> 7; mtval = the address. Spike maps flash as plain RAM, so this
+# is DUT-only. x18 holds the causes in order, x20 the traps with a wrong
+# mtval.
+pma_flash           expect x18=0x5777777 x20=0x0 x30=0x0
+
+# Timer interrupts at a period a QSPI-speed handler can keep up with; the
+# timer counts clocks and Spike counts instructions, so DUT-only. x18 = taken,
+# x20 = taken with the wrong cause or an mepc outside the wait loop.
+t_irq_slow          expect x18=0x3 x20=0x0
+
+# WFI woken by the timer: during the wait (mepc = WFI+4), with MIE=0 (no trap,
+# MTIP then pending in mip), and with the interrupt already takeable as the
+# WFI arrives (mepc = WFI+4 again; Spike, just as legally, uses the WFI's pc).
+# The timer counts clocks, so DUT-only; wfi_slow.S lists the registers.
+wfi_slow            expect x9=0x0 x10=0x0 x18=0x2 x20=0x80000007 x21=0x77 x22=0x80
+wfi_slow            expect x9=0x0 x10=0x0 x18=0x2 x20=0x80000007 x21=0x77 x22=0x80 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+
+# Timer interrupts landing on M ops, loads and stores to both PSRAMs, an AMO
+# and page- and chip-straddling fetches: the checksum with interrupts on must
+# equal the one with them off (x21, Spike's value for that loop), and every
+# interrupt must have had the timer's cause (x9). DUT-only, as t_irq_slow.
+irq_stress          expect x9=0x1 x21=0xf08894e2 x25=0x0
+irq_stress          expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+
+# Boots from flash (SoC only): runs from flash, copies a routine into PSRAM
+# and runs it there after FENCE.I, the way a boot loader hands over.
+flash_boot          flash
+# The flash-end twin of straddle_top (SoC only: boots from flash).
+straddle_flash_end  flash
+
+# ---- SoC only: hostile hand-over, late sampling, SoC-speed variants ---------
+# The QSPI Pmod handed over in states the start-up sequence must undo, and
+# a 25 ns round trip through the rd_late strap (hold 12 ns, more than a
+# clock) on page-wrapping PSRAM. Spike's trace does not depend on timing,
+# so flash_boot is still compared line for line.
+flash_boot          soc spike +FLASH_DCRM +PSRAM_A_QPI
+flash_boot          soc spike +FLASH_QPI +FLASH_CRM +PSRAM_QPI
+flash_boot          soc spike +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12 +PSRAM_WRAP
+irq_stress          soc expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12 +PSRAM_WRAP +PSRAM_QPI +FLASH_CRM
+# t_ctl's LR/SC loop at a 2000-clock period (t_ctl_slow.S says why).
+t_ctl_slow          soc expect x8=0x64 x25=0x64 x20=0x1
+
+#soc-skip cnt_alias -- the csrr of `cycle` waits in EX through a QSPI fetch (about 57 clocks) and reads mcycle when it executes, 0x2039 rather than 0x2000; Spike counts one per instruction. The forwarding it checks is the same in both builds.
+#soc-skip cnt_xhalf -- its mcycle cases read the cycle counter, which counts clocks: at QSPI speed each instruction is tens of clocks, while Spike counts one per instruction. The minstret cases are covered at the core level.
+#soc-skip t_irq t_irq2 t_mulirq t_ctl -- their timer periods (40, 37, 50 and 100 clocks) are shorter than an interrupt handler at QSPI speed (about 60 clocks per instruction), so the handler never finishes before the next interrupt and the loop never advances. Legal; these tests assume a fast memory. t_ctl_slow runs t_ctl's LR/SC loop at SoC speed instead.

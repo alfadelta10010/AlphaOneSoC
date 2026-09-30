@@ -1,4 +1,4 @@
-# A 32-bit instruction at 0x81FFFFFE straddles the end of the memory window:
+# A 32-bit instruction at 0x80FFFFFE straddles the end of the memory window:
 # cause 1, mepc at the instruction, mtval at its upper half.
   .section .text.init
   .globl rvtest_entry_point
@@ -6,7 +6,7 @@ rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
   li   a0, 0x5a5a
-  li   t1, 0x81FFFFFE
+  li   t1, 0x80FFFFFE
   jalr x0, 0(t1)
   .align 2
 handler:

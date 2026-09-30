@@ -10,10 +10,17 @@
 //   0xBFF8: mtime_lo  (4B) — low 32 bits of mtime (read-write)
 //   0xBFFC: mtime_hi  (4B) — high 32 bits of mtime
 //
-// mtime increments every clock cycle (simulation-accurate).
+// mtime increments every clock cycle, so the device tree's
+// timebase-frequency is the core clock. There is deliberately no prescaler:
+// it would cost a counter and a divisor register and buy nothing Linux needs.
 // Write to mtime is prioritised over the automatic increment in the same cycle.
 //
-// timer_irq is asserted when mtime >= mtimecmp.
+// timer_irq is mtime >= mtimecmp, registered: the 64-bit compare would
+// otherwise sit in front of the core's interrupt and next-PC logic. It costs
+// one flop and one cycle -- MTIP rises and falls a cycle after the compare
+// changes, which no software can observe except as an interrupt arriving (or
+// a stale one still pending) one cycle later. Linux programs mtimecmp with
+// MTIE already set and takes a spurious timer interrupt in stride.
 // sw_irq    is asserted when msip[0] = 1.
 
 module clint(
@@ -65,7 +72,13 @@ module clint(
         end
     end
 
-    assign timer_irq = (mtime >= mtimecmp);
+    reg mtip;
+    always @(posedge clk) begin
+        if (rst) mtip <= 1'b0;
+        else     mtip <= (mtime >= mtimecmp);
+    end
+
+    assign timer_irq = mtip;
     assign sw_irq    = msip;
     assign mtime_out = mtime;
 

@@ -1,12 +1,16 @@
 // Simple byte-addressable memory model for simulation
 //
-// Unified 32 MB flat address space:
-//   0x0000_0000 – 0x00FF_FFFF : Flash (16 MB) — code and read-only data
-//   0x0100_0000 – 0x01FF_FFFF : RAM   (16 MB) — stack, heap, .data/.bss
+// The SoC's memory map, as far as the core-level testbench needs it:
+//   0x8000_0000 – 0x80FF_FFFF : PSRAM (16 MB) — the program, data and stack
+//   0x2000_0000 – 0x20FF_FFFF : flash (16 MB) — reads as zeros, never written
 //   0x0200_0000 – 0x020B_FFFF : CLINT aperture — see CLINT_TOP below
 //
-// Both instruction fetch and data access ports index into the same array for
-// the Flash/RAM region. CLINT is handled by an instantiated clint module.
+// The core's PMA check refuses everything else before it reaches this
+// model, so PSRAM is recognised by address bit 31 alone and indexed by
+// [23:0]. Flash reads return zeros because that is what the reference model
+// returns: Spike maps the flash window as zero-filled RAM, and nothing is
+// ever loaded there. The core faults every store to flash, so no write
+// reaches it. CLINT is handled by an instantiated clint module.
 //
 // Dual-port: simultaneous instruction fetch and data access.
 // Instruction port is read-only and combinational.
@@ -49,8 +53,8 @@
 //   2  LFSR garbage, different every cycle
 
 module memory_model #(
-    parameter MEM_SIZE    = 33554432,      // 32 MB (0x0000_0000 – 0x01FF_FFFF)
-    parameter INIT_FILE   = "program.hex", // hex file loaded at address 0
+    parameter MEM_SIZE    = 16777216,      // 16 MB of PSRAM (0x8000_0000 – 0x80FF_FFFF)
+    parameter INIT_FILE   = "program.hex", // hex file loaded at 0x8000_0000
     parameter IMEM_WAIT   = 0,             // instruction-port wait states
     parameter DMEM_WAIT   = 0,             // data-port wait states
     parameter IMEM_RANDOM = 0,             // randomise instruction-port ready
@@ -185,7 +189,7 @@ module memory_model #(
     // address inside it, and without this it would answer from clint_inst's
     // default case (0) and lose its read-back.
     wire in_clint_reg = in_clint && (dmem_addr <= CLINT_REG_TOP) && !in_extirq;
-    wire in_mem    = !in_clint && !in_extirq;  // Flash + RAM; ignore GPIO for sim simplicity
+    wire in_mem    = dmem_addr[31];            // PSRAM; flash is never written
 
     reg extirq_reg;
     always @(posedge clk) begin
@@ -209,9 +213,10 @@ module memory_model #(
     end
 
     // --- Instruction read (combinational) ---
-    // 25-bit index covers the full 32 MB range (0x0000_0000 – 0x01FF_FFFF).
-    wire [24:0] ia = imem_addr[24:0];
-    wire [31:0] imem_word = {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]};
+    // PSRAM by its 24-bit offset; a fetch from flash reads zeros.
+    wire [23:0] ia = imem_addr[23:0];
+    wire [31:0] imem_word = imem_addr[31] ? {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]}
+                                          : 32'h0000_0000;
     // Not valid until the handshake completes: a core that captures the fetch
     // while imem_ready is low latches junk rather than the right instruction.
     // See NOTREADY_DATA in the header for why X alone is not enough.
@@ -221,8 +226,9 @@ module memory_model #(
     assign imem_rdata = imem_ready ? imem_word : notready_word;
 
     // --- Data read (combinational) ---
-    wire [24:0] da = dmem_addr[24:0];
-    wire [31:0] mem_rdata = {mem[da+3], mem[da+2], mem[da+1], mem[da]};
+    wire [23:0] da = dmem_addr[23:0];
+    wire [31:0] mem_rdata = dmem_addr[31] ? {mem[da+3], mem[da+2], mem[da+1], mem[da]}
+                                          : 32'h0000_0000;   // flash
 
     // --- Data write (synchronous, byte-lane masked) ---
     // The write commits only on the cycle the handshake completes, so a store

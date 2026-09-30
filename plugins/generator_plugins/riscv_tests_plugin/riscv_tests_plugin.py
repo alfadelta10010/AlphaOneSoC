@@ -176,9 +176,12 @@ class riscv_tests_plugin(object):
                     test_list[base_key]['extra_compile'] = []
                     test_list[base_key]['compile_macros'] = []
                     test_list[base_key]['result'] = 'Unavailable'
-                    # Upstream Spike emits 5 bootrom instructions before
-                    # jumping to --pc=0x80000000 (auipc/addi/csrr/lw/jr).
-                    test_list[base_key]['ignore_lines'] = 5
+                    # Spike starts the hart at --pc directly (upstream c76d96d9, 2026-03):
+                    # the boot ROM is neither executed nor logged, so ref.dump begins with
+                    # the first program instruction, like dut.dump. Explicit 0 because
+                    # river_core's schema defaults ignore_lines to 4. (Spike before that
+                    # ran and logged 5 ROM instructions here, and this was 5.)
+                    test_list[base_key]['ignore_lines'] = 0
                     if (os.path.isdir(work_dir)):
                         logger.debug(f'{work_dir} exists')
                         shutil.rmtree(work_dir, ignore_errors=True)
@@ -217,8 +220,9 @@ class riscv_tests_plugin(object):
                                 f'{self.output_dir}/env/v/entry.S']
                         test_list[base_key]['compile_macros'] = [f'ENTROPY=0x{entropy}']
                         test_list[base_key]['result'] = 'Unavailable'
-                        # v-mode: 5 bootrom + 9 v-mode setup = 14
-                        test_list[base_key]['ignore_lines'] = 14
+                        # v-mode: 9 v-mode setup lines (Spike no longer
+                        # logs the 5 boot-ROM lines that used to precede them)
+                        test_list[base_key]['ignore_lines'] = 9
                         if (os.path.isdir(work_dir)):
                             logger.debug(f'{work_dir} exists')
                             shutil.rmtree(work_dir, ignore_errors=True)

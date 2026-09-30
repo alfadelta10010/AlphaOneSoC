@@ -5,6 +5,17 @@
 #   ./run.sh                    every run listed in MANIFEST
 #   ./run.sh one <name> [+PLUSARG...]
 #   ./run.sh refs               regenerate the Spike reference of every test
+#   ./run.sh soc                every test in MANIFEST through the whole SoC
+#   ./run.sh soc build | soc one <name> [+PLUSARG...]
+#                               the same two, for the SoC build
+#
+# `soc` builds tb_rivercore with -DSOC_TB: the core runs through the bus
+# fabric, memory controller and QSPI engine against a behavioural QSPI Pmod
+# (tb/qspi_pmod_model.v) instead of tb/memory_model.v's ideal memory, and is
+# compared against the same Spike references. The memory-timing plusargs
+# (+IMEM_WAIT and friends) belong to memory_model and do nothing there, so
+# each test runs once, with the first MANIFEST line that names it. Artifacts
+# go to ./out/soc.
 #
 # MANIFEST has one run per line:
 #
@@ -13,10 +24,30 @@
 #       (Spike's commit log up to the tohost store) line for line, and must
 #       itself reach the tohost store.
 #
-#   <name> expect <reg>=<hex>... [-- +PLUSARG...]
+#   <name> expect <reg>=<hex>[|<hex>...]... [-- +PLUSARG...]
 #       DUT only, for a deliberate, spec-legal divergence from Spike: the
-#       final value of each listed register must be exactly as given. The
-#       comment above the line says why the test cannot be Spike-compared.
+#       final value of each listed register must be one of the values given.
+#       The comment above the line says why the test cannot be
+#       Spike-compared, and why more than one value is legal where it is.
+#
+#   <name> flash
+#       SoC only: <name>.S is linked with <name>.ld into flash at
+#       0x2000_0000 and loaded into the QSPI model's flash, which is where
+#       the SoC boots. Then compared with Spike like `spike`, traced from
+#       reset. (Other tests boot straight into their PSRAM image: the
+#       testbench forces the core's boot_addr to 0x8000_0000.) The
+#       core-level run skips it.
+#
+#   <name> soc <spike|expect ...>
+#       SoC only, and run there even when an earlier line already ran the
+#       test: the rest of the line is a `spike` or `expect` line as above.
+#       For the SoC's own plusargs -- the QSPI Pmod model's hand-over states
+#       and delays, the rd_late strap -- and for SoC-speed variants of
+#       tests the SoC run otherwise skips. The core-level run skips it.
+#
+#   #soc-skip <name>... -- <reason>
+#       The SoC-level run skips these tests. For tests whose point depends on
+#       a fast memory (a timer period shorter than a QSPI-speed handler).
 #
 # Every run fails on: an assembly error, a testbench ERROR line (e.g. the
 # memory handshake checker), a DUT-ABORT (watchdog), an empty dump, or not
@@ -28,51 +59,80 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
+SOC=0
+[ "${1:-}" = soc ] && { SOC=1; shift; }
 OUT="$HERE/out"
+[ $SOC = 1 ] && OUT="$HERE/out/soc"
 mkdir -p "$OUT"
-SPIKE_ARGS="--hartids=0 --log-commits --priv=mu --pc=0x80000000 --isa=rv32imac_zicntr
-            -m0x80000000:0x2000000 --pmpregions=4 --pmpgranularity=4"
+SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
+            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
+SPIKE_ARGS="$SPIKE_MEM --pc=0x80000000"
 TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
 ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 
+CORE_SRC=("$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,signExt}.v)
 build() {
-  iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
-    "$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,signExt}.v \
-    "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v || return 1
+  if [ $SOC = 1 ]; then
+    iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
+      "${CORE_SRC[@]}" "$ROOT"/src/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,alphaone_soc}.v \
+      "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v || return 1
+  else
+    iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
+      "${CORE_SRC[@]}" \
+      "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v || return 1
+  fi
   echo "build ok"
 }
+
+# Tests the MANIFEST boots from flash.
+is_flash() { grep -qE "^$1 +flash( |\$)" "$HERE/MANIFEST"; }
 
 asm() { # asm <name>
   local n=$1
   riscv64-unknown-elf-gcc -static -std=gnu99 -O0 -mcmodel=medany -nostdlib \
     -nostartfiles -march=rv32imac_zicsr_zifencei -mabi=ilp32 \
     -T "$(ld_for "$n")" "$HERE/$n.S" -o "$OUT/$n.elf" 2>"$OUT/$n.asm.log" || return 1
-  riscv64-unknown-elf-objcopy -O verilog --change-addresses=-0x80000000 \
-    "$OUT/$n.elf" "$OUT/$n.hex"
+  if is_flash "$n"; then
+    # Only what lives in flash; the PSRAM side starts zeroed. (.straddle
+    # is straddle_flash_end's last halfword of flash.)
+    riscv64-unknown-elf-objcopy -O verilog -j .text.init -j .text -j .rodata -j .straddle \
+      --change-addresses=-0x20000000 "$OUT/$n.elf" "$OUT/$n.hex"
+  else
+    riscv64-unknown-elf-objcopy -O verilog --change-addresses=-0x80000000 \
+      "$OUT/$n.elf" "$OUT/$n.hex"
+  fi
 }
 
 # Spike runs on past tohost (it only polls HTIF every few thousand steps),
 # so the reference is cut four lines after the tohost store -- the testbench
-# drains at most that many retires after it. The 5 boot-ROM lines are
-# dropped, and so are the mstatush/tcontrol/mtinst/mtval2 tokens Spike logs
-# alongside trap entry and mstatus writes on RV32 for CSRs this core does not
-# log. A reference that never reaches tohost is capped instead.
+# drains at most that many retires after it. Spike starts at --pc directly
+# and logs no boot ROM, so nothing precedes the program. The mstatush/
+# tcontrol/mtinst/mtval2 tokens Spike logs alongside trap entry and mstatus
+# writes on RV32, for CSRs this core does not log, are dropped. A reference
+# that never reaches tohost is capped instead.
 ref() { # ref <name>
   local n=$1
-  ( ulimit -f 200000; timeout 60 spike $SPIKE_ARGS --log "$OUT/$n.ref.raw" "$OUT/$n.elf" \
+  local args=$SPIKE_ARGS
+  is_flash "$n" && args="$SPIKE_MEM --pc=0x20000000"
+  ( ulimit -f 200000; timeout 60 spike $args --log "$OUT/$n.ref.raw" "$OUT/$n.elf" \
       </dev/null >/dev/null 2>&1 ) 2>/dev/null
-  sed '1,5d' "$OUT/$n.ref.raw" \
-    | sed -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2) 0x[0-9a-f]+//g' \
+  sed -E 's/ c[0-9]+_(mstatush|tcontrol|mtinst|mtval2) 0x[0-9a-f]+//g' "$OUT/$n.ref.raw" \
     | awk -v t="mem 0x$TOHOST " 'index($0, t) && !cut { cut = NR + 4 }
                                   { print } cut && NR >= cut { exit } NR >= 20000 { exit }' \
     > "$HERE/$n.ref"
 }
 
+# Every QSPI access costs about 60 clocks, so the SoC gets a larger backstop.
+MAXC=400000
+[ $SOC = 1 ] && MAXC=30000000
+
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
-  vvp "$OUT/sim" +INIT_FILE="$OUT/$n.hex" +DUMP_FILE="$OUT/$n.dut" \
-      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=400000 "$@" >"$OUT/$n.sim.log" 2>&1
+  local image=+INIT_FILE="$OUT/$n.hex"
+  is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
+  vvp "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" >"$OUT/$n.sim.log" 2>&1
 }
 
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both
@@ -123,10 +183,13 @@ run_expect() { # run_expect <name> <reg>=<hex>... [-- <plusargs...>]
   asm "$n" || { bad "$label" "    assembly failed"; return; }
   sim "$n" "${extra[@]}"
   local why; why=$(sane "$n") || { bad "$label" "$why"; return; }
-  local c r want got msg=""
+  local c r alts a hit got msg=""
   for c in "${checks[@]}"; do
-    r=${c%%=*}; want=$((${c#*=})); got=$(rd "$OUT/$n.dut" "$r")
-    [ -n "$got" ] && [ $((got)) = "$want" ] || msg="$msg    $r = ${got:-<never written>}, want $(printf 0x%08x "$want")
+    r=${c%%=*}; alts=${c#*=}; got=$(rd "$OUT/$n.dut" "$r"); hit=0
+    for a in ${alts//|/ }; do
+      [ -n "$got" ] && [ $((got)) = $((a)) ] && hit=1
+    done
+    [ $hit = 1 ] || msg="$msg    $r = ${got:-<never written>}, want $alts
 "
   done
   [ -z "$msg" ] && ok "$label" || bad "$label" "${msg%$'\n'}"
@@ -139,11 +202,22 @@ suite() {
     grep -qE "^$t( |\$)" "$HERE/MANIFEST" || missing="${missing:-} $t"
   done
   [ -n "${missing:-}" ] && bad "MANIFEST" "    not listed:$missing"
+  local ran=" " skip=" "
+  [ $SOC = 1 ] && skip=" $(sed -n 's/^#soc-skip \([^-]*\).*/\1/p' "$HERE/MANIFEST" | tr '\n' ' ') "
   while read -r name mode rest; do
     case "$name" in ''|\#*) continue ;; esac
+    if [ "$mode" = soc ]; then
+      [ $SOC = 1 ] || continue
+      read -r mode rest <<< "$rest"
+    elif [ $SOC = 1 ]; then
+      case "$ran$skip" in *" $name "*) continue ;; esac
+      ran="$ran$name "
+    elif [ "$mode" = flash ]; then
+      continue
+    fi
     # shellcheck disable=SC2086
     case "$mode" in
-      spike)  run_spike "$name" $rest ;;
+      spike|flash) run_spike "$name" $rest ;;
       expect) run_expect "$name" $rest ;;
       *)      bad "$name" "    unknown mode '$mode'" ;;
     esac

@@ -246,14 +246,14 @@ class rrag_plugin(object):
                 output_dir + '/rrag/common/crt.S'
             ]
 
-            # Spike emits 5 bootrom instructions (0x1000-0x1010, ending in
-            # the jr to --pc) before reaching the program, and the DUT starts
-            # directly at the reset PC. river_core's schema defaults
-            # ignore_lines to 4, so one bootrom instruction leaked into every
-            # comparison and shifted the whole trace by one line. Every other
-            # plugin here already sets 5; rrag never did, which failed 208 of
-            # 1000 tests that otherwise match the reference exactly.
-            test_list[base_key]['ignore_lines'] = 5
+            # Spike starts the hart at --pc directly (upstream c76d96d9, 2026-03):
+            # the boot ROM is neither executed nor logged, so ref.dump begins with
+            # the first program instruction, like dut.dump. Explicit 0 because
+            # river_core's schema defaults ignore_lines to 4. (Spike before that
+            # ran and logged 5 ROM instructions here, and this was 5.)
+            # Leaving it unset once failed 208 of 1000 tests: the default 4
+            # left a ROM line in every comparison and shifted the trace.
+            test_list[base_key]['ignore_lines'] = 0
             test_list[base_key]['result'] = 'Unavailable'
 
         # A config whose generation failed leaves no .S, so it vanishes from

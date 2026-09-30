@@ -9,7 +9,7 @@
 # a pipeline flush.  This test validates the programming model and checks
 # that the fencei_flush signal is asserted without breaking execution.
 #
-# RAM is at 0x0100_0000.  We write a small leaf function there:
+# A scratch area at 0x8080_0000, 8 MB into PSRAM, well clear of the test.  We write a small leaf function there:
 #
 #   leaf:
 #     addi  a1, zero, 0x42   # a1 = 0x42
@@ -44,9 +44,9 @@ _start:
     bne   t0, t1, fail_1
 
     # ===== Test 2: self-modifying code via RAM =====
-    # Write two instructions to RAM base (0x0100_0000 = 0x1000 << 12)
+    # Write two instructions to the scratch area (0x8080_0000 = 0x80800 << 12)
     # addi a1, zero, 0x42
-    lui   t0, 0x1000         # t0 = 0x0100_0000 (RAM base)
+    lui   t0, 0x80800        # t0 = 0x8080_0000 (scratch area)
     lui   t1, 0x04200        # upper bits of 0x04200593
     addi  t1, t1, 0x593      # t1 = 0x04200593  (addi a1, zero, 0x42)
     sw    t1, 0(t0)

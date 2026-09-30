@@ -33,29 +33,23 @@ module tb_rivercore;
     wire [63:0] mtime_val;
 
     // Parameters
-    parameter MEM_SIZE = 33554432; // 32 MB
-
-    // ── Verification remap ──────────────────────────────────────────────
     //
-    // The SoC's real map -- Flash at 0x00000000, RAM at 0x01000000, CLINT at
-    // 0x02000000, GPIO at 0x03000000 -- is what src/fyracore.v and
-    // src/memController.v describe by default, and it is what the hardware
-    // will be. It cannot be used for river_core lockstep verification:
+    // The core runs on the SoC's own memory map (src/fyracore.v PMA_*
+    // defaults): 16 MB of PSRAM at 0x8000_0000, which tb/memory_model.v
+    // models, and 16 MB of flash at 0x2000_0000, which it answers with
+    // zeros. The program is loaded into PSRAM and the core is started there
+    // (boot_addr), where Spike starts too; the SoC itself boots from flash.
     //
-    //   * Spike's boot ROM is fixed at DEFAULT_RSTVEC 0x1000 and cannot be
-    //     disabled (--disable-dtb removes it and Spike then hangs with an
-    //     empty dump). It would sit inside Flash.
-    //   * Spike places RAM at DRAM_BASE 0x80000000 and -m only resizes it.
-    //
-    // So the remap lives here, in the testbench, rather than in the core.
-    // The core keeps describing the machine being built; this file bends the
-    // address map to whatever the reference model can be made to agree with.
-    //
-    // MEM_BASE/MEM_SIZE must match plugins/river-config.ini:
-    //   [spike] mem_flags = -m0x80000000:0x2000000
+    // The memory windows must match plugins/river-config.ini:
+    //   [spike] mem_flags = -m0x20000000:0x1000000,0x80000000:0x1000000
     // Change one and you must change the other, or the DUT and the reference
     // disagree about which addresses are mapped -- the bug the PMA check
     // exists to catch.
+    //
+    // Spike has no read-only memory, so a store to flash succeeds there and
+    // is a store access fault here. That divergence is deliberate and
+    // spec-legal; no test stores to flash on purpose.
+    parameter MEM_SIZE = 16777216; // 16 MB of PSRAM
     parameter MEM_BASE = 32'h8000_0000;
 
     // IO0 is the CLINT window, and its size is dictated by the reference
@@ -79,17 +73,128 @@ module tb_rivercore;
     // can move.
     parameter IO0_BASE = 32'h0200_0000;
     parameter IO0_TOP  = 32'h020B_FFFF;
-    // No GPIO is modelled, and spike has no device there either, so IO1 is
+    // No UART, GPIO or syscon is modelled, and spike has no device there
+    // either (plugins/helpers/spike-fyracore.dts drops its UART), so IO1 is
     // switched off by making BASE > TOP -- a window that matches nothing.
     parameter IO1_BASE = 32'hFFFF_FFFF;
     parameter IO1_TOP  = 32'h0000_0000;
 
-    fyracore #(
-        .RESET_PC    (MEM_BASE),
+`ifdef SOC_TB
+    // ── The whole SoC ────────────────────────────────────────────────────
+    //
+    // Built with -DSOC_TB (tests/directed/run.sh soc), the core runs through
+    // the complete memory path -- bus fabric, memory controller and QSPI
+    // engine -- against a behavioural QSPI Pmod, instead of memory_model's
+    // ideal memory. Everything below this block is shared: the trace reads
+    // the core through `CPU, and the tb-level port wires are views of the
+    // core's own ports.
+    //
+    // The SoC always boots from flash. A test linked in PSRAM (the usual
+    // case) is loaded into the model's PSRAM through the back door, as
+    // memory_model does, and the testbench forces the core's boot_addr to
+    // 0x8000_0000, so the first fetch goes through the fabric and the QSPI
+    // engine to PSRAM. Every register is 0 on entry, as it is on Spike, which
+    // starts the hart at --pc directly; the reference is the same Spike run
+    // as the core-level flow. A test given +FLASH_FILE= is a flash-booting
+    // program (MANIFEST mode `flash`): it is the flash image, boots from the
+    // real boot_addr, and is traced from reset.
+    //
+    // The CLINT gets dmem_addr[15:0], so the part of Spike's 0xC0000 CLINT
+    // aperture above 0x0200_FFFF aliases the registers here instead of
+    // reading 0 as memory_model does. No directed test touches it.
+    //
+    // +RD_LATE sets the QSPI read-latency strap; +QSPI_DELAY (read by the
+    // model) sets the device + pad delay it has to cover.
+    reg rd_late;
+    initial rd_late = $test$plusargs("RD_LATE");
+    wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
+    wire [2:0] qspi_cs_n;
+    wire [3:0] qspi_io_out, pmod_io;
+    // The pins as the SoC sees them. Nobody driving reads X, so sampling an
+    // undriven bus cannot quietly return plausible data.
+    wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'bxxxx);
+
+    alphaone_soc #(
         // Match the reference model's marchid so the lockstep dump agrees.
         .MARCHID     (32'd5),
-        .PMA_MEM_BASE(MEM_BASE),
-        .PMA_MEM_TOP (MEM_BASE + MEM_SIZE - 1),
+        .PMA_IO0_BASE(IO0_BASE),
+        .PMA_IO0_TOP (IO0_TOP),
+        .PMA_IO1_BASE(IO1_BASE),
+        .PMA_IO1_TOP (IO1_TOP)
+    ) soc (
+        .clk        (clk),
+        .rst        (rst),
+        .qspi_rd_late(rd_late),
+        .qspi_sck   (qspi_sck),
+        .qspi_cs_n  (qspi_cs_n),
+        .qspi_ctl_oe(qspi_ctl_oe),
+        .qspi_io_out(qspi_io_out),
+        .qspi_io_oe (qspi_io_oe),
+        .qspi_io_in (qspi_io_in),
+        // IO1 is off in this testbench (see IO1_BASE), so the peripherals
+        // are unreachable; their pins are only tied to idle levels.
+        .uart_rx    (1'b1),
+        .uart_tx    (),
+        .uart_rts_n (),
+        .gpio_in    (8'h00),
+        .gpio_out   ()
+    );
+
+    qspi_pmod_model pmod (
+        .host_sck   (qspi_sck),
+        .host_cs_n  (qspi_cs_n),
+        .host_ctl_oe(qspi_ctl_oe),
+        .host_io    (qspi_io_out),
+        .host_oe    (qspi_io_oe),
+        .dev_io     (pmod_io),
+        .dev_oe     (pmod_oe)
+    );
+
+    assign imem_addr      = soc.cpu.imem_addr;
+    assign imem_req       = soc.cpu.imem_req;
+    assign imem_rdata     = soc.cpu.imem_rdata;
+    assign imem_ready     = soc.cpu.imem_ready;
+    assign dmem_req       = soc.cpu.dmem_req;
+    assign dmem_addr      = soc.cpu.dmem_addr;
+    assign dmem_wdata     = soc.cpu.dmem_wdata;
+    assign dmem_be        = soc.cpu.dmem_be;
+    assign dmem_we        = soc.cpu.dmem_we;
+    assign dmem_rdata     = soc.cpu.dmem_rdata;
+    assign dmem_ready     = soc.cpu.dmem_ready;
+    assign fencei_flush   = soc.cpu.fencei_flush;
+    assign dbg_pc         = soc.cpu.dbg_pc;
+    assign dbg_retired    = soc.cpu.dbg_retired;
+    assign dbg_instr      = soc.cpu.dbg_instr;
+    assign dbg_compressed = soc.cpu.dbg_compressed;
+    assign dbg_trap       = soc.cpu.dbg_trap;
+
+    // Handshake checkers (tb/req_hold_check.v): memory_model checks the
+    // core's side of its ports in the core-level testbench, and there is no
+    // memory_model here, where every wait is 40-60 clocks rather than a few.
+    // Checked: the core's two ports, the data port as it reaches mem_ctrl
+    // through the bus fabric, and mem_ctrl's requests to the QSPI engine.
+    req_hold_check #(.W(32), .NAME("imem request")) chk_imem (
+        .clk(clk), .rst(rst), .take(imem_req), .hold(imem_req), .done(imem_ready),
+        .payload(imem_addr));
+    req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
+        .clk(clk), .rst(rst), .take(dmem_req), .hold(dmem_req), .done(dmem_ready),
+        .payload({dmem_addr, dmem_we, dmem_be, dmem_we ? dmem_wdata : 32'h0}));
+    req_hold_check #(.W(69), .NAME("mem_ctrl data request")) chk_memd (
+        .clk(clk), .rst(rst), .take(soc.memc.d_req), .hold(soc.memc.d_req),
+        .done(soc.memc.d_ready),
+        .payload({soc.memc.d_addr, soc.memc.d_we, soc.memc.d_be,
+                  soc.memc.d_we ? soc.memc.d_wdata : 32'h0}));
+    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1)) chk_qspi (
+        .clk(clk), .rst(rst), .take(soc.qspi.idle && soc.qspi.start),
+        .hold(soc.qspi.start), .done(soc.qspi.done),
+        .payload({soc.qspi.cs_sel, soc.qspi.addr, soc.qspi.we, soc.qspi.nbytes_m1,
+                  soc.qspi.we ? soc.qspi.wdata : 32'h0}));
+`define CPU    soc.cpu
+`define MEMARR pmod.ram
+`else
+    fyracore #(
+        // Match the reference model's marchid so the lockstep dump agrees.
+        .MARCHID     (32'd5),
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
@@ -97,6 +202,7 @@ module tb_rivercore;
     ) cpu(
         .clk         (clk),
         .rst         (rst),
+        .boot_addr   (MEM_BASE),
         .imem_addr   (imem_addr),
         .imem_req    (imem_req),
         .imem_rdata  (imem_rdata),
@@ -151,6 +257,10 @@ module tb_rivercore;
         .ext_irq   (ext_irq),
         .mtime_out (mtime_val)
     );
+
+`define CPU    cpu
+`define MEMARR mem.mem
+`endif
 
     // Clock generation: 10ns period
     initial clk = 0;
@@ -261,13 +371,13 @@ module tb_rivercore;
     initial begin
         #1;
         if (have_init_file) begin
-            $readmemh(init_file_str, mem.mem);
+            $readmemh(init_file_str, `MEMARR);
             // A missing or truncated INIT_FILE leaves memory zero-filled, which
             // otherwise runs to MAX_CYCLES and writes an empty dump - a silent
             // failure the comparison stage reports as a DUT bug. Empty dumps
             // also compare equal to each other, so this must fail loudly.
-            // RESET_PC 0x80000000 aliases to mem[0] (memory_model masks [24:0]).
-            if ({mem.mem[3], mem.mem[2], mem.mem[1], mem.mem[0]} === 32'h0) begin
+            // boot_addr 0x80000000 is mem[0] (memory_model indexes PSRAM by [23:0]).
+            if ({`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 32'h0) begin
                 $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
                          init_file_str);
                 $fatal(1);
@@ -275,6 +385,24 @@ module tb_rivercore;
         end
     end
 
+
+`ifdef SOC_TB
+    // A PSRAM-linked test boots straight into PSRAM (see the SoC block
+    // above). This used to be a two-instruction flash stub -- lui t0, 0x80000;
+    // jr t0 -- which left t0 = 0x8000_0000 on entry. That matched the boot ROM
+    // of the Spike of the time, which ended in the same state; current Spike
+    // runs no ROM and enters with t0 = 0, so the stub would now diverge on any
+    // test that reads t0 before writing it. At #1, after the plusargs above
+    // and long before reset ends.
+    initial begin
+        #1;
+        if (!$test$plusargs("FLASH_FILE")) begin
+            force soc.cpu.boot_addr = 32'h8000_0000;
+            start_pc       = 32'h8000_0000;
+            logging_active = 1'b0;
+        end
+    end
+`endif
 
     // ================================================================
     //  Counters
@@ -285,7 +413,7 @@ module tb_rivercore;
     // ================================================================
     //  Termination detection
     // ================================================================
-    wire trap_handler_set = (cpu.csr_unit.mtvec != 32'b0);
+    wire trap_handler_set = (`CPU.csr_unit.mtvec != 32'b0);
     wire is_ecall  = dbg_trap && (dbg_instr == 32'h0000_0073) && !trap_handler_set;
     wire is_ebreak = dbg_trap && (dbg_instr == 32'h0010_0073) && !trap_handler_set;
     wire is_halt   = dbg_retired && (dbg_instr == 32'h0000_006f);
@@ -371,10 +499,14 @@ module tb_rivercore;
     end
 
     // ================================================================
-    //  START_PC gating — activate logging when PC matches start_pc
+    //  START_PC gating — logging starts with the instruction at start_pc
     // ================================================================
+    // logging_on includes the retire of that first instruction itself;
+    // logging_active, a register, only turns on after it, so gating the dump
+    // on it alone dropped the first line.
+    wire logging_on = logging_active || (dbg_retired && dbg_pc == start_pc);
     always @(posedge clk) begin
-        if (!logging_active && dbg_retired && dbg_pc == start_pc)
+        if (logging_on)
             logging_active <= 1'b1;
     end
 
@@ -400,14 +532,14 @@ module tb_rivercore;
     // WB the register already holds the post-mret priv. Spike emits the priv at
     // execution time, so override to M (3) for mret retire lines.
     wire is_mret_retire = (dbg_instr == 32'h30200073);
-    wire [1:0] dump_priv = is_mret_retire ? 2'd3 : (cpu.priv_mode ? 2'd3 : 2'd0);
+    wire [1:0] dump_priv = is_mret_retire ? 2'd3 : (`CPU.priv_mode ? 2'd3 : 2'd0);
 
     always @(posedge clk) begin
         // The retire-budget test belongs here rather than only in the main
         // loop: the loop checks after the write has already happened, which
         // emitted max_instr+1 lines. Spike stops at exactly --instructions,
         // so one extra line would fail every bounded test on length.
-        if (!rst && dbg_retired && logging_active && !terminate &&
+        if (!rst && dbg_retired && logging_on && !terminate &&
             (max_instr == 0 || instr_count < max_instr)) begin
             // Header: core <hart>: <priv> 0x<PC> (0x<instr>)
             // Compressed instructions print as 4 hex digits to match Spike.
@@ -423,56 +555,63 @@ module tb_rivercore;
                         dbg_instr);
 
             // Register change (only if rd != x0)
-            if (cpu.wb_regWR && cpu.wb_rd != 5'b0)
-                $fwrite(dump_fd, " x%0d 0x%08h", cpu.wb_rd, cpu.wb_data);
+            if (`CPU.wb_regWR && `CPU.wb_rd != 5'b0)
+                $fwrite(dump_fd, " x%0d 0x%08h", `CPU.wb_rd, `CPU.wb_data);
 
             // CSR commit (Spike format: c<addr_dec>_<name> 0x<value>)
-            if (cpu.exwb_csrWR) begin
-                case (cpu.exwb_csr_addr)
-                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   cpu.csr_wval);
+            if (`CPU.exwb_csrWR) begin
+                case (`CPU.exwb_csr_addr)
+                    12'h300: $fwrite(dump_fd, " c768_mstatus 0x%08h",   `CPU.csr_wval);
                     // A refused misa.C clear leaves misa unchanged, and Spike
                     // logs nothing for it.
-                    12'h301: if (cpu.exwb_csr_wdata[2] == 1'b1 || !cpu.exwb_trap_pc[1])
-                                  $fwrite(dump_fd, " c769_misa 0x%08h", cpu.csr_wval);
-                    12'h304: $fwrite(dump_fd, " c772_mie 0x%08h",       cpu.csr_wval);
-                    12'h305: $fwrite(dump_fd, " c773_mtvec 0x%08h",     cpu.csr_wval);
-                    12'h306: $fwrite(dump_fd, " c774_mcounteren 0x%08h",cpu.csr_wval);
-                    12'h320: $fwrite(dump_fd, " c800_mcountinhibit 0x%08h", cpu.csr_wval);
-                    12'h340: $fwrite(dump_fd, " c832_mscratch 0x%08h",  cpu.csr_wval);
-                    12'h341: $fwrite(dump_fd, " c833_mepc 0x%08h",      cpu.csr_wval);
-                    12'h342: $fwrite(dump_fd, " c834_mcause 0x%08h",    cpu.csr_wval);
-                    12'h343: $fwrite(dump_fd, " c835_mtval 0x%08h",     cpu.csr_wval);
-                    12'h344: $fwrite(dump_fd, " c836_mip 0x%08h",       cpu.csr_wval);
+                    12'h301: if (`CPU.exwb_csr_wdata[2] == 1'b1 || !`CPU.exwb_trap_pc[1])
+                                  $fwrite(dump_fd, " c769_misa 0x%08h", `CPU.csr_wval);
+                    12'h304: $fwrite(dump_fd, " c772_mie 0x%08h",       `CPU.csr_wval);
+                    12'h305: $fwrite(dump_fd, " c773_mtvec 0x%08h",     `CPU.csr_wval);
+                    12'h306: $fwrite(dump_fd, " c774_mcounteren 0x%08h",`CPU.csr_wval);
+                    12'h320: $fwrite(dump_fd, " c800_mcountinhibit 0x%08h", `CPU.csr_wval);
+                    12'h340: $fwrite(dump_fd, " c832_mscratch 0x%08h",  `CPU.csr_wval);
+                    12'h341: $fwrite(dump_fd, " c833_mepc 0x%08h",      `CPU.csr_wval);
+                    12'h342: $fwrite(dump_fd, " c834_mcause 0x%08h",    `CPU.csr_wval);
+                    12'h343: $fwrite(dump_fd, " c835_mtval 0x%08h",     `CPU.csr_wval);
+                    12'h344: $fwrite(dump_fd, " c836_mip 0x%08h",       `CPU.csr_wval);
                     // A PMP write that a lock discards entirely is not
                     // logged by Spike: pmpcfg0 only when every byte is
                     // locked, pmpaddr[i] when its own or entry i+1's TOR
                     // lock holds it.
-                    12'h3A0: if (!(cpu.csr_pmpcfg0[7]  && cpu.csr_pmpcfg0[15] &&
-                                   cpu.csr_pmpcfg0[23] && cpu.csr_pmpcfg0[31]))
-                                  $fwrite(dump_fd, " c928_pmpcfg0 0x%08h",  cpu.csr_wval);
-                    12'h3B0: if (!cpu.csr_unit.tor_lock_addr0)
-                                  $fwrite(dump_fd, " c944_pmpaddr0 0x%08h", cpu.csr_wval);
-                    12'h3B1: if (!cpu.csr_unit.tor_lock_addr1)
-                                  $fwrite(dump_fd, " c945_pmpaddr1 0x%08h", cpu.csr_wval);
-                    12'h3B2: if (!cpu.csr_unit.tor_lock_addr2)
-                                  $fwrite(dump_fd, " c946_pmpaddr2 0x%08h", cpu.csr_wval);
-                    12'h3B3: if (!cpu.csr_unit.tor_lock_addr3)
-                                  $fwrite(dump_fd, " c947_pmpaddr3 0x%08h", cpu.csr_wval);
-                    12'hB00: $fwrite(dump_fd, " c2816_mcycle 0x%08h",   cpu.csr_wval);
-                    12'hB02: $fwrite(dump_fd, " c2818_minstret 0x%08h", cpu.csr_wval);
-                    12'hB80: $fwrite(dump_fd, " c2944_mcycleh 0x%08h",  cpu.csr_wval);
-                    12'hB82: $fwrite(dump_fd, " c2946_minstreth 0x%08h",cpu.csr_wval);
+                    12'h3A0: if (!(`CPU.csr_pmpcfg0[7]  && `CPU.csr_pmpcfg0[15] &&
+                                   `CPU.csr_pmpcfg0[23] && `CPU.csr_pmpcfg0[31]))
+                                  $fwrite(dump_fd, " c928_pmpcfg0 0x%08h",  `CPU.csr_wval);
+                    12'h3B0: if (!`CPU.csr_unit.tor_lock_addr0)
+                                  $fwrite(dump_fd, " c944_pmpaddr0 0x%08h", `CPU.csr_wval);
+                    12'h3B1: if (!`CPU.csr_unit.tor_lock_addr1)
+                                  $fwrite(dump_fd, " c945_pmpaddr1 0x%08h", `CPU.csr_wval);
+                    12'h3B2: if (!`CPU.csr_unit.tor_lock_addr2)
+                                  $fwrite(dump_fd, " c946_pmpaddr2 0x%08h", `CPU.csr_wval);
+                    12'h3B3: if (!`CPU.csr_unit.tor_lock_addr3)
+                                  $fwrite(dump_fd, " c947_pmpaddr3 0x%08h", `CPU.csr_wval);
+                    12'hB00: $fwrite(dump_fd, " c2816_mcycle 0x%08h",   `CPU.csr_wval);
+                    12'hB02: $fwrite(dump_fd, " c2818_minstret 0x%08h", `CPU.csr_wval);
+                    12'hB80: $fwrite(dump_fd, " c2944_mcycleh 0x%08h",  `CPU.csr_wval);
+                    12'hB82: $fwrite(dump_fd, " c2946_minstreth 0x%08h",`CPU.csr_wval);
                     // Read-only-zero CSRs Spike does log a write to.
-                    12'h30A: $fwrite(dump_fd, " c778_menvcfg 0x%08h",   cpu.csr_wval);
-                    12'h31A: $fwrite(dump_fd, " c794_menvcfgh 0x%08h",  cpu.csr_wval);
+                    12'h30A: $fwrite(dump_fd, " c778_menvcfg 0x%08h",   `CPU.csr_wval);
+                    12'h31A: $fwrite(dump_fd, " c794_menvcfgh 0x%08h",  `CPU.csr_wval);
+                    // pmpaddr4-15 beyond the 4 implemented regions: Spike
+                    // (since 4850489d) accepts the write, keeps 0 and logs it.
+                    12'h3B4, 12'h3B5, 12'h3B6, 12'h3B7,
+                    12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB,
+                    12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF:
+                        $fwrite(dump_fd, " c%0d_pmpaddr%0d 0x%08h",
+                                `CPU.exwb_csr_addr, `CPU.exwb_csr_addr[3:0], `CPU.csr_wval);
                     // Writes Spike accepts without logging: the
-                    // unimplemented pmpcfg1-3 and pmpaddr4-15, mstatush and
+                    // unimplemented pmpcfg1-3, mstatush and
                     // mhpmcounter3-31(h), all of which read 0.
                     default:
-                        if (cpu.exwb_csr_addr[11:5] == 7'b0011_001 &&
-                            cpu.exwb_csr_addr[4:0] >= 5'd3)    // mhpmevent3-31
+                        if (`CPU.exwb_csr_addr[11:5] == 7'b0011_001 &&
+                            `CPU.exwb_csr_addr[4:0] >= 5'd3)    // mhpmevent3-31
                             $fwrite(dump_fd, " c%0d_mhpmevent%0d 0x%08h",
-                                    cpu.exwb_csr_addr, cpu.exwb_csr_addr[4:0], cpu.csr_wval);
+                                    `CPU.exwb_csr_addr, `CPU.exwb_csr_addr[4:0], `CPU.csr_wval);
                 endcase
             end
 
@@ -480,7 +619,7 @@ module tb_rivercore;
             // cycle (when mret is detected). At this WB-stage retire cycle,
             // mstatus already holds the post-MRET value, so emit it raw.
             if (is_mret_retire) begin
-                $fwrite(dump_fd, " c768_mstatus 0x%08h", cpu.csr_unit.mstatus);
+                $fwrite(dump_fd, " c768_mstatus 0x%08h", `CPU.csr_unit.mstatus);
             end
 
             // Memory access marker. Spike format: loads emit "mem 0x<addr>";
@@ -488,8 +627,8 @@ module tb_rivercore;
             // (unaligned) effective address and the natural-width store data,
             // so we use exwb_alu_result instead of dmem_addr and width-mask
             // exwb_rs2_data instead of using the bus-shifted store_data.
-            if (cpu.exwb_memRD) begin
-                $fwrite(dump_fd, " mem 0x%08h", cpu.exwb_alu_result);
+            if (`CPU.exwb_memRD) begin
+                $fwrite(dump_fd, " mem 0x%08h", `CPU.exwb_alu_result);
                 // An AMO reads and writes in the same retire, and Spike logs
                 // both markers on one line. Emitting only the read leaves the
                 // written value uncompared: river_core's dump parser pairs the
@@ -500,18 +639,18 @@ module tb_rivercore;
                 // from the decode alone would keep the dump matching Spike even
                 // if the store were dropped, which is exactly the failure the
                 // trace exists to catch.
-                if (cpu.exwb_isAmo && cpu.amo_phase && dmem_we)
+                if (`CPU.exwb_isAmo && `CPU.amo_phase && dmem_we)
                     $fwrite(dump_fd, " mem 0x%08h 0x%08h",
-                            cpu.exwb_alu_result, dmem_wdata);
+                            `CPU.exwb_alu_result, dmem_wdata);
             end
             else if (dmem_we) begin
-                case (cpu.exwb_memSize)
+                case (`CPU.exwb_memSize)
                     2'b00: $fwrite(dump_fd, " mem 0x%08h 0x%02h",
-                                   cpu.exwb_alu_result, cpu.exwb_rs2_data[7:0]);
+                                   `CPU.exwb_alu_result, `CPU.exwb_rs2_data[7:0]);
                     2'b01: $fwrite(dump_fd, " mem 0x%08h 0x%04h",
-                                   cpu.exwb_alu_result, cpu.exwb_rs2_data[15:0]);
+                                   `CPU.exwb_alu_result, `CPU.exwb_rs2_data[15:0]);
                     default: $fwrite(dump_fd, " mem 0x%08h 0x%08h",
-                                     cpu.exwb_alu_result, cpu.exwb_rs2_data);
+                                     `CPU.exwb_alu_result, `CPU.exwb_rs2_data);
                 endcase
             end
 

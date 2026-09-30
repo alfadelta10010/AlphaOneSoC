@@ -3,7 +3,7 @@
 .section .text.init
 .globl rvtest_entry_point
 rvtest_entry_point:
-    li  t0, 0x81000000
+    li  t0, 0x80800000
     li  t1, 0x12345678
     sw  t1, 0(t0)
     li  t2, 0x9abcdef0

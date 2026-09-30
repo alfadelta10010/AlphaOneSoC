@@ -141,17 +141,20 @@ class riscv_torture_plugin(object):
                   f'{self.output_dir}/riscv-torture/env/v/string.c',
                   f'{self.output_dir}/riscv-torture/env/v/entry.S']
                 compile_macros = [f'ENTROPY=0x{entropy}']
-                # 5 Spike bootrom instructions + 9 v-mode setup instructions.
-                ignore_lines = 14
+                # 9 v-mode setup instructions (Spike no longer logs the 5
+                # boot-ROM instructions that used to precede them).
+                ignore_lines = 9
             else:
                 linker_file = f'{self.output_dir}/riscv-torture/env/p/link.ld'
                 include = [f'{self.output_dir}/riscv-torture/env/p/']
                 extra_compile = []
                 compile_macros = []
-                # Spike emits 5 bootrom instructions (0x1000-0x1010, ending in the
-                # jr to --pc) before reaching the program; the DUT starts at the
-                # reset PC.
-                ignore_lines = 5
+                # Spike starts the hart at --pc directly (upstream c76d96d9, 2026-03):
+                # the boot ROM is neither executed nor logged, so ref.dump begins with
+                # the first program instruction, like dut.dump. Explicit 0 because
+                # river_core's schema defaults ignore_lines to 4. (Spike before that
+                # ran and logged 5 ROM instructions here, and this was 5.)
+                ignore_lines = 0
                 
 
             test_list[base_key] = {}

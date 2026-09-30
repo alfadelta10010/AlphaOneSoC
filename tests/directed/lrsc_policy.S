@@ -1,17 +1,18 @@
 # LR/SC reservation policy matrix. a0..a4 = SC result (0 success, 1 fail).
-# 1 lr; sw same addr; sc        -> fail   (conservative local-write clear)
-# 2 lr; amoadd same addr; sc    -> fail   (same, and the point of the fix)
-# 3 lr; ecall; sc               -> fail   (trap clear)
-# 4 lr; sc unrelated; sc        -> fail   (any SC invalidates, success or not)
+# 1 lr; sw same addr; sc        -> succeed (own stores keep the reservation)
+# 2 lr; amoadd same addr; sc    -> succeed (so do own AMOs)
+# 3 lr; ecall; sc               -> fail    (trap clear)
+# 4 lr; sc unrelated; sc        -> fail    (any SC invalidates, success or not)
 # 5 lr; sc                      -> succeed (control)
+# Spike makes the same five choices, so the whole trace is compared.
 .section .text.init
 .option norvc
 .globl rvtest_entry_point
 rvtest_entry_point:
     la   t6, handler
     csrw mtvec, t6
-    li   s0, 0x81000000
-    li   s1, 0x81000010
+    li   s0, 0x80800000
+    li   s1, 0x80800010
 
     sw   x0, 0(s0)
     lr.w t0, (s0)

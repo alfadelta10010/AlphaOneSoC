@@ -293,9 +293,12 @@ class riscv_dv_plugin(object):
             entry['compile_macros'] = []
             entry['extra_compile'] = []
             entry['result'] = 'Unavailable'
-            # Spike emits 5 bootrom instructions before jumping to --pc, which
-            # the DUT does not execute. Same adjustment the riscof plugin makes.
-            entry['ignore_lines'] = 5
+            # Spike starts the hart at --pc directly (upstream c76d96d9, 2026-03):
+            # the boot ROM is neither executed nor logged, so ref.dump begins with
+            # the first program instruction, like dut.dump. Explicit 0 because
+            # river_core's schema defaults ignore_lines to 4. (Spike before that
+            # ran and logged 5 ROM instructions here, and this was 5.)
+            entry['ignore_lines'] = 0
             test_list[key] = entry
 
         if not test_list:

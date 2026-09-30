@@ -8,7 +8,7 @@
 rvtest_entry_point:
     la   t6, handler
     csrw mtvec, t6
-    li   a0, 0x81000001
+    li   a0, 0x80800001
     csrci misa, 4
     nop
     nop

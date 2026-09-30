@@ -109,10 +109,12 @@ class riscof_plugin(object):
             new_entry['compile_macros'] = riscof_test_list[entry]['macros']
             new_entry['extra_compile'] = []
             new_entry['march'] = self.march
-            # Spike emits 5 bootrom instructions (auipc/addi/csrr/lw/jr)
-            # before jumping to --pc=0x80000000. The DUT starts directly at
-            # RESET_PC. Skip those leading ref.dump lines.
-            new_entry['ignore_lines'] = 5
+            # Spike starts the hart at --pc directly (upstream c76d96d9, 2026-03):
+            # the boot ROM is neither executed nor logged, so ref.dump begins with
+            # the first program instruction, like dut.dump. Explicit 0 because
+            # river_core's schema defaults ignore_lines to 4. (Spike before that
+            # ran and logged 5 ROM instructions here, and this was 5.)
+            new_entry['ignore_lines'] = 0
             test_list[key] = new_entry
 
         if 'C' not in self.isa:

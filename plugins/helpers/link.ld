@@ -1,25 +1,25 @@
 /* Linker script for FyraCore river_core verification.
  *
- * Verification runs the core with RESET_PC = 0x8000_0000 so the flow can share
- * Spike's default DRAM base and riscv-tests' linker conventions. tb/memory_model.v
- * masks addresses to [24:0], so 0x8000_0000 aliases onto the first byte of the
- * 32 MB simulated array and the whole image must fit inside that window.
+ * Verification boots the core from PSRAM at 0x8000_0000 (boot_addr), which is
+ * also Spike's DRAM base and riscv-tests' linker convention. The whole image,
+ * data and stack included, lives in the 16 MB of PSRAM tb/memory_model.v
+ * models; flash is read-only.
  *
  * Everything is placed contiguously from 0x8000_0000 with no separate load
  * address: the DUT is loaded from a flat objcopy hex (which is shifted down by
  * 0x8000_0000), and Spike loads the ELF by program header, so a split VMA/LMA
  * would need a copy loop that neither path runs.
  *
- * The hardware memory map (flash at 0x0, RAM at 0x0100_0000) lives in
- * link_soc.ld and is not used by the verification flow.
+ * link_soc.ld is the script for programs that boot from flash at 0x2000_0000;
+ * the verification flow does not use it.
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_boot_start)
 
 MEMORY
 {
-    /* Must not exceed tb/memory_model.v MEM_SIZE (32 MB). */
-    MEM (rwx) : ORIGIN = 0x80000000, LENGTH = 32M
+    /* Must not exceed tb/memory_model.v MEM_SIZE (16 MB). */
+    MEM (rwx) : ORIGIN = 0x80000000, LENGTH = 16M
 }
 
 SECTIONS

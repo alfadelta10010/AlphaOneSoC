@@ -25,7 +25,7 @@ module tb_cpu;
     wire [63:0] mtime_val;
 
     // Parameters
-    parameter MEM_SIZE   = 33554432;  // 32 MB — 16 MB Flash (0x0000_0000) + 16 MB RAM (0x0100_0000)
+    parameter MEM_SIZE   = 16777216;  // 16 MB of PSRAM at 0x8000_0000; programs load and boot there
 `ifndef MAX_CYCLES
     parameter MAX_CYCLES = 100000;
 `else
@@ -41,6 +41,7 @@ module tb_cpu;
     fyracore cpu(
         .clk         (clk),
         .rst         (rst),
+        .boot_addr   (32'h8000_0000),
         .imem_addr   (imem_addr),
         .imem_req    (imem_req),
         .imem_rdata  (imem_rdata),
