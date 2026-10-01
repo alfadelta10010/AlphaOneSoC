@@ -54,6 +54,10 @@
 # reaching tohost. Every .S in this directory must appear in MANIFEST, so a
 # test cannot silently drop out of the suite.
 #
+# RUN_PLUSARGS is added to every simulation, e.g. RUN_PLUSARGS=+RF_X starts
+# the registers at X instead of 0 (src/regFile.v), so a test that reads a
+# register it never wrote fails its trace compare.
+#
 # Tests live beside this script, artifacts go to ./out (gitignored).
 # Toolchain: riscv64-unknown-elf-*, spike and iverilog on PATH.
 set -u
@@ -132,7 +136,7 @@ sim() { # sim <name> <plusargs...>
   local image=+INIT_FILE="$OUT/$n.hex"
   is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
   vvp "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
-      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" >"$OUT/$n.sim.log" 2>&1
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
 }
 
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both

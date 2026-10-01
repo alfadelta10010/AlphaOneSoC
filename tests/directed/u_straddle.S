@@ -5,6 +5,7 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  li   s1, 0                  # the loop counter below (x-regs are not reset)
   la   t0, handler
   csrw mtvec, t0
   li   a0, -1
