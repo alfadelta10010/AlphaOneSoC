@@ -171,6 +171,8 @@ module fyracore #(
     // IF/EX loads, and every other pc change flushes IF/EX).
     reg        ifex_valid;
     reg        ifex_c_illegal;  // Compressed decoder flagged a reserved encoding
+    reg        ifetch_lo_done;  // PMP has checked the fetch at ifex_pc
+    reg        ifetch_lo_denied;// ...and refused it
     reg        ifetch_hi_done;  // upper half of the straddling instruction in EX checked
     reg        ifetch_hi_denied;// ...and PMP refused it
 
@@ -215,13 +217,12 @@ module fyracore #(
     // (needed to break iverilog's forward-reference restriction)
     wire [31:0] csr_rdata_eff;   // driven by assign in CSR section
     wire        csr_addr_valid;  // driven by CSR unit output
-    wire        pmp_ifetch_allow; // driven by pmp_ifetch instance
-    wire        pmp_data_allow;   // driven by pmp_data instance
+    wire        pmp_allow;        // driven by the (one, time-shared) pmp instance
     wire        irq_inject;      // driven by interrupt detection logic in CSR/WB section
     wire        csr_misa_c;      // driven by CSR unit output (misa.C bit)
     wire        csr_mstatus_tw;  // driven by CSR unit output (mstatus.TW bit)
     wire        csr_mstatus_mprv;// driven by CSR unit output (mstatus.MPRV bit)
-    wire        ex_ifetch_hi_phase; // PMP is checking a straddling instruction's upper half
+    wire        ex_ifetch_hi_phase; // PMP is checking the fetch (either half), not the data access
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -511,20 +512,23 @@ module fyracore #(
     // PMP says the permissions deny it, or the PMA says nothing is mapped
     // there. Both raise the same causes (1 / 5 / 7), so they are combined
     // here rather than at every use site.
-    // (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
+    // (uses the forward-declared pmp_allow)
     //
     // Fetch: the lower half is checked at ifex_pc. For a straddling
-    // instruction the upper half gets its own PMA compare, and the single
-    // fetch PMP checker looks at it for one extra EX cycle first
-    // (ex_ifetch_hi_phase) whenever PMP could deny it; the verdict is kept in
-    // ifetch_hi_denied. No fault is raised during that cycle.
-    wire ex_ifetch_fault_lo = !ex_pma_fetch_ok || !pmp_ifetch_allow;
+    // instruction the upper half gets its own PMA compare. The one PMP
+    // checker serves the fetch and the data access in turn: whenever PMP
+    // could deny the fetch it looks at ifex_pc, then at a straddling
+    // instruction's upper half, one stalled EX cycle each
+    // (ex_ifetch_hi_phase), and the verdicts are kept in ifetch_lo_denied and
+    // ifetch_hi_denied. No fault is raised during those cycles. The data
+    // access is checked on the instruction's last EX cycle.
+    wire ex_ifetch_fault_lo = !ex_pma_fetch_ok || ifetch_lo_denied;
     wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok || ifetch_hi_denied);
     wire ex_ifetch_fault = ifex_valid && !ex_ifetch_hi_phase &&
                            (ex_ifetch_fault_lo || ex_ifetch_fault_hi);
     // Data side: only when a memory op is present and it's not already misaligned
     wire ex_data_fault   = ifex_valid && ex_mem_active && !ex_misaligned &&
-                           (!pmp_data_allow || !ex_pma_data_ok);
+                           !ex_ifetch_hi_phase && (!pmp_allow || !ex_pma_data_ok);
 
     // Illegal instruction (cause 2). Collected into one signal so the trap
     // cause chain can test it in its spec-mandated priority position rather
@@ -908,49 +912,45 @@ module fyracore #(
                     (external_irq & csr_mie[11]) |
                     !wfi_has_enabled_irq;  // NOP when no sources enabled
 
-    // ── PMP checks ───────────────────────────────────────────────────────────
-    // pmp_ifetch_allow and pmp_data_allow are forward-declared near top of EX stage.
-    // Instruction fetch: check ifex_pc with Execute permission (EX stage), or
-    // the upper half of a straddling instruction during ex_ifetch_hi_phase.
+    // ── PMP check ────────────────────────────────────────────────────────────
+    // One checker, time-shared (pmp_allow is forward-declared near the top of
+    // EX). While PMP could refuse a fetch the instruction spends one stalled
+    // EX cycle checking ifex_pc with Execute permission (ex_ifetch_lo_phase)
+    // and, if it straddles two words, one more on its upper half, latching
+    // each verdict; its data access is checked on the cycle after. Checking
+    // all three at once took three checkers.
     //
     // PMP can only refuse an M-mode fetch through a locked entry, so the
-    // extra cycle is spent only in U-mode or when some entry is locked; an
-    // M-mode kernel with unlocked (or no) PMP entries never pays it.
+    // extra cycles are spent only in U-mode or when some entry is locked; an
+    // M-mode kernel with unlocked (or no) PMP entries never pays them. In the
+    // SoC they are hidden behind the next fetch.
     wire pmp_any_locked = csr_pmpcfg0[7] | csr_pmpcfg0[15] | csr_pmpcfg0[23] | csr_pmpcfg0[31];
-    assign ex_ifetch_hi_phase = ifex_valid && ex_straddle && !ifetch_hi_done &&
-                                (!priv_mode || pmp_any_locked);
-    pmp pmp_ifetch(
-        .pmpcfg0    (csr_pmpcfg0),
-        .pmpaddr0   (csr_pmpaddr0),
-        .pmpaddr1   (csr_pmpaddr1),
-        .pmpaddr2   (csr_pmpaddr2),
-        .pmpaddr3   (csr_pmpaddr3),
-        .addr       (ex_ifetch_hi_phase ? ex_pc_hi : ifex_pc),
-        .access_type(3'b100),       // Execute
-        .priv_mode  (priv_mode),
-        .pmp_allow  (pmp_ifetch_allow)
-    );
+    wire fetch_can_deny = !priv_mode || pmp_any_locked;
+    wire ex_ifetch_lo_phase = ifex_valid && fetch_can_deny && !ifetch_lo_done;
+    assign ex_ifetch_hi_phase = ex_ifetch_lo_phase ||
+                                (ifex_valid && fetch_can_deny && ex_straddle && !ifetch_hi_done);
 
     // Data access: check ex_alu_result with R or W permission (EX stage, address ready).
     wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b011 : // AMO: R+W
                                      ex_misalign_is_store ? 3'b010 : // Store/SC: W
                                      3'b001;                          // Load/LR: R
     // MPRV=1 makes loads and stores check as though the hart were in MPP.
-    // Instruction fetch is excluded by the spec, so pmp_ifetch keeps priv_mode.
+    // Instruction fetch is excluded by the spec, so its check keeps priv_mode.
     // The load or store right after `csrw mstatus` waits in EX for the write
     // to commit (csr_wb_hazard), so it is checked against the new values.
     wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;
 
-    pmp pmp_data(
+    pmp pmp_unit(
         .pmpcfg0    (csr_pmpcfg0),
         .pmpaddr0   (csr_pmpaddr0),
         .pmpaddr1   (csr_pmpaddr1),
         .pmpaddr2   (csr_pmpaddr2),
         .pmpaddr3   (csr_pmpaddr3),
-        .addr       (ex_alu_result),
-        .access_type(ex_pmp_access_type),
-        .priv_mode  (data_priv_mode),
-        .pmp_allow  (pmp_data_allow)
+        .addr       (ex_ifetch_lo_phase ? ifex_pc :
+                     ex_ifetch_hi_phase ? ex_pc_hi : ex_alu_result),
+        .access_type(ex_ifetch_hi_phase ? 3'b100 : ex_pmp_access_type),  // Execute
+        .priv_mode  (ex_ifetch_hi_phase ? priv_mode : data_priv_mode),
+        .pmp_allow  (pmp_allow)
     );
 
     // No CSR forwarding: an instruction never reads CSR state in EX while a
@@ -1029,6 +1029,8 @@ module fyracore #(
             ifex_compressed<= 1'b0;
             ifex_valid     <= 1'b0;
             ifex_c_illegal <= 1'b0;
+            ifetch_lo_done <= 1'b0;
+            ifetch_lo_denied <= 1'b0;
             ifetch_hi_done <= 1'b0;
             ifetch_hi_denied <= 1'b0;
             // EX/WB
@@ -1088,11 +1090,14 @@ module fyracore #(
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
-                // Hold IF/EX on stall. If the stall is the upper-half PMP
-                // check, record its verdict; the next cycle checks ifex_pc.
-                if (ex_ifetch_hi_phase) begin
+                // Hold IF/EX on stall. If the stall is a fetch PMP check,
+                // record its verdict; the next cycle checks the next thing.
+                if (ex_ifetch_lo_phase) begin
+                    ifetch_lo_done   <= 1'b1;
+                    ifetch_lo_denied <= !pmp_allow;
+                end else if (ex_ifetch_hi_phase) begin
                     ifetch_hi_done   <= 1'b1;
-                    ifetch_hi_denied <= !pmp_ifetch_allow;
+                    ifetch_hi_denied <= !pmp_allow;
                 end
             end else if (flush || ex_cti) begin
                 // Insert bubble (a branch or jump fetched nothing behind it)
@@ -1101,6 +1106,8 @@ module fyracore #(
                 ifex_raw_instr <= 32'h0000_0013;
                 ifex_compressed<= 1'b0;
                 ifex_c_illegal <= 1'b0;
+                ifetch_lo_done <= 1'b0;
+                ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
             end else begin
@@ -1109,6 +1116,8 @@ module fyracore #(
                 ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
                 ifex_compressed<= if_compressed;
                 ifex_valid     <= 1'b1;
+                ifetch_lo_done <= 1'b0;
+                ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
                 // misa.C is applied in EX (ex_illegal_insn), not here.
