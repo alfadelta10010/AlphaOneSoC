@@ -1,10 +1,14 @@
-// Multi-cycle multiply/divide unit -- RV32M extension
+// Multi-cycle multiply/divide unit -- RV32M extension, and the core's shifter
 //
 // All eight M-extension operations run through one FSM around a single
 // 34-bit adder/subtractor and one 33+32-bit shift register pair. A separate
 // multiply and divide datapath, each with its own adder and operand/result
 // negators, cost about twice the area for operations that in the SoC finish
 // behind the next instruction fetch anyway.
+//
+// The RV32I shifts (SLL/SRL/SRA and their immediate forms) use the same
+// shift register, one bit per cycle, instead of a 32-bit barrel shifter in
+// the ALU: 2 + shamt cycles, again behind the next fetch in the SoC.
 //
 // Multiply (MUL/MULH/MULHSU/MULHU): signed-aware shift-and-add. The
 // multiplicand is sign-extended into the 33-bit accumulator when it is
@@ -24,6 +28,8 @@
 //   3'b001  MULH     3'b101  DIVU
 //   3'b010  MULHSU   3'b110  REM
 //   3'b011  MULHU    3'b111  REMU
+// With shift = 1, op[2] picks the direction (0 SLL, 1 SRL/SRA, as in aluOp)
+// and sra the arithmetic right shift; b[4:0] is the shift amount.
 //
 // Handshake:
 //   Caller asserts start for one cycle.  busy is asserted the following cycle
@@ -35,6 +41,8 @@ module muldiv (
     input  wire        rst,
     input  wire        start,       // one-cycle pulse to begin
     input  wire [2:0]  op,          // operation select (see above)
+    input  wire        shift,       // a shift, not an M operation
+    input  wire        sra,         // ... arithmetic right
     input  wire [31:0] a,           // operand A (dividend / multiplicand)
     input  wire [31:0] b,           // operand B (divisor / multiplier)
     output wire [31:0] result,      // computed result (valid from done)
@@ -46,7 +54,8 @@ module muldiv (
                S_NEGA = 3'd1,       // divide: |dividend|
                S_NEGB = 3'd2,       // divide: |divisor|
                S_LOOP = 3'd3,       // 32 iterations
-               S_FIX  = 3'd4;       // select / negate the result
+               S_FIX  = 3'd4,       // select / negate the result
+               S_SH   = 3'd5;       // shift one bit per cycle
 
     reg [2:0]  st;
     reg [4:0]  cnt;
@@ -58,6 +67,8 @@ module muldiv (
     reg        sb;      // multiplier is signed
     reg        hi;      // return the high word (MULH*) / the remainder (REM*)
     reg        na, nb;  // divide: dividend / divisor was negative
+    reg        shr;     // shift: right (else left)
+    reg        fill;    // shift: the bit shifted in at the top (SRA)
 
     assign result = lo;
 
@@ -100,8 +111,15 @@ module muldiv (
                 busy  <= 1'b1;
                 cnt   <= 5'd0;
                 acc   <= 33'b0;
-                isdiv <= op[2];
-                if (op[2]) begin
+                isdiv <= op[2] & ~shift;
+                if (shift) begin
+                    // cnt counts up from 31 - shamt; the shift is done at 31
+                    lo   <= a;
+                    cnt  <= ~b[4:0];
+                    shr  <= op[2];
+                    fill <= sra & a[31];
+                    st   <= S_SH;
+                end else if (op[2]) begin
                     // DIV/REM are signed, DIVU/REMU (op[0] = 1) are not
                     lo <= a; m <= b;
                     na <= ~op[0] & a[31];
@@ -139,6 +157,16 @@ module muldiv (
                 busy <= 1'b0;
                 done <= 1'b1;
                 st   <= S_IDLE;
+            end
+            S_SH: begin
+                if (cnt == 5'd31) begin
+                    busy <= 1'b0;
+                    done <= 1'b1;
+                    st   <= S_IDLE;
+                end else begin
+                    lo  <= shr ? {fill, lo[31:1]} : {lo[30:0], 1'b0};
+                    cnt <= cnt + 5'd1;
+                end
             end
             default: st <= S_IDLE;
         endcase

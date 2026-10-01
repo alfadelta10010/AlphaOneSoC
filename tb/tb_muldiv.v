@@ -11,6 +11,7 @@ module tb_muldiv;
     // ── DUT signals ──────────────────────────────────────────────────────────
     reg         clk, rst, start;
     reg  [2:0]  op;
+    reg         shift, sra;     // a shift (SRA when sra) instead of an M op
     reg  [31:0] a, b;
     wire [31:0] result;
     wire        busy, done;
@@ -33,6 +34,8 @@ module tb_muldiv;
         .rst   (rst),
         .start (start),
         .op    (op),
+        .shift (shift),
+        .sra   (sra),
         .a     (a),
         .b     (b),
         .result(result),
@@ -62,6 +65,27 @@ module tb_muldiv;
         end
     endtask
 
+    // ── Task: issue one shift (dir: 0 SLL, 1 SRL/SRA) and wait for done ──────
+    task run_sh;
+        input        t_right, t_sra;
+        input [31:0] t_a, t_b;
+        begin
+            @(negedge clk);
+            op    = {t_right, 2'b01};   // aluOp[2:0] of SLL / SRL / SRA
+            shift = 1'b1;
+            sra   = t_sra;
+            a     = t_a;
+            b     = t_b;
+            start = 1'b1;
+            @(negedge clk);
+            start = 1'b0;
+            @(posedge done);
+            @(negedge clk);
+            shift = 1'b0;
+            sra   = 1'b0;
+        end
+    endtask
+
     // ── Task: check result ────────────────────────────────────────────────────
     task check;
         input [31:0]  got;
@@ -81,7 +105,7 @@ module tb_muldiv;
     initial begin
         pass_count = 0;
         fail_count = 0;
-        start = 0; op = 0; a = 0; b = 0;
+        start = 0; op = 0; a = 0; b = 0; shift = 0; sra = 0;
 
         // Reset
         rst = 1;
@@ -257,6 +281,30 @@ module tb_muldiv;
 
         run_op(REMU, 32'h80000000, 32'h7FFFFFFF);   // 2^31 % (2^31-1) = 1
         check(result, 32'd1, "REMU  0x80000000 % 0x7FFFFFFF");
+
+        // ──────────────────────────────────────────────────────────────────────
+        $display("=== SLL / SRL / SRA (one bit per cycle; shamt = b[4:0]) ===");
+        // ──────────────────────────────────────────────────────────────────────
+        run_sh(0, 0, 32'h1, 32'd0);         check(result, 32'h1, "SLL by 0");
+        run_sh(0, 0, 32'h1, 32'd1);         check(result, 32'h2, "SLL by 1");
+        run_sh(0, 0, 32'h1, 32'd31);        check(result, 32'h80000000, "SLL by 31");
+        run_sh(0, 0, 32'hFFFFFFFF, 32'd4);  check(result, 32'hFFFFFFF0, "SLL fill");
+        run_sh(0, 0, 32'hABCDEF01, 32'h20); check(result, 32'hABCDEF01, "SLL shamt masked to 5 bits");
+        run_sh(0, 0, 32'h12345678, 32'h10); check(result, 32'h56780000, "SLL by 16");
+        run_sh(1, 0, 32'h80000000, 32'd1);  check(result, 32'h40000000, "SRL sign>>1");
+        run_sh(1, 0, 32'hFFFFFFFF, 32'd4);  check(result, 32'h0FFFFFFF, "SRL fill 0");
+        run_sh(1, 0, 32'h80000000, 32'd31); check(result, 32'h1, "SRL >>31");
+        run_sh(1, 0, 32'hDEADBEEF, 32'd0);  check(result, 32'hDEADBEEF, "SRL >>0");
+        run_sh(1, 0, 32'h12345678, 32'd8);  check(result, 32'h00123456, "SRL >>8");
+        run_sh(1, 1, 32'h80000000, 32'd1);  check(result, 32'hC0000000, "SRA neg>>1");
+        run_sh(1, 1, 32'h80000000, 32'd31); check(result, 32'hFFFFFFFF, "SRA neg>>31");
+        run_sh(1, 1, 32'h7FFFFFFF, 32'd1);  check(result, 32'h3FFFFFFF, "SRA pos>>1");
+        run_sh(1, 1, 32'h40000000, 32'd0);  check(result, 32'h40000000, "SRA >>0");
+        run_sh(1, 1, 32'hFFFFFF00, 32'd8);  check(result, 32'hFFFFFFFF, "SRA neg>>8");
+        run_sh(1, 1, 32'h00FF0000, 32'd16); check(result, 32'h000000FF, "SRA pos>>16");
+        run_sh(1, 1, 32'hDEADBEEF, 32'hFFFFFFE3); check(result, 32'hFBD5B7DD, "SRA shamt masked (3)");
+        // an M operation straight after a shift still works
+        run_op(MUL, 32'd3, 32'd7);          check(result, 32'd21, "MUL 3 * 7 after shifts");
 
         // ── Summary ──────────────────────────────────────────────────────────
         $display("");

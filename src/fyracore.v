@@ -373,13 +373,21 @@ module fyracore #(
     wire        muldiv_start;   // driven by assign in Hazard Detection
     wire        muldiv_stall;   // driven by assign in Hazard Detection
 
+    // The shifts (aluOp 00001 SLL, 00101 SRL, 01101 SRA) run through muldiv's
+    // shift register as well, one bit per cycle: the ALU has no shifter.
+    // Everything below that says "M instruction" covers them too.
+    wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
+    wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
+
     muldiv muldiv_inst(
         .clk   (clk),
         .rst   (rst),
         .start (muldiv_start),
         .op    (ctrl_aluOp[2:0]),    // op encoded in lower 3 bits of aluOp
-        .a     (alu_d1),             // rs1 (aluSrc1=0 for all M-ext R-type)
-        .b     (alu_d2),             // rs2 (aluSrc2=1 for all M-ext R-type)
+        .shift (ex_is_shift),
+        .sra   (ctrl_aluOp[3]),
+        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
+        .b     (alu_d2),             // rs2, or the immediate shift amount
         .result(muldiv_result),
         .busy  (muldiv_busy),
         .done  (muldiv_done)
@@ -645,7 +653,7 @@ module fyracore #(
     // flush, which contains ex_trap -- so without this muldiv_stall would
     // wait for a result that never comes and the trap would never commit.
     // ex_trap depends on neither stall nor flush, so this closes no loop.
-    wire muldiv_want = ifex_valid && ctrl_isMulDiv && !ex_trap;
+    wire muldiv_want = ifex_valid && ex_is_iter && !ex_trap;
 
     // Sticky completion. muldiv_done is a one-cycle pulse; holding it here
     // means the pipeline can take the result on whatever later cycle it is
@@ -1185,9 +1193,9 @@ module fyracore #(
                 exwb_trap   <= 1'b0;
                 exwb_trap_val <= 32'b0;
             end else begin
-                // The M-ext result, the link address (pc is ifex_pc + 2/4),
-                // a CSR's old value, or the ALU result.
-                exwb_alu_result <= ctrl_isMulDiv          ? muldiv_result :
+                // The M-ext or shift result, the link address (pc is
+                // ifex_pc + 2/4), a CSR's old value, or the ALU result.
+                exwb_alu_result <= ex_is_iter             ? muldiv_result :
                                    (ctrl_wbSel == 2'b10)  ? pc            :
                                    (ctrl_wbSel == 2'b11)  ? csr_rdata_eff :
                                                             ex_alu_result;

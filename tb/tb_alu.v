@@ -51,14 +51,7 @@ module tb_alu;
         d1 = 32'h0; d2 = 32'h80000000; check(32'h80000000, "SUB 0-min");
         d1 = 32'hFFFFFFFF; d2 = 32'hFFFFFFFF; check(32'h0, "SUB self");
 
-        // ---- SLL (00001) ----
-        control = 5'b00001;
-        d1 = 32'h1; d2 = 32'd0; check(32'h1, "SLL by 0");
-        d1 = 32'h1; d2 = 32'd1; check(32'h2, "SLL by 1");
-        d1 = 32'h1; d2 = 32'd31; check(32'h80000000, "SLL by 31");
-        d1 = 32'hFFFFFFFF; d2 = 32'd4; check(32'hFFFFFFF0, "SLL fill");
-        d1 = 32'hABCDEF01; d2 = 32'h00000020; check(32'hABCDEF01, "SLL shamt masked to 5 bits");
-        d1 = 32'h12345678; d2 = 32'h00000010; check(32'h56780000, "SLL by 16");
+        // SLL, SRL and SRA are done serially in muldiv.v (tb_muldiv.v).
 
         // ---- SLT (00010) ----
         control = 5'b00010;
@@ -90,23 +83,6 @@ module tb_alu;
         d1 = 32'h0; d2 = 32'h0; check(32'h0, "XOR zero");
         d1 = 32'hFFFFFFFF; d2 = 32'h0; check(32'hFFFFFFFF, "XOR with 0");
         d1 = 32'hAAAAAAAA; d2 = 32'h55555555; check(32'hFFFFFFFF, "XOR complement");
-
-        // ---- SRL (00101) ----
-        control = 5'b00101;
-        d1 = 32'h80000000; d2 = 32'd1; check(32'h40000000, "SRL sign>>1");
-        d1 = 32'hFFFFFFFF; d2 = 32'd4; check(32'h0FFFFFFF, "SRL fill 0");
-        d1 = 32'h80000000; d2 = 32'd31; check(32'h1, "SRL >>31");
-        d1 = 32'hDEADBEEF; d2 = 32'd0; check(32'hDEADBEEF, "SRL >>0");
-        d1 = 32'h12345678; d2 = 32'd8; check(32'h00123456, "SRL >>8");
-
-        // ---- SRA (01101) ----
-        control = 5'b01101;
-        d1 = 32'h80000000; d2 = 32'd1; check(32'hC0000000, "SRA neg>>1");
-        d1 = 32'h80000000; d2 = 32'd31; check(32'hFFFFFFFF, "SRA neg>>31");
-        d1 = 32'h7FFFFFFF; d2 = 32'd1; check(32'h3FFFFFFF, "SRA pos>>1");
-        d1 = 32'h40000000; d2 = 32'd0; check(32'h40000000, "SRA >>0");
-        d1 = 32'hFFFFFF00; d2 = 32'd8; check(32'hFFFFFFFF, "SRA neg>>8");
-        d1 = 32'h00FF0000; d2 = 32'd16; check(32'h000000FF, "SRA pos>>16");
 
         // ---- OR (00110) ----
         control = 5'b00110;
