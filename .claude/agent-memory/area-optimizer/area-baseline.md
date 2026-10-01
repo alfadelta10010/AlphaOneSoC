@@ -1,9 +1,16 @@
 ---
 name: area-baseline
-description: Measured sky130 synth area of AlphaOneSoC at 4b4ed8b (2026-09-29) and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
+description: Measured sky130 synth area of AlphaOneSoC at 10a37c3 (main, 2026-09-30) and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
 metadata:
   type: project
 ---
+
+**10a37c3 (main after PR #5, 2026-09-30): SoC flat 13.60 t (6 seeds; seeds 1-4 13.61), 2,736 ff**
+(1,443 dfxtp + 1,293 edfxtp). Hier per block unchanged from 4b4ed8b below (uart 0.29/77,
+qspi 0.25/54). Pair deltas by seed (same synshuf seed on both sides): seed-to-seed spread of a
+paired delta is ~0.05-0.1 t, much tighter than unpaired means. Workspace + scripts for this
+round: `localFiles/area-opt-2026-09-30/` (synmean.sh, summ.sh, psuite.sh = parallel directed
+suites, bench.sh = SoC CPI, synsta.sh = OpenSTA). See [[area-optimizations-measured]].
 
 Tool: local yosys 0.66, `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, `read_liberty -lib`,
 `synth -flatten`, dfflibmap + abc `-dont_use *lpflow* *_0 *probe*`, opt_clean, stat -liberty.

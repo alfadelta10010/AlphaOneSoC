@@ -25,6 +25,12 @@ locally: core suite 106/106 and `run.sh soc` 66/66 for mdfix alone and for mdfix
 - The PR's "57.1 clk/instr (tests >= 40 instr)" does not reproduce at 4b4ed8b: same definition
   gives 63.9 mean-of-CPI over 17 tests (wfi_slow 136 inflates it), 59.2 aggregate.
 
+10a37c3 + series (2026-09-30, `localFiles/area-opt-2026-09-30/res/bench_*`): base 56.10,
+perf-only 48.30, final area stack 48.42 clk/instr. Shared muldiv (34/36 clk) and serial shifts
+(2+shamt, 33 max) stay hidden behind the 42-clk fetch with mdfix; 1-read-port adds +1 clk per
+branch with rs2 != x0 (43 -> 44). A 16-bit compressed-pair fetch buffer would skip 16.9% of
+fetches on the C bench (~-15% clocks, ~+0.05 t est., not built).
+
 **Why:** memory-bound core; a fetch is 42 clk, so wasted fetches dominate CPI.
 **How to apply:** quote these instead of the old "t_mul 84 vs 73" (stale framing). The
 "+0.1 t mem_ctrl fetch buffer" is not needed for the M-op case.
