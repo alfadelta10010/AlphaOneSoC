@@ -582,8 +582,17 @@ module fyracore #(
     // wfi_active stalls the pipeline until an interrupt becomes pending.
     // stall_nofetch is the same without the pending fetch: an M instruction
     // starts on it (see muldiv_start).
+    //
+    // csr_wb_hazard: a CSR write commits in WB, and the instruction behind it
+    // waits in EX for that one cycle, so everything EX derives from CSR state
+    // -- a CSR read, the trap and MRET targets, interrupt gating, MPRV/MPP for
+    // the data PMP check, TW, misa.C -- sees the committed value. The
+    // alternative, forwarding csr.v's post-write value into each of those, is
+    // a 32-bit mux per consumer and a copy of every WARL rule on the read
+    // path. In the SoC the cycle is hidden behind the next fetch.
+    wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
     wire stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active ||
-                         ex_ifetch_hi_phase;
+                         ex_ifetch_hi_phase || csr_wb_hazard;
     wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
@@ -796,7 +805,7 @@ module fyracore #(
     // CSR unit
     wire        csr_trap_signal = exwb_valid && exwb_trap;
     wire [31:0] csr_mtvec, csr_mepc;
-    wire [31:0] csr_wval;           // post-write value of the CSR WB is writing
+    wire [31:0] csr_wval;           // post-write value of the CSR WB is writing (trace only)
     wire        csr_mstatus_mie;
     wire [31:0] csr_mie;            // full mie register (for per-bit IRQ gating)
     // csr_misa_c forward-declared at top of EX stage; driven by CSR unit port
@@ -844,8 +853,9 @@ module fyracore #(
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    // csr_mstatus_mie is the post-write value, so there is no window where an
-    // interrupt slips in after csrci mstatus,8 but before the write commits.
+    // No interrupt is injected while a CSR write is in WB (csr_wb_hazard is
+    // part of stall_other), so there is no window where one slips in after
+    // csrci mstatus,8 but before the write commits.
     wire irq_global_en     = !priv_mode || csr_mstatus_mie;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
     wire irq_sw_pend       = sw_irq       & csr_mie[3]  & irq_global_en;
@@ -921,8 +931,8 @@ module fyracore #(
                                      3'b001;                          // Load/LR: R
     // MPRV=1 makes loads and stores check as though the hart were in MPP.
     // Instruction fetch is excluded by the spec, so pmp_ifetch keeps priv_mode.
-    // csr.v exports both as they stand after a pending WB write, so the load
-    // or store right after `csrw mstatus` is checked against the new values.
+    // The load or store right after `csrw mstatus` waits in EX for the write
+    // to commit (csr_wb_hazard), so it is checked against the new values.
     wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;
 
     pmp pmp_data(
@@ -937,33 +947,18 @@ module fyracore #(
         .pmp_allow  (pmp_data_allow)
     );
 
-    // CSR forwarding: when WB writes the CSR that EX reads, EX gets csr.v's
-    // post-write value, which already applies every WARL rule (MPP
-    // legalisation, locked PMP entries, reserved bits, the mepc IALIGN mask,
-    // mip's live bits). The rules live only in csr.v; do not re-derive them
-    // here.
-    //
-    // The user-level counter aliases read the same registers as their M-level
-    // names -- cycle/instret (0xC00/0xC02) and their high halves (0xC80/0xC82)
-    // are mcycle/minstret (0xB00/0xB02, 0xB80/0xB82) -- so a read of the alias
-    // right after a write to the M-level name must be forwarded too.
-    wire csr_wb_writing = exwb_valid && exwb_csrWR && !exwb_trap;
-    wire csr_fwd_alias  = (ex_csr_addr[11:8] == 4'hC) && (exwb_csr_addr[11:8] == 4'hB) &&
-                          (ex_csr_addr[7:0] == exwb_csr_addr[7:0]) &&
-                          (ex_csr_addr[6:2] == 5'b0) && !ex_csr_addr[0];   // x00, x02, x80, x82
-    wire csr_fwd = csr_wb_writing && ((exwb_csr_addr == ex_csr_addr) || csr_fwd_alias);
-    assign csr_rdata_eff = csr_fwd ? csr_wval : csr_rdata;
+    // No CSR forwarding: an instruction never reads CSR state in EX while a
+    // CSR write is in WB (csr_wb_hazard stalls it for that cycle).
+    assign csr_rdata_eff = csr_rdata;
 
     // ================================================================
     //  PC Update Logic
     // ================================================================
-    // Forward mtvec/mepc from a WB CSR write to avoid stale redirect targets.
-    // Without this, sequences like "csrw mepc, t5; mret" read the old mepc
-    // because the WB write hasn't committed when EX computes next_pc.
-    wire mtvec_fwd = csr_wb_writing && (exwb_csr_addr == 12'h305);
-    wire mepc_fwd  = csr_wb_writing && (exwb_csr_addr == 12'h341);
-    wire [31:0] trap_target = mtvec_fwd ? csr_wval : csr_mtvec;
-    wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
+    // "csrw mepc, t5; mret" and "csrw mtvec, t0; ecall" read the written
+    // value: csr_wb_hazard holds the MRET or the trap in EX until the write
+    // has committed.
+    wire [31:0] trap_target = csr_mtvec;
+    wire [31:0] mret_target = csr_mepc;
 
     reg [31:0] next_pc;
     always @(*) begin

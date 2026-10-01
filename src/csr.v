@@ -57,7 +57,7 @@ module csr #(
     // alignment requirements). Set by fyracore from current WB-stage PC[1].
     input  wire        pc_next_misaligned,
     // The value the CSR at waddr reads back once this cycle's write has
-    // committed -- see `wval` below. fyracore forwards it to EX.
+    // committed -- see `wval` below. Only the testbench's trace uses it.
     output wire [31:0] wval_out
 );
     // ===== CSR Registers =====
@@ -130,14 +130,21 @@ module csr #(
     // riscv-tests rv32mi-instret_overflow checks it for minstret.
     //
     // *_next is both the register's next value and what the EX read port
-    // returns, so the increment is suppressed at its enable: while WB writes
-    // either half, an adjacent read of the *other* half sees it unchanged.
-    // (The written half itself reaches EX through fyracore's csr_fwd.)
-    // Suppressing it only on the register's input made that read return the
-    // discarded increment.
+    // returns, so the increment is suppressed at its enable.
+    //
+    // fyracore holds the instruction after a CSR write in EX for one cycle
+    // (csr_wb_hazard), so an rdcycle right after `csrw mcycle` reads a cycle
+    // later than the write, where the cycle count has moved on by one. The
+    // reference model counts instructions, not clocks, and reads the written
+    // value there. mcycle_wr_q skips the one increment in between, so that
+    // read returns what was written, as it did when EX was forwarded the
+    // write. (minstret needs nothing: the stall's bubble retires nothing.)
     wire        mcycle_we     = we && (waddr == 12'hB00 || waddr == 12'hB80);
     wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
-    wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we) ? mcycle + 64'd1 : mcycle;
+    reg         mcycle_wr_q;
+    always @(posedge clk) mcycle_wr_q <= !rst && mcycle_we;
+    wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we && !mcycle_wr_q) ?
+                                mcycle + 64'd1 : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
                                 minstret + 64'd1 : minstret;
 
@@ -161,23 +168,23 @@ module csr #(
         end
     end
 
-    // The mstatus fields fyracore consumes are exported as they stand after
-    // a WB CSR write commits, because their consumers sit in EX, one stage
-    // ahead of the write: the MRET privilege restore (MPP), interrupt gating
-    // (MIE), the data PMP check (MPRV, MPP) and the U-mode WFI check (TW).
+    // The mstatus fields fyracore consumes -- the MRET privilege restore
+    // (MPP), interrupt gating (MIE), the data PMP check (MPRV, MPP) and the
+    // U-mode WFI check (TW) -- sit in EX, one stage ahead of the write.
     // Zicsr requires a write's effects to be visible to the very next
-    // instruction, so e.g. `csrw mstatus, <MPP=M>; mret` returns to M-mode.
-    assign mstatus_mie  = mstatus_after_we[3];
-    assign mstatus_mpp  = mstatus_after_we[12:11];  // MPP field (11=M, 00=U)
-    assign mstatus_mprv = mstatus_after_we[17];
-    assign mstatus_tw   = mstatus_after_we[21];
+    // instruction (`csrw mstatus, <MPP=M>; mret` returns to M-mode), and
+    // fyracore provides that by holding the next instruction in EX until the
+    // write has committed (csr_wb_hazard), so the stored value is exported.
+    assign mstatus_mie  = mstatus[3];
+    assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
+    assign mstatus_mprv = mstatus[17];
+    assign mstatus_tw   = mstatus[21];
 
-    // mie likewise: interrupt gating sits in EX, and Priv §3.1.9 requires the
-    // interrupt conditions to be re-evaluated immediately after an explicit
-    // write to mie, so the instruction right after `csrs mie` is already
-    // interruptible and the one right after `csrc mie` is not.
-    assign mie_out = (we && waddr == 12'h304) ? (csr_new & 32'h0000_0888)
-                                                             : mie_reg;
+    // mie likewise: Priv §3.1.9 requires the interrupt conditions to be
+    // re-evaluated immediately after an explicit write to mie, so the
+    // instruction right after `csrs mie` is already interruptible and the
+    // one right after `csrc mie` is not; it reaches EX after the write.
+    assign mie_out = mie_reg;
 
     // misa as it will stand after a WB write: only C is writable, and a
     // clear is refused when it would leave the next PC misaligned.
@@ -186,11 +193,10 @@ module csr #(
     wire [31:0] misa_after_we = misa_we_ok ? {misa_reg[31:3], csr_new[2], misa_reg[1:0]}
                                            : misa_reg;
     // misa.C gates compressed decode, the branch-target alignment check and
-    // the mepc read mask, all of which fyracore applies in EX -- so, like the
-    // mstatus fields, it is exported as it stands after a pending write. The
-    // instruction right after `csrci misa, 4` is then already checked with
-    // C=0, as Zicsr requires.
-    assign misa_c = misa_after_we[2];
+    // the mepc read mask, all of which fyracore applies in EX -- after the
+    // write, like the mstatus fields, so the instruction right after
+    // `csrci misa, 4` is already checked with C=0, as Zicsr requires.
+    assign misa_c = misa_reg[2];
     // Priv spec §3.1.15: when IALIGN=32 (misa.C=0), mepc[1] masked on reads.
     wire [31:0] mepc_eff = {mepc[31:2], (misa_c ? mepc[1] : 1'b0), 1'b0};
     assign mepc_out      = mepc_eff;
@@ -233,8 +239,9 @@ module csr #(
     // ===== Post-write value ======================================================
     // What a read of waddr returns once this cycle's write has committed
     // (mepc and mip store a little more than they read back, noted there).
-    // fyracore forwards it to an EX-stage read of the same CSR and to the
-    // trap/MRET targets. Only meaningful while a write is in WB.
+    // fyracore exports it only to the testbench, which logs it as the
+    // written value; synthesis drops it. Only meaningful while a write is in
+    // WB.
     reg [31:0] wval;
     always @(*) begin
         case (waddr)
