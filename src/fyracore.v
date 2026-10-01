@@ -573,8 +573,11 @@ module fyracore #(
 
     // stall_other: all stall sources except muldiv (used to gate muldiv_start)
     // wfi_active stalls the pipeline until an interrupt becomes pending.
-    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active ||
-                       ex_ifetch_hi_phase;
+    // stall_nofetch is the same without the pending fetch: an M instruction
+    // starts on it (see muldiv_start).
+    wire stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active ||
+                         ex_ifetch_hi_phase;
+    wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
     //   muldiv_start: pulse for one cycle to launch a new M-ext operation.
@@ -602,8 +605,13 @@ module fyracore #(
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
     wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
 
+    // A pending fetch does not hold the operation back: it runs during the
+    // fetch wait and is captured (muldiv_capture) once the fetch is in.
+    // Waiting for the fetch as well started it on the cycle the fetch
+    // completed, and muldiv_stall then dropped that fetch and fetched the
+    // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_other && !flush;
+                          && !stall_nofetch && !flush;
     assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin
