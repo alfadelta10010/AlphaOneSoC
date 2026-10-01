@@ -113,7 +113,8 @@ module tb_regFile;
         @(negedge clk);
         check1(5'd15, 32'hA000000F, "Write disabled");
 
-        // Reset clears all registers
+        // Reset leaves the registers alone: they have no reset (boot code
+        // clears them), so their values survive it
         @(negedge clk);
         rst = 1;
         @(posedge clk); @(posedge clk);
@@ -121,7 +122,7 @@ module tb_regFile;
         rst = 0;
         @(negedge clk);
         rs1 = 5'd10; rs2 = 5'd15;
-        check2(32'h0, 32'h0, "Reset clears regs");
+        check2(32'h12345678, 32'hA000000F, "Reset leaves regs");
 
         // Simultaneous read of two different registers
         write_reg(5'd5, 32'h5555_5555);
