@@ -5,7 +5,14 @@ module tb_alu;
     wire [31:0] result;
     integer pass_count = 0, fail_count = 0;
 
-    alu uut(.d1(d1), .d2(d2), .result(result), .control(control));
+    // SUB and SLT(U) come from the core's shared comparator (branchCtrl.v),
+    // which fyracore feeds the same operands.
+    wire [31:0] sub_res;
+    wire        lts, ltu;
+    branchCtrl cmp(.funct3(3'b000), .r1(d1), .r2(d2), .branchValid(),
+                   .diff(sub_res), .lt_signed(lts), .lt_unsigned(ltu));
+    alu uut(.d1(d1), .d2(d2), .sub_res(sub_res), .lt_signed(lts), .lt_unsigned(ltu),
+            .result(result), .control(control));
 
     task check(input [31:0] expected, input [159:0] name);
         begin

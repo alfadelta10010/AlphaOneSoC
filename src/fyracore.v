@@ -327,13 +327,22 @@ module fyracore #(
     wire [31:0] alu_d1 = ctrl_aluSrc1 ? ifex_pc   : ex_rs1_val;
     wire [31:0] alu_d2 = ctrl_aluSrc2 ? ex_rs2_val : ex_imm;
 
+    // The comparator (branchCtrl, below) is shared: rs1 against rs2 for a
+    // branch, against the ALU's second operand otherwise, which for SUB and
+    // SLT(I)(U) is exactly the ALU's d1 - d2 (their d1 is always rs1).
+    wire [31:0] cmp_diff;
+    wire        cmp_lts, cmp_ltu;
+
     // ALU (RV32I only — M-extension handled by muldiv below)
     wire [31:0] ex_alu_result;
     alu alu_inst(
-        .d1     (alu_d1),
-        .d2     (alu_d2),
-        .result (ex_alu_result),
-        .control(ctrl_aluOp)
+        .d1         (alu_d1),
+        .d2         (alu_d2),
+        .sub_res    (cmp_diff),
+        .lt_signed  (cmp_lts),
+        .lt_unsigned(cmp_ltu),
+        .result     (ex_alu_result),
+        .control    (ctrl_aluOp)
     );
 
     // ── Multi-cycle multiply/divide unit (RV32M) ──────────────────────────────
@@ -362,8 +371,11 @@ module fyracore #(
     branchCtrl bcmp(
         .funct3     (ex_funct3),
         .r1         (ex_rs1_val),
-        .r2         (ex_rs2_val),
-        .branchValid(ex_branch_valid)
+        .r2         (ctrl_doBranch ? ex_rs2_val : alu_d2),
+        .branchValid(ex_branch_valid),
+        .diff       (cmp_diff),
+        .lt_signed  (cmp_lts),
+        .lt_unsigned(cmp_ltu)
     );
 
     wire ex_branch_taken = (ctrl_doBranch && ex_branch_valid) || ctrl_doJump;
