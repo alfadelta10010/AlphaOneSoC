@@ -166,7 +166,9 @@ module fyracore #(
     reg [31:0] ifex_instr;
     reg [31:0] ifex_raw_instr;  // Original fetched bytes (16-bit if compressed)
     reg        ifex_compressed;
-    reg [31:0] ifex_pc_next;
+    // There is no ifex_pc_next: while IF/EX holds an instruction, pc already
+    // is that instruction's pc + 2 or + 4 (pc advances on exactly the cycles
+    // IF/EX loads, and every other pc change flushes IF/EX).
     reg        ifex_valid;
     reg        ifex_c_illegal;  // Compressed decoder flagged a reserved encoding
     reg        ifetch_hi_done;  // upper half of the straddling instruction in EX checked
@@ -177,8 +179,9 @@ module fyracore #(
     //  assignments can reference them without iverilog forward-ref errors)
     // ================================================================
     reg [31:0] exwb_alu_result;
+    // rs2 for a store; the new value for a CSR write; an AMO's new value
+    // once its read is done
     reg [31:0] exwb_rs2_data;
-    reg [31:0] exwb_pc_next;
     reg [4:0]  exwb_rd;
     reg        exwb_regWR;
     reg        exwb_memRD;
@@ -190,8 +193,10 @@ module fyracore #(
     // CSR pipeline regs
     reg        exwb_csrWR;
     reg [11:0] exwb_csr_addr;
-    reg [31:0] exwb_csr_wdata;
-    reg [31:0] exwb_csr_rdata;
+    // The CSR write value travels in exwb_rs2_data (a CSR instruction has no
+    // rs2), and the value it read in exwb_alu_result, like the link address
+    // of a JAL/JALR. The name is kept for the testbench's trace.
+    wire [31:0] exwb_csr_wdata = exwb_rs2_data;
     // Atomics pipeline regs
     reg        exwb_isAmo;
     reg        exwb_isLR;
@@ -483,9 +488,9 @@ module fyracore #(
     // only ifex_pc executed an instruction whose upper half lay past the end
     // of memory (with junk upper bits), or in a region without X permission.
     wire        ex_straddle = !ifex_compressed && ifex_pc[1];
-    // ifex_pc + 2 with no adder: a 32-bit instruction's ifex_pc_next is
-    // ifex_pc + 4, and that word is where the upper half lives.
-    wire [31:0] ex_pc_hi = {ifex_pc_next[31:2], 2'b00};
+    // ifex_pc + 2 with no adder: for a 32-bit instruction pc is ifex_pc + 4,
+    // and that word is where the upper half lives.
+    wire [31:0] ex_pc_hi = {pc[31:2], 2'b00};
     wire ex_pma_fetch_hi_ok = in_exec(ex_pc_hi);
     wire ex_pma_in_rom = in_win(ex_alu_result, PMA_ROM_BASE, PMA_ROM_TOP);
     wire ex_pma_in_ram = in_win(ex_alu_result, PMA_RAM_BASE, PMA_RAM_TOP);
@@ -677,8 +682,10 @@ module fyracore #(
 
     // AMO state machine
     reg        amo_phase; // 0=read, 1=write
-    reg [31:0] amo_old_val;
-    reg [31:0] amo_new_val;
+    // Between its read and its write an AMO keeps the old value in
+    // exwb_trap_val, free because an AMO in WB never traps, and the new value
+    // in exwb_rs2_data, whose rs2 the new value was computed from.
+    wire [31:0] amo_old_val = exwb_trap_val;
 
     // LR/SC reservation. The reservation set is the naturally aligned word
     // holding the LR's address -- the smallest set the spec allows -- so only
@@ -732,7 +739,7 @@ module fyracore #(
     );
 
     assign dmem_addr  = mem_addr_aligned;
-    assign dmem_wdata = (exwb_isAmo && amo_phase) ? amo_new_val : store_data_shifted;
+    assign dmem_wdata = store_data_shifted;   // an AMO's new value is in exwb_rs2_data
     // An AMO, LR or SC is a word access, so access_be is 1111 for it.
     assign dmem_be    = access_be;
     assign dmem_we    = wb_mem_write;
@@ -786,10 +793,9 @@ module fyracore #(
     wire [31:0] wb_alu_or_sc = exwb_isSC ? {31'b0, !sc_success} : exwb_alu_result;
     wire [31:0] wb_load_or_amo = (exwb_isAmo && amo_phase) ? amo_old_val : load_data;
 
-    assign wb_data = (exwb_wbSel == 2'b00) ? wb_alu_or_sc :
-                     (exwb_wbSel == 2'b01) ? wb_load_or_amo :
-                     (exwb_wbSel == 2'b10) ? exwb_pc_next :
-                     exwb_csr_rdata; // 2'b11
+    // The link address (wbSel 10) and a CSR's old value (11) are already in
+    // exwb_alu_result.
+    assign wb_data = (exwb_wbSel == 2'b01) ? wb_load_or_amo : wb_alu_or_sc;
 
     // !wb_mem_stall: with EX/WB now held across a memory stall, writeback would
     // otherwise fire on every cycle of it, and a load would latch dmem_rdata
@@ -985,7 +991,7 @@ module fyracore #(
         else if (ex_branch_taken && ifex_valid && !stall)
             next_pc = ex_branch_target;
         else if ((ex_is_fencei || ex_pmp_csr_wr) && ifex_valid && !stall)
-            next_pc = ifex_pc_next; // Re-fetch after FENCE.I or a PMP CSR write
+            next_pc = pc;           // Re-fetch after FENCE.I or a PMP CSR write
         else if (stall || ex_cti)
             next_pc = pc;       // a not-taken branch: pc already is the fall-through
         else
@@ -1021,7 +1027,6 @@ module fyracore #(
             ifex_instr     <= 32'h0000_0013; // NOP
             ifex_raw_instr <= 32'h0000_0013;
             ifex_compressed<= 1'b0;
-            ifex_pc_next   <= 32'b0;
             ifex_valid     <= 1'b0;
             ifex_c_illegal <= 1'b0;
             ifetch_hi_done <= 1'b0;
@@ -1029,7 +1034,6 @@ module fyracore #(
             // EX/WB
             exwb_alu_result <= 32'b0;
             exwb_rs2_data   <= 32'b0;
-            exwb_pc_next    <= 32'b0;
             exwb_rd         <= 5'b0;
             exwb_regWR      <= 1'b0;
             exwb_memRD      <= 1'b0;
@@ -1040,8 +1044,6 @@ module fyracore #(
             exwb_valid      <= 1'b0;
             exwb_csrWR      <= 1'b0;
             exwb_csr_addr   <= 12'b0;
-            exwb_csr_wdata  <= 32'b0;
-            exwb_csr_rdata  <= 32'b0;
             exwb_isAmo      <= 1'b0;
             exwb_isLR       <= 1'b0;
             exwb_isSC       <= 1'b0;
@@ -1055,8 +1057,6 @@ module fyracore #(
             exwb_compressed <= 1'b0;
             // AMO
             amo_phase      <= 1'b0;
-            amo_old_val    <= 32'b0;
-            amo_new_val    <= 32'b0;
             wb_busy        <= 1'b0;
             // WFI
             wfi_active        <= 1'b0;
@@ -1108,7 +1108,6 @@ module fyracore #(
                 ifex_instr     <= if_instr;
                 ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
                 ifex_compressed<= if_compressed;
-                ifex_pc_next   <= if_pc_next;
                 ifex_valid     <= 1'b1;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
@@ -1121,8 +1120,8 @@ module fyracore #(
                 // AMO phase transition: read → write
                 if (exwb_isAmo && !amo_phase && dmem_ready) begin
                     amo_phase   <= 1'b1;
-                    amo_old_val <= load_data;
-                    amo_new_val <= amo_computed;
+                    exwb_trap_val <= load_data;     // amo_old_val
+                    exwb_rs2_data <= amo_computed;  // the write's data
                     wb_busy     <= 1'b0; // Release pipeline next cycle
                 end
             end else if (wb_mem_stall && !irq_inject) begin
@@ -1147,10 +1146,13 @@ module fyracore #(
                 exwb_trap   <= 1'b0;
                 exwb_trap_val <= 32'b0;
             end else begin
-                // For M-ext ops, use the muldiv result; for all others, use the ALU result.
-                exwb_alu_result <= ctrl_isMulDiv ? muldiv_result : ex_alu_result;
-                exwb_rs2_data   <= ex_rs2_val;
-                exwb_pc_next    <= ifex_pc_next;
+                // The M-ext result, the link address (pc is ifex_pc + 2/4),
+                // a CSR's old value, or the ALU result.
+                exwb_alu_result <= ctrl_isMulDiv          ? muldiv_result :
+                                   (ctrl_wbSel == 2'b10)  ? pc            :
+                                   (ctrl_wbSel == 2'b11)  ? csr_rdata_eff :
+                                                            ex_alu_result;
+                exwb_rs2_data   <= ex_csr_active ? ex_csr_wdata : ex_rs2_val;
                 exwb_rd         <= ex_rd;
                 exwb_regWR      <= ctrl_regWR;
                 exwb_memRD      <= ctrl_memRD;
@@ -1161,8 +1163,6 @@ module fyracore #(
                 exwb_valid      <= ifex_valid;
                 exwb_csrWR      <= ex_csr_writes; // No write for CSRRS/CSRRC when rs1=0
                 exwb_csr_addr   <= ex_csr_addr;
-                exwb_csr_wdata  <= ex_csr_wdata;
-                exwb_csr_rdata  <= csr_rdata_eff;
                 exwb_isAmo      <= ctrl_isAmo;
                 exwb_isLR       <= ctrl_isLR;
                 exwb_isSC       <= ctrl_isSC;
@@ -1224,7 +1224,7 @@ module fyracore #(
                     // mepc: if interrupted instruction is WFI, advance past it so MRET
                     // doesn't re-execute WFI. For all other instructions, point to the
                     // instruction itself so it re-executes after MRET.
-                    exwb_trap_pc    <= ex_is_wfi ? ifex_pc_next : ifex_pc;
+                    exwb_trap_pc    <= ex_is_wfi ? pc : ifex_pc;
                     exwb_valid      <= 1'b1;
                     exwb_regWR      <= 1'b0;  // suppress writeback
                     exwb_memRD      <= 1'b0;
