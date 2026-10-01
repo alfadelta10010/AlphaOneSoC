@@ -62,8 +62,9 @@ module fyracore #(
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
     //
     // Instruction memory interface (read-only). imem_req is high whenever the
-    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*); outside them
-    // no fetch is requested at all (see imem_req below). When the pipeline is stalled
+    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*) and no branch
+    // or jump is in EX; outside them no fetch is requested at all (see
+    // imem_req below). When the pipeline is stalled
     // with a fetch already completed, the same address is requested again.
     //
     // For the memory controller:
@@ -126,6 +127,7 @@ module fyracore #(
     wire        if_c_illegal;
     wire [31:0] if_instr      = if_compressed ? if_instr_decompressed : if_fetched;
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
+    wire        ex_cti;          // branch or jump in EX (assigned after the controller)
 
     // Is an address inside [base, top]? A window with base > top is empty.
     function automatic in_win(input [31:0] a, input [31:0] base, input [31:0] top);
@@ -140,7 +142,11 @@ module fyracore #(
     // a fetch must not read an IO device (a read can have side effects, e.g.
     // popping a UART FIFO), and an address with no device behind it must not
     // wait forever for a ready that nobody will give.
-    assign imem_req  = in_exec(pc);
+    // A branch or jump in EX decides the next pc, so the fall-through is not
+    // fetched speculatively behind it: on the SoC's one QSPI bus that fetch
+    // would have to complete (~42 clocks) before a taken branch could
+    // redirect. A not-taken branch then costs one bubble instead.
+    assign imem_req  = in_exec(pc) && !ex_cti;
 
     compressed_decoder cdec(
         .instr_in (if_fetched[15:0]),
@@ -355,6 +361,7 @@ module fyracore #(
     );
 
     wire ex_branch_taken = (ctrl_doBranch && ex_branch_valid) || ctrl_doJump;
+    assign ex_cti = ifex_valid && (ctrl_doBranch || ctrl_doJump);
     // JALR clears bit 0 of target
     wire [31:0] ex_branch_target = (ex_opcode == 7'b1100111) ?
                                    {ex_alu_result[31:1], 1'b0} : ex_alu_result;
@@ -984,8 +991,8 @@ module fyracore #(
             next_pc = ex_branch_target;
         else if ((ex_is_fencei || ex_pmp_csr_wr) && ifex_valid && !stall)
             next_pc = ifex_pc_next; // Re-fetch after FENCE.I or a PMP CSR write
-        else if (stall)
-            next_pc = pc;
+        else if (stall || ex_cti)
+            next_pc = pc;       // a not-taken branch: pc already is the fall-through
         else
             next_pc = if_pc_next;
     end
@@ -1092,8 +1099,8 @@ module fyracore #(
                     ifetch_hi_done   <= 1'b1;
                     ifetch_hi_denied <= !pmp_ifetch_allow;
                 end
-            end else if (flush) begin
-                // Insert bubble
+            end else if (flush || ex_cti) begin
+                // Insert bubble (a branch or jump fetched nothing behind it)
                 ifex_valid     <= 1'b0;
                 ifex_instr     <= 32'h0000_0013; // NOP
                 ifex_raw_instr <= 32'h0000_0013;
