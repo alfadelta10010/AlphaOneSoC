@@ -1,8 +1,9 @@
 // FyraCore — 3-stage pipelined RV32IMCA+Zicsr+Zifencei processor
 //
 // Pipeline stages:
-//   IF  — Instruction Fetch + C-extension decompression
-//   EX  — Decode, Register Read, ALU Execute, Branch Resolve
+//   IF  — Instruction Fetch
+//   EX  — C-extension decompression, Decode, Register Read, ALU Execute,
+//         Branch Resolve
 //   WB  — Memory Access, Writeback, CSR commit
 //
 // Hazard handling:
@@ -123,9 +124,6 @@ module fyracore #(
     // simulation, rather than X.
     wire [31:0] if_fetched    = imem_rdata & {32{imem_req}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
-    wire [31:0] if_instr_decompressed;
-    wire        if_c_illegal;
-    wire [31:0] if_instr      = if_compressed ? if_instr_decompressed : if_fetched;
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
     wire        ex_cti;          // branch or jump in EX (assigned after the controller)
 
@@ -148,12 +146,6 @@ module fyracore #(
     // redirect. A not-taken branch then costs one bubble instead.
     assign imem_req  = in_exec(pc) && !ex_cti;
 
-    compressed_decoder cdec(
-        .instr_in (if_fetched[15:0]),
-        .instr_out(if_instr_decompressed),
-        .illegal  (if_c_illegal)
-    );
-
     // ================================================================
     //  IF/EX Pipeline Register
     // Privilege mode: 1=Machine, 0=User. Declared early so EX-stage wires can reference it.
@@ -163,14 +155,25 @@ module fyracore #(
 
     // ================================================================
     reg [31:0] ifex_pc;
-    reg [31:0] ifex_instr;
     reg [31:0] ifex_raw_instr;  // Original fetched bytes (16-bit if compressed)
     reg        ifex_compressed;
     // There is no ifex_pc_next: while IF/EX holds an instruction, pc already
     // is that instruction's pc + 2 or + 4 (pc advances on exactly the cycles
     // IF/EX loads, and every other pc change flushes IF/EX).
     reg        ifex_valid;
-    reg        ifex_c_illegal;  // Compressed decoder flagged a reserved encoding
+
+    // A compressed instruction is expanded in EX, from the bytes IF/EX
+    // already holds for the trace and for mtval. Expanding it in IF took a
+    // second 32-bit copy of the instruction in IF/EX.
+    wire [31:0] ex_instr_decompressed;
+    wire        ex_c_illegal_raw;
+    compressed_decoder cdec(
+        .instr_in (ifex_raw_instr[15:0]),
+        .instr_out(ex_instr_decompressed),
+        .illegal  (ex_c_illegal_raw)
+    );
+    wire [31:0] ifex_instr     = ifex_compressed ? ex_instr_decompressed : ifex_raw_instr;
+    wire        ifex_c_illegal = ifex_compressed && ex_c_illegal_raw;  // reserved encoding
     reg        ifetch_lo_done;  // PMP has checked the fetch at ifex_pc
     reg        ifetch_lo_denied;// ...and refused it
     reg        ifetch_hi_done;  // upper half of the straddling instruction in EX checked
@@ -1036,11 +1039,9 @@ module fyracore #(
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
-            ifex_instr     <= 32'h0000_0013; // NOP
-            ifex_raw_instr <= 32'h0000_0013;
+            ifex_raw_instr <= 32'h0000_0013; // NOP
             ifex_compressed<= 1'b0;
             ifex_valid     <= 1'b0;
-            ifex_c_illegal <= 1'b0;
             ifetch_lo_done <= 1'b0;
             ifetch_lo_denied <= 1'b0;
             ifetch_hi_done <= 1'b0;
@@ -1114,17 +1115,14 @@ module fyracore #(
             end else if (flush || ex_cti) begin
                 // Insert bubble (a branch or jump fetched nothing behind it)
                 ifex_valid     <= 1'b0;
-                ifex_instr     <= 32'h0000_0013; // NOP
-                ifex_raw_instr <= 32'h0000_0013;
+                ifex_raw_instr <= 32'h0000_0013; // NOP
                 ifex_compressed<= 1'b0;
-                ifex_c_illegal <= 1'b0;
                 ifetch_lo_done <= 1'b0;
                 ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
             end else begin
                 ifex_pc        <= pc;
-                ifex_instr     <= if_instr;
                 ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
                 ifex_compressed<= if_compressed;
                 ifex_valid     <= 1'b1;
@@ -1132,8 +1130,7 @@ module fyracore #(
                 ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
-                // misa.C is applied in EX (ex_illegal_insn), not here.
-                ifex_c_illegal <= if_compressed && if_c_illegal;
+                // misa.C is applied in EX (ex_illegal_insn).
             end
 
             // ---- EX/WB Pipeline Register ----
