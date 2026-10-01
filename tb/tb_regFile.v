@@ -1,15 +1,17 @@
 `timescale 1ns / 1ps
 module tb_regFile;
     reg         clk, rst, wrEn;
-    reg  [4:0]  rs1, rs2, rd;
+    reg  [4:0]  rs1, rs2, rd;   // the two registers check2 reads
+    reg  [4:0]  rs;             // the one read port
     reg  [31:0] dIn;
-    wire [31:0] r1, r2;
+    wire [31:0] r;
+    reg  [31:0] r1, r2;
     integer pass_count = 0, fail_count = 0, i;
 
     regFile #(32) uut(
         .clk(clk), .rst(rst), .wrEn(wrEn),
-        .rs1(rs1), .rs2(rs2), .rd(rd),
-        .dIn(dIn), .r1(r1), .r2(r2)
+        .rs(rs), .rd(rd),
+        .dIn(dIn), .r(r)
     );
 
     initial clk = 0;
@@ -18,7 +20,9 @@ module tb_regFile;
     task check1(input [4:0] reg_num, input [31:0] expected, input [159:0] name);
         begin
             rs1 = reg_num;
+            rs = reg_num;
             #1;
+            r1 = r;
             if (r1 === expected) begin
                 pass_count = pass_count + 1;
             end else begin
@@ -29,9 +33,15 @@ module tb_regFile;
         end
     endtask
 
+    // Reads rs1, then rs2, through the one port.
     task check2(input [31:0] exp_r1, input [31:0] exp_r2, input [159:0] name);
         begin
+            rs = rs1;
             #1;
+            r1 = r;
+            rs = rs2;
+            #1;
+            r2 = r;
             if (r1 === exp_r1 && r2 === exp_r2) begin
                 pass_count = pass_count + 1;
             end else begin
@@ -59,7 +69,7 @@ module tb_regFile;
         $display("=== Register File Testbench ===");
 
         // Reset
-        rst = 1; wrEn = 0; rd = 0; dIn = 0; rs1 = 0; rs2 = 0;
+        rst = 1; wrEn = 0; rd = 0; dIn = 0; rs1 = 0; rs2 = 0; rs = 0;
         @(posedge clk); @(posedge clk);
         #1;
         rst = 0;
@@ -129,7 +139,7 @@ module tb_regFile;
         write_reg(5'd6, 32'h6666_6666);
         @(negedge clk);
         rs1 = 5'd5; rs2 = 5'd6;
-        check2(32'h55555555, 32'h66666666, "Dual read diff regs");
+        check2(32'h55555555, 32'h66666666, "Two reads, diff regs");
 
         // Edge: max register x31
         write_reg(5'd31, 32'h7FFF_FFFF);
@@ -144,12 +154,12 @@ module tb_regFile;
         @(negedge clk);
         check1(5'd20, 32'h33333333, "Last write wins");
 
-        // Read rs1 and rs2 as different registers simultaneously
+        // Read two different registers one after the other
         write_reg(5'd1, 32'hAAAA_BBBB);
         write_reg(5'd2, 32'hCCCC_DDDD);
         @(negedge clk);
         rs1 = 5'd1; rs2 = 5'd2;
-        check2(32'hAAAABBBB, 32'hCCCCDDDD, "Dual port read");
+        check2(32'hAAAABBBB, 32'hCCCCDDDD, "Two reads");
 
         $display("\n=== RegFile Results: %0d passed, %0d failed ===", pass_count, fail_count);
         if (fail_count == 0) $display("ALL REGFILE TESTS PASSED");

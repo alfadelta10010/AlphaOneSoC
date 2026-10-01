@@ -1,13 +1,15 @@
+// One write port, one read port. fyracore time-shares the read port between
+// rs1 and rs2 (see rs2_phase there): a second 32:1 read mux of 32-bit words
+// is most of a register file's logic, and the cycle it saves is spent
+// waiting for the next instruction fetch anyway.
 module regFile #(parameter DATA_WIDTH = 32) (
     input  wire                  clk,
     input  wire                  rst,   // unused: the registers are not reset
     input  wire                  wrEn,
-    input  wire [4:0]            rs1,
-    input  wire [4:0]            rs2,
+    input  wire [4:0]            rs,
     input  wire [4:0]            rd,
     input  wire [DATA_WIDTH-1:0] dIn,
-    output wire [DATA_WIDTH-1:0] r1,
-    output wire [DATA_WIDTH-1:0] r2
+    output wire [DATA_WIDTH-1:0] r
 );
     reg [DATA_WIDTH-1:0] reg_file [0:31];
     integer i;
@@ -38,6 +40,5 @@ module regFile #(parameter DATA_WIDTH = 32) (
     end
 
     // Combinational read (x0 always returns 0)
-    assign r1 = (rs1 != 5'b0) ? reg_file[rs1] : {DATA_WIDTH{1'b0}};
-    assign r2 = (rs2 != 5'b0) ? reg_file[rs2] : {DATA_WIDTH{1'b0}};
+    assign r = (rs != 5'b0) ? reg_file[rs] : {DATA_WIDTH{1'b0}};
 endmodule
