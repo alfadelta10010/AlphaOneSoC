@@ -147,6 +147,16 @@ pmp_napot_hi        spike
 pmp_tor4g           spike
 mprv                spike
 mprv2               spike
+# Coverage the review of the area cuts found missing, each one killing a
+# mutant the rest of the suite let through: the PMP-write refetch with a
+# locked entry, the fetch check's privilege with MPRV and a locked entry,
+# SRA/MULH*/SLT* across the sign boundary, rs2_hold's snoop of a WB write
+# landing after the rs2 read, and the link address of c.jal/c.jalr.
+pmp_refetch         spike
+mprv_lock           spike
+datapath            spike
+rs2_snoop           spike
+cjal_link           spike
 t_umode             spike
 
 # ---- straddling 32-bit fetch ------------------------------------------------------
