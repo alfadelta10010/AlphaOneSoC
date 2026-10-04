@@ -28,8 +28,11 @@ update after each review with confirmed decisions, findings, and recurring patte
   UART (fbdcc03) 16550 subset @0x10000000, reg-shift 0, no FIFOs: THR back-pressure, RTS# RX flow control,
   polled; LCR.SBC + LSR.BI since 805324c/3f0d708, RBR resets 0. GPIO (40516d6) OUT/IN + SPI mode-3 TX @0x10010000. soc_bus ANDs IO readies (6a8d4c6).
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on
-  wb_mem_stall (2167485); other stalls bubble. imem_req = in_exec(pc) (not constant 1 any more); every redirect
-  gated on !stall so pc only moves when imem_ready. Loads read the whole word (no byte-lane info needed).
+  wb_mem_stall (2167485); other stalls bubble. imem_req = in_exec(pc) && !ex_cti (no fetch behind a CTI);
+  every redirect gated on !stall so pc only moves when imem_ready. Loads read the whole word.
+- Area stack (branch area-opt_alfadelta10010, 2026-10-01): RF no reset + ONE read port (rs2_phase/rs2_hold),
+  NO CSR forwarding (1-clk csr_wb_hazard stall, *_legal stores, mcycle_wr_q), one time-shared PMP checker,
+  muldiv on one 34-bit add/sub also does the shifts serially, decompress in EX, link = pc (no ifex_pc_next).
 - Straddling 32-bit fetch (PC[1]=1): extra EX cycle (ex_ifetch_hi_phase) for the hi-half PMP check, only in
   U-mode or with a locked entry (96ee78a). PMP CSR writes refetch the next insn like FENCE.I (2d02808).
 - Verification: river_core + Spike trace diff; tb/tb_rivercore.v + tb/memory_model.v (core level) or -DSOC_TB
@@ -72,6 +75,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   tests; mutation claim overstated — finding_pr5_review_2026-09-29.md
 - 2026-09-30 PR #5 fix round 3f8a69f: no CRIT/MAJ; model misses step order + QPI-exit step, BI same-cycle,
   MTIP window upper bound (all PROVEN by mutant) — finding_pr5_fixround_review_2026-09-30.md
+- 2026-10-04 area-opt stack 2209bb0: no CRIT/MAJ, RTL correct; suites miss SRA/MULHSU/SLTU values, PMP refetch,
+  fetch-PMP vs MPRV, rs2 snoop (5 probes written) — finding_areaopt_review_2026-10-04.md
 
 ## Notes index
 
@@ -100,3 +105,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-29 PR #5 memory path](finding_pr5_mempath_review_2026-09-29.md) — command/timing verdicts, rd_late sweep, reset stress, model gaps
 - [2026-09-29 PR #5 periph + claims](finding_pr5_review_2026-09-29.md) — reproduced suite numbers, 8250 re-check, CLINT decode gap, keypad lag
 - [2026-09-30 PR #5 fix round](finding_pr5_fixround_review_2026-09-30.md) — dual-CRM step verdict per hand-over state, UART SBC/BI, 4 proven check gaps
+- [2026-10-04 area-opt review](finding_areaopt_review_2026-10-04.md) — 13 area/perf commits verdicts, 28 mutants, value-coverage gap, fast scratch flows

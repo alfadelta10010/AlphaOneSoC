@@ -46,6 +46,17 @@ Spike, omit `--instructions` — see [[reference-spike-probed-behaviours]].
 
 Related: [[project-fyracore-overview]].
 
+**Fast scratch flows (2026-10-04, localFiles/area-opt-2026-09-30/review/):**
+- tb/memory_model.v's 16 MB zero-fill is ~90% of each core sim. A scratch tree whose model reads
+  never-written bytes as 0 (zb() on reads, no fill) is equivalent: suite 1m40s vs 19 min, 116/116.
+- rrun.sh = run.sh with RV_ROOT/RV_OUT and FAST_KILL; mut.py = exact-string mutants; rgen.py +
+  rrand.sh/rirq2.sh = random hazard-dense lockstep vs Spike (modes none/trap/irq/umode/uirq/mlock,
+  core or soc). irq modes filter the handler's PC range from both traces (Spike's CLINT never
+  fires in <5000 instr), so the oracle is external.
+- GAS does NOT compress `jal ra,L`/`jalr ra,0(rs)` here; emit c.jal/c.jalr explicitly.
+- Never edit a bash script while an instance runs it (bash reads lazily: tail gets garbled).
+- `pkill -f <pattern>` matches the agent's own `bash -c` and kills the tool call; kill by PID.
+
 **Local arch-test without river_core (2026-09-24):** clone riscv-arch-test 3.9.1 into scratch, compile each
 `rv32i_m/{I,C,A,M,Zifencei,privilege}` test with `-DTEST_CASE_1=True -DXLEN=32 -Drvtest_mtrap_routine=True`
 (without the last macro, misalign-l*/s* and C/cebreak trap into nothing and hang identically on both models),

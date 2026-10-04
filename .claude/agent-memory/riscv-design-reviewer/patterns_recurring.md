@@ -60,3 +60,10 @@ Verification blind spots
   make the belt-and-braces step untestable -- ask for a pessimistic model option.
 - Every new sticky status bit needs its own set-vs-clear same-cycle case (BI copied OE's RTL but not
   OE's test). Every "pins the window" test needs a read just past the window, not only inside it.
+- Gating a check behind a condition (PMP time-share: fetch phase only if U-mode or a lock) silently
+  removes an EXISTING test's sensitivity (mprv.S no longer sees fetch-vs-MPRV). Re-mutate old tests.
+- The 116-run directed suite is pipeline/privilege-heavy and nearly value-free: no SRA, MULHSU/MULHU,
+  mixed-sign SLTU (2026-10-04). Datapath rewrites need river_core or a values probe; unit tbs miss
+  the fyracore wiring (sra_wire0 escaped everything in the repo).
+- A mechanism kept "just in case" after a redesign (PMP-write refetch after csr_wb_hazard) may still
+  be necessary only in a corner no test reaches -- write the probe that needs it before judging it.
