@@ -347,7 +347,7 @@ the step before it, which cancels most of ABC's order noise).
   U-mode or with a locked PMP entry, and 2 + shamt per shift.
 - Verification: core directed 116/116 and SoC directed 75/75 at every step;
   the final tree also with every register starting at X (`RUN_PLUSARGS=+RF_X`) and
-  `make test-all`. A river_core regression is still to run.
+  `make test-all`.
 - Pre-layout timing (OpenSTA, unbuffered netlist, default wire load): the worst
   register-to-register path falls from 47.8 to 27.8 ns as the large fanouts go
   (one read mux, one PMP checker, no CSR forwarding). These are unbuffered numbers,
@@ -362,6 +362,10 @@ After the design review of these thirteen (no Critical or Major findings):
   mutants: `pmp_refetch`, `mprv_lock`, `datapath`, `rs2_snoop`, `cjal_link`.
 - Final tree: core directed 121/121, SoC directed 80/80, both again with
   `RUN_PLUSARGS=+RF_X`, and `make test-all` passes.
+- river_core at cc95754 (conformance plus three random rounds, Spike 7ab2efd6):
+  conformance 175/176 (`rv32ui-ma_data`, known), rrag 3000/3000, riscv-dv 225/228
+  (one program that never terminates on either model, two Spike LR/SC
+  interleave yields). No DUT divergence, no false pass.
 
 **Held: flop register file with one clock gate per register (#1a).** One
 `sky130_fd_sc_hd__dlclkp_1` per register replaces the 992 enable flops' muxes:
