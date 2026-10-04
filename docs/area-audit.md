@@ -353,6 +353,16 @@ the step before it, which cancels most of ABC's order noise).
   (one read mux, one PMP checker, no CSR forwarding). These are unbuffered numbers,
   not fmax.
 
+After the design review of these thirteen (no Critical or Major findings):
+
+- The fetch is also held while ECALL, EBREAK, MRET, FENCE.I or a PMP CSR write is
+  in EX (`ex_nofetch`), since each always redirects. SoC suite: −2.0% cycles over
+  68 tests (trap-heavy PMP tests up to −12%); area 10.07 tiles (noise), 2,205 flops.
+- Five Spike-compared directed tests close the coverage gaps the review proved with
+  mutants: `pmp_refetch`, `mprv_lock`, `datapath`, `rs2_snoop`, `cjal_link`.
+- Final tree: core directed 121/121, SoC directed 80/80, both again with
+  `RUN_PLUSARGS=+RF_X`, and `make test-all` passes.
+
 **Held: flop register file with one clock gate per register (#1a).** One
 `sky130_fd_sc_hd__dlclkp_1` per register replaces the 992 enable flops' muxes:
 −1.01 tiles on top of step 13, to **9.03 tiles (73% of 6x2)**. The registers stay
