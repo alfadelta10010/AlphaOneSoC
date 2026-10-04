@@ -1,0 +1,49 @@
+PSRAM and VGA timing question
+venusjoel
+OP
+ — 6/3/26, 1:58 PM
+Hello! My partner and I are working on a university project through Tiny Tapeout. We are using some external parts, including a PSRAM module, a gamepad Pmod, and VGA output. For our design, we want the TT chip itself to run at 50 MHz, but the VGA timing needs an effective 25 MHz pixel rate, and the PSRAM module needs a 25 MHz clock. I also saw that TT GPIO output is limited to around 33 MHz, so we are planning to output 25 MHz to the PSRAM. In our tests, this seems to work using a simple clock divider from the 50 MHz chip clock. I wanted to ask if anyone has tested this on final Tiny Tapeout hardware, does using a simple divider to generate a 25 MHz clock output for PSRAM work reliably? For VGA, we are planning to use the 50 MHz system clock and update the VGA timing every other cycle, giving an effective 25 MHz pixel rate. Would that work as expected? I do not think the gamepad Pmod should cause any issue in this regard. We have the external parts here and tested our build on an FPGA, where it seems to work. We just want to make sure it would work on the real thing before moving forward.
+Thanks!
+toivoh [TT], Role icon, tested tapeout — 6/3/26, 6:01 PM
+I have never used the PSRAM, but I've done a lot of VGA output at around 25.2 MHz by clicking at around 50.4 MHz and updating every other cycle, that is no problem. And it shouldn't be a problem for other IO signals that you want to pretend are half of the clock frequency either. Also, my impression is that VGA displays usually have some tolerance around the target pixel clock. Mine seems to tolerate that I go down to 60% of the nominal pixel clock or maybe even a bit lower and still looks quite ok, but I don't know how representative that is.
+TT gpio output is limited to around outputting max a 33 MHz clock or so. That means that it's ok to output a signal that is sampled at up to 66 MHz (a 33 MHz clock can be seen as a square wave sampled at 66 MHz).
+For the PSRAM, I've heard that there is some refresh timing that you have to beware, which means that you can't keep the interface busy for too many cycles at a time, which can be troublesome for some VGA projects. Maybe @RebelMike or @pongsagon knows more about it.
+I've been using the RP2040 (RP2350 on the new boards)  as RAM emulator instead, see e g https://github.com/toivoh/tt06-retro-console and https://github.com/toivoh/pio-ram-emulator. It also has its limitations, but not related to max number of accesses in a row.
+GitHub
+GitHub - toivoh/tt06-retro-console: Retro console with two parallax...
+Retro console with two parallax planes and analog emulation polysynth - toivoh/tt06-retro-console
+RebelMikeRole icon, contributor — 6/3/26, 7:01 PM
+Yes, the APS6404 PSRAM on the TT QSPI PMOD has a max chip select time of 8us, which is significantly shorter than a 640x480 scanline.  It's possible you will get away with a longer select time, but this may cause the data to read incorrectly after the max selection time, and could possibly also cause data corruption as you're blocking the RAM from refreshing.  Whether this causes a problem in practice I'm not sure - potentially you don't care if the odd bit is flipped on a display so don't need to be as careful as if you were reading instructions for a CPU.  Personally, I would probably split the scanline in half and have sufficient buffer to do one read restart during the scanout - that would still be reading for longer than the spec allows, but likely short enough not to cause issues in practice.
+
+The other consideration is making sure you generate a clean clock.  This should be fine as long as it comes directly from the output from a flop without any other logic between the flop and the output pin.  If there is any logic then you would need to understand whether the cells involved might cause unexpected transients (that doesn't matter so much on a data line, but does on a clock).
+tnt [TT], Role icon, team — 6/3/26, 8:23 PM
+One idea is to interleave. Use one PSRAM, then swtich to the other about 1/4 of the way in the line and then repeat the cycle every 8 us to get through the line.
+You do need a FIFO to absorb the switch time, but should be manageable.
+RebelMikeRole icon, contributor — 6/3/26, 8:40 PM
+I don't think that would help much as the min deselect time is only 18ns which is only one clock at 50MHz anyway.  It would help if you could prime the second PSRAM while reading from the first, but you can't do that on the TT QSPI PMOD
+tnt [TT], Role icon, team — 6/3/26, 8:55 PM
+MMm, fair. I was expecting a longer required gap 😅
+venusjoel
+OP
+ — 6/4/26, 3:16 AM
+Thanks for your responses! Good to know that using the 50 MHz clock with an every-other-cycle enable for VGA has worked on real TT hardware.
+
+For the PSRAM, we are not planning to keep CS low for a full scanline. We read short bursts into two ping-pong buffers and release CS between transactions. Right now each burst is 8 bytes at 25 MHz SCK, so the data portion should be 16 SCK cycles, around 640 ns. Even with the command/address/dummy cycles added, each transaction should still be well under the 8 us limit.
+
+The controller also inserts a short CS-high gap between transactions. In the back-to-back case this should be at least roughly one to two SCK cycles, around 40–80 ns at 25 MHz, and if there are no pending read/write requests it idles with CS high for longer. During active VGA scanout, the reads can happen frequently to keep the buffers filled, but CS is still released after each burst rather than being held low continuously.
+
+We also changed the PSRAM clock output so it comes from a registered flop output, not through combinational logic. We have the PSRAM connected to our FPGA setup at the moment, and this method seems to work well there.
+
+Does this approach sound like it addresses the main PSRAM concerns you mentioned? or is there anything else you think we should watch out for on the real TT hardware? Thanks again!
+
+
+
+
+
+
+
+Btw. the flash chip on the QSPI pmod has different versions of its datasheet, and several sites link to the one titled [W25Q128JV](https://www.winbond.com/hq/support/documentation/?__locale=en&category=%2F.categories%2Fresources%2Fdatasheet%2F&pno=W25Q128JV) that doesn't list all the modes available. There is another datasheet titled [W25Q128JV-DTR](https://www.winbond.com/hq/support/documentation/?__locale=en&category=%2F.categories%2Fresources%2Fdatasheet%2F&pno=W25Q128JV_DTR) that includes QPI & DTR modes. For designs that need faster random access from flash I recommend to use this extended version.
+
+
+
+https://docs.google.com/document/d/1xsKXSyzRcITReSPcTtEUlEqfY_uygV3ntWclOUEb7FA/edit?tab=t.0

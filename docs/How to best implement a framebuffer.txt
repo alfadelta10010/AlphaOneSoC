@@ -1,0 +1,141 @@
+How to best implement a framebuffer?
+pseudogravity
+OP
+ — 12/23/25, 10:41 PM
+Hi all. I'm new to tinytapeout and I've been working on a design for a toy graphics processor. However, I have a question about the best way to implement a frame buffer. My original plan was to use the QSPI pmod, but after doing the math, it seems like there is not enough memory bandwidth to read a line of VGA off the PSRAM while also performing other memory operations.  So, I'm curious how other people have solved this problem. 
+tnt [TT], Role icon, team — 12/23/25, 10:58 PM
+They haven't ... they just don't have a frame buffer 😅
+YoukaiRempeka [FUMO], Role icon, tapeout — 12/24/25, 4:32 AM
+There is this: https://github.com/rejunity/tinyqv-full-peripheral-vga
+GitHub
+GitHub - rejunity/tinyqv-full-peripheral-vga: VGA adapter for TinyQV
+VGA adapter for TinyQV. Contribute to rejunity/tinyqv-full-peripheral-vga development by creating an account on GitHub.
+tnt [TT], Role icon, team — 12/24/25, 4:34 AM
+Sure but the "frame buffer" is 320 bits 😅
+YoukaiRempeka [FUMO], Role icon, tapeout — 12/24/25, 4:47 AM
+This one has 512 bits: https://github.com/htfab/tinyqv-baby-vga
+GitHub
+GitHub - htfab/tinyqv-baby-vga
+Contribute to htfab/tinyqv-baby-vga development by creating an account on GitHub.
+Contribute to htfab/tinyqv-baby-vga development by creating an account on GitHub.
+RebelMikeRole icon, contributor — 12/24/25, 6:42 AM
+Loading a ~512 bit scanline buffer takes less than the time for a scanline at 1024x768, so it’s possible to do something from PSRAM, though you don’t have time for much else if you want to do that every line! I targeted 256x192. That was for sky130. On gf180 same principle but at 640x480.
+toivoh [TT], Role icon, tested tapeout — 12/24/25, 10:28 AM
+I'm using a framebuffer in https://github.com/toivoh/tt09-pio-ram-emulator-example, which was submitted to TT09 (and then to TTIHP25a. It renders a Julia fractal over a number of frames, and displays it from the frame buffer. It uses my RAM emulator https://github.com/toivoh/pio-ram-emulator that I implemented on the RP2040 microcontroller chip that is present on the demo board that comes with TT chips. The example doesn't really push the limits of the RAM emulator. There might also be some room for optimization if you are interested in trying to make a RAM emulator along similar principles that is more optimized to your use case.
+GitHub
+GitHub - toivoh/pio-ram-emulator: RAM emulator for RP2040 using onl...
+RAM emulator for RP2040 using only PIO and DMA for response handling - toivoh/pio-ram-emulator
+GitHub - toivoh/pio-ram-emulator: RAM emulator for RP2040 using onl...
+There is also https://github.com/pongsagon/tt_um_pongsagon_tinygpu_v2 which I believe has been submitted to TTSKY25b. It seems to be using the QSPI Pmod for a framebuffer. Maybe @pongsagon can tell you more. 
+GitHub
+GitHub - pongsagon/tt_um_pongsagon_tinygpu_v2: A GPU with transform...
+A GPU with transformation & lighting, rasterization, texture mapping, flat shading, double buffer, z-buffer - pongsagon/tt_um_pongsagon_tinygpu_v2
+A GPU with transformation & lighting, rasterization, texture mapping, flat shading, double buffer, z-buffer - pongsagon/tt_um_pongsagon_tinygpu_v2
+pongsagonRole icon, tested tapeout — 12/24/25, 11:08 AM
+QSPI pmod can do at most 4-bit/clk.    In my case, my double framebuffer is 4-bit, 320x240.  I also have an 8-bit depth buffer.   I am sending the signal for vga 640x480@60fps
+
+To have room for other memory operations, I draw only a quarter of the screen leaving the rest pixels black.   This black pixel time is for doing other mem operations.
+
+I also sending the same front buffer image to vga for multiple frames so that I can have time for more mem operations.
+
+I got the idea after seeing @RebelMike RLE video player that reading from QSPI RAM is fast enough.  Thanks Mike. 
+ [TT], 
+pongsagonRole icon, tested tapeout — 12/24/25, 11:19 AM
+Nice.  What is your RAM emulator bandwidth in TT chips? 
+You don’t have to do any mem op during Julia calculation right?
+toivoh [TT], Role icon, tested tapeout — 12/24/25, 11:40 AM
+I put some stats at https://github.com/toivoh/pio-ram-emulator?tab=readme-ov-file#pio-ram-emulator-a-ram-emulator-on-rp2040-using-only-pio-and-dma-for-response-handling, it depends a bit on how you use it. Read is faster than write for random access, block transfers help make writes approach the speed of reads. But for non-block transfers,
+Random access: > 8 MB/s read or > 4 MB/s write (or a mix, such as > 4 MB/s read and > 2 MB/s write at the same time)
+
+is a good summary.
+GitHub
+GitHub - toivoh/pio-ram-emulator: RAM emulator for RP2040 using onl...
+RAM emulator for RP2040 using only PIO and DMA for response handling - toivoh/pio-ram-emulator
+
+My retro console https://github.com/toivoh/tt06-retro-console uses a different, more tailored RAM emulator just for reading. It gets 4 bits/clock cycle for 16 bit random access reads, so 25 MB/s. 
+GitHub
+GitHub - toivoh/tt06-retro-console: Retro console with two parallax...
+Retro console with two parallax planes and analog emulation polysynth - toivoh/tt06-retro-console
+GitHub - toivoh/tt06-retro-console: Retro console with two parallax...
+toivoh [TT], Role icon, tested tapeout — 12/24/25, 11:48 AM
+If you use start bits and headers as I did in pio-ram-emulator, you get some overhead. It only uses 2 TX pins and 2 RX pins, but it would be hard to get much higher speed for 16 bit transactions even with more pins, due to the overhead.
+For the retro console, there is no overhead: 4 address bits sent in one direction and 4 data bits in the other, every cycle (the sync is established once at startup). That kind of scheme allows you to scale up the bandwidth better. I'm sure there's a way to make a read/write scheme out of it, but I haven't looked into the details.
+toivoh [TT], Role icon, tested tapeout — 12/24/25, 12:24 PM
+The design both calculates the fractal and displays the framebuffer all the time. It reads the framebuffer at steady pace, and I sprinkled in some time slots for writing in between the reads I think.
+pongsagonRole icon, tested tapeout — 12/24/25, 12:25 PM
+I see.  Thank you
+pseudogravity
+OP
+ — 12/31/25, 9:50 AM
+Thanks for the responses.  I was thinking about this some more and came up with an alternative idea: a custom VGA Pmod. Essentially, I could take a PSRAM chip and put it between the output pins and the VGA lines. The output pins would provide hsync/vsync, the clock, chip select, and 4 QSPI lines. Three of the QSPI lines feed into the RGB lines of the VGA. With the right timing, I could either "race the beam" or have the PSRAM read back a line of the framebuffer directly to VGA. I would have limited time during the porches to make other edits to the framebuffer, but this would allow me to have way more bandwidth for any other computations using the regular QSPI Pmod on the bidirectional pins.
+
+Does this idea seem like it could have potential?
+
+Also I'll probably be sacrificing some color depth (6 bit -> 3 bit) but that's ok.
+RebelMikeRole icon, contributor — 12/31/25, 2:06 PM
+Interesting idea! There are a couple of issues though.
+
+You’d need to have a tri state buffer to be able to disable the output from the asic to the QSPI when you wanted the PSRAM to drive them, which might mess with timing, and also needs an extra pin for the enable. Although maybe you could just use resistors?
+
+The other problem is that you can only select a PSRAM for a relatively short amount of time, as it needs to perform memory refresh which it can’t do while selected. This is likely shorter than a scanline. You probably need a true SRAM with a QSPI interface.
+toivoh [TT], Role icon, tested tapeout — 12/31/25, 2:50 PM
+Then there's of course the drawback that unless you make your Pmod generally available somehow, nobody else will be able to try you design. But that shouldn't stop you unless you want it to.
+pongsagonRole icon, tested tapeout — 12/31/25, 9:10 PM
+Could you explain more about refresh mechanism of this PSRAM?  If we do burst read or burst write too long, does it will cause memory failure?
+pongsagonRole icon, tested tapeout — 12/31/25, 9:30 PM
+OMG😱.  I didn’t know about this tCEM limitation before.
+Just search the datasheet , it said that max tCEM is 8us.
+But I have try burst read for 320pixel (320x40ns/1000 = 12us) and try burst write to clear the whole 320x240 8bit z-buffer (320x240x2x40ns/1000 =6144us) and they are still work with Basys3 FPGA board.  Why is that?
+RebelMikeRole icon, contributor — 1/1/26, 3:14 AM
+You’re also not meant to write more than 1kB at a time, so I suspect that is working because the whole memory fails and clears to zero
+pongsagonRole icon, tested tapeout — 1/2/26, 10:05 AM
+For the 320pixel burst read that take 12us, may be it is still within the saftey margin eventhough it is exceeding the 8us spec.
+
+But the whole z-buffer clearing that take 6144us is a complete mystery, because I did not clear it to zero and the content in the front buffer is still valid.
+
+Now that I know about tCEM, I will doing more experiment with PSRAM to verify it
+RebelMikeRole icon, contributor — 1/2/26, 4:31 PM
+I’ve definitely had problems with long reads before. Interesting if long writes work in practice!
+One thing I’ve found in the past is that the start of the memory is a bit more robust than the middle. Though I imagine that could vary chip to chip too.
+Also I guess for a frame buffer individual bit flips are not a disaster
+toivoh [TT], Role icon, tested tapeout — 1/3/26, 2:08 PM
+I suppose that tCEM is the maximum time that the manufacturer wants to guarantee. It probably (usually) works with a bit longer time in practice (or maybe even much longer?), but it seems to be hard to be sure about it...
+tnt [TT], Role icon, team — 1/3/26, 3:56 PM
+I know I hit limits when I was using it as a frame buffer on ice40. And then the chip stars being desynchronized. A read would return data delayed...
+ [TT], 
+toivoh [TT], Role icon, tested tapeout — 1/3/26, 9:23 PM
+What were you using it for, standard VGA 640x480 60 Hz?
+toivoh [TT], Role icon, tested tapeout — 1/3/26, 9:32 PM
+How did you get the 12 us burst read figure? In VGA 640x480 60 Hz mode, 640 pixels should take a bit more than 25 us I think. Do you have a line buffer where you store pixels between reading them from the RAM and sending them to the display?
+If you do, you could split your burst into several? (I'm not sure how long you need to wait in between, though).
+But I also wonder how the tCEM figure should be interpreted. The RAM obviously needs to refresh itself, because it has a DRAM inside, right?
+But it might be that each memory location doesn't decay in 8 us, it's more that the RAM needs some time to itself with a certain frequency to have time to cycle through all of it's contents before they decay.
+ [TT], 
+tnt [TT], Role icon, team — 1/3/26, 9:37 PM
+No 1920×1080
+toivoh [TT], Role icon, tested tapeout — 1/3/26, 9:38 PM
+It could be that if your access pattern covers all the DRAM rows in a short enough time window, you're still good. I think the C64 did something like that, they organised the display hardware so that it would cycle through and this refresh all DRAM rows while reading out the contents to draw one frame I think.
+YoukaiRempeka [FUMO], Role icon, tapeout — 1/4/26, 3:44 AM
+The Apple II did the access pattern trick. The C64 had a PAL which handled DRAM refresh.
+ [TT], 
+pongsagonRole icon, tested tapeout — 1/4/26, 6:06 AM
+I only render 320x240 out of 640x480, so it is 12.8us.  I did not have a line buffer.
+
+Yes, I may have to split a line burst read into two.  The duration between subsequent burst from the datasheet, tCPH, is 18ns.  This is the time for the DRAM to refresh it self.  Also, we need a delay for the first data the be ready which is around 16clk.   So in total, we should need a buffer of 17 pixels.
+toivoh [TT], Role icon, tested tapeout — 1/4/26, 10:18 AM
+But if you're reading the pixels faster than how fast they should be delivered to the VGA, you need to store them in a buffer in between? I'm assuming you're scaling up those 320 pixels to fit 640 pixels on screen?
+ [TT], 
+pongsagonRole icon, tested tapeout — 1/4/26, 11:00 AM
+I did not scale up, the 3/4 of the screen are black.  The pixels reading speed is the same as sending them to VGA.
+toivoh [TT], Role icon, tested tapeout — 1/4/26, 2:31 PM
+So half of the screen width is blank?
+toivoh [TT], Role icon, tested tapeout — 1/4/26, 3:11 PM
+I understand.
+ [TT], 
+pongsagonRole icon, tested tapeout — 1/4/26, 5:11 PM
+Yeap, I trade resolution for other tasks that also need memory R/W.
+toivoh [TT], Role icon, tested tapeout — 1/4/26, 8:12 PM
+I'm thinking that maybe you could take the whole screen width to read 320 pixels in a number of shorter bursts and scale to reach pixel to two pixels wide, then you would have time to let the memory refresh itself. But I suppose that the increased overhead would lead to less time to do the rendering.
+pongsagonRole icon, tested tapeout — 7/31/26, 2:32 PM
+Update on PSRAM burst reads.  Now I have received my TT chip.  Everything work fine like when I have tested with FPGA.   No memory corruption.  My burst reads are way beyond the manufacturer spec.  I guess it still under a save margin.  The tCEM might decrease exponentially with the temperature.
+

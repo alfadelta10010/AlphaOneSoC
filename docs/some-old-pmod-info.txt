@@ -1,0 +1,44 @@
+thomasflummerRole icon, contributor — 10/13/25, 2:42 AM
+Are you using the W25Q128JVSIM or the W25Q128JVSIQ for the flash chip on the QSPI-PMOD? I'm asking, because I put together some a while back and couldn't get them to work with the online flasher (I used W25Q128JVSIM), but today figured out I had to set the QE bit in status register 2, and then it worked great, but the ...Q version has that set by default from the factory
+if the QE bit isn't set, the flasher won't detect the flash id and flashing fails. I havn't looked deeper into how the flashing tool works, but have a feeling it goes straight to quad mode.
+mole99Role icon, contributor — 10/13/25, 10:35 AM
+The flash chip on the Pmod is a W25Q128JVSIM: https://github.com/mole99/qspi-pmod/blob/main/qspi-pmod.pdf
+I assume those manufactured by TT use the same chip.
+RebelMikeRole icon, contributor — 10/13/25, 12:30 PM
+Yeah, for the TT version the QA process sets the QE bit before they ship. The advantage of the M is it can do DDR, although I don’t know of any designs that use that yet.
+tnt [TT], Role icon, team — 10/13/25, 12:35 PM
+They can all do DDR I'm pretty sure. There was a mixup on some pmod for the icebreaker and some ended with IM some with IQ and I'm pretty sure I tested both and it worked fine. 
+stuartRole icon, team — 10/13/25, 12:48 PM
+I can confirm that W25Q128JVSIM is used when we make the boards
+thomasflummerRole icon, contributor — 10/13/25, 1:20 PM
+Thanks for the clarification... until yesterday, I hadn't gone that deep into the flash datasheet, but I learned something, so that was good
+tnt [TT], Role icon, team — 10/13/25, 1:30 PM
+It's annoying that there are no PSRAM with DTR mode, would be a good way to speed up SRAM access on TT 😅
+Another option I was thinking of was to have the clock be external and just masked by CS signal.
+(Goal is to avoid having a clock signal which is effectively toggling twice as fast and which is a problem with sky130 IOs).
+
+
+If you want to read a QSPI flash, this could be what you are looking for: https://github.com/MichaelBell/tinyQV/blob/main/cpu/qspi_flash.v
+And this will also read and write to the PSRAMs on the QSPI PMOD and handle a wider range of latencies, though the configuration as you take it out of reset needs some care: https://github.com/MichaelBell/tinyQV/blob/main/cpu/qspi_ctrl.v
+strauRole icon, tapeout — 2/2/25, 2:55 PM
+ok thanks! Any suggestions as to how I could verify my implementation?
+RebelMikeRole icon, contributor — 2/2/25, 3:00 PM
+This should simulate the QSPI Pmod: https://github.com/MichaelBell/tt06-tinyQV/blob/main/test/sim_qspi.v
+and you can see how I connected it to the test here: https://github.com/MichaelBell/tt06-tinyQV/blob/main/test/tb_qspi.v
+
+
+This is what I used for testing TinyQV, which uses everything on the QSPI Pmod: https://github.com/MichaelBell/tt06-tinyQV/blob/main/test/sim_qspi.v
+Note that’s a little specific because it assumes the flash is in continuous read mode (command EBh is assumed) and the PSRAM is in QPI mode.
+For a simple SPI RAM this should be a reasonable starting point: https://github.com/MichaelBell/nanoV/blob/8c95b70026e8878aa9e5a6c2f336890b25694fe7/sim_sram.v
+RebelMikeRole icon, contributor — 11/13/24, 2:56 PM
+On the controller side I have https://github.com/MichaelBell/tinyQV/blob/main/cpu/qspi_flash.v which is a relatively straightforward flash controller that uses quad data read commands but doesn’t assume continuous read mode. I don’t actually use it in tinyQV but Rej used it in the Atari 2600 project on tt09.
+
+https://github.com/MichaelBell/tinyQV/blob/main/cpu/qspi_ctrl.v is the controller I actually use in TinyQV, which has the same assumptions as the QSPI sim I linked first. It supports configurable latency so I’m hoping it will run up to 40MHz or so on TT06 - we’ll find out soon!
+
+
+
+Btw. the flash chip on the QSPI pmod has different versions of its datasheet, and several sites link to the one titled [W25Q128JV](https://www.winbond.com/hq/support/documentation/?__locale=en&category=%2F.categories%2Fresources%2Fdatasheet%2F&pno=W25Q128JV) that doesn't list all the modes available. There is another datasheet titled [W25Q128JV-DTR](https://www.winbond.com/hq/support/documentation/?__locale=en&category=%2F.categories%2Fresources%2Fdatasheet%2F&pno=W25Q128JV_DTR) that includes QPI & DTR modes. For designs that need faster random access from flash I recommend to use this extended version.
+
+
+
+https://docs.google.com/document/d/1xsKXSyzRcITReSPcTtEUlEqfY_uygV3ntWclOUEb7FA/edit?tab=t.0
