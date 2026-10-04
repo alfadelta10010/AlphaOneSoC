@@ -33,7 +33,7 @@
 ```
 
 **IF (Instruction Fetch):**
-- Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window and no branch or jump is in EX (`imem_req`); outside the window nothing is fetched and the instruction faults in EX
+- Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window and EX holds no instruction that decides the next pc (`ex_nofetch`: branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write); outside the window nothing is fetched and the instruction faults in EX
 - The PC only changes on a cycle the fetch completes, so the address of an outstanding fetch is never withdrawn
 - Detects compressed instructions (bits `[1:0] != 2'b11`); IF/EX holds the fetched bits (`ifex_raw_instr`), and EX expands them
 - Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal). While IF/EX holds an instruction, `pc` is that instruction's next PC (there is no `ifex_pc_next`)
@@ -59,7 +59,7 @@
 |---|---|
 | Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
 | Load-use | Stall until the load's data returns |
-| Branch/Jump | No fetch is requested while it is in EX (`ex_cti`); 1-cycle bubble, taken or not |
+| Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
 | rs2 read | One EX cycle reads rs2 into `rs2_hold` (`rs2_phase`), for an instruction whose format has an rs2 field (R, S, B, AMO) that is not x0; `decoder` gives rs2 = x0 to every other format |
 | CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
 | Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
@@ -85,7 +85,7 @@ flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pm
 
 Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because EX can briefly see not-yet-valid forwarded load data during a load-use or AMO-read stall.
 
-An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (rs2 read, CSR write, fetch PMP checks) are hidden the same way, except on a branch or jump, which has no fetch in flight.
+An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (rs2 read, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight.
 
 ### 2.3 CSR Values Seen by EX
 
@@ -200,7 +200,7 @@ Both ports follow the same contract:
 - From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `be`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
 - Nothing transfers while `*_req` is low, whatever `*_ready` is.
 
-`imem_req` is high whenever PC lies in `PMA_ROM_*` or `PMA_RAM_*` and no branch or jump is in EX (the next PC is decided there; on a shared bus a speculative fall-through fetch would have to finish before a taken redirect). Outside the windows no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
+`imem_req` is high whenever PC lies in `PMA_ROM_*` or `PMA_RAM_*` and EX holds no branch, jump, ECALL, EBREAK, MRET, FENCE.I or PMP CSR write (`ex_nofetch`: the next PC is decided there; on a shared bus a speculative fall-through fetch would have to finish before a taken redirect). Outside the windows no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
 
 `dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. `dmem_be` gives the byte lanes of every request, loads included; `dmem_we` says whether it is a write. An AMO is a read followed by a write, back to back.
 

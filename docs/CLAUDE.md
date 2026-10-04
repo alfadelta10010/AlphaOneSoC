@@ -101,7 +101,7 @@ Test programs are RISC-V assembly in `tests/*.S`. The build pipeline: `.S` → `
 
 ### Pipeline: IF → EX → WB
 
-- **IF**: Fetch and PC computation. No fetch is requested while a branch or jump is in EX (`ex_cti`); a not-taken branch then costs one bubble.
+- **IF**: Fetch and PC computation. No fetch is requested while EX holds an instruction that decides the next pc (`ex_nofetch`: branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write — decode-only terms, so the request never drops mid-fetch); a not-taken branch then costs one bubble.
 - **EX**: RV32C expansion (`compressed_decoder`, from `ifex_raw_instr`), decode (`decoder`), control signals (`controller`), register read (`regFile`, one read port) with WB→EX forwarding, ALU execute, branch resolve, PMP check, trap detection, interrupt injection.
 - **WB**: Memory access, CSR commit (`csr`), AMO phase 2, register writeback, trap entry.
 

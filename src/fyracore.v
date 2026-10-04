@@ -9,7 +9,8 @@
 // Hazard handling:
 //   - Data forwarding from WB → EX
 //   - Load-use stall (1 cycle)
-//   - Branch/jump: no fetch while it is in EX, 1-cycle bubble taken or not
+//   - Branch/jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write: no fetch
+//     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
 //   - rs2 read: one stalled EX cycle (rs2_phase), the register file has one
 //     read port
 //   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
@@ -68,8 +69,8 @@ module fyracore #(
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
     //
     // Instruction memory interface (read-only). imem_req is high whenever the
-    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*) and no branch
-    // or jump is in EX; outside them no fetch is requested at all (see
+    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*) and EX holds
+    // no instruction that decides the next pc (ex_nofetch); outside them no fetch is requested at all (see
     // imem_req below). When the pipeline is stalled
     // with a fetch already completed, the same address is requested again.
     //
@@ -130,7 +131,7 @@ module fyracore #(
     wire [31:0] if_fetched    = imem_rdata & {32{imem_req}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
-    wire        ex_cti;          // branch or jump in EX (assigned after the controller)
+    wire        ex_nofetch;      // EX decides the next pc (assigned after the PMP-write decode)
 
     // Is an address inside [base, top]? A window with base > top is empty.
     function automatic in_win(input [31:0] a, input [31:0] base, input [31:0] top);
@@ -145,11 +146,11 @@ module fyracore #(
     // a fetch must not read an IO device (a read can have side effects, e.g.
     // popping a UART FIFO), and an address with no device behind it must not
     // wait forever for a ready that nobody will give.
-    // A branch or jump in EX decides the next pc, so the fall-through is not
-    // fetched speculatively behind it: on the SoC's one QSPI bus that fetch
-    // would have to complete (~42 clocks) before a taken branch could
-    // redirect. A not-taken branch then costs one bubble instead.
-    assign imem_req  = in_exec(pc) && !ex_cti;
+    // While the instruction in EX decides the next pc, the fall-through is
+    // not fetched speculatively behind it: on the SoC's one QSPI bus that
+    // fetch would have to complete (~42 clocks) before the redirect could be
+    // taken. See ex_nofetch. A not-taken branch then costs one bubble.
+    assign imem_req  = in_exec(pc) && !ex_nofetch;
 
     // ================================================================
     //  IF/EX Pipeline Register
@@ -410,7 +411,6 @@ module fyracore #(
     );
 
     wire ex_branch_taken = (ctrl_doBranch && ex_branch_valid) || ctrl_doJump;
-    assign ex_cti = ifex_valid && (ctrl_doBranch || ctrl_doJump);
     // JALR clears bit 0 of target
     wire [31:0] ex_branch_target = (ex_opcode == 7'b1100111) ?
                                    {ex_alu_result[31:1], 1'b0} : ex_alu_result;
@@ -493,6 +493,16 @@ module fyracore #(
     // PMP write (tests/directed/pmp_refetch).
     wire ex_pmp_csr_wr = ifex_valid && ex_csr_writes &&
                          (ex_csr_addr == 12'h3A0 || ex_csr_addr[11:2] == 10'b0011_1011_00);
+    // No fetch behind an instruction that decides the next pc: a branch or
+    // jump, and the ones that always redirect -- ECALL and EBREAK (they
+    // trap), MRET (it returns, or traps when malformed or in U-mode),
+    // FENCE.I and a PMP CSR write (they refetch the fall-through, which is
+    // pc). Decode-only terms: ex_trap and ex_illegal_insn can change while
+    // EX waits (forwarded operands, misa.C during a CSR-write stall), and
+    // imem_req must not drop while a fetch is outstanding.
+    assign ex_nofetch = ex_pmp_csr_wr || (ifex_valid &&
+                        (ctrl_doBranch || ctrl_doJump || ctrl_isEcall || ctrl_isEbreak ||
+                         ctrl_isMret || ctrl_isFenceI));
     // CSR access requires privilege >= csr_addr[9:8] (00=U, 01=S, 11=M).
     // Since we only have M(1) and U(0): any CSR with addr[9:8] != 00 requires M-mode.
     wire ex_csr_priv_fail = !priv_mode && (ex_csr_addr[9:8] != 2'b00);
@@ -1038,7 +1048,7 @@ module fyracore #(
             next_pc = ex_branch_target;
         else if ((ex_is_fencei || ex_pmp_csr_wr) && ifex_valid && !stall)
             next_pc = pc;           // Re-fetch after FENCE.I or a PMP CSR write
-        else if (stall || ex_cti)
+        else if (stall || ex_nofetch)
             next_pc = pc;       // a not-taken branch: pc already is the fall-through
         else
             next_pc = if_pc_next;
@@ -1147,8 +1157,8 @@ module fyracore #(
                     ifetch_hi_done   <= 1'b1;
                     ifetch_hi_denied <= !pmp_allow;
                 end
-            end else if (flush || ex_cti) begin
-                // Insert bubble (a branch or jump fetched nothing behind it)
+            end else if (flush || ex_nofetch) begin
+                // Insert bubble (nothing was fetched behind ex_nofetch)
                 ifex_valid     <= 1'b0;
                 ifex_raw_instr <= 32'h0000_0013; // NOP
                 ifex_compressed<= 1'b0;
