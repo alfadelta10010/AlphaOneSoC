@@ -1,9 +1,14 @@
 ---
 name: area-baseline
-description: Measured sky130 synth area of AlphaOneSoC at 10a37c3 (main, 2026-09-30) and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
+description: Measured sky130 synth area of AlphaOneSoC: applied stack 10.04 t (branch area-opt_alfadelta10010), 10a37c3 13.60 t and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
 metadata:
   type: project
 ---
+
+**Branch area-opt_alfadelta10010 @3c25950 (stack applied, 2026-10-01): SoC flat 10.04 t,
+2,205 ff** (4 seeds). Hier: regFile 3.28, glue 2.19/373, csr 2.08/461, muldiv 0.72/118,
+clint 0.67, pmp 0.37 (one), uart 0.29, qspi 0.25, alu 0.16. Remaining big items: flop RF
+(ICG patch held), CSR file, CLINT + counters (mandatory).
 
 **10a37c3 (main after PR #5, 2026-09-30): SoC flat 13.60 t (6 seeds; seeds 1-4 13.61), 2,736 ff**
 (1,443 dfxtp + 1,293 edfxtp). Hier per block unchanged from 4b4ed8b below (uart 0.29/77,

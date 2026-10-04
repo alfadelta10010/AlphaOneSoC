@@ -5,9 +5,15 @@ metadata:
   type: project
 ---
 
-**2026-09-30 corroboration at 10a37c3 (supersedes the numbers below for planning):** 14-patch
-series in `localFiles/area-opt-2026-09-30/patches/` (report: corroboration.md there), each
-step core 116/116 + SoC 75/75; finals also pass with `+RF_X` and `make test-all`.
+**APPLIED (2026-10-01..04): patches 01-13 are committed on branch `area-opt_alfadelta10010`
+(ff130fb..3c25950; docs 2209bb0) -> SoC 10.04 t, 2,205 ff, 81% of 6x2.** Patch 14 (ICG RF,
+-1.01 t -> 9.03 t) is HELD pending a LibreLane hardening run (CTS skew, hold buffers,
+gating checks, GLS) -- see [[icg-flow-evidence]]. New area work starts from that branch,
+not from 10a37c3. Report: `localFiles/area-opt-2026-09-30/corroboration.md`.
+
+**2026-09-30 corroboration at 10a37c3:** 14-patch series in
+`localFiles/area-opt-2026-09-30/patches/`, every step core 116/116 + SoC 75/75; finals also
+pass with `+RF_X` and `make test-all`.
 Order and paired step deltas: mdfix 0, brhold +0.04 (noise), #1b -0.38, tests-x-clean 0,
 #3 -0.93, #4 legal stores -0.22 + stall -0.35, #5 -0.53, #8 -0.25, #13 -0.11, #16 -0.08
 (-0.10 as removal from final), #9 -0.48 (bigger on flop RF than the -0.27 latch claim),
@@ -17,6 +23,10 @@ Individually on 10a37c3: #1b -0.31, #1a -1.58 (incl. 1b), #3 -0.91, #4 -0.66 (ma
 -0.33), #5 -0.53, #8 -0.24, #13 -0.09, #16 -0.02, #9 -0.48, #3+#10 -1.17.
 Trades on top of 9.03 t: PMP 0 -> 8.07 t, PMP 1 -> 8.36 t (4x2 not reached with margin).
 REJECTED 2026-09-30: forwarding -> RAW stall (-0.07 t on final, no timing gain).
+Verdicts vs docs/area-audit.md: CONFIRMED #1b #1a #3 #4(total) #5 #8 #13 #15 perf-fixes;
+CHANGED #9 (bigger), #10 (bigger), #16 (noise alone, -0.10 in full stack), #4 masking share.
+Muldiv timing (measured): done is high 34 (MUL) / 36 (DIV) / 2+shamt (shift) cycles after the
+start cycle; EX occupancy is one more. Docs on the branch label it off by one (reported).
 Gotchas found: CSR stall moves the mtip_stale spurious-IRQ window (MANIFEST pins updated);
 mcycle skip-increment flop must cover mcycleh too; 4 directed tests read unwritten regs
 (enc_probe a1, mie_enable s2, t_mstatus s11, u_straddle s1) -- fixed at entry; masking only
