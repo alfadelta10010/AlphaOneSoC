@@ -217,7 +217,6 @@ module fyracore #(
     reg [31:0] exwb_trap_cause;
     reg [31:0] exwb_trap_pc;
     reg [31:0] exwb_trap_val;   // mtval: faulting addr (misalign) or instr (illegal), else 0
-    reg [31:0] exwb_instr;
     reg [31:0] exwb_raw_instr;  // Original fetched bytes for trace dump
     reg        exwb_compressed;
 
@@ -484,11 +483,14 @@ module fyracore #(
     );
     wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
     // A write to pmpcfg0 or pmpaddr0-3 changes the checks that the next
-    // instruction's fetch and data access undergo, and both checks run in EX
-    // while the write commits one stage later in WB. Rather than forward
-    // 160 bits of PMP state into both checkers, the write refetches the
-    // next instruction the way FENCE.I does, so that instruction reaches EX
-    // only after the write has committed. One cycle per PMP write.
+    // instruction's fetch and data access undergo, and both run in EX while
+    // the write commits one stage later in WB. The CSR-write stall
+    // (csr_wb_hazard) keeps the data check behind the write, but with a
+    // locked entry or in U-mode the next instruction's fetch verdict can be
+    // latched during that very stall cycle, against the old configuration.
+    // So the write refetches the next instruction the way FENCE.I does,
+    // and it reaches EX only after the write has committed. One fetch per
+    // PMP write (tests/directed/pmp_refetch).
     wire ex_pmp_csr_wr = ifex_valid && ex_csr_writes &&
                          (ex_csr_addr == 12'h3A0 || ex_csr_addr[11:2] == 10'b0011_1011_00);
     // CSR access requires privilege >= csr_addr[9:8] (00=U, 01=S, 11=M).
@@ -1097,7 +1099,6 @@ module fyracore #(
             exwb_trap_cause <= 32'b0;
             exwb_trap_pc    <= 32'b0;
             exwb_trap_val   <= 32'b0;
-            exwb_instr      <= 32'h0000_0013;
             exwb_raw_instr  <= 32'h0000_0013;
             exwb_compressed <= 1'b0;
             // AMO
@@ -1219,7 +1220,6 @@ module fyracore #(
                 exwb_isLR       <= ctrl_isLR;
                 exwb_isSC       <= ctrl_isSC;
                 exwb_amoOp      <= ctrl_amoOp;
-                exwb_instr      <= ifex_instr;
                 exwb_raw_instr  <= ifex_raw_instr;
                 exwb_compressed <= ifex_compressed;
                 exwb_trap_pc    <= ifex_pc;

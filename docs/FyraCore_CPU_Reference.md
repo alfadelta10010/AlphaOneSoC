@@ -60,7 +60,7 @@
 | Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
 | Load-use | Stall until the load's data returns |
 | Branch/Jump | No fetch is requested while it is in EX (`ex_cti`); 1-cycle bubble, taken or not |
-| rs2 read | One EX cycle reads rs2 into `rs2_hold` (`rs2_phase`), for any instruction with rs2 != x0 |
+| rs2 read | One EX cycle reads rs2 into `rs2_hold` (`rs2_phase`), for an instruction whose format has an rs2 field (R, S, B, AMO) that is not x0; `decoder` gives rs2 = x0 to every other format |
 | CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
 | Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
@@ -518,7 +518,7 @@ Enough for M/U isolation (Linux M-mode programs one NAPOT entry covering everyth
 The WARL rules used to exist in four places (csr.v, the EX forward, the trap/MRET target masks, the testbench trace), and each copy that drifted produced a defect. With a one-cycle stall behind every CSR write, EX reads only stored state, the rules live once (the `*_legal` wires), and the forwarding muxes are gone. The cycle is hidden behind the next fetch in the SoC.
 
 ### 12.6 Why Refetch After a PMP Write?
-Forwarding pending PMP state into both checkers would need a 160-bit mux. PMP writes are rare, so a one-cycle refetch is the cheaper way to make the next instruction see them.
+Forwarding pending PMP state into the checker would need a 160-bit mux, and the CSR-write stall alone does not cover a fetch verdict latched during that stall. PMP writes are rare, so refetching the next instruction (one fetch per write) is the cheaper way to make it see them.
 
 ### 12.7 Why One Time-Shared PMP Checker?
 Checking the fetch, a straddling fetch's upper half and the data access at once took separate checkers. The extra EX cycles are only spent when PMP can actually deny a fetch (U-mode, or a locked entry), so an M-mode kernel never pays them, and in the SoC they are hidden behind the next fetch.

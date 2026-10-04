@@ -1,5 +1,6 @@
-# Back-to-back csrw/csrr so the read is served by the EX forwarding path
-# rather than the register, exercising fyracore's copy of csr.v's WARL masks.
+# Back-to-back csrw/csrr: the read waits one cycle in EX (csr_wb_hazard) for
+# the write to commit, then reads the stored legal value, exercising csr.v's
+# *_legal WARL rules.
 .section .text.init
 .option norvc
 .globl rvtest_entry_point
