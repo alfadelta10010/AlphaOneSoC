@@ -148,9 +148,11 @@ module csr #(
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
                                 minstret + 64'd1 : minstret;
 
-    // mstatus as it will stand after a CSR write in WB commits this cycle.
-    // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
-    // the older instruction, so its value is what they must transform.
+    // mstatus as it will stand after a CSR write in WB commits this cycle:
+    // the legal value the write stores. A trap or an MRET never coincides
+    // with that write -- the instruction behind a CSR write waits in EX until
+    // it has committed (fyracore's csr_wb_hazard) -- so they always see the
+    // stored mstatus.
     // M+U only: MPP's legal values are 00 (U) and 11 (M). A write of 01 (S,
     // absent) or 10 (reserved) is legalised to U, the least-privileged
     // mode -- one AND gate, and what the reference model does. (Keeping the

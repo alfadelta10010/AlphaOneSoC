@@ -9,7 +9,12 @@
 // Hazard handling:
 //   - Data forwarding from WB → EX
 //   - Load-use stall (1 cycle)
-//   - Branch/jump flush (1 cycle penalty)
+//   - Branch/jump: no fetch while it is in EX, 1-cycle bubble taken or not
+//   - rs2 read: one stalled EX cycle (rs2_phase), the register file has one
+//     read port
+//   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
+//   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
+//   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
