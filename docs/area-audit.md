@@ -11,8 +11,9 @@ area, which is a tile's die area at TT's default 60% placement density (seven ti
 (161 × 111.52 µm) at 60% holds 10,773 µm². The shape capacities below come from
 TinyTapeout's `tile_sizes.yaml` and are exact. Flop counts are raw counts.
 
-**Re-measured 2026-09-29** (PR #5 review, then its fixes): see the last section.
-Numbers above it are as first measured.
+**Re-measured 2026-09-29** (PR #5 review, then its fixes): see the section of that
+name. **Applied 2026-10-01**: thirteen of the cuts are in the RTL; see the last
+section. The tables before those two sections are kept as first measured, as history.
 
 ## Method
 
@@ -306,3 +307,62 @@ Same recipe; each figure is the mean of four to six file orders.
   72.2% of 6x2**: the conclusion above holds.
 - Stacks and scripts: `localFiles/area-audit/pr5/`, `localFiles/area-audit/synshuf.sh`,
   `localFiles/pr5-fixes-2026-09-29/area/`.
+
+## Applied 2026-10-01
+
+Thirteen changes are in `src/` on top of 10a37c3, one commit each, measured with the
+same recipe (mean of four file orders; each step's delta is paired by file order with
+the step before it, which cancels most of ABC's order noise).
+
+| step | change | candidate | tiles | Δ | flops |
+|---|---|---|---|---|---|
+| | 10a37c3 | | 13.61 | | 2,736 |
+| 1 | M instruction starts during the fetch wait (performance) | | 13.60 | 0.00 | 2,736 |
+| 2 | no fetch while a branch or jump is in EX (performance) | | 13.64 | +0.04 | 2,736 |
+| 3 | register file without reset; `boot_flash.S` zeroes x1-x31 | #1b | 13.26 | −0.38 | 2,736 |
+| 4 | four directed tests initialise what they read; `RUN_PLUSARGS` | #1b | 13.26 | 0.00 | 2,736 |
+| 5 | multiply and divide on one 34-bit add/sub | #3 | 12.33 | −0.93 | 2,543 |
+| 6 | CSRs store only their legal bits | #4 | 12.12 | −0.22 | 2,412 |
+| 7 | stall after a CSR write instead of forwarding it | #4 | 11.77 | −0.35 | 2,405 |
+| 8 | EX/WB register consolidation | #5 | 11.24 | −0.53 | 2,214 |
+| 9 | one time-shared PMP checker | #8 | 10.99 | −0.25 | 2,216 |
+| 10 | one comparator for branches and SLT, one shifter | #13 | 10.89 | −0.11 | 2,216 |
+| 11 | decompress in EX | #16 | 10.81 | −0.08 | 2,185 |
+| 12 | one register-file read port | #9 | 10.34 | −0.48 | 2,218 |
+| 13 | shifts done serially in the muldiv shift register | #10 | **10.04** | −0.29 | **2,205** |
+
+- **10.04 tiles, 2,205 flops: 81% of 6x2** (123% of 4x2), with the full ISA, UART
+  and GPIO. The doc's low-risk set (#1b, 3, 4, 5, 8, 13, 16) lands at 10.81 (10.77
+  estimated above).
+- Where the estimates moved: #9 is −0.48 on a flop register file (−0.27 was on the
+  latch one); #10, an estimate of −0.15, measured −0.29, because the multiply/divide
+  shift register already shifts both ways; #4's masking alone is −0.33, because the
+  flops only go once nothing else reads the shared post-write value.
+- Speed: compiled C goes from 56.1 to 48.4 clocks per instruction (−14%; steps 1-2
+  give 48.3). Behind the QSPI fetch, multiply, divide and a 31-bit shift all cost
+  the same 42 clocks as an add. The one visible cost is a branch whose rs2 is not
+  x0: 44 clocks instead of 43 (the rs2 read cycle, with no fetch in flight).
+- In the core testbench (no wait states) the core is slower by design: one cycle
+  after a CSR write, one per instruction with an rs2, one or two per instruction in
+  U-mode or with a locked PMP entry, and 2 + shamt per shift.
+- Verification: core directed 116/116 and SoC directed 75/75 at every step;
+  the final tree also with every register starting at X (`RUN_PLUSARGS=+RF_X`) and
+  `make test-all`. A river_core regression is still to run.
+- Pre-layout timing (OpenSTA, unbuffered netlist, default wire load): the worst
+  register-to-register path falls from 47.8 to 27.8 ns as the large fanouts go
+  (one read mux, one PMP checker, no CSR forwarding). These are unbuffered numbers,
+  not fmax.
+
+**Held: flop register file with one clock gate per register (#1a).** One
+`sky130_fd_sc_hd__dlclkp_1` per register replaces the 992 enable flops' muxes:
+−1.01 tiles on top of step 13, to **9.03 tiles (73% of 6x2)**. The registers stay
+flops; each clock gate contains a latch. It passes both directed suites in
+simulation, but no TinyTapeout design is known to have finished hardening with
+explicit clock gates, so it waits for a LibreLane run that checks clock-tree skew,
+hold buffering, the clock-gating timing checks and a gate-level simulation. The
+patch and its measurements are in `localFiles/area-opt-2026-09-30/`.
+
+Feature trades, measured on top of #1a, not applied (they need the user's
+decision): PMP with no entries 8.07 tiles, with one entry 8.36 tiles. Neither leaves
+placement margin on 4x2.
+

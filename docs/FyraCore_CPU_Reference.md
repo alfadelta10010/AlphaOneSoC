@@ -23,8 +23,8 @@
 ```
   IF                        EX                          WB
   +-----------+             +------------------+        +-----------------+
-  | Fetch     |  ifex_*     | Decode           |  exwb_*| Memory Access   |
-  | C-Decomp  | ---------> | Regfile Read     | -----> | Writeback       |
+  | Fetch     |  ifex_*     | C-Decomp, Decode |  exwb_*| Memory Access   |
+  |           | ---------> | Regfile Read     | -----> | Writeback       |
   | PC Update |             | ALU / MulDiv     |        | CSR Commit      |
   +-----------+             | Branch Resolve   |        | Trap Entry      |
                             | PMA + PMP Check  |        | AMO Phase 2     |
@@ -33,15 +33,15 @@
 ```
 
 **IF (Instruction Fetch):**
-- Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window (`imem_req`); outside it nothing is fetched and the instruction faults in EX
+- Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window and no branch or jump is in EX (`imem_req`); outside the window nothing is fetched and the instruction faults in EX
 - The PC only changes on a cycle the fetch completes, so the address of an outstanding fetch is never withdrawn
-- Detects compressed instructions (bits `[1:0] != 2'b11`) and expands them via `compressed_decoder`
-- Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal)
+- Detects compressed instructions (bits `[1:0] != 2'b11`); IF/EX holds the fetched bits (`ifex_raw_instr`), and EX expands them
+- Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal). While IF/EX holds an instruction, `pc` is that instruction's next PC (there is no `ifex_pc_next`)
 
 **EX (Execute):**
-- Decodes instruction fields (`decoder`) and control signals (`controller`)
-- Reads the register file with WB->EX forwarding
-- Executes the ALU operation or runs the multi-cycle multiply/divide unit
+- Expands a compressed instruction (`compressed_decoder`), decodes instruction fields (`decoder`) and control signals (`controller`)
+- Reads the register file through its one read port (rs2 in a stalled cycle, `rs2_phase`), with WB->EX forwarding
+- Executes the ALU operation, or runs the multi-cycle unit (`muldiv`: multiply, divide and the shifts)
 - Evaluates branches
 - Checks the fetch (both halves of a straddling 32-bit instruction) and the data address against the PMA map and PMP
 - Detects all synchronous traps and injects interrupts
@@ -59,45 +59,52 @@
 |---|---|
 | Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
 | Load-use | Stall until the load's data returns |
-| Branch/Jump | 1-cycle flush penalty |
-| Multi-cycle MulDiv | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
+| Branch/Jump | No fetch is requested while it is in EX (`ex_cti`); 1-cycle bubble, taken or not |
+| rs2 read | One EX cycle reads rs2 into `rs2_hold` (`rs2_phase`), for any instruction with rs2 != x0 |
+| CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
+| Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
 | Memory not ready | Stall while `imem_ready` is low, or while a data request is outstanding |
 | WFI | Stall until an enabled interrupt is pending; NOP if no source is enabled in `mie` |
-| Straddling fetch with PMP live | One extra EX cycle to PMP-check the upper half (`ex_ifetch_hi_phase`) |
+| Fetch PMP check (U-mode or a locked entry) | One EX cycle to check `ifex_pc`, one more for a straddling instruction's upper half (`ex_ifetch_hi_phase`) |
 | PMP CSR write | The next instruction is refetched, like FENCE.I |
 
 ```
-stall_other  = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active
-               || ex_ifetch_hi_phase
-wb_mem_stall = dmem_req && !dmem_ready
-muldiv_want  = ifex_valid && ctrl_isMulDiv && !ex_trap
-muldiv_have  = muldiv_ready || muldiv_done
-muldiv_stall = muldiv_want && !muldiv_have
-stall        = stall_other || muldiv_stall
+stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active
+                || ex_ifetch_hi_phase || csr_wb_hazard || rs2_phase
+stall_other   = stall_nofetch || if_mem_stall
+wb_mem_stall  = dmem_req && !dmem_ready
+muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap
+muldiv_have   = muldiv_ready || muldiv_done
+muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && !stall_nofetch && !flush
+muldiv_stall  = muldiv_want && !muldiv_have
+stall         = stall_other || muldiv_stall
 flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr
                || irq_inject
 ```
 
 Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because EX can briefly see not-yet-valid forwarded load data during a load-use or AMO-read stall.
 
+An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (rs2 read, CSR write, fetch PMP checks) are hidden the same way, except on a branch or jump, which has no fetch in flight.
+
 ### 2.3 CSR Values Seen by EX
 
-CSR writes commit in WB, one stage behind EX. Zicsr requires a write's effects to be visible to the very next instruction, so `csr.v` exposes post-write state:
+CSR writes commit in WB, one stage behind EX. Zicsr requires a write's effects to be visible to the very next instruction. Nothing is forwarded; the next instruction waits instead:
 
-- **`wval_out` (`csr_wval`)**: the value the CSR at `waddr` reads back once the pending write commits. Every WARL rule lives here and only here: MPP legalisation, the misa.C refusal, mie/mcounteren/mcountinhibit masks, mtvec direct mode, the mepc IALIGN read mask, mip's live bits, per-byte pmpcfg locks, TOR/L locks on pmpaddr, read-zero CSRs. The register update stores this value.
-- **CSR read forwarding**: an EX read of the CSR being written in WB (or of its U-mode counter alias: `cycle`/`instret`/`cycleh`/`instreth`) gets `csr_wval`.
-- **Post-write exports**: `mstatus_mie`, `mstatus_mpp`, `mstatus_mprv`, `mstatus_tw`, `mie_out` and `misa_c` all reflect a pending WB write, because their consumers (interrupt gating, the MRET privilege restore, the data PMP check, the U-mode WFI check, compressed decode and branch-target alignment) sit in EX.
-- **PMP registers are not forwarded.** A write to `pmpcfg0` or `pmpaddr0-3` refetches the next instruction instead (`ex_pmp_csr_wr`), so it reaches EX after the write has committed. This costs one cycle per PMP write instead of a 160-bit forwarding mux.
+- **`csr_wb_hazard`**: while a CSR write is in WB, the instruction in EX stalls for that cycle, so every EX consumer -- a CSR read (including the U-mode counter aliases), `trap_target`/`mret_target`, interrupt gating, the MRET privilege restore, the data PMP check (MPRV/MPP), the U-mode WFI check (TW), compressed decode and branch-target alignment (misa.C) -- reads the stored value. No interrupt is injected during it.
+- **Legal values**: each writable register stores its `*_legal` wire (`mie_legal`, `mtvec_legal`, `pmpcfg0_legal`, `pmpaddr0_legal`, ...; mstatus and misa store `mstatus_after_we` / `misa_after_we`). Every WARL rule lives there and only there: MPP legalisation, the misa.C refusal, mie/mcounteren/mcountinhibit masks, mtvec direct mode, per-byte pmpcfg locks, TOR/L locks on pmpaddr. Bits no write can set are constant, so they have no flops.
+- **`wval_out` (`csr_wval`)**: the value the CSR at `waddr` reads back once the pending write commits (the same wires, plus the mepc IALIGN read mask, mip's live bits and read-zero CSRs). Only the testbench trace uses it; synthesis removes it.
+- **mcycle**: the stall cycle would make an `rdcycle` right after `csrw mcycle` (or `mcycleh`) read the written value + 1. `mcycle_wr_q` skips the increment on the cycle after an mcycle write, so it reads the written value, as Spike does.
+- **PMP registers** additionally refetch the next instruction after a write to `pmpcfg0` or `pmpaddr0-3` (`ex_pmp_csr_wr`), so its fetch is checked against the new values.
 
-### 2.4 Trap Target / MRET Target Forwarding
+### 2.4 Trap Target / MRET Target
 
 ```verilog
-wire [31:0] trap_target = mtvec_fwd ? csr_wval : csr_mtvec;
-wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
+wire [31:0] trap_target = csr_mtvec;
+wire [31:0] mret_target = csr_mepc;
 ```
 
-`csrw mepc, t0; mret` returns to the new mepc; `csrw mtvec, t0` followed by a trapping instruction vectors to the new mtvec.
+`csrw mepc, t0; mret` returns to the new mepc, and `csrw mtvec, t0` followed by a trapping instruction vectors to the new mtvec: the MRET or the trapping instruction waits in EX until the write has committed (`csr_wb_hazard`).
 
 ---
 
@@ -107,17 +114,17 @@ wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
 
 | File | Module | Description |
 |---|---|---|
-| `fyracore.v` | `fyracore` | Top-level 3-stage pipeline (~1280 lines). Instantiates the modules from `alu` to `pmp` below. |
-| `alu.v` | `alu` | RV32I ALU (ADD, SUB, SLL, SRL, SRA, SLT, SLTU, XOR, OR, AND). |
-| `muldiv.v` | `muldiv` | Iterative multiply/divide unit: shift-add multiplier (33-34 cycles), restoring divider (34 cycles). |
+| `fyracore.v` | `fyracore` | Top-level 3-stage pipeline (~1350 lines). Instantiates the modules from `alu` to `pmp` below. |
+| `alu.v` | `alu` | RV32I ALU: ADD, XOR, OR, AND, and SUB/SLT/SLTU from the shared comparator (`branchCtrl`). No shifter. |
+| `muldiv.v` | `muldiv` | Iterative unit on one 34-bit adder/subtractor: signed-aware shift-add multiplier (34 cycles), restoring divider on magnitudes (36 cycles), and the RV32I shifts, one bit per cycle (2 + shamt cycles). |
 | `controller.v` | `controller` | Combinational decode of opcode/funct3/funct7 into control signals. Rejects illegal LOAD/STORE/JALR encodings without requesting side effects; the pipeline completes the rs2/rd/rs1 checks for SYSTEM and LR. |
 | `decoder.v` | `decoder` | Instruction field extractor: opcode, rd, rs1, rs2, funct3, funct7. |
 | `signExt.v` | `signExt` | Immediate generation for all formats. |
-| `branchCtrl.v` | `branchCtrl` | Branch condition evaluator. |
-| `regFile.v` | `regFile` | 32x32-bit register file, x0 hardwired to zero. |
+| `branchCtrl.v` | `branchCtrl` | The core's one comparator: rs1 - rs2 for a branch condition, rs1 - (ALU operand 2) for SUB/SLT/SLTU. |
+| `regFile.v` | `regFile` | 32x32-bit register file, x0 hardwired to zero. One write port, one read port. No reset (boot code zeroes x1-x31); simulation starts the registers at 0, or at X with `+RF_X`. |
 | `compressed_decoder.v` | `compressed_decoder` | RV32C expansion. Its legal/illegal verdict matches the RV32IMAC rules on all 49,152 16-bit encodings. |
-| `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, and the post-write value `wval` (section 2.3). |
-| `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. Two instances: fetch (X) and data (R/W/RW). |
+| `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, the `*_legal` write values and the post-write value `wval` (section 2.3). |
+| `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
 | `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO. Boots from flash (0x2000_0000). |
 | `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
@@ -193,7 +200,7 @@ Both ports follow the same contract:
 - From the cycle a request is raised until the cycle `*_ready` is seen high with it, the core holds its address (and for data `we`, `be`, `wdata`) stable. That ready cycle completes the transfer; read data is taken on it.
 - Nothing transfers while `*_req` is low, whatever `*_ready` is.
 
-`imem_req` is high whenever PC lies in `PMA_ROM_*` or `PMA_RAM_*`. Outside it no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
+`imem_req` is high whenever PC lies in `PMA_ROM_*` or `PMA_RAM_*` and no branch or jump is in EX (the next PC is decided there; on a shared bus a speculative fall-through fetch would have to finish before a taken redirect). Outside the windows no fetch is requested (an IO read can have side effects, and an unmapped address would never answer); the fetched bits are forced to 0 and the instruction faults in EX with cause 1. When the pipeline is stalled with a fetch already completed, the same address is requested again.
 
 `dmem_req` is high for a valid, non-trapping load, store or AMO in WB, except a failing SC, which retires without a transaction. `dmem_be` gives the byte lanes of every request, loads included; `dmem_we` says whether it is a write. An AMO is a read followed by a write, back to back.
 
@@ -201,7 +208,7 @@ For a memory controller: while a data request waits, the pipeline is stalled and
 
 ### 5.2 Memory controller and QSPI engine
 
-`src/mem_ctrl.v` serves both ports from one QSPI engine (`src/qspi_ctrl.v`): data first; a fetch reads 4 bytes from the halfword PC; a load reads the whole aligned word; a store sends only its enabled bytes; a PSRAM fetch that crosses a 1 KB page (which includes PSRAM A into B at 0x807F_FFFE) is split into two 2-byte reads, because PSRAM parts without row-boundary crossing wrap within the page. `qspi_ctrl` resets the Pmod's devices before its first request and puts the PSRAMs in QPI mode (a 4-byte PSRAM read is 20 SCK cycles, a flash read 28), never selects the flash for a write, and has a read-latency strap (`rd_late`). It does not keep the last fetched word, so a pipeline stalled with a fetch outstanding (M ops, WFI) refetches. See `docs/soc-architecture.md`.
+`src/mem_ctrl.v` serves both ports from one QSPI engine (`src/qspi_ctrl.v`): data first; a fetch reads 4 bytes from the halfword PC; a load reads the whole aligned word; a store sends only its enabled bytes; a PSRAM fetch that crosses a 1 KB page (which includes PSRAM A into B at 0x807F_FFFE) is split into two 2-byte reads, because PSRAM parts without row-boundary crossing wrap within the page. `qspi_ctrl` resets the Pmod's devices before its first request and puts the PSRAMs in QPI mode (a 4-byte PSRAM read is 20 SCK cycles, a flash read 28), never selects the flash for a write, and has a read-latency strap (`rd_late`). It does not keep the last fetched word, so a pipeline stalled with a fetch outstanding (WFI) refetches. See `docs/soc-architecture.md`.
 
 ---
 
@@ -237,8 +244,8 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 - Reset: all entries OFF (Spike resets permissive; see the riscv-dv notes).
 
 **Checks in the pipeline:**
-- `pmp_ifetch` (X) checks `ifex_pc`. For a 32-bit instruction at an address with bit 1 set, the upper half at `{ifex_pc_next[31:2], 2'b00}` is checked too: by a dedicated PMA compare, and by the same PMP checker during one extra EX cycle (`ex_ifetch_hi_phase`) whenever PMP could deny it (U-mode, or any entry locked). A fault in only the upper half reports that half's address in mtval.
-- `pmp_data` checks `ex_alu_result` with R (load, LR), W (store, SC) or R+W (AMO). With `mstatus.MPRV = 1`, the privilege checked is MPP.
+- One checker (`pmp_unit`) serves the fetch and the data access in turn. Whenever PMP could deny a fetch (U-mode, or any entry locked) the instruction spends one stalled EX cycle checking `ifex_pc` with X permission and, for a 32-bit instruction at an address with bit 1 set, one more on the upper half at `{pc[31:2], 2'b00}` (`ex_ifetch_hi_phase`); the verdicts are latched in `ifetch_lo_denied` / `ifetch_hi_denied`. The upper half also has a dedicated PMA compare. A fault in only the upper half reports that half's address in mtval. An M-mode kernel with no locked entry never spends these cycles.
+- On the instruction's last EX cycle the checker looks at `ex_alu_result` with R (load, LR), W (store, SC) or R+W (AMO). With `mstatus.MPRV = 1`, the privilege checked is MPP.
 
 ---
 
@@ -362,9 +369,9 @@ LR/SC to an IO window is an access fault (no reservation set there); an AMO to a
 ### 8.4 Interrupts
 
 - Sources: MEIP (cause 11) > MSIP (3) > MTIP (7).
-- Enable: `irq_global_en = !priv_mode || mstatus.MIE`, with per-source `mie` bits. Both are the post-write values, so the instruction after `csrc mstatus, 8` or `csrc mie, …` is already masked, and the one after `csrs mie, …` is already interruptible.
-- MTIP lags mtimecmp: the CLINT registers it, so after a store moves mtimecmp into the future `mip.MTIP` still reads 1 for two clocks (the store commits in WB, then the register updates) -- the next two instructions when the fetch is fast, fewer or none behind fetch waits -- and MIE set in that window takes a timer interrupt whose handler finds nothing pending. Priv 3.2.1 allows it ("reflected in MTIP eventually, but not necessarily immediately. A spurious timer interrupt might occur"); Linux programs mtimecmp with MIE = 0 several instructions before re-enabling, and MRET always leaves a bubble. `tests/directed/mtip_stale.S` pins the window at both ends.
-- Injection: `irq_inject = any_irq_pend && ifex_valid && !ex_trap && !muldiv_want && !stall_other`. It is never taken during a stall or while any M instruction is in EX, and a synchronous trap wins.
+- Enable: `irq_global_en = !priv_mode || mstatus.MIE`, with per-source `mie` bits. The instruction after a CSR write reaches EX only once the write has committed, so the instruction after `csrc mstatus, 8` or `csrc mie, …` is already masked, and the one after `csrs mie, …` is already interruptible.
+- MTIP lags mtimecmp: the CLINT registers it, so after a store moves mtimecmp into the future `mip.MTIP` still reads 1 for two clocks (the store commits in WB, then the register updates) -- the next two instructions when the fetch is fast, fewer or none behind fetch waits. An interrupt enabled in that window would be taken with nothing pending by the time the handler reads mip; Priv 3.2.1 allows it ("reflected in MTIP eventually, but not necessarily immediately. A spurious timer interrupt might occur"). A `csrsi mstatus, 8` right after the store does not reach it: the CSR-write stall outlasts the window. Linux programs mtimecmp with MIE = 0 several instructions before re-enabling, and MRET always leaves a bubble. `tests/directed/mtip_stale.S` pins the window at both ends.
+- Injection: `irq_inject = any_irq_pend && ifex_valid && !ex_trap && !muldiv_want && !stall_other`. It is never taken during a stall or while an M instruction or a shift is in EX, and a synchronous trap wins.
 - Entry: the EX instruction's side effects are suppressed and its PC becomes mepc, so it re-executes after MRET.
 
 ### 8.5 WFI
@@ -384,10 +391,11 @@ All base instructions. FENCE is a NOP (in-order core, blocking memory). FENCE fi
 
 | Op | Instruction | Cycles |
 |---|---|---|
-| MUL, MULH, MULHSU, MULHU | multiply | 33-34 |
-| DIV, DIVU, REM, REMU | divide | 34 |
+| MUL, MULH, MULHSU, MULHU | multiply | 34 |
+| DIV, DIVU, REM, REMU | divide | 36 |
+| SLL, SRL, SRA (and immediates) | shift | 2 + shamt |
 
-Division by zero and signed overflow follow the spec. Handshake: `start` for one cycle, `busy` while computing, `done` for one cycle as `busy` drops. The pipeline takes the result on the done cycle if it can, otherwise it holds it in `muldiv_ready` until it can. It never restarts on the done cycle.
+Cycles are EX cycles, from the `start` cycle to the `done` cycle inclusive (as counted in `muldiv.v`). They run during the next instruction's fetch, so behind the SoC's QSPI memory an M instruction costs no more than an ALU one. One 34-bit adder/subtractor serves all eight: a signed multiplicand is sign-extended into the accumulator and a signed multiplier's last step subtracts, so a multiply needs no operand or result negation; a divide negates its operands and result through the same adder. The RV32I shifts (SLL/SRL/SRA, SLLI/SRLI/SRAI) run through the same unit's shift register, one bit per cycle. Division by zero and signed overflow follow the spec. Handshake: `start` for one cycle, `busy` while computing, `done` for one cycle as `busy` drops. The pipeline takes the result on the done cycle if it can, otherwise it holds it in `muldiv_ready` until it can. It never restarts on the done cycle.
 
 ### 9.3 A Extension
 
@@ -498,7 +506,7 @@ Memory-timing plusargs for the lockstep sim: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RA
 Area is the primary constraint. IF/EX/WB keeps pipeline registers minimal while most instructions still take one cycle; the QSPI memory bottleneck dominates throughput anyway.
 
 ### 12.2 Why Iterative MulDiv?
-The combinational operators cost more than 10k gates. The iterative unit costs about 1k, for 33-34 cycles per operation.
+The combinational operators cost more than 10k gates. The iterative unit, with one shared adder, costs about 0.7 tile for 34-36 cycles per operation, which run during the next instruction's QSPI fetch. The shifts use it too, instead of a barrel shifter.
 
 ### 12.3 Why Direct-Mode mtvec?
 Vectored mode adds logic for no benefit on an M+U system; Linux uses direct mode.
@@ -506,17 +514,17 @@ Vectored mode adds logic for no benefit on an M+U system; Linux uses direct mode
 ### 12.4 Why 4 PMP Entries?
 Enough for M/U isolation (Linux M-mode programs one NAPOT entry covering everything). More entries cost area linearly.
 
-### 12.5 Why a Post-Write Value in csr.v?
-The WARL rules used to exist in four places (csr.v, the EX forward, the trap/MRET target masks, the testbench trace), and each copy that drifted produced a defect. `wval` is the single copy; forwarding, the targets and the trace all use it.
+### 12.5 Why Stall After a CSR Write Instead of Forwarding?
+The WARL rules used to exist in four places (csr.v, the EX forward, the trap/MRET target masks, the testbench trace), and each copy that drifted produced a defect. With a one-cycle stall behind every CSR write, EX reads only stored state, the rules live once (the `*_legal` wires), and the forwarding muxes are gone. The cycle is hidden behind the next fetch in the SoC.
 
 ### 12.6 Why Refetch After a PMP Write?
 Forwarding pending PMP state into both checkers would need a 160-bit mux. PMP writes are rare, so a one-cycle refetch is the cheaper way to make the next instruction see them.
 
-### 12.7 Why Check a Straddling Instruction's Upper Half With the Same PMP Checker?
-A second fetch PMP checker would double the comparator area. The extra EX cycle is only spent when PMP can actually deny a fetch (U-mode, or a locked entry), so an M-mode kernel never pays it.
+### 12.7 Why One Time-Shared PMP Checker?
+Checking the fetch, a straddling fetch's upper half and the data access at once took separate checkers. The extra EX cycles are only spent when PMP can actually deny a fetch (U-mode, or a locked entry), so an M-mode kernel never pays them, and in the SoC they are hidden behind the next fetch.
 
 ### 12.8 Why Pre-Compute CSR Values in EX?
-EX computes the read-modify-write value, so the CSR unit only ever writes and the forwarded value is a single word.
+EX computes the read-modify-write value, so the CSR unit only ever writes, and the value travels to WB in `exwb_rs2_data` (a CSR instruction has no rs2).
 
 ### 12.9 IRQ MPP Save
 `priv_mode` is set to M on the WB trap commit, never directly on `irq_inject`, so the CSR unit saves the pre-interrupt privilege into MPP.
@@ -537,4 +545,5 @@ EX computes the read-modify-write value, so the CSR unit only ever writes and th
 10. No Zihpm: `hpmcounter3-31` trap; `mhpmcounter3-31`/`mhpmevent3-31` read 0.
 11. mtime ticks every clock (no prescaler); MTIP is registered, one cycle behind the compare.
 12. One external interrupt input and no PLIC.
-13. The memory controller keeps no fetch buffer: a stall with a fetch outstanding refetches, and every access costs a full QSPI transaction (about 60 clocks).
+13. The memory controller keeps no fetch buffer: a stall with a fetch outstanding refetches, and every access costs a full QSPI transaction (about 42 clocks from PSRAM, 60 from flash).
+14. x1-x31 are not reset; boot code must zero them (`plugins/helpers/boot_flash.S` does).
