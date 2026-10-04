@@ -20,7 +20,7 @@ rvtest_entry_point:
     csrw mstatus, t0
     nop
     lw   a1, 0(a0)             # data as U: no matching entry -> cause 5
-    addi a2, a2, 7             # the fetch stream itself keeps running at M
+    addi a2, zero, 7           # the fetch stream itself keeps running at M
     csrw mstatus, x0
     lw   a3, 0(a0)             # 0x11
     mv   a4, s0                # expect 0x5
