@@ -1,9 +1,20 @@
 ---
 name: area-baseline
-description: Measured sky130 synth area of AlphaOneSoC: applied stack 10.04 t (branch area-opt_alfadelta10010), 10a37c3 13.60 t and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
+description: Measured sky130 synth area of AlphaOneSoC (recipe ~20-24% below LibreLane; TT-flow 16.58 -> 12.52 t): applied stack 10.04 t (branch area-opt_alfadelta10010), 10a37c3 13.60 t and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
 metadata:
   type: project
 ---
+
+**CORRECTION 2026-10-10 (pre-PR review): this recipe's tile figures run ~20-24% LOW.**
+It lets yosys use `_1` cells and edfxtp_1, which LibreLane's SYNTH_EXCLUDED_CELL_FILE
+(`no_synth.cells`, 199 cells for sky130A 8afc8346: 141 `_1` cells, edfxtp_1, every dlclkp)
+excludes; TT netlists are dfxtp_2 + `_2` gates + mux2_1/buf_1. LibreLane synth: 10a37c3
+16.58 t / 2,771 ff, branch 12.52 t / 2,238 ff (recipe 13.61 / 10.07). Add no_synth.cells to
+the dont-use list (localFiles/area-opt-review-2026-10-09/ppa/synll.sh, within 0.5% of
+LibreLane) for absolute numbers; paired deltas rank cuts either way, except edfxtp-only
+savings (#1b RF reset: recipe -0.38, TT cells +0.08). Never quote "% of <shape>" from a
+synth figure: post-CTS std-cell area was 1.32x LibreLane synth, and NO harden completes
+(DPL-0036, ~1,000 hold buffers on RF enable loops) -- fit is tested in the TT submission repo.
 
 **Branch area-opt_alfadelta10010 @3c25950 (stack applied, 2026-10-01): SoC flat 10.04 t,
 2,205 ff** (4 seeds). Hier: regFile 3.28, glue 2.19/373, csr 2.08/461, muldiv 0.72/118,

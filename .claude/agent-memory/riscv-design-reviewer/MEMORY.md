@@ -28,7 +28,7 @@ update after each review with confirmed decisions, findings, and recurring patte
   UART (fbdcc03) 16550 subset @0x10000000, reg-shift 0, no FIFOs: THR back-pressure, RTS# RX flow control,
   polled; LCR.SBC + LSR.BI since 805324c/3f0d708, RBR resets 0. GPIO (40516d6) OUT/IN + SPI mode-3 TX @0x10010000. soc_bus ANDs IO readies (6a8d4c6).
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on
-  wb_mem_stall (2167485); other stalls bubble. imem_req = in_exec(pc) && !ex_cti (no fetch behind a CTI);
+  wb_mem_stall (2167485); other stalls bubble. imem_req = in_exec(pc) && !ex_nofetch (no fetch behind a CTI, ECALL/EBREAK/MRET/FENCE.I/PMP write);
   every redirect gated on !stall so pc only moves when imem_ready. Loads read the whole word.
 - Area stack (branch area-opt_alfadelta10010, 2026-10-01): RF no reset + ONE read port (rs2_phase/rs2_hold),
   NO CSR forwarding (1-clk csr_wb_hazard stall, *_legal stores, mcycle_wr_q), one time-shared PMP checker,

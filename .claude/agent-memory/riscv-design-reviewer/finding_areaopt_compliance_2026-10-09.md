@@ -29,3 +29,6 @@ Findings:
 **Why:** gate before the area stack's PR to main. **How to apply:** next time, check whether nf_misa_c
 landed in tests/directed and whether the RF_X wording changed. Related: [[finding-areaopt-review-2026-10-04]],
 [[patterns-recurring]].
+
+SHAs after the 2026-10-10 history rewrite (9fcb21d split in two; trees identical): 30eacb1 -> c7e6325,
+cc95754 -> 65d5d44, ef9037d -> d19ceed, 0db10ee -> d57ef3d, e9c1700 -> f767acc, 9fcb21d -> f02e68c + def1cdc.

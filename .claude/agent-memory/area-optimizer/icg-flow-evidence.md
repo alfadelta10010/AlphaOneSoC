@@ -15,8 +15,11 @@ metadata:
   removed clock gating: LibreLane 3.0.14's yosys 0.62 `clockgate` gated a sync-reset flop on
   its enable alone (fixed yosys >= 0.65). Same PRs claim the TT flow never uses edfxtp
   (enable flop = dfxtp + mux2), so our recipe slightly underestimates enable-flop area.
-- open_pdks sky130 librelane synth_excluded.cells: clkbuf/clkinv/dly*/tap/decap/fill/diode/
-  lpflow/probe/`s*` -- dlclkp and edfxtp are not in it.
+- CORRECTED 2026-10-10: LibreLane's SYNTH_EXCLUDED_CELL_FILE for sky130 is `no_synth.cells`
+  (199 cells for 8afc8346), and it DOES exclude every dlclkp, edfxtp_1 and 141 `_1` cells
+  (verified in a ttsky26c run's resolved.json and netlist: dfxtp_2 x2238, no dfxtp_1/edfxtp_1).
+  Exclusion stops yosys mapping to them; an explicitly instantiated dlclkp_1 (patch 14) still
+  goes through. The earlier note here read a different list.
 
 **How to apply:** ICG RF (#1a) needs a sandbox hardening (CTS skew, hold buffers, signoff
 gating checks, GLS) before it lands; avoid yosys `clockgate` on sync-reset flops. Related:

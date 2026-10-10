@@ -31,3 +31,6 @@ Sandbox projects /home/mempool/tt/projects/ppa-rev-{main,tip,tip8,tip6d80,tipicg
 figure that wasn't produced with the TT cell set (synll.sh) or LibreLane; ask for a completed harden
 before any shape claim; check RF hold-buffer count in any harden. Related: [[patterns-recurring]],
 [[finding-areaopt-review-2026-10-04]].
+
+SHAs after the 2026-10-10 history rewrite (9fcb21d split in two; trees identical): 30eacb1 -> c7e6325,
+cc95754 -> 65d5d44, ef9037d -> d19ceed, 0db10ee -> d57ef3d, e9c1700 -> f767acc, 9fcb21d -> f02e68c + def1cdc.

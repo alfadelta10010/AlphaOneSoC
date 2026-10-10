@@ -22,7 +22,7 @@ SoC) 0 mismatches.
 Findings (all verification, PROVEN by mutant + probe):
 - m1: no directed test runs SRA/SRAI, MULHSU/MULHU, MULH neg multiplier, SLTU mixed sign.
   mul_nosub, mulhsu_unsigned, sra_nofill, sra_wire0 (fyracore .sra(1'b0)), sltu_signed all
-  pass 116/116; unit tbs catch 3, nothing in repo catches sra_wire0. river_core not run.
+  pass 116/116; unit tbs catch 3, nothing in repo catches sra_wire0. river_core not run (then; run later on 65d5d44: 0 DUT defects).
 - m2: PMP-write refetch (ex_pmp_csr_wr) is NECESSARY (locked entry present -> lo phase latched
   in csr_wb_hazard cycle with old cfg) but untested; fetch-PMP privilege under MPRV untested
   since the time-share (mprv.S lost sensitivity: no lock -> no fetch phase in M).
