@@ -107,7 +107,7 @@ Test programs are RISC-V assembly in `tests/*.S`. The build pipeline: `.S` → `
 
 The pipeline top-level is `src/fyracore.v` (~1350 lines). It instantiates all other modules.
 
-**EX stall cycles that the SoC hides behind the ~42-clock fetch:** one after a CSR write (`csr_wb_hazard`), one to read rs2 (`rs2_phase`), one or two fetch PMP checks in U-mode or with a locked entry, the M-unit's iterations and serial shifts. In the core testbench (zero-wait memory) they are visible as extra cycles; in the SoC only a branch pays its rs2 phase (no fetch is in flight behind a branch).
+**EX stall cycles that the SoC hides behind the ~42-clock fetch:** one after a CSR write (`csr_wb_hazard`), one to read rs2 (`rs2_phase`), one or two fetch PMP checks in U-mode or with a locked entry, the M-unit's iterations and serial shifts. In the core testbench (zero-wait memory) they are visible as extra cycles: compiled C runs at 3.88 CPI there, against 2.55 before the area cuts. In the SoC they show only where no fetch is in flight, i.e. on the `ex_nofetch` instructions: a branch with rs2 ≠ x0 costs 44 clocks instead of 43, and in U-mode (or with a locked entry) every jump and branch pays its fetch PMP check, +1 clock (compiled C in U-mode is 0.23% slower than in M-mode). Interrupts also wait for an M op or shift in EX: in a loop of 31-bit shifts the timer interrupt's latency averages 433 clocks (max 550), against 108 for a loop of NOPs.
 
 ### Key Architectural Patterns
 

@@ -85,7 +85,7 @@ flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pm
 
 Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because EX can briefly see not-yet-valid forwarded load data during a load-use or AMO-read stall.
 
-An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (rs2 read, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight.
+An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (rs2 read, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
 
 ### 2.3 CSR Values Seen by EX
 
@@ -515,13 +515,13 @@ Vectored mode adds logic for no benefit on an M+U system; Linux uses direct mode
 Enough for M/U isolation (Linux M-mode programs one NAPOT entry covering everything). More entries cost area linearly.
 
 ### 12.5 Why Stall After a CSR Write Instead of Forwarding?
-The WARL rules used to exist in four places (csr.v, the EX forward, the trap/MRET target masks, the testbench trace), and each copy that drifted produced a defect. With a one-cycle stall behind every CSR write, EX reads only stored state, the rules live once (the `*_legal` wires), and the forwarding muxes are gone. The cycle is hidden behind the next fetch in the SoC.
+The WARL rules used to exist in four places (csr.v, the EX forward, the trap/MRET target masks, the testbench trace), and each copy that drifted produced a defect. With a one-cycle stall behind every CSR write, EX reads only stored state, the rules live once (the `*_legal` wires), and the forwarding muxes are gone. In the SoC the cycle is hidden behind the next fetch, unless the instruction after the write is one of the `ex_nofetch` ones (e.g. `csrw mepc` followed by `mret`).
 
 ### 12.6 Why Refetch After a PMP Write?
 Forwarding pending PMP state into the checker would need a 160-bit mux, and the CSR-write stall alone does not cover a fetch verdict latched during that stall. PMP writes are rare, so refetching the next instruction (one fetch per write) is the cheaper way to make it see them.
 
 ### 12.7 Why One Time-Shared PMP Checker?
-Checking the fetch, a straddling fetch's upper half and the data access at once took separate checkers. The extra EX cycles are only spent when PMP can actually deny a fetch (U-mode, or a locked entry), so an M-mode kernel never pays them, and in the SoC they are hidden behind the next fetch.
+Checking the fetch, a straddling fetch's upper half and the data access at once took separate checkers. The extra EX cycles are only spent when PMP can actually deny a fetch (U-mode, or a locked entry), so an M-mode kernel never pays them. In the SoC they are hidden behind the next fetch, except on jumps and branches (no fetch is in flight behind them; see `ex_nofetch`), which pay +1 clock in U-mode: compiled C runs 0.23% slower in U-mode than in M-mode.
 
 ### 12.8 Why Pre-Compute CSR Values in EX?
 EX computes the read-modify-write value, so the CSR unit only ever writes, and the value travels to WB in `exwb_rs2_data` (a CSR instruction has no rs2).
