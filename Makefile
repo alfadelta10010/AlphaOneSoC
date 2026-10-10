@@ -31,6 +31,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
               $(SRC_DIR)/muldiv.v \
               $(SRC_DIR)/pmp.v \
               $(SRC_DIR)/regFile.v \
+              $(SRC_DIR)/rf_top.v \
               $(SRC_DIR)/regs.v \
               $(SRC_DIR)/signExt.v
 

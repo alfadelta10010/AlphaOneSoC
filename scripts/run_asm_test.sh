@@ -56,7 +56,7 @@ SRC_FILES=$(ls \
     ${SRC_DIR}/controller.v ${SRC_DIR}/csr.v ${SRC_DIR}/decoder.v \
     ${SRC_DIR}/muldiv.v \
     ${SRC_DIR}/pmp.v \
-    ${SRC_DIR}/regFile.v ${SRC_DIR}/regs.v ${SRC_DIR}/signExt.v \
+    ${SRC_DIR}/regFile.v ${SRC_DIR}/rf_top.v ${SRC_DIR}/regs.v ${SRC_DIR}/signExt.v \
     ${SRC_DIR}/fyracore.v)
 
 iverilog -Wall \
