@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Area-opt Branch Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column; a verdict band, then scannable tables, each wide table in its own scroller. */
+:root{
+  --bg:#f6f7f5; --panel:#ffffff; --fg:#1b2220; --muted:#5a6863; --rule:#d9dfdc;
+  --accent:#0d6b63; --accent-soft:#e2f1ef;
+  --crit:#b3261e; --crit-bg:#fbe9e7; --major:#b8590b; --major-bg:#fdf0e3;
+  --minor:#7a6a00; --minor-bg:#f8f3d6; --nit:#56636b; --nit-bg:#eceff1;
+  --ok:#1f7a3a; --ok-bg:#e5f4ea;
+  --f-display:"Archivo",system-ui,sans-serif; --f-body:"Source Sans 3",system-ui,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121715; --panel:#1a211f; --fg:#e4ebe8; --muted:#9aa9a4; --rule:#2c3633;
+  --accent:#5cc4b8; --accent-soft:#163a36;
+  --crit:#ff8a80; --crit-bg:#3a1a18; --major:#ffb36b; --major-bg:#3a2714; --minor:#e6d36a; --minor-bg:#33300f; --nit:#a7b4bb; --nit-bg:#252d31;
+  --ok:#7fd99a; --ok-bg:#17301f; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121715; --panel:#1a211f; --fg:#e4ebe8; --muted:#9aa9a4; --rule:#2c3633;
+  --accent:#5cc4b8; --accent-soft:#163a36;
+  --crit:#ff8a80; --crit-bg:#3a1a18; --major:#ffb36b; --major-bg:#3a2714; --minor:#e6d36a; --minor-bg:#33300f; --nit:#a7b4bb; --nit-bg:#252d31;
+  --ok:#7fd99a; --ok-bg:#17301f; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:16px/1.55 var(--f-body);padding-inline:16px;padding-block:28px 64px}
+.wrap{max-width:1080px;margin:0 auto;display:grid;gap:36px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;line-height:1.2}
+h1{font-size:clamp(1.7rem,3.6vw,2.4rem);font-weight:800;letter-spacing:-.01em}
+h2{font-size:1.3rem;font-weight:700;padding-bottom:8px;border-bottom:2px solid var(--fg)}
+h3{font-size:1.02rem;font-weight:700}
+p{margin:0;max-width:72ch}
+code,.mono{font-family:var(--f-mono);font-size:.86em}
+a{color:var(--accent)}
+.eyebrow{font:600 .74rem/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header{display:grid;gap:12px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 20px;color:var(--muted);font-size:.92rem}
+.meta b{color:var(--fg);font-weight:600}
+section{display:grid;gap:16px}
+.verdict{background:var(--panel);border:1px solid var(--rule);border-left:6px solid var(--accent);padding:20px 22px;display:grid;gap:10px}
+.verdict p{font-size:1.06rem}
+.score{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.slice{background:var(--panel);border:1px solid var(--rule);padding:14px 16px;display:grid;gap:6px;align-content:start;min-width:0}
+.slice .k{font:600 .8rem var(--f-body);color:var(--muted)}
+.slice .d{font-size:.92rem}
+.pill{display:inline-block;font:600 .72rem/1 var(--f-mono);letter-spacing:.05em;text-transform:uppercase;padding:5px 8px;border-radius:3px;white-space:nowrap;justify-self:start}
+.p-ok{color:var(--ok);background:var(--ok-bg)} .p-crit{color:var(--crit);background:var(--crit-bg)}
+.p-major{color:var(--major);background:var(--major-bg)} .p-minor{color:var(--minor);background:var(--minor-bg)} .p-nit{color:var(--nit);background:var(--nit-bg)}
+.tbl{overflow-x:auto;border:1px solid var(--rule);background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--rule)}
+th{font:600 .74rem var(--f-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--bg);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;font-family:var(--f-mono);font-size:.84rem;white-space:nowrap}
+td.where{font-family:var(--f-mono);font-size:.8rem;color:var(--muted);min-width:150px}
+td.fix{min-width:220px}
+tr.sev-crit td:first-child{box-shadow:inset 4px 0 0 var(--crit)}
+tr.sev-major td:first-child{box-shadow:inset 4px 0 0 var(--major)}
+tr.sev-minor td:first-child{box-shadow:inset 4px 0 0 var(--minor)}
+tr.sev-nit td:first-child{box-shadow:inset 4px 0 0 var(--nit)}
+.src{font:600 .7rem var(--f-mono);color:var(--muted);white-space:nowrap}
+.decisions{display:grid;gap:10px;margin:0;padding:0;list-style:none;counter-reset:d}
+.decisions li{background:var(--panel);border:1px solid var(--rule);padding:12px 16px 12px 52px;position:relative;counter-increment:d}
+.decisions li::before{content:counter(d);position:absolute;left:16px;top:12px;font:800 1.1rem var(--f-display);color:var(--accent)}
+.decisions .rec{color:var(--muted);font-size:.9rem;display:block;margin-top:4px}
+.tasks{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.tasks li{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}
+.tasks li::before{content:"";width:14px;height:14px;border:2px solid var(--muted);border-radius:2px;margin-top:4px}
+.held{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px 24px;margin:0;padding-left:18px}
+.note{font-size:.88rem;color:var(--muted)}
+.paths{display:grid;gap:4px;font-family:var(--f-mono);font-size:.8rem;color:var(--muted);overflow-x:auto}
+body{margin:0}
+.status{background:var(--panel);border:1px solid var(--rule);border-left:6px solid var(--ok);padding:18px 22px;display:grid;gap:12px}
+.status ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 28px}
+.cols>div{min-width:0;display:grid;gap:6px;align-content:start}
+.done{text-decoration:line-through;text-decoration-color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:.86rem;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">FyraCore / AlphaOne SoC · pre-PR adversarial review</div>
+  <h1>Area-opt branch review</h1>
+  <div class="meta">
+    <span>Branch <b class="mono">area-opt_alfadelta10010</b></span>
+    <span>Reviewed <b class="mono">10a37c3..30eacb1</b>, now <span class="mono">c7e6325</span> after the history rewrite</span>
+    <span>Reviewed <b>2026-10-09/10</b>; fixes <b>2026-10-10</b></span>
+    <span>PR <a href="https://github.com/alfadelta10010/AlphaOneSoC/pull/6">#6</a></span>
+  </div>
+  <p class="note">Three independent passes: RTL compliance and hazards (riscv-design-reviewer), PPA and claims (riscv-design-reviewer, efficiency pass), and a verification audit. The lead added housekeeping and spot-checked the key evidence. Area is in TinyTapeout tiles: 1 t ≈ 11,300 µm² of std-cell area at 60% density; 6x2 = 12.35 t, 8x2 = 16.52 t.</p>
+  <p class="note">This branch exists to find and rank area cuts. Whether the SoC fits a tile shape and meets timing is tested in the TinyTapeout submission repository with LibreLane.</p>
+</header>
+
+<section>
+  <div class="status">
+    <span class="eyebrow">Status after the fixes (2026-10-10)</span>
+    <div class="cols">
+      <div><h3>Fixed on the branch</h3><ul>
+        <li>Area docs measured against TT's flow; shape and timing claims withdrawn (<span class="mono">f0636a8</span>)</li>
+        <li><code>run.sh</code> fails any dump that holds an X; <code>rd()</code> keeps X (<span class="mono">0db0e99</span>)</li>
+        <li><code>mie_disable</code> clears s2 before counting (<span class="mono">937a2a8</span>)</li>
+        <li><code>+RF_X</code> wording names the branch-only gap (<span class="mono">a8084de</span>)</li>
+        <li>Visible stall costs documented (<span class="mono">af9fcce</span>)</li>
+        <li><code>9fcb21d</code> split: muldiv docs (<span class="mono">f02e68c</span>) and the datasheets and Discord threads (<span class="mono">def1cdc</span>)</li>
+        <li>Agent notes corrected (<span class="mono">bab339e</span>)</li>
+      </ul></div>
+      <div><h3>Still open</h3><ul>
+        <li>A completed harden: moves to the submission repository</li>
+        <li>ICG register file: fix the lint and synthesis-check failures</li>
+        <li>Shared muldiv adder on the critical path</li>
+        <li>Probe for <code>ex_nofetch</code> staying decode-only; nonzero register init; a flash-boot test of <code>boot_flash.S</code>; low-signal riscv-dv flag; the nits</li>
+      </ul></div>
+    </div>
+  </div>
+  <div class="verdict">
+    <span class="eyebrow">Verdict</span>
+    <p><b>The RTL is correct and the speed-up is real. The area cut is real in relative terms, about −24%. The tile figures, the "81% of 6x2" claim and the timing claim are wrong.</b> No TinyTapeout harden completes, on this branch or on main. The docs and the <span class="mono">run.sh</span> X blind spot are now fixed on the branch. The harden failure moves to the submission repository, where cuts are hardened; this branch improves it (fewer hold buffers) but does not solve it.</p>
+  </div>
+  <div class="score">
+    <div class="slice"><span class="k">RTL correctness</span><span class="pill p-ok">holds</span><span class="d">0 Critical, 0 Major. <code>ex_nofetch</code> is proven decode-only. 5,025 fresh lockstep runs, 0 mismatches.</span></div>
+    <div class="slice"><span class="k">Verification claims</span><span class="pill p-ok">reproduced</span><span class="d">Core 121/121, SoC 80/80, both again with +RF_X; test-all passes; river_core labels re-derived. One harness gap (Major).</span></div>
+    <div class="slice"><span class="k">Performance claims</span><span class="pill p-ok">reproduced</span><span class="d">C bench 56.10 → 48.42. Docs understate the U-mode, zero-wait and interrupt-latency costs.</span></div>
+    <div class="slice"><span class="k">Area, relative</span><span class="pill p-ok">holds</span><span class="d">−24.4% in the TT cell set, −24.8% placed at 8x2. Every cut except the register-file reset removal survives.</span></div>
+    <div class="slice"><span class="k">Area, absolute tiles</span><span class="pill p-crit">were wrong</span><span class="d">The recipe is ~24% low. LibreLane synthesis gives 12.52 t, which is 101% of 6x2, not 81%. The docs now say so.</span></div>
+    <div class="slice"><span class="k">Timing claim</span><span class="pill p-major">withdrawn</span><span class="d">47.8 → 27.8 ns is unbuffered noise. After CTS the tip has less slack than main: +2.90 vs +4.26 ns at tt.</span></div>
+    <div class="slice"><span class="k">Tapeout readiness</span><span class="pill p-crit">blocked</span><span class="d">Every harden fails DPL-0036 on register-file hold buffers. Already true on main.</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Correct the area and timing claims on this branch before merge?</b> This means re-baselining <code>docs/area-audit.md</code> in the TT cell set and withdrawing "81% of 6x2", "47.8 → 27.8 ns" and "−0.38 t" for the reset removal.<span class="rec">Done (f0636a8): the docs now measure against TT's flow; the commit messages keep the recipe numbers as history.</span></li>
+    <li><b>Keep the register-file reset removal (<code>3510430</code>)?</b> It saves nothing in the TT cell set (+0.08 t).<span class="rec">Kept, and documented as a legality and ICG prerequisite rather than an area cut.</span></li>
+    <li><b>Path to a completed harden.</b> With the ICG register file, hold buffers drop from 1,299 to 420 and routing demand from 184% to 104%. Detailed routing at 6x2 still fails. The options are the ICG register file (after the lint fix) plus more cuts, or 8x2 and up.<span class="rec">Moves to the submission repository, where cuts are hardened and measured.</span></li>
+    <li><b>Commit <code>9fcb21d</code> carries 5.7 MB of unrelated files:</b> three datasheet PDFs and five TinyTapeout Discord threads that <code>docs/qspi-memories.md</code> cites. Splitting it means a history rewrite and a force-push to the PR branch.<span class="rec">Done: split into f02e68c and def1cdc, the later commits rebased with committer date = author date, force-pushed.</span></li>
+    <li><b>Take the shared muldiv adder off the critical path</b> with a non-restoring divider or a registered add/sub control (~0 area)?<span class="rec">Open: a follow-up, checked with signoff STA once a harden completes.</span></li>
+  </ol>
+</section>
+
+<section>
+  <h2>Findings</h2>
+  <div class="legend"><span>PROVEN = reproduced by simulation, synthesis or the flow. MEASURED = a number from the flow. REASONED = argued from the RTL and spec.</span></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Sev</th><th>Finding</th><th>Where</th><th>Proof</th><th>Fix</th><th>Status</th></tr></thead>
+    <tbody>
+    <tr class="sev-crit"><td><span class="pill p-crit">Crit</span><div class="src">PPA C1</div></td><td>The tile figures are ~24% low. The recipe maps to <code>_1</code> cells and <code>edfxtp</code>, and LibreLane's <code>no_synth.cells</code> excludes 199 cells, including those. LibreLane synthesis: main 16.58 t, tip 12.52 t (101% of 6x2). Placed area grows 1.64× over the recipe figure.</td><td class="where">docs/area-audit.md "Applied"; 3c25950; patch 14 "9.03 t"</td><td>PROVEN; lead verified the cell list and the synthesis areas on the sandbox</td><td class="fix">Add <code>no_synth.cells</code> to the dont-use list, re-baseline every tile figure, and claim no tile shape without a finished harden.</td><td><span class="pill p-ok">docs fixed</span><div class="src">f0636a8; fit → submission repo</div></td></tr>
+    <tr class="sev-crit"><td><span class="pill p-crit">Crit</span><div class="src">PPA C2 · pre-existing</div></td><td>No TT harden completes: main at 8x2, the tip at 6x2 (density 60% and 80%) and the tip at 8x2 all fail detailed placement (DPL-0036). About 950–1,000 hold buffers sit on the register file's Q→mux→D loops, because TT's SDC applies 0.25 ns of uncertainty to hold. Routing demand is 132–186%.</td><td class="where">sandbox projects ppa-rev-{main,tip,tip8,tip6d80,tipicg}</td><td>PROVEN; lead confirmed DPL-0036 in all three logs</td><td class="fix">Adopt the ICG register file once it passes TT's checks, then cut more or plan for a larger tile. Re-harden before any shape claim.</td><td><span class="pill p-minor">open</span><div class="src">submission repo</div></td></tr>
+    <tr class="sev-major"><td><span class="pill p-major">Major</span><div class="src">PPA M1</div></td><td>The register-file reset removal saves +0.08 t in the TT cell set, not −0.38 t. Main's reset folds into the same <code>a22o</code> as the enable; the recipe's saving came from <code>edfxtp_1</code>.</td><td class="where">3510430</td><td>MEASURED, 6 seeds, paired</td><td class="fix">Stop counting it as an area cut. Keep it on functional grounds.</td><td><span class="pill p-ok">docs fixed</span><div class="src">f0636a8; change kept</div></td></tr>
+    <tr class="sev-major"><td><span class="pill p-major">Major</span><div class="src">PPA M2</div></td><td>The timing claim rests on noise: the dead-code commit 0db10ee moves the unbuffered metric by 4.8 ns. After CTS at 8x2 and 20 ns, tt slack is main +4.26 ns and tip +2.90 ns; at ss, −8.81 and −9.45 ns. The tip's ten worst paths all run <code>muldiv isdiv</code> → 34-bit ripple add/sub → <code>sum[33]</code>.</td><td class="where">area-audit "47.8 → 27.8 ns"; bbd6d95; 29e17f5</td><td>MEASURED</td><td class="fix">Withdraw the claim. Use a non-restoring divider or register the add/sub control.</td><td><span class="pill p-ok">claim withdrawn</span><div class="src">f0636a8; adder fix open</div></td></tr>
+    <tr class="sev-major"><td><span class="pill p-major">Major</span><div class="src">PPA M3 · not on branch</div></td><td>The held ICG patch fails TT's lint (32 MULTIDRIVEN) and synthesis checks (<code>reg_file[0]</code> has no driver). With both checks off it is worth −1.23 t, not −1.01.</td><td class="where">localFiles patch 14, regFile.v:48, :70</td><td>MEASURED</td><td class="fix">Use 31 separate <code>reg</code>s in the generate block and never declare entry 0.</td><td><span class="pill p-ok">documented</span><div class="src">f0636a8; patch fix open</div></td></tr>
+    <tr class="sev-major"><td><span class="pill p-major">Major</span><div class="src">Verif M1</div></td><td>The <code>expect</code> mode and <code>sane()</code> cannot see X. <code>rd()</code> skips an all-X write and returns the previous value. Under +RF_X a control test goes from FAIL to PASS, and <code>mie_disable</code> reads <code>s2</code>, which it never writes, and passes. 6b10d3b fixed four such tests and missed this one.</td><td class="where">tests/directed/run.sh:146, :153; mie_disable.S:20-22</td><td>PROVEN; lead confirmed the X lines in the dump</td><td class="fix">Fail any dump that contains X, make <code>rd()</code> fail on a non-hex value, and add <code>li s2, 0</code>.</td><td><span class="pill p-ok">fixed</span><div class="src">937a2a8, 0db0e99</div></td></tr>
+    <tr class="sev-minor"><td><span class="pill p-minor">Minor</span><div class="src">Compliance m1</div></td><td>No repository test pins <code>ex_nofetch</code> as decode-only. The two alternatives the commit rules out, deriving it from <code>ex_illegal_insn</code> or <code>ex_trap</code>, both pass 121/121. In the SoC, <code>nf_trap</code> trips <code>req_hold_check</code> at the QSPI engine in 3 of 5 runs.</td><td class="where">fyracore.v:496-505</td><td>PROVEN, killed by probe nf_misa_c @IMEM_WAIT=2</td><td class="fix">Add <code>nf_misa_c.S</code> to the directed suite at IMEM_WAIT 1 and 2.</td><td><span class="pill p-minor">open</span></td></tr>
+    <tr class="sev-minor"><td><span class="pill p-minor">Minor</span><div class="src">Compliance m2 · Verif m1</div></td><td>+RF_X misses an X that only steers a branch: iverilog takes the else arm, which matches Spike's zero start. The docs say otherwise.</td><td class="where">docs/CLAUDE.md:128; regFile.v:26-27; area-audit:349, 364</td><td>PROVEN (rfx_blind passes, rfx_caught fails)</td><td class="fix">Reword. Add a nonzero or random init (two patterns of opposite sign) compared against Spike.</td><td><span class="pill p-ok">docs fixed</span><div class="src">a8084de; init option open</div></td></tr>
+    <tr class="sev-minor"><td><span class="pill p-minor">Minor</span><div class="src">Verif m2</div></td><td>11 of the 225 riscv-dv passes are PMP tests that retire 308–343 lines of an 11–21k-line program, then exit through the fault handler with tohost=1.</td><td class="where">regr/cc95754 audit</td><td>PROVEN</td><td class="fix">Have the audit flag retired/program below ~5% and leave those out of the pass count.</td><td><span class="pill p-minor">open</span><div class="src">noted in f0636a8</div></td></tr>
+    <tr class="sev-minor"><td><span class="pill p-minor">Minor</span><div class="src">Verif m3</div></td><td>No flow executes <code>boot_flash.S</code>'s x1–x31 clear, which is now what makes C safe.</td><td class="where">plugins/helpers/boot_flash.S</td><td>REASONED (it assembles to 31 c.li)</td><td class="fix">Add a SoC flash-boot test with +RF_X.</td><td><span class="pill p-minor">open</span></td></tr>
+    <tr class="sev-minor"><td><span class="pill p-minor">Minor</span><div class="src">Lead · PPA m5</div></td><td><code>9fcb21d</code>'s message is about muldiv cycle counts, but the commit also adds 3 PDFs and 5 Discord threads (5.7 MB) that name third-party handles.</td><td class="where">9fcb21d</td><td>PROVEN</td><td class="fix">Split before merge (needs a force-push), or keep and note it.</td><td><span class="pill p-ok">fixed</span><div class="src">f02e68c + def1cdc</div></td></tr>
+    <tr class="sev-minor"><td><span class="pill p-minor">Minor</span><div class="src">PPA m1–m4</div></td><td>The docs understate several costs:<br>• U-mode jumps and branches cost +1 clock (C bench in U-mode +0.23%).<br>• A run of shifts blocks interrupts: average timer latency 108 → 433 clocks.<br>• The zero-wait core C bench is +52% CPI.<br>• <code>ex_nofetch</code>'s −2.0% applies to the suite; on the C bench it is 0%.</td><td class="where">docs/CLAUDE.md; CPU Reference; area-audit</td><td>MEASURED</td><td class="fix">Reword and quantify. Optionally allow interrupt injection before a shift starts.</td><td><span class="pill p-ok">docs fixed</span><div class="src">af9fcce, f0636a8</div></td></tr>
+    <tr class="sev-nit"><td><span class="pill p-nit">Nit</span><div class="src">Compliance n1–n2</div></td><td>The PMP and FENCE.I refetch arms are now redundant backstops behind <code>ex_nofetch</code>; only removing both fails a test. Nothing asserts that the fetch-hold speed-up stays: dropping any term shows up only in cycle counts.</td><td class="where">fyracore.v:643, 1049-1050</td><td>PROVEN equivalent</td><td class="fix">Document which mechanism carries Priv 3.7. Add an assertion that no fetch completes behind an <code>ex_nofetch</code> instruction.</td><td><span class="pill p-minor">open</span></td></tr>
+    <tr class="sev-nit"><td><span class="pill p-nit">Nit</span><div class="src">Verif n1–n3</div></td><td><code>mtip_stale</code> (b) now pins only an absence. The probes run at zero wait states only. Regression provenance is a free-text CODE label.</td><td class="where">MANIFEST; run-multi.sh</td><td>REASONED</td><td class="fix">Add a positive control, add wait-state lines, and record the git rev and a src hash.</td><td><span class="pill p-minor">open</span></td></tr>
+    <tr class="sev-nit"><td><span class="pill p-nit">Nit</span><div class="src">PPA · lead</div></td><td>26d1d5e says "was 33-34" clocks; main measures 34. The area-optimizer memory wrongly says LibreLane allows <code>edfxtp</code> and <code>dlclkp</code>. The reviewer memory still names <code>ex_cti</code>, and its 10-04 note says river_core was not run.</td><td class="where">.claude/agent-memory/</td><td>REASONED</td><td class="fix">Correct the notes.</td><td><span class="pill p-ok">fixed</span><div class="src">bab339e (26d1d5e message kept)</div></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Claims against verdicts</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Claim</th><th>Where</th><th>Measured</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>main 13.61 t / 2,736 ff → tip 10.07 t / 2,205 ff</td><td class="where">area-audit, PR</td><td class="num">recipe 13.59 → 10.06 (8 seeds); LibreLane 16.58 → 12.52</td><td><span class="pill p-minor">recipe only</span></td></tr>
+      <tr><td>81% of 6x2</td><td class="where">area-audit</td><td class="num">101% of 6x2 at synthesis; no harden completes</td><td><span class="pill p-crit">wrong</span></td></tr>
+      <tr><td>dont-use list "close to LibreLane's"</td><td class="where">area-audit Method</td><td class="num">141 _1 cells + edfxtp missing</td><td><span class="pill p-crit">wrong</span></td></tr>
+      <tr><td>Register-file reset removal −0.38 t</td><td class="where">3510430</td><td class="num">+0.08 t (TT cells)</td><td><span class="pill p-major">wrong</span></td></tr>
+      <tr><td>Other per-step deltas</td><td class="where">commits</td><td class="num">all hold, mostly larger</td><td><span class="pill p-ok">holds</span></td></tr>
+      <tr><td>Worst path 47.8 → 27.8 ns; "no timing penalty"</td><td class="where">area-audit, bbd6d95, 29e17f5</td><td class="num">tip slack +2.90 vs main +4.26 (post-CTS)</td><td><span class="pill p-major">wrong</span></td></tr>
+      <tr><td>ICG register file −1.01 t → 9.03 t</td><td class="where">area-audit</td><td class="num">−1.23 t; fails TT checks; no route at 6x2</td><td><span class="pill p-major">wrong</span></td></tr>
+      <tr><td>C bench 56.1 → 48.4 clk/instr</td><td class="where">area-audit</td><td class="num">56.10 → 48.42</td><td><span class="pill p-ok">holds</span></td></tr>
+      <tr><td>MUL/DIV 84.2 → 42.0; taken branch 84.2 → 43</td><td class="where">ff130fb, 9dc7443</td><td class="num">reproduced</td><td><span class="pill p-ok">holds</span></td></tr>
+      <tr><td>ex_nofetch −2.0% SoC cycles, 0 area</td><td class="where">ef9037d, area-audit</td><td class="num">−2.03% suite; 0% C bench; 10.07 vs 10.04</td><td><span class="pill p-minor">suite only</span></td></tr>
+      <tr><td>PMP fetch checks hidden behind the fetch</td><td class="where">CPU Reference, f41e712</td><td class="num">+1 clk on U-mode jumps and branches</td><td><span class="pill p-minor">partly</span></td></tr>
+      <tr><td>Core 121/121, SoC 80/80, also with +RF_X; test-all</td><td class="where">cc95754</td><td class="num">reproduced</td><td><span class="pill p-ok">holds</span></td></tr>
+      <tr><td>+RF_X catches any read of an unwritten register</td><td class="where">CLAUDE.md, regFile.v</td><td class="num">misses branch-only X and expect-mode X</td><td><span class="pill p-major">overclaim</span></td></tr>
+      <tr><td>"Four tests read registers they never wrote"</td><td class="where">6b10d3b</td><td class="num">five: mie_disable too</td><td><span class="pill p-minor">incomplete</span></td></tr>
+      <tr><td>river_core: conformance 175/176, rrag 3000/3000, riscv-dv 225/228, 0 DUT defects</td><td class="where">30eacb1</td><td class="num">totals and labels re-derived; sandbox source md5 = tip</td><td><span class="pill p-ok">holds</span></td></tr>
+      <tr><td>Refs come from Spike</td><td class="where">6b10d3b, e9c1700</td><td class="num">75/75 byte-identical</td><td><span class="pill p-ok">holds</span></td></tr>
+      <tr><td>Each probe kills its mutant</td><td class="where">e9c1700</td><td class="num">9/9 at the tip, core and SoC</td><td><span class="pill p-ok">holds</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Verification gaps to close</h2>
+  <ul class="tasks">
+    <li><span class="done">Make <code>run.sh</code> fail on any X in a dump, make <code>rd()</code> strict, and add <code>li s2, 0</code> to <code>mie_disable.S</code>.</span></li>
+    <li><span>Add <code>nf_misa_c.S</code> (from the compliance pass's <span class="mono">probes/</span>) as a <code>spike</code> test at <code>+IMEM_WAIT=1</code> and <code>+IMEM_WAIT=2</code>.</span></li>
+    <li><span>Add a nonzero or random register-init option next to +RF_X, and reword the +RF_X docs.</span></li>
+    <li><span>Add a flash-boot SoC test that runs through <code>boot_flash.S</code> with +RF_X.</span></li>
+    <li><span>Have the regression audit flag riscv-dv tests that retire under ~5% of their program.</span></li>
+    <li><span>Add wait-state lines for <code>rs2_snoop</code> and <code>pmp_refetch</code>, and a positive control for <code>mtip_stale</code> (b).</span></li>
+    <li><span>Add an assertion that no fetch completes while EX holds an <code>ex_nofetch</code> instruction.</span></li>
+    <li><span class="done">Re-baseline area with the TT cell set.</span></li>
+    <li><span>Harden in the submission repository before any tile-shape claim.</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2>What held up</h2>
+  <ul class="held">
+    <li><code>ex_nofetch</code> uses only IF/EX decode, which changes on <code>!stall</code> edges, so <code>imem_req</code> never drops mid-fetch.</li>
+    <li>The refetch target is the correct fall-through after compressed, straddling and rs2-phase code.</li>
+    <li>Malformed SYSTEM words, U-mode MRET, and ECALL against an interrupt are all legal and match Spike.</li>
+    <li>No control flop lacks a reset, there are no latches or combinational loops, and no construct mismatches between simulation and synthesis.</li>
+    <li>3,005 + 2,020 fresh lockstep runs, 0 mismatches, with about 218k interrupt-handler entries and 85 runs through the whole SoC.</li>
+    <li>Every contract-breaking <code>ex_nofetch</code> mutant is killed by the handshake checkers or a trace mismatch.</li>
+    <li>All suites reproduce, with and without +RF_X, and all 75 references regenerate byte-identical from Spike.</li>
+    <li>The five review probes still kill their mutants after <code>ef9037d</code>.</li>
+    <li>No unit-bench check was weakened. The shift checks moved to <code>tb_muldiv</code> rather than being dropped.</li>
+    <li>The river_core numbers and labels are correct, and the run used the tip RTL.</li>
+    <li>The relative area cut and every performance number reproduce.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Housekeeping and evidence</h2>
+  <p class="note">Sandbox and local machine left idle (no thermal trips, peak 69 °C). The reviewer's memory notes were committed (now <code>77c5519</code>). <code>scripts/sync-to-sandbox.sh</code> stays untracked, as it was before the review. Evidence:</p>
+  <div class="paths">
+    <span>localFiles/area-opt-review-2026-10-09/compliance/REPORT.md  (probes/, scripts/rgen2.py, mut2.py, out/)</span>
+    <span>localFiles/area-opt-review-2026-10-09/ppa/REPORT.md  (synll.sh, synsta_buf.sh, bench/, harden/)</span>
+    <span>localFiles/area-opt-review-2026-10-09/verif/REPORT.md  (core/soc logs, ctl/, mut/, rand/, regr/)</span>
+    <span>sandbox:/home/mempool/tt/projects/ppa-rev-{main,tip,tip8,tip6d80,tipicg}   ~/regr/ppa-review{,2,3}</span>
+    <span>localFiles/area-opt-2026-09-30/review/REVIEW.md  (the 2026-10-04 design review)</span>
+  </div>
+  <h3>SHAs after the 2026-10-10 history rewrite</h3>
+  <p class="note">Splitting <code>9fcb21d</code> rewrote every later commit; the trees are identical, and the reports above cite the old SHAs. Commits before it are unchanged.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Reviewed as</th><th>Now</th><th>Commit</th></tr></thead>
+    <tbody>
+      <tr><td class="num">9fcb21d</td><td class="num">f02e68c + def1cdc</td><td>muldiv latency docs; the datasheets and Discord threads</td></tr>
+      <tr><td class="num">c52d999</td><td class="num">cd161f6</td><td>agent memory: applied stack and held ICG patch</td></tr>
+      <tr><td class="num">e9c1700</td><td class="num">f767acc</td><td>the five review probes</td></tr>
+      <tr><td class="num">0db10ee</td><td class="num">d57ef3d</td><td>drop the dead exwb_instr</td></tr>
+      <tr><td class="num">ef9037d</td><td class="num">d19ceed</td><td><code>ex_nofetch</code> (last RTL commit)</td></tr>
+      <tr><td class="num">819f3af</td><td class="num">7d89b3c</td><td>agent memory: area-cut design review</td></tr>
+      <tr><td class="num">507483c</td><td class="num">802ff35</td><td>mprv_lock reads a2 after writing it</td></tr>
+      <tr><td class="num">cc95754</td><td class="num">65d5d44</td><td>review follow-ups (river_core ran on this tree)</td></tr>
+      <tr><td class="num">30eacb1</td><td class="num">c7e6325</td><td>river_core results</td></tr>
+      <tr><td class="num">d124575</td><td class="num">77c5519</td><td>agent memory: 2026-10-09 reviews</td></tr>
+    </tbody>
+  </table></div>
+</section>
+</div>
+</body>
+</html>

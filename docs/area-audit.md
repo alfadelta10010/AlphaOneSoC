@@ -25,7 +25,7 @@ two designs survive the cell set, and most cuts grow in it (section "TinyTapeout
 check"); one does not (the register-file reset, +0.08). **Every statement below that a
 stack fits, or fills N% of, a tile shape is withdrawn**, and so is the pre-layout timing
 claim in "Applied". No harden of this SoC has completed yet, at any 2-row shape, on main
-or with the cuts.
+or with the cuts. The review that found this is `docs/area-opt-review-2026-10-10.html`.
 
 ## Method
 
