@@ -50,9 +50,10 @@
 #       a fast memory (a timer period shorter than a QSPI-speed handler).
 #
 # Every run fails on: an assembly error, a testbench ERROR line (e.g. the
-# memory handshake checker), a DUT-ABORT (watchdog), an empty dump, or not
-# reaching tohost. Every .S in this directory must appear in MANIFEST, so a
-# test cannot silently drop out of the suite.
+# memory handshake checker), a DUT-ABORT (watchdog), an empty dump, an X or
+# Z digit anywhere in the dump, or not reaching tohost. Every .S in this
+# directory must appear in MANIFEST, so a test cannot silently drop out of
+# the suite.
 #
 # RUN_PLUSARGS is added to every simulation, e.g. RUN_PLUSARGS=+RF_X starts
 # the registers at X instead of 0 (src/regFile.v), so a test that reads a
@@ -142,8 +143,10 @@ sim() { # sim <name> <plusargs...>
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both
 # traces are compared with runs of spaces squeezed, and register values are
 # extracted with ' +'. A single-space pattern silently matches x10-x31 only.
+# rd() keeps x/z digits, so a register whose last write was X reads back as
+# X rather than as its last hex value.
 norm() { sed -E 's/ +/ /g' "$1"; }
-rd()   { grep -oE "\b$2 +0x[0-9a-f]+" "$1" 2>/dev/null | tail -1 | awk '{print $2}'; }
+rd()   { grep -oE "\b$2 +0x[0-9a-fxzXZ]+" "$1" 2>/dev/null | tail -1 | awk '{print $2}'; }
 
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf "  PASS %s\n" "$1"; }
@@ -156,6 +159,12 @@ sane() { # sane <name>
   grep -q "DUT-ABORT" "$OUT/$n.dut" && { grep -m1 "DUT-ABORT" "$OUT/$n.dut"; return 1; }
   [ -s "$OUT/$n.dut" ] || { echo "    empty dump"; return 1; }
   grep -q "mem 0x$TOHOST 0x0*1\$" "$OUT/$n.dut" || { echo "    never reached tohost"; return 1; }
+  # An X anywhere in the dump means a value came from a register (or memory)
+  # nothing wrote; with +RF_X that is a read of an unwritten register. The
+  # trace compare would see it, but an expect run only reads its listed
+  # registers.
+  local xline; xline=$(grep -m1 -E '0x[0-9a-f]*[xzXZ]' "$OUT/$n.dut") &&
+    { echo "    X in the dump: $xline"; return 1; }
   return 0
 }
 
@@ -191,7 +200,7 @@ run_expect() { # run_expect <name> <reg>=<hex>... [-- <plusargs...>]
   for c in "${checks[@]}"; do
     r=${c%%=*}; alts=${c#*=}; got=$(rd "$OUT/$n.dut" "$r"); hit=0
     for a in ${alts//|/ }; do
-      [ -n "$got" ] && [ $((got)) = $((a)) ] && hit=1
+      [[ $got =~ ^0x[0-9a-f]+$ ]] && [ $((got)) = $((a)) ] && hit=1
     done
     [ $hit = 1 ] || msg="$msg    $r = ${got:-<never written>}, want $alts
 "
