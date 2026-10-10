@@ -11,8 +11,6 @@
 //   - Load-use stall (1 cycle)
 //   - Branch/jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write: no fetch
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
-//   - rs2 read: one stalled EX cycle (rs2_phase), the register file has one
-//     read port
 //   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
 //   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
@@ -313,33 +311,18 @@ module fyracore #(
     wire [4:0]  wb_rd;
     wire [31:0] wb_data;
 
-    // One read port, time-shared. An instruction with an rs2 field spends one
-    // stalled EX cycle (rs2_phase) reading rs2 into rs2_hold; the port reads
-    // rs1 on every other cycle. rs2_hold snoops each register-file write to
-    // rs2, so it holds the architectural value for as long as the
-    // instruction stays in EX. rs2_held clears whenever IF/EX moves, so every
-    // instruction takes its own phase. In the SoC the cycle is hidden behind
-    // the next fetch, except on a branch, which has no fetch in flight.
-    reg         rs2_held;
-    reg  [31:0] rs2_hold;
-    wire        rs2_phase = ifex_valid && (ex_rs2 != 5'b0) && !rs2_held;
-    wire [31:0] rf_port;
+    // Two read ports: rs1 and rs2 in the same cycle.
     regFile #(32) rf(
         .clk (clk),
         .rst (rst),
         .wrEn(wb_regWR),
-        .rs  (rs2_phase ? ex_rs2 : ex_rs1),
+        .rs1 (ex_rs1),
+        .rs2 (ex_rs2),
         .rd  (wb_rd),
         .dIn (wb_data),
-        .r   (rf_port)
+        .r1  (rf_r1),
+        .r2  (rf_r2)
     );
-    assign rf_r1 = rf_port;
-    assign rf_r2 = (ex_rs2 == 5'b0) ? 32'b0 : rs2_hold;
-    wire   rs2_wr_now = wb_regWR && (wb_rd != 5'b0) && (wb_rd == ex_rs2);
-    always @(posedge clk) begin
-        if (rs2_phase)       rs2_hold <= rs2_wr_now ? wb_data : rf_port;
-        else if (rs2_wr_now) rs2_hold <= wb_data;
-    end
 
     // Data forwarding from WB → EX
     wire fwd_rs1 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs1);
@@ -657,7 +640,7 @@ module fyracore #(
     // path. In the SoC the cycle is hidden behind the next fetch.
     wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
     wire stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active ||
-                         ex_ifetch_hi_phase || csr_wb_hazard || rs2_phase;
+                         ex_ifetch_hi_phase || csr_wb_hazard;
     wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
@@ -1087,7 +1070,6 @@ module fyracore #(
             ifetch_lo_denied <= 1'b0;
             ifetch_hi_done <= 1'b0;
             ifetch_hi_denied <= 1'b0;
-            rs2_held       <= 1'b0;
             // EX/WB
             exwb_alu_result <= 32'b0;
             exwb_rs2_data   <= 32'b0;
@@ -1141,10 +1123,6 @@ module fyracore #(
                 wfi_active <= 1'b1;
             else if (wfi_wake || irq_inject)
                 wfi_active <= 1'b0;
-
-            // ---- register-file port phase: cleared whenever IF/EX moves ----
-            if (!stall)         rs2_held <= 1'b0;
-            else if (rs2_phase) rs2_held <= 1'b1;
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin

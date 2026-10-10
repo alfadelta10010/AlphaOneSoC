@@ -1,47 +1,40 @@
 `timescale 1ns / 1ps
 module tb_regFile;
     reg         clk, rst, wrEn;
-    reg  [4:0]  rs1, rs2, rd;   // the two registers check2 reads
-    reg  [4:0]  rs;             // the one read port
+    reg  [4:0]  rs1, rs2, rd;   // the two read ports
     reg  [31:0] dIn;
-    wire [31:0] r;
-    reg  [31:0] r1, r2;
+    wire [31:0] r1, r2;
     integer pass_count = 0, fail_count = 0, i;
 
     regFile #(32) uut(
         .clk(clk), .rst(rst), .wrEn(wrEn),
-        .rs(rs), .rd(rd),
-        .dIn(dIn), .r(r)
+        .rs1(rs1), .rs2(rs2), .rd(rd),
+        .dIn(dIn), .r1(r1), .r2(r2)
     );
 
     initial clk = 0;
     always #5 clk = ~clk;
 
+    // Reads one register on both ports.
     task check1(input [4:0] reg_num, input [31:0] expected, input [159:0] name);
         begin
             rs1 = reg_num;
-            rs = reg_num;
+            rs2 = reg_num;
             #1;
-            r1 = r;
-            if (r1 === expected) begin
+            if (r1 === expected && r2 === expected) begin
                 pass_count = pass_count + 1;
             end else begin
                 fail_count = fail_count + 1;
-                $display("FAIL: %0s | reg x%0d | got=0x%08h exp=0x%08h",
-                         name, reg_num, r1, expected);
+                $display("FAIL: %0s | reg x%0d | got=0x%08h/0x%08h exp=0x%08h",
+                         name, reg_num, r1, r2, expected);
             end
         end
     endtask
 
-    // Reads rs1, then rs2, through the one port.
+    // Reads rs1 and rs2 at once.
     task check2(input [31:0] exp_r1, input [31:0] exp_r2, input [159:0] name);
         begin
-            rs = rs1;
             #1;
-            r1 = r;
-            rs = rs2;
-            #1;
-            r2 = r;
             if (r1 === exp_r1 && r2 === exp_r2) begin
                 pass_count = pass_count + 1;
             end else begin
@@ -69,7 +62,7 @@ module tb_regFile;
         $display("=== Register File Testbench ===");
 
         // Reset
-        rst = 1; wrEn = 0; rd = 0; dIn = 0; rs1 = 0; rs2 = 0; rs = 0;
+        rst = 1; wrEn = 0; rd = 0; dIn = 0; rs1 = 0; rs2 = 0;
         @(posedge clk); @(posedge clk);
         #1;
         rst = 0;
