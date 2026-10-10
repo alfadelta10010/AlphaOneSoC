@@ -330,16 +330,20 @@ synchronise `rst_n` before it reaches this reset.
 
 ## Area
 
-Measured with yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`
-(standard-cell area before placement; 1 tile ≈ 11,300 µm² at TinyTapeout's
-60% density), re-measured 2026-09-29 as the mean of four file orders (abc
-varies by about 0.1 tile with the order): the whole SoC is **13.61 tiles,
-2,736 flops**, against about 7 tiles for a 4x2 slot. The SoC blocks added
-here cost about 0.7 tiles flat (qspi_ctrl 0.24, mem_ctrl 0.07, the UART
-0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus mostly folds
-away). The excess is in the core: register file 4.50, core glue 2.72, CSR
-2.49, muldiv 1.62 tiles. The measured cuts and what they buy are in
-`docs/area-audit.md`.
+Standard-cell area before placement, in tiles (1 tile ≈ 11,300 µm² at
+TinyTapeout's 60% density). With the area cuts in `docs/area-audit.md`
+applied, LibreLane's own synthesis (TT's flow, ttsky26c) puts the whole SoC at
+**12.52 tiles, 2,238 flops** (16.58 tiles before the cuts), against about 7
+tiles for a 4x2 slot. The yosys recipe the audit uses to rank cuts gives
+10.07 tiles: it lets yosys use cells LibreLane excludes, so its figures run
+about 20-24% low. The largest blocks, hierarchical with TT's cells: register
+file 3.68, CSR 2.65, core glue 2.67, muldiv 0.93 tiles. The SoC blocks added
+here cost about 0.7 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
+the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus
+mostly folds away). No harden of the SoC has completed yet (hold buffers on
+the register file's enable loops stop detailed placement; see "TinyTapeout
+flow check" in `docs/area-audit.md`); fit and timing are settled in the
+TinyTapeout submission repository.
 
 ## Performance
 

@@ -506,7 +506,7 @@ Memory-timing plusargs for the lockstep sim: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RA
 Area is the primary constraint. IF/EX/WB keeps pipeline registers minimal while most instructions still take one cycle; the QSPI memory bottleneck dominates throughput anyway.
 
 ### 12.2 Why Iterative MulDiv?
-The combinational operators cost more than 10k gates. The iterative unit, with one shared adder, costs about 0.7 tile for 34-36 cycles per operation, which run during the next instruction's QSPI fetch. The shifts use it too, instead of a barrel shifter.
+The combinational operators cost more than 10k gates. The iterative unit, with one shared adder, costs about 0.9 tile (0.93 with TT's cells, 0.72 in the audit's yosys recipe) for 34-36 cycles per operation, which run during the next instruction's QSPI fetch. The shifts use it too, instead of a barrel shifter.
 
 ### 12.3 Why Direct-Mode mtvec?
 Vectored mode adds logic for no benefit on an M+U system; Linux uses direct mode.
