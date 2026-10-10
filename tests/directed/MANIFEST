@@ -77,9 +77,9 @@ mie_enable          spike
 # once); the core takes it after the store lands, by which time mie is off --
 # unless the pipeline is still waiting on a fetch when the store lands, as it
 # is behind the QSPI memory, and then the core takes it before the csrc too
-# (mepc = the csrc, 0x8000002c). Both legal; what matters is that it is never
+# (mepc = the csrc, 0x80000030). Both legal; what matters is that it is never
 # taken after the disable.
-mie_disable         expect x14=0x999|0x8000002c
+mie_disable         expect x14=0x999|0x80000030
 # Timer-driven: mtime ticks per clock here and per ~100 retires on Spike, so
 # these cannot be lockstep-compared. They check the program completes with
 # no interrupt landing at a bad mepc; randomised waits are what used to
