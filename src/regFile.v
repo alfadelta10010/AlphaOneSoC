@@ -23,8 +23,12 @@ module regFile #(parameter DATA_WIDTH = 32) (
     //
     // Simulation starts them at 0 anyway, the way Spike does, so programs
     // that bypass the boot stub (the directed tests start straight in PSRAM)
-    // still trace-compare. +RF_X leaves them X instead, which makes any read
-    // of a register a program never wrote visible in its trace.
+    // still trace-compare. +RF_X leaves them X instead: a read of a register
+    // a program never wrote then puts an X in its trace (written to a
+    // register, a CSR or memory, or used as an address), which run.sh fails.
+    // An X that only decides a branch is not caught: the simulator takes the
+    // not-taken arm, and when Spike (registers at 0) also falls through, the
+    // traces agree.
 `ifndef SYNTHESIS
     initial begin
         if (!$test$plusargs("RF_X"))

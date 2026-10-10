@@ -57,7 +57,9 @@
 #
 # RUN_PLUSARGS is added to every simulation, e.g. RUN_PLUSARGS=+RF_X starts
 # the registers at X instead of 0 (src/regFile.v), so a test that reads a
-# register it never wrote fails its trace compare.
+# register it never wrote fails on the X it leaves in the dump -- unless
+# the value only decides a branch that falls through on Spike as well
+# (src/regFile.v says why).
 #
 # Tests live beside this script, artifacts go to ./out (gitignored).
 # Toolchain: riscv64-unknown-elf-*, spike and iverilog on PATH.
