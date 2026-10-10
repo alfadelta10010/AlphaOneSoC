@@ -77,6 +77,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   MTIP window upper bound (all PROVEN by mutant) — finding_pr5_fixround_review_2026-09-30.md
 - 2026-10-04 area-opt stack 2209bb0: no CRIT/MAJ, RTL correct; suites miss SRA/MULHSU/SLTU values, PMP refetch,
   fetch-PMP vs MPRV, rs2 snoop (5 probes written) — finding_areaopt_review_2026-10-04.md
+- 2026-10-09 PPA/claims 30eacb1: tile figures ~24% low vs TT cell set (12.52 t = 101% of 6x2), NO harden
+  completes (RF self-loop hold buffers), #1b saves 0, tip slower at tt (muldiv) — finding_ppa_review_2026-10-09.md
 
 ## Notes index
 
@@ -106,3 +108,5 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-09-29 PR #5 periph + claims](finding_pr5_review_2026-09-29.md) — reproduced suite numbers, 8250 re-check, CLINT decode gap, keypad lag
 - [2026-09-30 PR #5 fix round](finding_pr5_fixround_review_2026-09-30.md) — dual-CRM step verdict per hand-over state, UART SBC/BI, 4 proven check gaps
 - [2026-10-04 area-opt review](finding_areaopt_review_2026-10-04.md) — 13 area/perf commits verdicts, 28 mutants, value-coverage gap, fast scratch flows
+- [2026-10-09 area-opt compliance](finding_areaopt_compliance_2026-10-09.md) — ex_nofetch proven decode-only; repo misses that property; +RF_X blind spot; rgen2/rr.sh tools
+- [2026-10-09 PPA/claims review](finding_ppa_review_2026-10-09.md) — TT-flow area/timing vs recipe, failed hardens, per-cut TT deltas, perf repro

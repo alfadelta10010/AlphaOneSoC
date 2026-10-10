@@ -67,3 +67,24 @@ Verification blind spots
   the fyracore wiring (sra_wire0 escaped everything in the repo).
 - A mechanism kept "just in case" after a redesign (PMP-write refetch after csr_wb_hazard) may still
   be necessary only in a corner no test reaches -- write the probe that needs it before judging it.
+- "Decode-only" / "never drops mid-fetch" claims: mutate to the named wrong alternative (ex_trap,
+  ex_illegal_insn) -- 2026-10-09 both passed 121/121. Withdrawal needs a FIXED imem wait (IMEM_WAIT=2);
+  random waits often complete the fetch first. misa.C flip under csr_wb_hazard is the canonical trigger.
+- Redundant backstops (ex_nofetch + refetch arm): each single-removal mutant survives; mutate pairs.
+- Perf-only features (fetch suppression) are equivalent mutants to every functional test; ask for a
+  cycle/fetch-count assertion or they rot silently.
+- +RF_X / X-init "proves unwritten reads are caught" is false for X that only steers a branch whose
+  iverilog else-arm matches Spike's 0-init path (bnez on X passes). Use random-init vs Spike instead.
+- Spike resets PMP permissive (entry0 RWX), the core all-off: random generators must zero PMP first.
+  Spike WFI waits for mip&mie (hangs with mie=0): only emit WFI in interrupt modes; filter WFI lines.
+
+PPA / area claims
+- Synthesis recipes that drop LibreLane's dont-use list (no_synth.cells: all common `_1` cells,
+  edfxtp, dlclkp) understate TT-flow area ~24% and can invent savings (edfxtp-only cuts like RF reset
+  removal). Re-measure with the TT cell set or LibreLane synth before believing a tile figure.
+- "60% density leaves 40% for buffers" is false here: post-CTS std-cell area was 1.64x the recipe area.
+- Flop banks with enable self-loops (Q->mux->D) each get a hold buffer under TT's 0.25 ns hold
+  uncertainty; ~1000 on the RF broke detailed placement in every harden (2026-10-09).
+- Unbuffered pre-layout STA is noise (a dead-code commit moved it 4.8 ns); only post-CTS/signoff
+  numbers from the real flow can rank timing.
+
