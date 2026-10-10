@@ -24,7 +24,9 @@ update after each review with confirmed decisions, findings, and recurring patte
   qspi_ctrl SCK=clk/2: PSRAM in QPI (0Bh 2+6+4 read, 38h 2+6 write, 97010f4); flash quad I/O EBh, cmd on IO0,
   M=FFh — USER DECISION (d8194db): no flash CRM/QPI, don't re-propose, don't call it "SPI mode".
   Start-up: F5h(QPI)/66h/99h PSRAMs, 8x1111, 16x1111 (dual CRM, d3cdb07) + FFh(QPI) flash, 35h PSRAMs. rd_late strap latched in reset,
-  CS0 masked on writes, registered MTIP, mtime = core clock, no PLIC, no TT wrapper (USER DECISION: don't flag).
+  CS0 masked on writes, registered MTIP, mtime = core clock, no PLIC. TT wrapper written 2026-10-10: reset
+  asserted asynchronously by rst_n and released on the 2nd clock edge, uio_oe = 0 and uo_out = 0x39 while it is high;
+  pins-only bench `make test-wrapper`.
   UART (fbdcc03) 16550 subset @0x10000000, reg-shift 0, no FIFOs: THR back-pressure, RTS# RX flow control,
   polled; LCR.SBC + LSR.BI since 805324c/3f0d708, RBR resets 0. GPIO (40516d6) OUT/IN + SPI mode-3 TX @0x10010000. soc_bus ANDs IO readies (6a8d4c6).
 - Microarchitecture: 3-stage pipeline IF/EX/WB; traps resolved in EX, committed at WB. EX/WB HOLDS on
@@ -79,6 +81,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   fetch-PMP vs MPRV, rs2 snoop (5 probes written) — finding_areaopt_review_2026-10-04.md
 - 2026-10-09 PPA/claims 30eacb1: tile figures ~24% low vs TT cell set (12.52 t = 101% of 6x2), NO harden
   completes (RF self-loop hold buffers), #1b saves 0, tip slower at tt (muldiv) — finding_ppa_review_2026-10-09.md
+- 2026-10-10 TT wrapper + pins bench (uncommitted): MAJ reset needs clocks, stock TT firmware resets with clock
+  stopped (FIXED same day: async-assert reset); bench's 2nd reset mis-aimed, no-sync mutant passes (both fixed) — finding_tt_wrapper_review_2026-10-10.md
 
 ## Notes index
 
@@ -110,3 +114,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-04 area-opt review](finding_areaopt_review_2026-10-04.md) — 13 area/perf commits verdicts, 28 mutants, value-coverage gap, fast scratch flows
 - [2026-10-09 area-opt compliance](finding_areaopt_compliance_2026-10-09.md) — ex_nofetch proven decode-only; repo misses that property; +RF_X blind spot; rgen2/rr.sh tools
 - [2026-10-09 PPA/claims review](finding_ppa_review_2026-10-09.md) — TT-flow area/timing vs recipe, failed hardens, per-cut TT deltas, perf repro
+- [2026-10-10 TT wrapper review](finding_tt_wrapper_review_2026-10-10.md) — TT firmware reset/clock order, async-latched reset fix proven, pin map verified, bench gaps
