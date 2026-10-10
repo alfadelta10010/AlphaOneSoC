@@ -4,6 +4,7 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  li   s2, 0                  # counted up below (x-regs are not reset)
   la   t0, handler
   csrw mtvec, t0
   li   s0, 0x02000000

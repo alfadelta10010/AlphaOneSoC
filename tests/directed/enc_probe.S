@@ -4,6 +4,7 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  li   a1, 0                  # the amoadd probe's address (x-regs are not reset)
   la   t0, handler
   csrw mtvec, t0
 #define P(...) li a0, 0xdead; __VA_ARGS__; mv s1, a0

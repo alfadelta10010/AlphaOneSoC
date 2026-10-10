@@ -1,0 +1,195 @@
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 11/6/24, 7:38 PM
+Hi, first time submitting to tapeout, we're looking to use the SPI ram RP2040 simulation on the TT-PCB, aiming to use it for our RV32I (+GPIO, UART) processor :) 
+We're trying to understand the following:
+What determines SYS Clock? Is that the clock of the RP2040, or the clock supplied to the design?
+How does SCLK get determined, is that up to our implementation of the SPI controller?
+We want to fetch 16 bits per cycle, is this possible? What determines the clock speed for fetching?
+Is the pins for emulated memory I/O configurable? We wanted to keep the option open for PMOD expansion with  down the line, and use the same I/O pins as the PMOD for the emulator 😅
+
+Thanks in advance! 
+TroyburnRole icon, contributor — 11/6/24, 8:50 PM
+Just to clarify:
+
+You intend to use SPI RAM emulation provided by the RP2040 (with potential caveats that may exist such as reduced clock rates, addressable RAM size limitations, SPI data path width limitations, etc..) ?
+
+Or you intended to use a real SPI RAM chip in production but want to test/design against today?
+
+Or you need to simulate one of the above during the design stages ?
+
+I ask because you use term simulate where I would more accurately describe it as emulation because it will be providing a real SPI bus and RAM device command set to working storage in the final production version that is returned of the PCB and ASIC.  This is no longer a simulation.
+
+The SYS clock of the RP2040 can be managed by the RP2040 internally there are some options to reprogram the RP2040 PLL to adjust the global clock, botha little faster and slower and into a nice round number that may help with specific frequency division.
+
+The RP2040 can provide a CLK to project within the design limits of the ASIC.
+
+With the RP2040 based SPI RAM emulation the ASIC is the SPI controller so provides the clock.
+
+I'd expect some caveats due to system limitations, what those are maybe the main question you are trying to get towards. 
+TroyburnRole icon, contributor — 11/6/24, 9:03 PM
+Your intended SPI bus is to be SDR or DDR?   I ask as many SPI parts start to provide DDR support when they get to 8 bits. 
+
+Not sure if emulation can provided DDR and if so at a clock rate that improves throughput.
+
+SPI bus is usually bidirectional so 16bit fetch also implies 16bit store.  Difficult to see how that works within limitations of TT interface.  You still need SCLK and SCS pins and I assume a CLK and RST_N.  Then you mention CPU UART and GPIO which will so need more pins.
+
+But 8bit per clock looks possible on paper (to a real SPI external part) maybe someone with RP2040 SPI emulation experience can confirm if that is possible as maybe the emulation uses RP2040 PIO support and maybe that has a limit on GPIO pins that can be used and changed per clock 
+..
+Re point 4 if with PMOD expansion this might assume you have a genuine SPI part you are targetting ?  With 16bit fetches? Do you have an part number for that?
+But sure you could make an SPI emulator from FPGA attached to PMOD.  This might use FPGA block ram / DDR to provide RAM functionality that has capability to exceed ASIC IO rates 
+RebelMikeRole icon, contributor — 11/7/24, 12:05 AM
+The SPI RAM emulation on the RP2040 is currently limited to standard SPI, so one bit per clock.  It's also fairly slow and the RAM available is limited to 128kB at most.  Max speed is documented here: https://github.com/MichaelBell/spi-ram-emu
+
+You would probably be better targeting the QSPI PMOD, which provides QSPI access to 16MB flash and 16MB PSRAM.  It should be available to ship as an add-on with the TT demo board: https://github.com/mole99/qspi-pmod
+
+The flash part used can do DTR, so that gets you up to 8 bits per SPI clock.  Doing 16 bits per cycle would need to use a lot of your available pins.
+GitHub
+GitHub - MichaelBell/spi-ram-emu: SPI RAM Emulation on Pico
+SPI RAM Emulation on Pico. Contribute to MichaelBell/spi-ram-emu development by creating an account on GitHub.
+GitHub - MichaelBell/spi-ram-emu: SPI RAM Emulation on Pico
+GitHub
+GitHub - mole99/qspi-pmod: A QSPI Pmod board designed in KiCad cont...
+A QSPI Pmod board designed in KiCad containing one Flash and two SPRAMs - mole99/qspi-pmod
+GitHub - mole99/qspi-pmod: A QSPI Pmod board designed in KiCad cont...
+RebelMikeRole icon, contributor — 11/7/24, 12:22 AM
+In answer to your questions:
+1) The SYS clock documented on the SPI RAM emulation README is the RP2040 system clock. This is only related to your project clock in that if the RP2040 is providing your project clock the project clock would be an even divider of the RP2040 system clock
+2) The SPI SCLK is provided by the SPI controller in your design.
+3) It might be possible to use the 8 bidir pins for data and do double data rate from the RP2040. But this wouldn’t be straightforward and might further reduce the max SCLK.
+4) I think it’s relatively straightforward to tweak the SPI pinout on the RP2040 side.
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 11/7/24, 10:39 AM
+You intend to use SPI RAM emulation provided by the RP2040 (with potential caveats that may exist such as reduced clock rates, addressable RAM size limitations, SPI data path width limitations, etc..) ?
+Or you intended to use a real SPI RAM chip in production but want to test/design against today?
+Or you need to simulate one of the above during the design stages ?
+Use the SPI RAM emulation as the main memory for our processor design, but modify the pin configuration of the emulator in such a manner that provided we want to change to a real SPI RAM chip, we are able to do so. 
+Thank you for differentiating between the terms, did not realise 😅
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 11/7/24, 11:28 AM
+1) The SYS clock documented on the SPI RAM emulation README is the RP2040 system clock. This is only related to your project clock in that if the RP2040 is providing your project clock the project clock would be an even divider of the RP2040 system clock
+Ok that's great, we wanted to know what frequency we can use to figure out what frequency for STA
+
+2) The SPI SCLK is provided by the SPI controller in your design.
+First timer here, would that mean we can take the 50 MHz project clock from the RP2040 and give that as SPI CLK, while using a divider to run our processor at slower speeds?
+
+3) It might be possible to use the 8 bidir pins for data and do double data rate from the RP2040. But this wouldn’t be straightforward and might further reduce the max SCLK.
+On the pinouts link, under SPI, it mentions the following:
+Alternatively, you can use the middle PMOD on the side of the board, in order to save the bidi IOs for another purpose.
+I'm assuming this doesn't count towards our bidis usage, right? And instead use the I and O pins only? 😅 
+Also might consider dropping the 16-bit idea, will roll with 8-bit/cycle 🙏 
+
+4) I think it’s relatively straightforward to tweak the SPI pinout on the RP2040 side.
+That's awesome, thank you so much, are there any instructions on the same? 
+TroyburnRole icon, contributor — 11/7/24, 11:28 PM
+To give some kind of response here:
+Going above 25MHz with SPI CLK will introduce turn-around-propagation delay concerns (as the mux has latency in both directions).
+Going above 25MHz with SPI CLK means you are basically connecting the global CLK pin (maybe via a clock-gate cell) to the SPI CLK output.  I think projects have shared the pin and used SPI CS to enable/disable (to not bother with using another pin for SPI CLK output if it is exactly the same signal as global CLK, even with latency/skew differences with doing that).
+
+Going SPI with 8bit data path with DDR (Double-Data-Rate) looks possible on paper (but still have potential concerns above approx 25MHz SPI CLK rates).  This would also leave pins available for UART and single-direction GPIO.
+
+Obviously these ideas might exceed limits for emulation, but you could make the design work at slower clock rates in that scenario and make things switch-able/automatic (use a different SPI command for 1bit, 4bit, 8bit data transfer in SDR or DDR load/store commands and switch between).  This would allow the RP2040 emulator to work at the same time as the possibility of a real 8bit DDR capable SPI chip, as well as a cheaper simple 1bit SDR SPI chip.  But obviously more complex/more planning/design/testing is needed to make all that work in a single design.
+
+The simple design approach is to accept a 50MHz global clock and use DFF to halve the SPI CLK to 25MHz and operate SPI.  But this is the opposite of your expressed design goals (of fast RAM, slow CPU), but reducing 50MHz down (for slower CPU clock) is possible trivially. 
+RebelMikeRole icon, contributor — 11/7/24, 11:46 PM
+On pinouts: The limit here is the IOs connected to your design.  There are 8 bidirs, 8 outputs and 10 inputs (including clk and reset).  That's all you get - it doesn't matter which PMODs you're using on the demo board to access them!
+
+On changing the SPI pinout of the emulated SPI, I don't have instructions for that, the PIO assembler would need tweaking.  Currently I have two versions.  Both require the input pins to be consecutive, one in order MOSI, SCK, CS (in the spi-ram-emu repo) and the other MOSI, CS, SCK (here: https://github.com/MichaelBell/micropython/blob/sim_spi_ram/ports/rp2/sram.pio).  MISO and MOSI can be any pin.
+
+Though again note the RP2040 emulated RAM is currently limited to 1-bit, single data rate SPI at a max of about 20MHz (and even that requires overclocking the RP2040).
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 11/8/24, 2:19 PM
+Thank you so much for your inputs 🛐
+alfadelta10010
+ changed the post title: Questions on SPI-RAM-emulation (v/s QSPI) — 11/8/24, 7:53 PM
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 11/9/24, 2:23 PM
+@RebelMike Sorry for the ping, does your TinyQV design use DDR for QSPI? We were looking for examples that use the PMOD, and wanted to know about this 🙏 
+Additionally, your design ran at 64 MHz, did you face issues with the latency of the MUXs? How did you mitigate those?
+
+Very sorry for the constant questions, we're trying to understand how to make best use of the PMOD 🛐
+RebelMikeRole icon, contributor — 11/9/24, 2:32 PM
+I’m happy to answer questions, don’t worry 🙂
+
+TinyQV doesn’t currently use DDR, though I am hoping to revise the qspi controller for TT10 to allow this, it’s proving quite a difficult change though!
+
+The qspi controller TinyQV uses has configurable latency to allow it to deal with the mux latency.
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 11/9/24, 2:34 PM
+Ohh alright, thank you so much! How many cycles does it take on TinyQV to fetch the 32-bit data from memory?
+RebelMikeRole icon, contributor — 11/9/24, 2:48 PM
+16 project clocks - the SPI clock runs at half the rate of the project clock. The Tiny Tapeout outputs are only rated at 33MHz so that’s about as fast as it can go.
+TinyQV implements compressed instructions so those only take 8 project clocks to fetch. The core can execute simple instructions in 8 clocks and more complex ones in 16, so that is fairly well matched. 
+tnt [TT], Role icon, team — 11/9/24, 4:17 PM
+Something I haven't seen used yet to deal with latency is auto-calibration.  If you output a signal ( say ... spi_clk ) on uio_out[n] ... it will come back one mux latency later on uio_in[n] ...
+TroyburnRole icon, contributor — 11/9/24, 9:14 PM
+Did anyone do a projection/simulation for DDR max SPI CLK ?  I did not clearly indicate while SDR might allow 25MHz SPI CLK maybe if you are doing DDR that might drop under 15MHz SPI CLK ?  The more recent shuttles have slightly better mux latency than older shuttles. 
+RebelMikeRole icon, contributor — 11/9/24, 9:25 PM
+As long as you account for the latency you should be able to run up to 33MHz (or hopefully a little more).  But yeah, if you just do the simple thing of flipping the clock and then reading the data back when you next flip the clock then logically that would halve your max clock rate, so yeah somewhere around 12-15MHz.
+As for auto-calibration, I think @toivoh was considering that, but my view on it is you almost certainly want to keep a manual config in case the auto doesn't work, and at that point it's a bit of a waste of time.
+toivoh [TT], Role icon, tested tapeout — 11/9/24, 10:37 PM
+Yeah, we'll see. I have a few designs where the TX pins on the TT chip do a sampled loopback of the RX pins during reset, the RAM emulator might be able to use that for auto calibration. But as you say, there will probably be need for a manual calibration option, so we'll see if I'll use it.
+If I could insert a fractional cycle delay using a mux and some delay cells, I might be able to make it fully automatic. But that will have to wait for another tapeout.
+toivoh [TT], Role icon, tested tapeout — 11/10/24, 12:47 AM
+At the cycle level, I'm using protocols with start and stop bits, so if a signal is delayed a number of cycles in either direction, you get more latency of course, but it's automatically handled otherwise. But if you use an existing SPI RAM I guess you can't rely on that kind of thing.
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 12/21/24, 7:14 PM
+Messages explaining preexisting implementations of QSPI and QSPI Pmod:
+⁠pmod⁠
+⁠pmod⁠
+⁠pmod⁠
+Matt Venn [TT], Role icon, team — 12/23/24, 2:41 PM
+@alfadelta10010 I would love to have a writeup of how to use this on the website if you feel inclined to document your research
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 12/23/24, 4:12 PM
+Definitely! Will organise and share :)
+jonnorRole icon, tapeout — 2/9/25, 11:58 PM
+It would be very nice to have some information about QSPI RAM under https://tinytapeout.com/specs/memory/ (or linked from there)
+Quicker, easier and cheaper to make your own chip!
+Memory - Tiny Tapeout
+Memory for Tiny Tapeout projects
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 3/1/25, 7:08 PM
+Hi @RebelMike, apologies for the ping, I've gone through the data sheet of the SPI flash, and had two questions regarding the Continuous Read Mode as you had used it in your design 😅  (using DSPI, for example)
+Assuming I sent Fast Read Dual I/O (0xBB) on IO0 pin, and then my address 0x00_0008, would the Mode bit settings be xx10xxxx or does it specifically have to be some specific value for the first nibble?
+
+Additionally, say I'm starting execution and want to read three addresses (0x00_0000, 0x00_0004, and 0x00_0008), does the process look like this?
+>Send Instruction (0xBB)
+>Send Address (0x00_0000)
+>Send Mode bits (1110xxxx)
+>Receive Data (0xDEAD_BEEF)
+>Send Address (0x00_0004)
+>Send Mode bits (1110xxxx)
+>Receive Data (0x0ABC_DEFF)
+>Send Address (0x00_0008)
+>Send some different mode bits, to exit continuous read (1111xxxx)
+>Receive Data (0x1234_5678)
+>Send New instruction (0xC7)? Or do I have to send 0xFFFF? And if so, do I have to send any other command to write to the mode bits?
+
+Thanks in advance! 
+ [TT], 
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 3/1/25, 7:09 PM
+A small update, I've prepared a markdown file with detailed descriptions for the main SPI flash commands required for a memory controller for processor and how to use the PMOD, I'm adding information on standard models for verification that I have located at different places in this server as well 🛐 
+Will be sharing a GitHub Gist soon-ish, hopefully, could be after the deadline for TT10 :') 
+ [TT], 
+RebelMikeRole icon, contributor — 3/2/25, 1:21 AM
+I’m away this weekend so can’t easily check in full, but from memory you should send 1010xxxx for continuous mode. It is strange that it’s not documented in the datasheet!
+Your description looks correct (assuming you raise CS between receiving data and sending the next address)
+To exit you should just need to send more bits 1111xxxx as you say, and then you’d need to give a command on the next request.
+alfadelta10010 [TT], Role icon, tapeout
+OP
+ — 3/5/25, 7:59 PM
+Thank you so much for your response, sir!
+
+It is strange that it’s not documented in the datasheet!
+I agree, the datasheet only mentions Mode bits 5 and 4 required to be set to (1, 0) for continuous write, which is not extremely clear about the remaining bits :')

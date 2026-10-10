@@ -1,14 +1,21 @@
 // FyraCore — 3-stage pipelined RV32IMCA+Zicsr+Zifencei processor
 //
 // Pipeline stages:
-//   IF  — Instruction Fetch + C-extension decompression
-//   EX  — Decode, Register Read, ALU Execute, Branch Resolve
+//   IF  — Instruction Fetch
+//   EX  — C-extension decompression, Decode, Register Read, ALU Execute,
+//         Branch Resolve
 //   WB  — Memory Access, Writeback, CSR commit
 //
 // Hazard handling:
 //   - Data forwarding from WB → EX
 //   - Load-use stall (1 cycle)
-//   - Branch/jump flush (1 cycle penalty)
+//   - Branch/jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write: no fetch
+//     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
+//   - rs2 read: one stalled EX cycle (rs2_phase), the register file has one
+//     read port
+//   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
+//   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
+//   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
@@ -62,8 +69,9 @@ module fyracore #(
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
     //
     // Instruction memory interface (read-only). imem_req is high whenever the
-    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*); outside them
-    // no fetch is requested at all (see imem_req below). When the pipeline is stalled
+    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*) and EX holds
+    // no instruction that decides the next pc (ex_nofetch); outside them no fetch is requested at all (see
+    // imem_req below). When the pipeline is stalled
     // with a fetch already completed, the same address is requested again.
     //
     // For the memory controller:
@@ -122,10 +130,8 @@ module fyracore #(
     // simulation, rather than X.
     wire [31:0] if_fetched    = imem_rdata & {32{imem_req}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
-    wire [31:0] if_instr_decompressed;
-    wire        if_c_illegal;
-    wire [31:0] if_instr      = if_compressed ? if_instr_decompressed : if_fetched;
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
+    wire        ex_nofetch;      // EX decides the next pc (assigned after the PMP-write decode)
 
     // Is an address inside [base, top]? A window with base > top is empty.
     function automatic in_win(input [31:0] a, input [31:0] base, input [31:0] top);
@@ -140,13 +146,11 @@ module fyracore #(
     // a fetch must not read an IO device (a read can have side effects, e.g.
     // popping a UART FIFO), and an address with no device behind it must not
     // wait forever for a ready that nobody will give.
-    assign imem_req  = in_exec(pc);
-
-    compressed_decoder cdec(
-        .instr_in (if_fetched[15:0]),
-        .instr_out(if_instr_decompressed),
-        .illegal  (if_c_illegal)
-    );
+    // While the instruction in EX decides the next pc, the fall-through is
+    // not fetched speculatively behind it: on the SoC's one QSPI bus that
+    // fetch would have to complete (~42 clocks) before the redirect could be
+    // taken. See ex_nofetch. A not-taken branch then costs one bubble.
+    assign imem_req  = in_exec(pc) && !ex_nofetch;
 
     // ================================================================
     //  IF/EX Pipeline Register
@@ -157,12 +161,27 @@ module fyracore #(
 
     // ================================================================
     reg [31:0] ifex_pc;
-    reg [31:0] ifex_instr;
     reg [31:0] ifex_raw_instr;  // Original fetched bytes (16-bit if compressed)
     reg        ifex_compressed;
-    reg [31:0] ifex_pc_next;
+    // There is no ifex_pc_next: while IF/EX holds an instruction, pc already
+    // is that instruction's pc + 2 or + 4 (pc advances on exactly the cycles
+    // IF/EX loads, and every other pc change flushes IF/EX).
     reg        ifex_valid;
-    reg        ifex_c_illegal;  // Compressed decoder flagged a reserved encoding
+
+    // A compressed instruction is expanded in EX, from the bytes IF/EX
+    // already holds for the trace and for mtval. Expanding it in IF took a
+    // second 32-bit copy of the instruction in IF/EX.
+    wire [31:0] ex_instr_decompressed;
+    wire        ex_c_illegal_raw;
+    compressed_decoder cdec(
+        .instr_in (ifex_raw_instr[15:0]),
+        .instr_out(ex_instr_decompressed),
+        .illegal  (ex_c_illegal_raw)
+    );
+    wire [31:0] ifex_instr     = ifex_compressed ? ex_instr_decompressed : ifex_raw_instr;
+    wire        ifex_c_illegal = ifex_compressed && ex_c_illegal_raw;  // reserved encoding
+    reg        ifetch_lo_done;  // PMP has checked the fetch at ifex_pc
+    reg        ifetch_lo_denied;// ...and refused it
     reg        ifetch_hi_done;  // upper half of the straddling instruction in EX checked
     reg        ifetch_hi_denied;// ...and PMP refused it
 
@@ -171,8 +190,9 @@ module fyracore #(
     //  assignments can reference them without iverilog forward-ref errors)
     // ================================================================
     reg [31:0] exwb_alu_result;
+    // rs2 for a store; the new value for a CSR write; an AMO's new value
+    // once its read is done
     reg [31:0] exwb_rs2_data;
-    reg [31:0] exwb_pc_next;
     reg [4:0]  exwb_rd;
     reg        exwb_regWR;
     reg        exwb_memRD;
@@ -184,8 +204,10 @@ module fyracore #(
     // CSR pipeline regs
     reg        exwb_csrWR;
     reg [11:0] exwb_csr_addr;
-    reg [31:0] exwb_csr_wdata;
-    reg [31:0] exwb_csr_rdata;
+    // The CSR write value travels in exwb_rs2_data (a CSR instruction has no
+    // rs2), and the value it read in exwb_alu_result, like the link address
+    // of a JAL/JALR. The name is kept for the testbench's trace.
+    wire [31:0] exwb_csr_wdata = exwb_rs2_data;
     // Atomics pipeline regs
     reg        exwb_isAmo;
     reg        exwb_isLR;
@@ -196,7 +218,6 @@ module fyracore #(
     reg [31:0] exwb_trap_cause;
     reg [31:0] exwb_trap_pc;
     reg [31:0] exwb_trap_val;   // mtval: faulting addr (misalign) or instr (illegal), else 0
-    reg [31:0] exwb_instr;
     reg [31:0] exwb_raw_instr;  // Original fetched bytes for trace dump
     reg        exwb_compressed;
 
@@ -204,13 +225,12 @@ module fyracore #(
     // (needed to break iverilog's forward-reference restriction)
     wire [31:0] csr_rdata_eff;   // driven by assign in CSR section
     wire        csr_addr_valid;  // driven by CSR unit output
-    wire        pmp_ifetch_allow; // driven by pmp_ifetch instance
-    wire        pmp_data_allow;   // driven by pmp_data instance
+    wire        pmp_allow;        // driven by the (one, time-shared) pmp instance
     wire        irq_inject;      // driven by interrupt detection logic in CSR/WB section
     wire        csr_misa_c;      // driven by CSR unit output (misa.C bit)
     wire        csr_mstatus_tw;  // driven by CSR unit output (mstatus.TW bit)
     wire        csr_mstatus_mprv;// driven by CSR unit output (mstatus.MPRV bit)
-    wire        ex_ifetch_hi_phase; // PMP is checking a straddling instruction's upper half
+    wire        ex_ifetch_hi_phase; // PMP is checking the fetch (either half), not the data access
 
     // ================================================================
     //  EX Stage — Decode + Control + Regfile Read + ALU + Branch
@@ -293,17 +313,33 @@ module fyracore #(
     wire [4:0]  wb_rd;
     wire [31:0] wb_data;
 
+    // One read port, time-shared. An instruction with an rs2 field spends one
+    // stalled EX cycle (rs2_phase) reading rs2 into rs2_hold; the port reads
+    // rs1 on every other cycle. rs2_hold snoops each register-file write to
+    // rs2, so it holds the architectural value for as long as the
+    // instruction stays in EX. rs2_held clears whenever IF/EX moves, so every
+    // instruction takes its own phase. In the SoC the cycle is hidden behind
+    // the next fetch, except on a branch, which has no fetch in flight.
+    reg         rs2_held;
+    reg  [31:0] rs2_hold;
+    wire        rs2_phase = ifex_valid && (ex_rs2 != 5'b0) && !rs2_held;
+    wire [31:0] rf_port;
     regFile #(32) rf(
         .clk (clk),
         .rst (rst),
         .wrEn(wb_regWR),
-        .rs1 (ex_rs1),
-        .rs2 (ex_rs2),
+        .rs  (rs2_phase ? ex_rs2 : ex_rs1),
         .rd  (wb_rd),
         .dIn (wb_data),
-        .r1  (rf_r1),
-        .r2  (rf_r2)
+        .r   (rf_port)
     );
+    assign rf_r1 = rf_port;
+    assign rf_r2 = (ex_rs2 == 5'b0) ? 32'b0 : rs2_hold;
+    wire   rs2_wr_now = wb_regWR && (wb_rd != 5'b0) && (wb_rd == ex_rs2);
+    always @(posedge clk) begin
+        if (rs2_phase)       rs2_hold <= rs2_wr_now ? wb_data : rf_port;
+        else if (rs2_wr_now) rs2_hold <= wb_data;
+    end
 
     // Data forwarding from WB → EX
     wire fwd_rs1 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs1);
@@ -315,13 +351,22 @@ module fyracore #(
     wire [31:0] alu_d1 = ctrl_aluSrc1 ? ifex_pc   : ex_rs1_val;
     wire [31:0] alu_d2 = ctrl_aluSrc2 ? ex_rs2_val : ex_imm;
 
+    // The comparator (branchCtrl, below) is shared: rs1 against rs2 for a
+    // branch, against the ALU's second operand otherwise, which for SUB and
+    // SLT(I)(U) is exactly the ALU's d1 - d2 (their d1 is always rs1).
+    wire [31:0] cmp_diff;
+    wire        cmp_lts, cmp_ltu;
+
     // ALU (RV32I only — M-extension handled by muldiv below)
     wire [31:0] ex_alu_result;
     alu alu_inst(
-        .d1     (alu_d1),
-        .d2     (alu_d2),
-        .result (ex_alu_result),
-        .control(ctrl_aluOp)
+        .d1         (alu_d1),
+        .d2         (alu_d2),
+        .sub_res    (cmp_diff),
+        .lt_signed  (cmp_lts),
+        .lt_unsigned(cmp_ltu),
+        .result     (ex_alu_result),
+        .control    (ctrl_aluOp)
     );
 
     // ── Multi-cycle multiply/divide unit (RV32M) ──────────────────────────────
@@ -333,13 +378,21 @@ module fyracore #(
     wire        muldiv_start;   // driven by assign in Hazard Detection
     wire        muldiv_stall;   // driven by assign in Hazard Detection
 
+    // The shifts (aluOp 00001 SLL, 00101 SRL, 01101 SRA) run through muldiv's
+    // shift register as well, one bit per cycle: the ALU has no shifter.
+    // Everything below that says "M instruction" covers them too.
+    wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
+    wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
+
     muldiv muldiv_inst(
         .clk   (clk),
         .rst   (rst),
         .start (muldiv_start),
         .op    (ctrl_aluOp[2:0]),    // op encoded in lower 3 bits of aluOp
-        .a     (alu_d1),             // rs1 (aluSrc1=0 for all M-ext R-type)
-        .b     (alu_d2),             // rs2 (aluSrc2=1 for all M-ext R-type)
+        .shift (ex_is_shift),
+        .sra   (ctrl_aluOp[3]),
+        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
+        .b     (alu_d2),             // rs2, or the immediate shift amount
         .result(muldiv_result),
         .busy  (muldiv_busy),
         .done  (muldiv_done)
@@ -350,8 +403,11 @@ module fyracore #(
     branchCtrl bcmp(
         .funct3     (ex_funct3),
         .r1         (ex_rs1_val),
-        .r2         (ex_rs2_val),
-        .branchValid(ex_branch_valid)
+        .r2         (ctrl_doBranch ? ex_rs2_val : alu_d2),
+        .branchValid(ex_branch_valid),
+        .diff       (cmp_diff),
+        .lt_signed  (cmp_lts),
+        .lt_unsigned(cmp_ltu)
     );
 
     wire ex_branch_taken = (ctrl_doBranch && ex_branch_valid) || ctrl_doJump;
@@ -427,13 +483,26 @@ module fyracore #(
     );
     wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
     // A write to pmpcfg0 or pmpaddr0-3 changes the checks that the next
-    // instruction's fetch and data access undergo, and both checks run in EX
-    // while the write commits one stage later in WB. Rather than forward
-    // 160 bits of PMP state into both checkers, the write refetches the
-    // next instruction the way FENCE.I does, so that instruction reaches EX
-    // only after the write has committed. One cycle per PMP write.
+    // instruction's fetch and data access undergo, and both run in EX while
+    // the write commits one stage later in WB. The CSR-write stall
+    // (csr_wb_hazard) keeps the data check behind the write, but with a
+    // locked entry or in U-mode the next instruction's fetch verdict can be
+    // latched during that very stall cycle, against the old configuration.
+    // So the write refetches the next instruction the way FENCE.I does,
+    // and it reaches EX only after the write has committed. One fetch per
+    // PMP write (tests/directed/pmp_refetch).
     wire ex_pmp_csr_wr = ifex_valid && ex_csr_writes &&
                          (ex_csr_addr == 12'h3A0 || ex_csr_addr[11:2] == 10'b0011_1011_00);
+    // No fetch behind an instruction that decides the next pc: a branch or
+    // jump, and the ones that always redirect -- ECALL and EBREAK (they
+    // trap), MRET (it returns, or traps when malformed or in U-mode),
+    // FENCE.I and a PMP CSR write (they refetch the fall-through, which is
+    // pc). Decode-only terms: ex_trap and ex_illegal_insn can change while
+    // EX waits (forwarded operands, misa.C during a CSR-write stall), and
+    // imem_req must not drop while a fetch is outstanding.
+    assign ex_nofetch = ex_pmp_csr_wr || (ifex_valid &&
+                        (ctrl_doBranch || ctrl_doJump || ctrl_isEcall || ctrl_isEbreak ||
+                         ctrl_isMret || ctrl_isFenceI));
     // CSR access requires privilege >= csr_addr[9:8] (00=U, 01=S, 11=M).
     // Since we only have M(1) and U(0): any CSR with addr[9:8] != 00 requires M-mode.
     wire ex_csr_priv_fail = !priv_mode && (ex_csr_addr[9:8] != 2'b00);
@@ -476,9 +545,9 @@ module fyracore #(
     // only ifex_pc executed an instruction whose upper half lay past the end
     // of memory (with junk upper bits), or in a region without X permission.
     wire        ex_straddle = !ifex_compressed && ifex_pc[1];
-    // ifex_pc + 2 with no adder: a 32-bit instruction's ifex_pc_next is
-    // ifex_pc + 4, and that word is where the upper half lives.
-    wire [31:0] ex_pc_hi = {ifex_pc_next[31:2], 2'b00};
+    // ifex_pc + 2 with no adder: for a 32-bit instruction pc is ifex_pc + 4,
+    // and that word is where the upper half lives.
+    wire [31:0] ex_pc_hi = {pc[31:2], 2'b00};
     wire ex_pma_fetch_hi_ok = in_exec(ex_pc_hi);
     wire ex_pma_in_rom = in_win(ex_alu_result, PMA_ROM_BASE, PMA_ROM_TOP);
     wire ex_pma_in_ram = in_win(ex_alu_result, PMA_RAM_BASE, PMA_RAM_TOP);
@@ -499,20 +568,23 @@ module fyracore #(
     // PMP says the permissions deny it, or the PMA says nothing is mapped
     // there. Both raise the same causes (1 / 5 / 7), so they are combined
     // here rather than at every use site.
-    // (uses forward-declared pmp_ifetch_allow / pmp_data_allow)
+    // (uses the forward-declared pmp_allow)
     //
     // Fetch: the lower half is checked at ifex_pc. For a straddling
-    // instruction the upper half gets its own PMA compare, and the single
-    // fetch PMP checker looks at it for one extra EX cycle first
-    // (ex_ifetch_hi_phase) whenever PMP could deny it; the verdict is kept in
-    // ifetch_hi_denied. No fault is raised during that cycle.
-    wire ex_ifetch_fault_lo = !ex_pma_fetch_ok || !pmp_ifetch_allow;
+    // instruction the upper half gets its own PMA compare. The one PMP
+    // checker serves the fetch and the data access in turn: whenever PMP
+    // could deny the fetch it looks at ifex_pc, then at a straddling
+    // instruction's upper half, one stalled EX cycle each
+    // (ex_ifetch_hi_phase), and the verdicts are kept in ifetch_lo_denied and
+    // ifetch_hi_denied. No fault is raised during those cycles. The data
+    // access is checked on the instruction's last EX cycle.
+    wire ex_ifetch_fault_lo = !ex_pma_fetch_ok || ifetch_lo_denied;
     wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok || ifetch_hi_denied);
     wire ex_ifetch_fault = ifex_valid && !ex_ifetch_hi_phase &&
                            (ex_ifetch_fault_lo || ex_ifetch_fault_hi);
     // Data side: only when a memory op is present and it's not already misaligned
     wire ex_data_fault   = ifex_valid && ex_mem_active && !ex_misaligned &&
-                           (!pmp_data_allow || !ex_pma_data_ok);
+                           !ex_ifetch_hi_phase && (!pmp_allow || !ex_pma_data_ok);
 
     // Illegal instruction (cause 2). Collected into one signal so the trap
     // cause chain can test it in its spec-mandated priority position rather
@@ -573,8 +645,20 @@ module fyracore #(
 
     // stall_other: all stall sources except muldiv (used to gate muldiv_start)
     // wfi_active stalls the pipeline until an interrupt becomes pending.
-    wire stall_other = load_use_hazard || wb_busy || if_mem_stall || wb_mem_stall || wfi_active ||
-                       ex_ifetch_hi_phase;
+    // stall_nofetch is the same without the pending fetch: an M instruction
+    // starts on it (see muldiv_start).
+    //
+    // csr_wb_hazard: a CSR write commits in WB, and the instruction behind it
+    // waits in EX for that one cycle, so everything EX derives from CSR state
+    // -- a CSR read, the trap and MRET targets, interrupt gating, MPRV/MPP for
+    // the data PMP check, TW, misa.C -- sees the committed value. The
+    // alternative, forwarding csr.v's post-write value into each of those, is
+    // a 32-bit mux per consumer and a copy of every WARL rule on the read
+    // path. In the SoC the cycle is hidden behind the next fetch.
+    wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
+    wire stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active ||
+                         ex_ifetch_hi_phase || csr_wb_hazard || rs2_phase;
+    wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
     //   muldiv_start: pulse for one cycle to launch a new M-ext operation.
@@ -586,7 +670,7 @@ module fyracore #(
     // flush, which contains ex_trap -- so without this muldiv_stall would
     // wait for a result that never comes and the trap would never commit.
     // ex_trap depends on neither stall nor flush, so this closes no loop.
-    wire muldiv_want = ifex_valid && ctrl_isMulDiv && !ex_trap;
+    wire muldiv_want = ifex_valid && ex_is_iter && !ex_trap;
 
     // Sticky completion. muldiv_done is a one-cycle pulse; holding it here
     // means the pipeline can take the result on whatever later cycle it is
@@ -602,8 +686,13 @@ module fyracore #(
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
     wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
 
+    // A pending fetch does not hold the operation back: it runs during the
+    // fetch wait and is captured (muldiv_capture) once the fetch is in.
+    // Waiting for the fetch as well started it on the cycle the fetch
+    // completed, and muldiv_stall then dropped that fetch and fetched the
+    // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_other && !flush;
+                          && !stall_nofetch && !flush;
     assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin
@@ -653,8 +742,10 @@ module fyracore #(
 
     // AMO state machine
     reg        amo_phase; // 0=read, 1=write
-    reg [31:0] amo_old_val;
-    reg [31:0] amo_new_val;
+    // Between its read and its write an AMO keeps the old value in
+    // exwb_trap_val, free because an AMO in WB never traps, and the new value
+    // in exwb_rs2_data, whose rs2 the new value was computed from.
+    wire [31:0] amo_old_val = exwb_trap_val;
 
     // LR/SC reservation. The reservation set is the naturally aligned word
     // holding the LR's address -- the smallest set the spec allows -- so only
@@ -708,7 +799,7 @@ module fyracore #(
     );
 
     assign dmem_addr  = mem_addr_aligned;
-    assign dmem_wdata = (exwb_isAmo && amo_phase) ? amo_new_val : store_data_shifted;
+    assign dmem_wdata = store_data_shifted;   // an AMO's new value is in exwb_rs2_data
     // An AMO, LR or SC is a word access, so access_be is 1111 for it.
     assign dmem_be    = access_be;
     assign dmem_we    = wb_mem_write;
@@ -762,10 +853,9 @@ module fyracore #(
     wire [31:0] wb_alu_or_sc = exwb_isSC ? {31'b0, !sc_success} : exwb_alu_result;
     wire [31:0] wb_load_or_amo = (exwb_isAmo && amo_phase) ? amo_old_val : load_data;
 
-    assign wb_data = (exwb_wbSel == 2'b00) ? wb_alu_or_sc :
-                     (exwb_wbSel == 2'b01) ? wb_load_or_amo :
-                     (exwb_wbSel == 2'b10) ? exwb_pc_next :
-                     exwb_csr_rdata; // 2'b11
+    // The link address (wbSel 10) and a CSR's old value (11) are already in
+    // exwb_alu_result.
+    assign wb_data = (exwb_wbSel == 2'b01) ? wb_load_or_amo : wb_alu_or_sc;
 
     // !wb_mem_stall: with EX/WB now held across a memory stall, writeback would
     // otherwise fire on every cycle of it, and a load would latch dmem_rdata
@@ -781,7 +871,7 @@ module fyracore #(
     // CSR unit
     wire        csr_trap_signal = exwb_valid && exwb_trap;
     wire [31:0] csr_mtvec, csr_mepc;
-    wire [31:0] csr_wval;           // post-write value of the CSR WB is writing
+    wire [31:0] csr_wval;           // post-write value of the CSR WB is writing (trace only)
     wire        csr_mstatus_mie;
     wire [31:0] csr_mie;            // full mie register (for per-bit IRQ gating)
     // csr_misa_c forward-declared at top of EX stage; driven by CSR unit port
@@ -829,8 +919,9 @@ module fyracore #(
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    // csr_mstatus_mie is the post-write value, so there is no window where an
-    // interrupt slips in after csrci mstatus,8 but before the write commits.
+    // No interrupt is injected while a CSR write is in WB (csr_wb_hazard is
+    // part of stall_other), so there is no window where one slips in after
+    // csrci mstatus,8 but before the write commits.
     wire irq_global_en     = !priv_mode || csr_mstatus_mie;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
     wire irq_sw_pend       = sw_irq       & csr_mie[3]  & irq_global_en;
@@ -877,78 +968,59 @@ module fyracore #(
                     (external_irq & csr_mie[11]) |
                     !wfi_has_enabled_irq;  // NOP when no sources enabled
 
-    // ── PMP checks ───────────────────────────────────────────────────────────
-    // pmp_ifetch_allow and pmp_data_allow are forward-declared near top of EX stage.
-    // Instruction fetch: check ifex_pc with Execute permission (EX stage), or
-    // the upper half of a straddling instruction during ex_ifetch_hi_phase.
+    // ── PMP check ────────────────────────────────────────────────────────────
+    // One checker, time-shared (pmp_allow is forward-declared near the top of
+    // EX). While PMP could refuse a fetch the instruction spends one stalled
+    // EX cycle checking ifex_pc with Execute permission (ex_ifetch_lo_phase)
+    // and, if it straddles two words, one more on its upper half, latching
+    // each verdict; its data access is checked on the cycle after. Checking
+    // all three at once took three checkers.
     //
     // PMP can only refuse an M-mode fetch through a locked entry, so the
-    // extra cycle is spent only in U-mode or when some entry is locked; an
-    // M-mode kernel with unlocked (or no) PMP entries never pays it.
+    // extra cycles are spent only in U-mode or when some entry is locked; an
+    // M-mode kernel with unlocked (or no) PMP entries never pays them. In the
+    // SoC they are hidden behind the next fetch.
     wire pmp_any_locked = csr_pmpcfg0[7] | csr_pmpcfg0[15] | csr_pmpcfg0[23] | csr_pmpcfg0[31];
-    assign ex_ifetch_hi_phase = ifex_valid && ex_straddle && !ifetch_hi_done &&
-                                (!priv_mode || pmp_any_locked);
-    pmp pmp_ifetch(
-        .pmpcfg0    (csr_pmpcfg0),
-        .pmpaddr0   (csr_pmpaddr0),
-        .pmpaddr1   (csr_pmpaddr1),
-        .pmpaddr2   (csr_pmpaddr2),
-        .pmpaddr3   (csr_pmpaddr3),
-        .addr       (ex_ifetch_hi_phase ? ex_pc_hi : ifex_pc),
-        .access_type(3'b100),       // Execute
-        .priv_mode  (priv_mode),
-        .pmp_allow  (pmp_ifetch_allow)
-    );
+    wire fetch_can_deny = !priv_mode || pmp_any_locked;
+    wire ex_ifetch_lo_phase = ifex_valid && fetch_can_deny && !ifetch_lo_done;
+    assign ex_ifetch_hi_phase = ex_ifetch_lo_phase ||
+                                (ifex_valid && fetch_can_deny && ex_straddle && !ifetch_hi_done);
 
     // Data access: check ex_alu_result with R or W permission (EX stage, address ready).
     wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b011 : // AMO: R+W
                                      ex_misalign_is_store ? 3'b010 : // Store/SC: W
                                      3'b001;                          // Load/LR: R
     // MPRV=1 makes loads and stores check as though the hart were in MPP.
-    // Instruction fetch is excluded by the spec, so pmp_ifetch keeps priv_mode.
-    // csr.v exports both as they stand after a pending WB write, so the load
-    // or store right after `csrw mstatus` is checked against the new values.
+    // Instruction fetch is excluded by the spec, so its check keeps priv_mode.
+    // The load or store right after `csrw mstatus` waits in EX for the write
+    // to commit (csr_wb_hazard), so it is checked against the new values.
     wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;
 
-    pmp pmp_data(
+    pmp pmp_unit(
         .pmpcfg0    (csr_pmpcfg0),
         .pmpaddr0   (csr_pmpaddr0),
         .pmpaddr1   (csr_pmpaddr1),
         .pmpaddr2   (csr_pmpaddr2),
         .pmpaddr3   (csr_pmpaddr3),
-        .addr       (ex_alu_result),
-        .access_type(ex_pmp_access_type),
-        .priv_mode  (data_priv_mode),
-        .pmp_allow  (pmp_data_allow)
+        .addr       (ex_ifetch_lo_phase ? ifex_pc :
+                     ex_ifetch_hi_phase ? ex_pc_hi : ex_alu_result),
+        .access_type(ex_ifetch_hi_phase ? 3'b100 : ex_pmp_access_type),  // Execute
+        .priv_mode  (ex_ifetch_hi_phase ? priv_mode : data_priv_mode),
+        .pmp_allow  (pmp_allow)
     );
 
-    // CSR forwarding: when WB writes the CSR that EX reads, EX gets csr.v's
-    // post-write value, which already applies every WARL rule (MPP
-    // legalisation, locked PMP entries, reserved bits, the mepc IALIGN mask,
-    // mip's live bits). The rules live only in csr.v; do not re-derive them
-    // here.
-    //
-    // The user-level counter aliases read the same registers as their M-level
-    // names -- cycle/instret (0xC00/0xC02) and their high halves (0xC80/0xC82)
-    // are mcycle/minstret (0xB00/0xB02, 0xB80/0xB82) -- so a read of the alias
-    // right after a write to the M-level name must be forwarded too.
-    wire csr_wb_writing = exwb_valid && exwb_csrWR && !exwb_trap;
-    wire csr_fwd_alias  = (ex_csr_addr[11:8] == 4'hC) && (exwb_csr_addr[11:8] == 4'hB) &&
-                          (ex_csr_addr[7:0] == exwb_csr_addr[7:0]) &&
-                          (ex_csr_addr[6:2] == 5'b0) && !ex_csr_addr[0];   // x00, x02, x80, x82
-    wire csr_fwd = csr_wb_writing && ((exwb_csr_addr == ex_csr_addr) || csr_fwd_alias);
-    assign csr_rdata_eff = csr_fwd ? csr_wval : csr_rdata;
+    // No CSR forwarding: an instruction never reads CSR state in EX while a
+    // CSR write is in WB (csr_wb_hazard stalls it for that cycle).
+    assign csr_rdata_eff = csr_rdata;
 
     // ================================================================
     //  PC Update Logic
     // ================================================================
-    // Forward mtvec/mepc from a WB CSR write to avoid stale redirect targets.
-    // Without this, sequences like "csrw mepc, t5; mret" read the old mepc
-    // because the WB write hasn't committed when EX computes next_pc.
-    wire mtvec_fwd = csr_wb_writing && (exwb_csr_addr == 12'h305);
-    wire mepc_fwd  = csr_wb_writing && (exwb_csr_addr == 12'h341);
-    wire [31:0] trap_target = mtvec_fwd ? csr_wval : csr_mtvec;
-    wire [31:0] mret_target = mepc_fwd  ? csr_wval : csr_mepc;
+    // "csrw mepc, t5; mret" and "csrw mtvec, t0; ecall" read the written
+    // value: csr_wb_hazard holds the MRET or the trap in EX until the write
+    // has committed.
+    wire [31:0] trap_target = csr_mtvec;
+    wire [31:0] mret_target = csr_mepc;
 
     reg [31:0] next_pc;
     always @(*) begin
@@ -975,9 +1047,9 @@ module fyracore #(
         else if (ex_branch_taken && ifex_valid && !stall)
             next_pc = ex_branch_target;
         else if ((ex_is_fencei || ex_pmp_csr_wr) && ifex_valid && !stall)
-            next_pc = ifex_pc_next; // Re-fetch after FENCE.I or a PMP CSR write
-        else if (stall)
-            next_pc = pc;
+            next_pc = pc;           // Re-fetch after FENCE.I or a PMP CSR write
+        else if (stall || ex_nofetch)
+            next_pc = pc;       // a not-taken branch: pc already is the fall-through
         else
             next_pc = if_pc_next;
     end
@@ -1008,18 +1080,17 @@ module fyracore #(
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
-            ifex_instr     <= 32'h0000_0013; // NOP
-            ifex_raw_instr <= 32'h0000_0013;
+            ifex_raw_instr <= 32'h0000_0013; // NOP
             ifex_compressed<= 1'b0;
-            ifex_pc_next   <= 32'b0;
             ifex_valid     <= 1'b0;
-            ifex_c_illegal <= 1'b0;
+            ifetch_lo_done <= 1'b0;
+            ifetch_lo_denied <= 1'b0;
             ifetch_hi_done <= 1'b0;
             ifetch_hi_denied <= 1'b0;
+            rs2_held       <= 1'b0;
             // EX/WB
             exwb_alu_result <= 32'b0;
             exwb_rs2_data   <= 32'b0;
-            exwb_pc_next    <= 32'b0;
             exwb_rd         <= 5'b0;
             exwb_regWR      <= 1'b0;
             exwb_memRD      <= 1'b0;
@@ -1030,8 +1101,6 @@ module fyracore #(
             exwb_valid      <= 1'b0;
             exwb_csrWR      <= 1'b0;
             exwb_csr_addr   <= 12'b0;
-            exwb_csr_wdata  <= 32'b0;
-            exwb_csr_rdata  <= 32'b0;
             exwb_isAmo      <= 1'b0;
             exwb_isLR       <= 1'b0;
             exwb_isSC       <= 1'b0;
@@ -1040,13 +1109,10 @@ module fyracore #(
             exwb_trap_cause <= 32'b0;
             exwb_trap_pc    <= 32'b0;
             exwb_trap_val   <= 32'b0;
-            exwb_instr      <= 32'h0000_0013;
             exwb_raw_instr  <= 32'h0000_0013;
             exwb_compressed <= 1'b0;
             // AMO
             amo_phase      <= 1'b0;
-            amo_old_val    <= 32'b0;
-            amo_new_val    <= 32'b0;
             wb_busy        <= 1'b0;
             // WFI
             wfi_active        <= 1'b0;
@@ -1076,34 +1142,40 @@ module fyracore #(
             else if (wfi_wake || irq_inject)
                 wfi_active <= 1'b0;
 
+            // ---- register-file port phase: cleared whenever IF/EX moves ----
+            if (!stall)         rs2_held <= 1'b0;
+            else if (rs2_phase) rs2_held <= 1'b1;
+
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
-                // Hold IF/EX on stall. If the stall is the upper-half PMP
-                // check, record its verdict; the next cycle checks ifex_pc.
-                if (ex_ifetch_hi_phase) begin
+                // Hold IF/EX on stall. If the stall is a fetch PMP check,
+                // record its verdict; the next cycle checks the next thing.
+                if (ex_ifetch_lo_phase) begin
+                    ifetch_lo_done   <= 1'b1;
+                    ifetch_lo_denied <= !pmp_allow;
+                end else if (ex_ifetch_hi_phase) begin
                     ifetch_hi_done   <= 1'b1;
-                    ifetch_hi_denied <= !pmp_ifetch_allow;
+                    ifetch_hi_denied <= !pmp_allow;
                 end
-            end else if (flush) begin
-                // Insert bubble
+            end else if (flush || ex_nofetch) begin
+                // Insert bubble (nothing was fetched behind ex_nofetch)
                 ifex_valid     <= 1'b0;
-                ifex_instr     <= 32'h0000_0013; // NOP
-                ifex_raw_instr <= 32'h0000_0013;
+                ifex_raw_instr <= 32'h0000_0013; // NOP
                 ifex_compressed<= 1'b0;
-                ifex_c_illegal <= 1'b0;
+                ifetch_lo_done <= 1'b0;
+                ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
             end else begin
                 ifex_pc        <= pc;
-                ifex_instr     <= if_instr;
                 ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
                 ifex_compressed<= if_compressed;
-                ifex_pc_next   <= if_pc_next;
                 ifex_valid     <= 1'b1;
+                ifetch_lo_done <= 1'b0;
+                ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
-                // misa.C is applied in EX (ex_illegal_insn), not here.
-                ifex_c_illegal <= if_compressed && if_c_illegal;
+                // misa.C is applied in EX (ex_illegal_insn).
             end
 
             // ---- EX/WB Pipeline Register ----
@@ -1111,8 +1183,8 @@ module fyracore #(
                 // AMO phase transition: read → write
                 if (exwb_isAmo && !amo_phase && dmem_ready) begin
                     amo_phase   <= 1'b1;
-                    amo_old_val <= load_data;
-                    amo_new_val <= amo_computed;
+                    exwb_trap_val <= load_data;     // amo_old_val
+                    exwb_rs2_data <= amo_computed;  // the write's data
                     wb_busy     <= 1'b0; // Release pipeline next cycle
                 end
             end else if (wb_mem_stall && !irq_inject) begin
@@ -1137,10 +1209,13 @@ module fyracore #(
                 exwb_trap   <= 1'b0;
                 exwb_trap_val <= 32'b0;
             end else begin
-                // For M-ext ops, use the muldiv result; for all others, use the ALU result.
-                exwb_alu_result <= ctrl_isMulDiv ? muldiv_result : ex_alu_result;
-                exwb_rs2_data   <= ex_rs2_val;
-                exwb_pc_next    <= ifex_pc_next;
+                // The M-ext or shift result, the link address (pc is
+                // ifex_pc + 2/4), a CSR's old value, or the ALU result.
+                exwb_alu_result <= ex_is_iter             ? muldiv_result :
+                                   (ctrl_wbSel == 2'b10)  ? pc            :
+                                   (ctrl_wbSel == 2'b11)  ? csr_rdata_eff :
+                                                            ex_alu_result;
+                exwb_rs2_data   <= ex_csr_active ? ex_csr_wdata : ex_rs2_val;
                 exwb_rd         <= ex_rd;
                 exwb_regWR      <= ctrl_regWR;
                 exwb_memRD      <= ctrl_memRD;
@@ -1151,13 +1226,10 @@ module fyracore #(
                 exwb_valid      <= ifex_valid;
                 exwb_csrWR      <= ex_csr_writes; // No write for CSRRS/CSRRC when rs1=0
                 exwb_csr_addr   <= ex_csr_addr;
-                exwb_csr_wdata  <= ex_csr_wdata;
-                exwb_csr_rdata  <= csr_rdata_eff;
                 exwb_isAmo      <= ctrl_isAmo;
                 exwb_isLR       <= ctrl_isLR;
                 exwb_isSC       <= ctrl_isSC;
                 exwb_amoOp      <= ctrl_amoOp;
-                exwb_instr      <= ifex_instr;
                 exwb_raw_instr  <= ifex_raw_instr;
                 exwb_compressed <= ifex_compressed;
                 exwb_trap_pc    <= ifex_pc;
@@ -1214,7 +1286,7 @@ module fyracore #(
                     // mepc: if interrupted instruction is WFI, advance past it so MRET
                     // doesn't re-execute WFI. For all other instructions, point to the
                     // instruction itself so it re-executes after MRET.
-                    exwb_trap_pc    <= ex_is_wfi ? ifex_pc_next : ifex_pc;
+                    exwb_trap_pc    <= ex_is_wfi ? pc : ifex_pc;
                     exwb_valid      <= 1'b1;
                     exwb_regWR      <= 1'b0;  // suppress writeback
                     exwb_memRD      <= 1'b0;

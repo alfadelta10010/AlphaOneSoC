@@ -164,10 +164,12 @@ columns).
 | 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
-block synthesised on its own; 1 tile ≈ 11,300 µm² of standard cells at
-TinyTapeout's 60% density (UART 3,321 µm², GPIO 1,380 µm²). The SoC is
-already about 1.9x the seven-tile budget (see "Area" in
-`docs/soc-architecture.md`); these two add 0.4 tiles.
+block synthesised on its own with the audit's recipe; 1 tile ≈ 11,300 µm² of
+standard cells at TinyTapeout's 60% density (UART 3,321 µm², GPIO 1,380 µm²).
+The recipe runs about 20-24% below LibreLane's synthesis (`docs/area-audit.md`).
+In LibreLane the whole SoC is 12.52 tiles with the area cuts, about 1.8x the
+seven-tile budget (see "Area" in `docs/soc-architecture.md`); these two add
+about 0.4 tiles of that.
 
 ### 1. TinyTapeout wrapper (not built)
 

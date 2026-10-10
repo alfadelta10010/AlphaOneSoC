@@ -1,0 +1,145 @@
+RAM for ttsky25b-tapeout project
+James
+OP
+ — 10/3/25, 11:46 PM
+Hey,
+I want to implement a Turing Machine (https://en.wikipedia.org/wiki/Turing_machine) using Verilog.
+For this I need memory (some for its memory tape and some to store its state transitions).
+I need some assistance making a choice and also to get started. I am considering two options:
+
+DFF RAM:
+... 128 bytes would not be much, but I could work with that. However, I'm uncertain whether this would be a good choice, because as I understand this needs 3x2 tiles, and I only have 1 at my disposal. Also, from what I've read here, it's a bit tricky to use.
+
+SPI RAM:
+... This sounds like a good option in theory, plenty of memory and I don't really care about it being slower. I'm just completely lost on how to include this into my design. Also, how do I simulate this?
+
+My background is Computer Science with a lecture on Computer Architecture where we implemented a small MIPS processor in VHDL. I would really like to do this project that I have in mind, but I'm not certain I am capable of even starting it. You may also tell me to not do it I guess, but I was hoping to somehow figure out how I can do this memory stuff and then tackle the rest.
+
+Best Regards!
+Turing machine
+A Turing machine is a mathematical model of computation describing an abstract machine that manipulates symbols on a strip of tape according to a table of rules. Despite the model's simplicity, it is capable of implementing any computer algorithm.
+The machine operates on an infinite memory tape divided into discrete cells, each of which can hold...
+Turing machine
+Image failed to load.
+urish [TT], Role icon, team — 10/3/25, 11:59 PM
+Turing machine doesn't need actually need random access.
+urish [TT], Role icon, team — 10/4/25, 12:00 AM
+So using a shift register may work better than something like DFFRAM.
+htamas [TT], Role icon, team — 10/4/25, 12:09 AM
+I would just use flip-flops for storing the state transitions and a fictional "external tape drive" (Tape PMOD 🙂) that you access over i/o. You specify the interface to the tape as it's convenient for you, and then implement it in the cocotb testbench.
+urish [TT], Role icon, team — 10/4/25, 12:11 AM
+in 6 months: Turing Machine Tape Pmod suddenly appears on the Tiny Tapeout store
+reference design: https://www.youtube.com/watch?v=E3keLeMwfHY
+YouTube
+Mike Davey
+A Turing Machine - Overview
+Image
+Pazzy [LYNX], Role icon, tapeout — 10/4/25, 12:20 AM
+I think this would be absolutely doable for your skills, given you even did a MIPS processor in VHDL! :praise: 
+
+Unless the VHDL TT template has improved VHDL support, there are some catches to keep in mind. The reason is that the TT tools transpile every individual file to Verilog, preventing the use of package files or other external definitions, requiring basic std_logic or std_logic_vector ports and forcing old-school VHDL 1987 component/entity instantiation.
+
+You can avoid these limitations by using the Verilog template and transpiling your VHDL files to a single Verilog file using GHDL. 
+ [LYNX], 
+James
+OP
+ — 10/4/25, 3:23 AM
+Thank you very much for your encouraging words! I don't mind using a language I haven't used before (Verilog). This way I'll learn new stuff and I'm not a VHDL pro anyway 😄
+ [TT], 
+James
+OP
+ — 10/4/25, 3:33 AM
+are you sure about that? i need to store the programs - i.e. the transition tables in the example in the screenshot, i.e. the .txt files on the SD card in the video you linked. and also the tape. i thought i'll need RAM for that. (i would like to not have the program fixed, but be able to load different ones into memory and have them executed.)
+Image
+ [TT], 
+James
+OP
+ — 10/4/25, 3:47 AM
+If I'm not mistaken, flip-flops won't provide me with enough memory. I thought of an encoding, which would use 8 bit for each transition (i.e. 1 arrow in the diagram / 1 entry in the table of the screenshot I posted). And there would be 120 possible transitions in each program - 120 bytes, excluding tape memory. 
+urish [TT], Role icon, team — 10/4/25, 5:41 PM
+120 bytes can fit in ~4 tiles, depending on how you access them 
+This project has 253 bytes of memory using flip-flops, and happily fits in 8 (4x2) tiles: https://tinytapeout.com/chips/ttsky25a/tt_um_urish_sic1
+Quicker, easier and cheaper to make your own chip!
+679 SIC-1 8-bit SUBLEQ Single Instruction Computer - Tiny Tapeout
+Hardware implementation of the 8-bit Single Instruction Computer
+679 SIC-1 8-bit SUBLEQ Single Instruction Computer - Tiny Tapeout
+htamas [TT], Role icon, team — 10/4/25, 5:50 PM
+AFAIU he would like to fit his design into a single tile. I assumed he would be ok with a Turing machine using a smaller alphabet and just a few states, which is certainly doable in a single tile. But 120 bytes won't fit into it, so at that point external memory is the only option. Either the QSPI PMOD, or just using the RP2040 as an external memory.
+toivoh [TT], Role icon, tested tapeout — 10/4/25, 6:41 PM
+Or making a somewhat slower turing machine that keeps those 120 bytes in external RAM as well.
+James
+OP
+ — 10/7/25, 11:05 PM
+Right, I'd like my design to fit into the 1 tile I have. Regarding speed: Don't really care 🙃 
+Going back to my original post: I'm lost. Are there useful resources like documentation and/or tutorials on what I need to do, or any proper reference implementations?
+toivoh [TT], Role icon, tested tapeout — 10/8/25, 12:29 AM
+There's @RebelMike's SPI RAM emulator that runs on the RP2040 on the Tiny Tapeout PCB: https://tinytapeout.com/specs/memory/#using-external-spi-ram 
+I also wrote a RAM emulator that runs on the RP2040: https://github.com/toivoh/pio-ram-emulator
+GitHub
+GitHub - toivoh/pio-ram-emulator: RAM emulator for RP2040 using onl...
+RAM emulator for RP2040 using only PIO and DMA for response handling - toivoh/pio-ram-emulator
+RAM emulator for RP2040 using only PIO and DMA for response handling - toivoh/pio-ram-emulator
+Quicker, easier and cheaper to make your own chip!
+Memory - Tiny Tapeout
+Memory for Tiny Tapeout projects
+And there's the QSPI memory Pmod which I believe is sold in the TT store https://tinytapeout.com/specs/pinouts/#qspi-flash-and-psram
+Quicker, easier and cheaper to make your own chip!
+Pinouts - Tiny Tapeout
+Recommended pinouts for various protocols and Pmods
+James
+OP
+ — 10/8/25, 1:19 AM
+Thank you!
+So, if I'm not mistaken, I'll run one of those emulators on the actual hardware which allows "my" chip to interact with the CPU so that it provides memory?!
+I have already seen Mike's project, but from the GitHub page it was unclear to me how I was supposed to make use of it - i.e. write Verilog code that does. Will have to figure that out.
+Even more unclear to me is: How do I test this before I get the actual hardware way after I'll have to be done with my implementation?
+RebelMikeRole icon, contributor — 10/8/25, 1:54 AM
+I'm afraid I'm not aware of a simple SPI RAM controller.  Targetting the QSPI Pmod probably makes sense, so you could potentially use https://github.com/meiniKi/FazyRV-ExoTiny/blob/bef337cabd04ec0f4a86aab643de91aa24f7d4ad/rtl/wb_qspi_mem.sv or https://github.com/MichaelBell/tinyQV/blob/main/cpu/qspi_ctrl.v
+GitHub
+FazyRV-ExoTiny/rtl/wb_qspi_mem.sv at bef337cabd04ec0f4a86aab643de91...
+Contribute to meiniKi/FazyRV-ExoTiny development by creating an account on GitHub.
+FazyRV-ExoTiny/rtl/wb_qspi_mem.sv at bef337cabd04ec0f4a86aab643de91...
+GitHub
+tinyQV/cpu/qspi_ctrl.v at main · MichaelBell/tinyQV
+A Risc-V SoC for Tiny Tapeout. Contribute to MichaelBell/tinyQV development by creating an account on GitHub.
+The FazyRV one benefits from being a bit more comprehensible and does the set up of the RAM itself, but it doesn't have any read latency configuration so you'll be limited in max clock speed.  It says data is read on falling edge, so limit would be ~15MHz.
+The TinyQV one needs the RAM to be set up by the RP2 before you start your design, but you can configure the latency so you can get ~33MHz
+Pazzy [LYNX], Role icon, tapeout — 10/8/25, 9:17 AM
+Here is a simple SPI RAM controller - written for an FRAM specifically but if I remember right, it should be easy to adapt to generic RAM (FRAM might be a good option as program storage for you, now that I think about it!)
+https://github.com/gfcwfzkm/tt09-scope-bfh-mht1_3/blob/main/src/measurements/samples_memory/fram.vhdl
+GitHub
+tt09-scope-bfh-mht1_3/src/measurements/samples_memory/fram.vhdl at ...
+A little oscilloscope + signal generator for TinyTapeout09! - gfcwfzkm/tt09-scope-bfh-mht1_3
+tt09-scope-bfh-mht1_3/src/measurements/samples_memory/fram.vhdl at ...
+There is a extensive VHDL testbench for it in the tests folder as well
+Pazzy [LYNX], Role icon, tapeout — 10/8/25, 9:19 AM
+When feeling overwhelmed with bigger things, always remember Divide and Conquer! Make a block diagram or a sketch of all the different components you have and how they are linked, then work on one liece at a time!
+Regarding testing, a FPGA would be perfect, even more so if it is one that has the same PMOD layout as TinyTapeout. 
+My university lacked one that had the same PMOD layout, so I cobbled up a board together for the affordable Tang Nano 9k instead (programmable with free proprietary or OSS tools). https://github.com/gfcwfzkm/t9k-baseboard
+GitHub
+GitHub - gfcwfzkm/t9k-baseboard: Tang Nano 9k board and VHDL explor...
+Tang Nano 9k board and VHDL explorations! Contribute to gfcwfzkm/t9k-baseboard development by creating an account on GitHub.
+GitHub - gfcwfzkm/t9k-baseboard: Tang Nano 9k board and VHDL explor...
+toivoh [TT], Role icon, tested tapeout — 10/8/25, 9:50 AM
+For my RAM emulator, there is the example project https://github.com/toivoh/tt09-pio-ram-emulator-example that shows how to use it.
+The code includes the modules pio_ram_emu_transmitter and pio_ram_emu_transmitter in https://github.com/toivoh/tt09-pio-ram-emulator-example/blob/main/src/pio_ram_emulator.v / https://github.com/toivoh/tt09-pio-ram-emulator-example/blob/main/src/sb_io.v that can be used to interface to the RAM emulator.
+For testing, there is https://github.com/toivoh/tt09-pio-ram-emulator-example/blob/main/test/pio_ram_emulator_model.v that tries to model the behavior of the RAM emulator, when it is connected as in https://github.com/toivoh/tt09-pio-ram-emulator-example/blob/cdd5c5701ea4d1b79aa99adb19441e2c5acbc164/test/tb.v#L72-L75. Try not to rely on the exact latency of the model, the receiver tells you when data is ready.
+There is example code for testing the project on a Pico-Ice board with an ice40 FPGA and an rp2040 microcontroller in https://github.com/toivoh/tt09-pio-ram-emulator-example/tree/main/pico-ice
+GitHub
+GitHub - toivoh/tt09-pio-ram-emulator-example: Example using pio-ra...
+Example using pio-ram-emulator to draw a Julia fractal - toivoh/tt09-pio-ram-emulator-example
+
+GitHub
+tt09-pio-ram-emulator-example/src/pio_ram_emulator.v at main · toi...
+Example using pio-ram-emulator to draw a Julia fractal - toivoh/tt09-pio-ram-emulator-example
+GitHub
+tt09-pio-ram-emulator-example/src/sb_io.v at main · toivoh/tt09-pi...
+Example using pio-ram-emulator to draw a Julia fractal - toivoh/tt09-pio-ram-emulator-example
+GitHub
+tt09-pio-ram-emulator-example/test/pio_ram_emulator_model.v at main...
+Example using pio-ram-emulator to draw a Julia fractal - toivoh/tt09-pio-ram-emulator-example
+GitHub
+tt09-pio-ram-emulator-example/test/tb.v at cdd5c5701ea4d1b79aa99adb...
+Example using pio-ram-emulator to draw a Julia fractal - toivoh/tt09-pio-ram-emulator-example
+
+

@@ -11,15 +11,32 @@ area, which is a tile's die area at TT's default 60% placement density (seven ti
 (161 × 111.52 µm) at 60% holds 10,773 µm². The shape capacities below come from
 TinyTapeout's `tile_sizes.yaml` and are exact. Flop counts are raw counts.
 
-**Re-measured 2026-09-29** (PR #5 review, then its fixes): see the last section.
-Numbers above it are as first measured.
+**Re-measured 2026-09-29** (PR #5 review, then its fixes): see the section of that
+name. **Applied 2026-10-01**: thirteen of the cuts are in the RTL; see that section.
+The tables before those two sections are kept as first measured, as history.
+
+**Corrected 2026-10-10: what these numbers are for.** This audit finds and ranks area
+cuts; whether a design fits a tile shape and meets timing is settled by hardening it in
+the TinyTapeout submission repository, not here. The recipe below lets yosys use the
+`_1` drive strengths and `edfxtp`, which LibreLane's `no_synth.cells` excludes, so every
+tile figure in this document is **about 20-24% below what TT's flow synthesises**
+(main 10a37c3: 13.61 tiles here, 16.58 in LibreLane's synthesis). Paired deltas between
+two designs survive the cell set, and most cuts grow in it (section "TinyTapeout flow
+check"); one does not (the register-file reset, +0.08). **Every statement below that a
+stack fits, or fills N% of, a tile shape is withdrawn**, and so is the pre-layout timing
+claim in "Applied". No harden of this SoC has completed yet, at any 2-row shape, on main
+or with the cuts. The review that found this is `docs/area-opt-review-2026-10-10.html`.
 
 ## Method
 
 - yosys 0.66 and `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`.
 - Script: `synth -flatten`, then `dfflibmap` and `abc`, both with
-  `-dont_use *lpflow* *_0 *probe*` (close to LibreLane's dont-use list), then `opt_clean` and
-  `stat -liberty`.
+  `-dont_use *lpflow* *_0 *probe*`, then `opt_clean` and `stat -liberty`. This is **not**
+  LibreLane's dont-use list: LibreLane's `SYNTH_EXCLUDED_CELL_FILE` (`no_synth.cells`,
+  199 cells for sky130A 8afc8346) also excludes 141 `_1` cells (`dfxtp_1`, `nand2_1`, ...),
+  `edfxtp_1` and every `dlclkp`. A TT netlist is `dfxtp_2`, `_2` gates, `mux2_1` and
+  `buf_1`. Adding that file to the dont-use list (`localFiles/area-opt-review-2026-10-09/ppa/synll.sh`)
+  reproduces LibreLane's synthesis within 0.5%.
 - The same script is used for every number here. Numbers from a different script are not
   comparable: plain `synth` gives about 4% less.
 - Noise: ABC gives identical designs different areas depending on file order. This
@@ -29,8 +46,11 @@ Numbers above it are as first measured.
   0.1 tile as noise**, and prefer the mean of four or more orders
   (`localFiles/area-audit/synshuf.sh`). Rows #10-#16 below (−0.10 to −0.15, from one or
   two runs) sit at that floor.
-- These are synthesis areas. Placement, CTS and hold fixing add buffers after this; the 40%
-  of each tile left free by the 60% density figure is the margin for that.
+- These are synthesis areas. Placement, CTS and hold fixing add buffers after this. The
+  first version of this section assumed the 40% of each tile left free by the 60%
+  density figure covers that; it does not. In the 2026-10-09 hardens the std-cell area
+  after CTS and timing repair was 1.32x LibreLane's synthesis area and 1.64x this
+  recipe's (section "TinyTapeout flow check").
 - Verification labels:
   - **core**: the directed suite (`tests/directed/run.sh`, 101 runs) passed on the variant.
   - **SoC**: `run.sh soc` (64 tests) passed as well.
@@ -172,6 +192,10 @@ the 64-bit mtimecmp (about 1.1 tiles together), mtval, mscratch and the full mep
 
 ## Cut stacks at b4f3f20 against TinyTapeout shapes
 
+**Withdrawn 2026-10-10:** the percentages below divide recipe areas by shape capacities,
+and the recipe is about 20-24% low (see "Corrected" at the top). Read the table for the
+order of the stacks, not for fit.
+
 Each stack was re-synthesised with the b4f3f20 SoC files (UART, GPIO, bus) on top of the
 variant core.
 
@@ -302,7 +326,161 @@ Same recipe; each figure is the mean of four to six file orders.
 - The only cut above noise in the new blocks is a UART feature trade: an 8-bit divisor
   (−0.06 tiles, −16 flops; no rates below 12.2 kbaud at 50 MHz) or a fixed divisor
   (−0.09 tiles, −24 flops; software cannot change the baud rate).
-- The full-ISA stack (#1-#9) with 4b4ed8b's core changes ported in is **8.92 tiles,
-  72.2% of 6x2**: the conclusion above holds.
+- The full-ISA stack (#1-#9) with 4b4ed8b's core changes ported in is **8.92 tiles**
+  in this recipe. (The "72.2% of 6x2" first written here is withdrawn; see "Corrected".)
 - Stacks and scripts: `localFiles/area-audit/pr5/`, `localFiles/area-audit/synshuf.sh`,
   `localFiles/pr5-fixes-2026-09-29/area/`.
+
+## Applied 2026-10-01
+
+Thirteen changes are in `src/` on top of 10a37c3, one commit each, measured with the
+same recipe (mean of four file orders; each step's delta is paired by file order with
+the step before it, which cancels most of ABC's order noise). The last column is the
+same paired delta with LibreLane's excluded cells added to the dont-use list (the
+2026-10-10 review; four to six seeds), which is the one to rank cuts by.
+
+| step | change | candidate | tiles (recipe) | Δ recipe | Δ TT cells | flops |
+|---|---|---|---|---|---|---|
+| | 10a37c3 | | 13.61 | | | 2,736 |
+| 1 | M instruction starts during the fetch wait (performance) | | 13.60 | 0.00 | | 2,736 |
+| 2 | no fetch while a branch or jump is in EX (performance) | | 13.64 | +0.04 | | 2,736 |
+| 3 | register file without reset; `boot_flash.S` zeroes x1-x31 | #1b | 13.26 | −0.38 | **+0.08** | 2,736 |
+| 4 | four directed tests initialise what they read; `RUN_PLUSARGS` | #1b | 13.26 | 0.00 | | 2,736 |
+| 5 | multiply and divide on one 34-bit add/sub | #3 | 12.33 | −0.93 | −1.17 | 2,543 |
+| 6 | CSRs store only their legal bits | #4 | 12.12 | −0.22 | −0.23 | 2,412 |
+| 7 | stall after a CSR write instead of forwarding it | #4 | 11.77 | −0.35 | −0.47 | 2,405 |
+| 8 | EX/WB register consolidation | #5 | 11.24 | −0.53 | −0.58 | 2,214 |
+| 9 | one time-shared PMP checker | #8 | 10.99 | −0.25 | −0.38 | 2,216 |
+| 10 | one comparator for branches and SLT, one shifter | #13 | 10.89 | −0.11 | −0.14 | 2,216 |
+| 11 | decompress in EX | #16 | 10.81 | −0.08 | −0.06 | 2,185 |
+| 12 | one register-file read port | #9 | 10.34 | −0.48 | −0.71 | 2,218 |
+| 13 | shifts done serially in the muldiv shift register | #10 | **10.04** | −0.29 | −0.41 | **2,205** |
+
+- **Totals.** Recipe 13.61 → 10.04 tiles (10.07 after `ex_nofetch`, noise); with
+  LibreLane's excluded cells 16.49 → 12.47; LibreLane's own synthesis 16.58 → 12.52
+  tiles, 2,771 → 2,238 flops. About −24% in every measurement. (This section first said
+  "81% of 6x2"; that is withdrawn. 12.52 tiles is 101% of 6x2's capacity before any
+  placement growth, and no harden has completed: see the next section.)
+- **The register-file reset (step 3) saves nothing in TT's cells**: +0.08 tiles (−0.03
+  to +0.19 over six seeds). On main the synchronous reset folds into the same `a22o` as
+  the write enable; the recipe's −0.38 came from mapping to `edfxtp_1`, which TT does
+  not allow. The change stays: it is legal (Priv: GPRs are unspecified at reset) and the
+  clock-gated register file (#1a below) needs it.
+- Every other cut survives the TT cell set, and most grow in it. The doc's low-risk set
+  (#1b, 3, 4, 5, 8, 13, 16) lands at 10.81 in the recipe.
+- Where the estimates moved: #9 is −0.48 on a flop register file (−0.27 was on the
+  latch one); #10, an estimate of −0.15, measured −0.29, because the multiply/divide
+  shift register already shifts both ways; #4's masking alone is −0.33, because the
+  flops only go once nothing else reads the shared post-write value.
+- Speed: compiled C goes from 56.1 to 48.4 clocks per instruction (−14%; steps 1-2
+  give 48.3). Behind the QSPI fetch, multiply, divide and a 31-bit shift all cost
+  the same 42 clocks as an add. What does show is listed in `docs/CLAUDE.md`: a branch
+  whose rs2 is not x0 costs 44 clocks instead of 43, U-mode jumps and branches +1 clock,
+  interrupt latency in a run of shifts (433 clocks on average for 31-bit shifts).
+- In the core testbench (no wait states) the core is slower by design: one cycle
+  after a CSR write, one per instruction with an rs2, one or two per instruction in
+  U-mode or with a locked PMP entry, and 2 + shamt per shift. Compiled C runs at 3.88
+  CPI there, against 2.55 on 10a37c3.
+- Verification: core directed 116/116 and SoC directed 75/75 at every step;
+  the final tree also with every register starting at X (`RUN_PLUSARGS=+RF_X`) and
+  `make test-all`.
+- Timing: this section first quoted the worst unbuffered pre-layout path falling from
+  47.8 to 27.8 ns. **Withdrawn**: that metric is noise (a commit that only removed dead
+  code moved it by 4.8 ns, and the final tree measures 39.2 ns), and after CTS the cut
+  tree has *less* slack than main (next section).
+
+After the design review of these thirteen (no Critical or Major findings):
+
+- The fetch is also held while ECALL, EBREAK, MRET, FENCE.I or a PMP CSR write is
+  in EX (`ex_nofetch`), since each always redirects. SoC directed suite: −2.0% cycles
+  over the 73 tests whose instruction count did not change (trap-heavy PMP tests up
+  to −12%); compiled C: no change. An ECALL/MRET round trip is 298 clocks (378 on
+  10a37c3, which also lacked the branch fetch hold). Area 10.07 tiles (noise), 2,205
+  flops.
+- Five Spike-compared directed tests close the coverage gaps the review proved with
+  mutants: `pmp_refetch`, `mprv_lock`, `datapath`, `rs2_snoop`, `cjal_link`.
+- Final tree: core directed 121/121, SoC directed 80/80, both again with
+  `RUN_PLUSARGS=+RF_X`, and `make test-all` passes.
+- river_core at 65d5d44 (the run was made at cc95754, the same tree before the
+  2026-10-10 history rewrite; conformance plus three random rounds, Spike 7ab2efd6):
+  conformance 175/176 (`rv32ui-ma_data`, known), rrag 3000/3000, riscv-dv 225/228
+  (one program that never terminates on either model, two Spike LR/SC
+  interleave yields). No DUT divergence, no false pass. 11 of the riscv-dv passes are
+  PMP tests that retire only ~2% of their program before leaving through the fault
+  handler; they say little about the PMP checker.
+
+**Held: flop register file with one clock gate per register (#1a).** One
+`sky130_fd_sc_hd__dlclkp_1` per register replaces the 992 enable flops' muxes. The
+registers stay flops; each clock gate contains a latch. The recipe put it at −1.01
+tiles on top of step 13; with TT's cells the paired delta is −1.12, and LibreLane's
+synthesis −1.23 (11.29 tiles). (The "9.03 tiles, 73% of 6x2" first written here is
+withdrawn.) **As written the patch does not pass TT's flow**: LibreLane's Verilator lint
+stops on 32 `MULTIDRIVEN` errors (`reg_file[g]` written from 31 differently clocked
+blocks) and sees the `ifndef SYNTHESIS` latch model, and with lint off
+`Checker.YosysSynthChecks` stops on `reg_file[0]` having no driver. Fix: 31 separate
+`reg`s declared inside the generate block, no entry 0. With both checks switched off it
+cuts the hold buffers that stop every harden (next section) from 1,299 to 420, but still
+does not route at 6x2. The patch and its first measurements are in
+`localFiles/area-opt-2026-09-30/`.
+
+Feature trades, measured on top of #1a, not applied (they need the user's
+decision): PMP with no entries 8.07 tiles, with one entry 8.36 tiles, in the recipe;
+multiply by about 1.24 for TT's cells.
+
+## TinyTapeout flow check (2026-10-10)
+
+The pre-PR review ran 10a37c3 and the final tree through TT's own flow: LibreLane 3.0.5
+for ttsky26c on the sandbox, TT's default config (`CLOCK_PERIOD` 20 ns,
+`PL_TARGET_DENSITY_PCT` 60, clock uncertainty 0.25 ns) and a review-only `tt_um`
+wrapper with the planned pinout. Projects: `/home/mempool/tt/projects/ppa-rev-*` on the
+sandbox; scripts and logs: `localFiles/area-opt-review-2026-10-09/ppa/`.
+
+| | 10a37c3 | final tree |
+|---|---|---|
+| recipe (8 seeds) | 13.59 t | 10.06 t |
+| recipe with LibreLane's excluded cells (4 seeds) | 16.49 t | 12.47 t |
+| LibreLane synthesis | 16.58 t, 2,771 flops | 12.52 t, 2,238 flops |
+| std-cell area after CTS and timing repair, 8x2 | 21.92 t | 16.48 t |
+
+Per block, hierarchical, recipe → TT cells: register file 4.51 → 4.30 on main, 3.28 →
+3.68 here; core glue 2.73 → 3.29 / 2.18 → 2.67; CSR 2.49 → 3.06 / 2.08 → 2.65; muldiv
+1.62 → 2.01 / 0.72 → 0.93; PMP 0.74 → 1.06 / 0.37 → 0.52; CLINT 0.68 → 0.85 / 0.67 →
+0.85; ALU 0.53 → 0.75 / 0.16 → 0.24.
+
+**No harden completes.** Every run stops in detailed placement during antenna repair
+(`DPL-0036`):
+
+| run | utilisation after CTS + repair | hold buffers | routing demand | result |
+|---|---|---|---|---|
+| 10a37c3, 8x2 | 81.7% | 1,842 | 144% | DPL-0036 |
+| final tree, 6x2 | 81.0% | 1,299 | 184% | DPL-0036 |
+| final tree, 6x2, density 80% | 81.1% | 1,247 | 186% | DPL-0036 |
+| final tree, 8x2 | 61.4% | 1,346 | 132% | DPL-0036 |
+| final tree + #1a (checks off), 6x2 | 70.9% | 420 | 104% | antenna repair passes; detailed routing ~371k violations after 3 iterations, stopped |
+
+The failing cells are hold buffers on the register file's own loop (flop → mux → flop:
+942 of the 1,299 at 6x2; on main 1,013 on its reset/enable `a22o` loop). TT's SDC puts
+0.25 ns of clock uncertainty on hold as well as setup, so a loop through one gate fails
+hold on every bit; each fix is a ~10 µm² delay cell, about 0.85 tiles per design, all in
+the densest block. Any flop bank with a short enable self-loop pays the same (mtimecmp,
+trap_val, the AMO registers on main).
+
+**Timing after CTS** (8x2, placement parasitics, before routing):
+
+| | tt WNS at 20 ns | ss_100C_1v60 WNS after repair |
+|---|---|---|
+| 10a37c3 | +4.26 ns | −8.81 ns |
+| final tree | +2.90 ns | −9.45 ns |
+| final tree, 6x2 | +3.27 ns | −7.83 ns |
+| final tree + #1a, 6x2 | +4.41 ns | −9.04 ns |
+
+Main's critical path runs from decode to the EX/WB registers (16.48 ns). All ten of the
+final tree's worst paths run from `muldiv`'s `isdiv`/`hi` through the operand mux and
+the shared 34-bit ripple add/sub to `sum[33]`, which selects the next accumulator (17.78
+ns): the shared adder of step 5. A non-restoring divider (the result's sign picks add
+or subtract on the next cycle) or a registered add/sub control takes it off the path at
+about zero area. Neither tree meets 50 MHz at the slow corner.
+
+What follows for the submission repository: re-measure there with LibreLane, adopt the
+clock-gated register file once it passes TT's lint and synthesis checks, and treat a
+completed harden, not a synthesis figure, as the test of a tile shape.

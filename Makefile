@@ -88,7 +88,7 @@ run_tb = cd $(BUILD_DIR) && $(VVP) $(1) | tee $(1).log && ! grep -qE '^(FAIL|TIM
 
 test-alu: $(BUILD_DIR)
 	@echo "=== Testing ALU ==="
-	@$(IVERILOG) -o $(BUILD_DIR)/tb_alu $(SRC_DIR)/alu.v $(TB_DIR)/tb_alu.v
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_alu $(SRC_DIR)/alu.v $(SRC_DIR)/branchCtrl.v $(TB_DIR)/tb_alu.v
 	@$(call run_tb,tb_alu)
 
 test-branchctrl: $(BUILD_DIR)

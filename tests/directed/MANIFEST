@@ -77,9 +77,9 @@ mie_enable          spike
 # once); the core takes it after the store lands, by which time mie is off --
 # unless the pipeline is still waiting on a fetch when the store lands, as it
 # is behind the QSPI memory, and then the core takes it before the csrc too
-# (mepc = the csrc, 0x8000002c). Both legal; what matters is that it is never
+# (mepc = the csrc, 0x80000030). Both legal; what matters is that it is never
 # taken after the disable.
-mie_disable         expect x14=0x999|0x8000002c
+mie_disable         expect x14=0x999|0x80000030
 # Timer-driven: mtime ticks per clock here and per ~100 retires on Spike, so
 # these cannot be lockstep-compared. They check the program completes with
 # no interrupt landing at a bad mepc; randomised waits are what used to
@@ -101,15 +101,17 @@ lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +DMEM_WAIT=3
 lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 # The registered MTIP's stale window (mtip_stale.S says more): after a store
 # moves mtimecmp away, mip.MTIP still reads 1 for two clocks (two
-# instructions with a fast fetch) and 0 on the third instruction, and MIE
-# set straight after the store takes a spurious timer interrupt (the
-# handler's mip, x12, reads 0). Legal (Priv 3.2.1); Spike updates MTIP at
-# once, so DUT-only. Fetch waits close the window before the reads, so the
-# first line (the one the SoC run takes) accepts either outcome; the others
-# pin it where the fetch is fast.
+# instructions with a fast fetch) and 0 on the third instruction. MIE set
+# straight after the store no longer catches it: the instruction behind a
+# CSR write waits a clock in EX, and by then MTIP has cleared, so no
+# spurious timer interrupt is taken (x18 = 0, the handler never runs).
+# Legal either way (Priv 3.2.1); Spike updates MTIP at once, so DUT-only.
+# Fetch waits close the window before the reads, so the first line (the one
+# the SoC run takes) accepts either outcome; the others pin it where the
+# fetch is fast.
 mtip_stale          expect x19=0x80 x20=0x0 x22=0x80|0x0 x23=0x80|0x0 x24=0x0 x18=0x1|0x0 x12=0x0|0xffffffff
-mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x1 x12=0x0 x10=0x80000007
-mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x1 x12=0x0 x10=0x80000007 -- +DMEM_WAIT=3 +DMEM_RANDOM=1
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x0 x12=0xffffffff
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x0 x12=0xffffffff -- +DMEM_WAIT=3 +DMEM_RANDOM=1
 
 # ---- FENCE.I -------------------------------------------------------------------
 fencei_smc          spike
@@ -145,6 +147,16 @@ pmp_napot_hi        spike
 pmp_tor4g           spike
 mprv                spike
 mprv2               spike
+# Coverage the review of the area cuts found missing, each one killing a
+# mutant the rest of the suite let through: the PMP-write refetch with a
+# locked entry, the fetch check's privilege with MPRV and a locked entry,
+# SRA/MULH*/SLT* across the sign boundary, rs2_hold's snoop of a WB write
+# landing after the rs2 read, and the link address of c.jal/c.jalr.
+pmp_refetch         spike
+mprv_lock           spike
+datapath            spike
+rs2_snoop           spike
+cjal_link           spike
 t_umode             spike
 
 # ---- straddling 32-bit fetch ------------------------------------------------------
@@ -203,6 +215,6 @@ irq_stress          soc expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +RD_LATE +QSPI_D
 # t_ctl's LR/SC loop at a 2000-clock period (t_ctl_slow.S says why).
 t_ctl_slow          soc expect x8=0x64 x25=0x64 x20=0x1
 
-#soc-skip cnt_alias -- the csrr of `cycle` waits in EX through a QSPI fetch (about 57 clocks) and reads mcycle when it executes, 0x2039 rather than 0x2000; Spike counts one per instruction. The forwarding it checks is the same in both builds.
+#soc-skip cnt_alias -- the csrr of `cycle` waits in EX through a QSPI fetch (about 57 clocks) and reads mcycle when it executes, 0x2039 rather than 0x2000; Spike counts one per instruction. The CSR-write stall it checks is the same in both builds.
 #soc-skip cnt_xhalf -- its mcycle cases read the cycle counter, which counts clocks: at QSPI speed each instruction is tens of clocks, while Spike counts one per instruction. The minstret cases are covered at the core level.
 #soc-skip t_irq t_irq2 t_mulirq t_ctl -- their timer periods (40, 37, 50 and 100 clocks) are shorter than an interrupt handler at QSPI speed (about 60 clocks per instruction), so the handler never finishes before the next interrupt and the loop never advances. Legal; these tests assume a fast memory. t_ctl_slow runs t_ctl's LR/SC loop at SoC speed instead.

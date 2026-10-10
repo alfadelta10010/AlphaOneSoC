@@ -57,7 +57,7 @@ module csr #(
     // alignment requirements). Set by fyracore from current WB-stage PC[1].
     input  wire        pc_next_misaligned,
     // The value the CSR at waddr reads back once this cycle's write has
-    // committed -- see `wval` below. fyracore forwards it to EX.
+    // committed -- see `wval` below. Only the testbench's trace uses it.
     output wire [31:0] wval_out
 );
     // ===== CSR Registers =====
@@ -130,20 +130,29 @@ module csr #(
     // riscv-tests rv32mi-instret_overflow checks it for minstret.
     //
     // *_next is both the register's next value and what the EX read port
-    // returns, so the increment is suppressed at its enable: while WB writes
-    // either half, an adjacent read of the *other* half sees it unchanged.
-    // (The written half itself reaches EX through fyracore's csr_fwd.)
-    // Suppressing it only on the register's input made that read return the
-    // discarded increment.
+    // returns, so the increment is suppressed at its enable.
+    //
+    // fyracore holds the instruction after a CSR write in EX for one cycle
+    // (csr_wb_hazard), so an rdcycle right after `csrw mcycle` reads a cycle
+    // later than the write, where the cycle count has moved on by one. The
+    // reference model counts instructions, not clocks, and reads the written
+    // value there. mcycle_wr_q skips the one increment in between, so that
+    // read returns what was written, as it did when EX was forwarded the
+    // write. (minstret needs nothing: the stall's bubble retires nothing.)
     wire        mcycle_we     = we && (waddr == 12'hB00 || waddr == 12'hB80);
     wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
-    wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we) ? mcycle + 64'd1 : mcycle;
+    reg         mcycle_wr_q;
+    always @(posedge clk) mcycle_wr_q <= !rst && mcycle_we;
+    wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we && !mcycle_wr_q) ?
+                                mcycle + 64'd1 : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
                                 minstret + 64'd1 : minstret;
 
-    // mstatus as it will stand after a CSR write in WB commits this cycle.
-    // A trap or an MRET can coincide with a csrw to mstatus, and the csrw is
-    // the older instruction, so its value is what they must transform.
+    // mstatus as it will stand after a CSR write in WB commits this cycle:
+    // the legal value the write stores. A trap or an MRET never coincides
+    // with that write -- the instruction behind a CSR write waits in EX until
+    // it has committed (fyracore's csr_wb_hazard) -- so they always see the
+    // stored mstatus.
     // M+U only: MPP's legal values are 00 (U) and 11 (M). A write of 01 (S,
     // absent) or 10 (reserved) is legalised to U, the least-privileged
     // mode -- one AND gate, and what the reference model does. (Keeping the
@@ -161,23 +170,23 @@ module csr #(
         end
     end
 
-    // The mstatus fields fyracore consumes are exported as they stand after
-    // a WB CSR write commits, because their consumers sit in EX, one stage
-    // ahead of the write: the MRET privilege restore (MPP), interrupt gating
-    // (MIE), the data PMP check (MPRV, MPP) and the U-mode WFI check (TW).
+    // The mstatus fields fyracore consumes -- the MRET privilege restore
+    // (MPP), interrupt gating (MIE), the data PMP check (MPRV, MPP) and the
+    // U-mode WFI check (TW) -- sit in EX, one stage ahead of the write.
     // Zicsr requires a write's effects to be visible to the very next
-    // instruction, so e.g. `csrw mstatus, <MPP=M>; mret` returns to M-mode.
-    assign mstatus_mie  = mstatus_after_we[3];
-    assign mstatus_mpp  = mstatus_after_we[12:11];  // MPP field (11=M, 00=U)
-    assign mstatus_mprv = mstatus_after_we[17];
-    assign mstatus_tw   = mstatus_after_we[21];
+    // instruction (`csrw mstatus, <MPP=M>; mret` returns to M-mode), and
+    // fyracore provides that by holding the next instruction in EX until the
+    // write has committed (csr_wb_hazard), so the stored value is exported.
+    assign mstatus_mie  = mstatus[3];
+    assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
+    assign mstatus_mprv = mstatus[17];
+    assign mstatus_tw   = mstatus[21];
 
-    // mie likewise: interrupt gating sits in EX, and Priv §3.1.9 requires the
-    // interrupt conditions to be re-evaluated immediately after an explicit
-    // write to mie, so the instruction right after `csrs mie` is already
-    // interruptible and the one right after `csrc mie` is not.
-    assign mie_out = (we && waddr == 12'h304) ? (csr_new & 32'h0000_0888)
-                                                             : mie_reg;
+    // mie likewise: Priv §3.1.9 requires the interrupt conditions to be
+    // re-evaluated immediately after an explicit write to mie, so the
+    // instruction right after `csrs mie` is already interruptible and the
+    // one right after `csrc mie` is not; it reaches EX after the write.
+    assign mie_out = mie_reg;
 
     // misa as it will stand after a WB write: only C is writable, and a
     // clear is refused when it would leave the next PC misaligned.
@@ -186,11 +195,10 @@ module csr #(
     wire [31:0] misa_after_we = misa_we_ok ? {misa_reg[31:3], csr_new[2], misa_reg[1:0]}
                                            : misa_reg;
     // misa.C gates compressed decode, the branch-target alignment check and
-    // the mepc read mask, all of which fyracore applies in EX -- so, like the
-    // mstatus fields, it is exported as it stands after a pending write. The
-    // instruction right after `csrci misa, 4` is then already checked with
-    // C=0, as Zicsr requires.
-    assign misa_c = misa_after_we[2];
+    // the mepc read mask, all of which fyracore applies in EX -- after the
+    // write, like the mstatus fields, so the instruction right after
+    // `csrci misa, 4` is already checked with C=0, as Zicsr requires.
+    assign misa_c = misa_reg[2];
     // Priv spec §3.1.15: when IALIGN=32 (misa.C=0), mepc[1] masked on reads.
     wire [31:0] mepc_eff = {mepc[31:2], (misa_c ? mepc[1] : 1'b0), 1'b0};
     assign mepc_out      = mepc_eff;
@@ -202,22 +210,49 @@ module csr #(
         pmpcfg_legal = {b[7], 2'b00, b[4:2], b[1] & b[0], b[0]};
     endfunction
 
+    // ===== Legal values =========================================================
+    // Each writable register's value after a write of csr_new, every WARL
+    // rule in one place, one wire per register. The write case below stores
+    // these wires register by register, so a bit that no write can set is a
+    // constant 0 that synthesis removes, flop and all; storing the shared
+    // `wval` mux instead hid that and kept all 32 flops of every WARL
+    // register. `wval` selects the same wires, so the rules cannot drift
+    // between the two.
+    wire [31:0] mie_legal     = csr_new & 32'h0000_0888;    // MSIE/MTIE/MEIE
+    wire [31:0] mtvec_legal   = {csr_new[31:2], 2'b00};     // direct mode only
+    wire [31:0] mcounteren_legal    = csr_new & 32'h0000_0007;  // CY/TM/IR
+    wire [31:0] mcountinhibit_legal = csr_new & 32'h0000_0005;  // TM reserved
+    // pmpcfg0: a locked byte keeps its value; otherwise bits [6:5] are
+    // reserved and read 0. A = 2'b10 (NA4) is legal at G=0 and pmp.v
+    // implements it, so it is stored as written. R/W/X form a collective
+    // WARL field in which R=0,W=1 is reserved (Priv §3.7.1): W is legalised
+    // to 0 when R is 0, as Spike does.
+    wire [31:0] pmpcfg0_legal = {pmpcfg0[31] ? pmpcfg0[31:24] : pmpcfg_legal(csr_new[31:24]),
+                                 pmpcfg0[23] ? pmpcfg0[23:16] : pmpcfg_legal(csr_new[23:16]),
+                                 pmpcfg0[15] ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),
+                                 pmpcfg0[7]  ? pmpcfg0[7:0]   : pmpcfg_legal(csr_new[7:0])};
+    // pmpaddr[i]: locked by its own L bit, or by entry i+1 when that entry is
+    // TOR and locked.
+    wire [31:0] pmpaddr0_legal = tor_lock_addr0 ? pmpaddr0 : csr_new;
+    wire [31:0] pmpaddr1_legal = tor_lock_addr1 ? pmpaddr1 : csr_new;
+    wire [31:0] pmpaddr2_legal = tor_lock_addr2 ? pmpaddr2 : csr_new;
+    wire [31:0] pmpaddr3_legal = tor_lock_addr3 ? pmpaddr3 : csr_new;
+
     // ===== Post-write value ======================================================
-    // What a read of waddr returns once this cycle's write has committed:
-    // every WARL rule in one place. The write case below stores this value
-    // (mepc and mip store a little more than they read back, noted there),
-    // and fyracore forwards it to an EX-stage read of the same CSR and to the
-    // trap/MRET targets, so the rules cannot drift between copies. Only
-    // meaningful while a write is in WB.
+    // What a read of waddr returns once this cycle's write has committed
+    // (mepc and mip store a little more than they read back, noted there).
+    // fyracore exports it only to the testbench, which logs it as the
+    // written value; synthesis drops it. Only meaningful while a write is in
+    // WB.
     reg [31:0] wval;
     always @(*) begin
         case (waddr)
             12'h300: wval = mstatus_after_we;
             12'h301: wval = misa_after_we;
-            12'h304: wval = csr_new & 32'h0000_0888;         // mie: MSIE/MTIE/MEIE
-            12'h305: wval = {csr_new[31:2], 2'b00};          // mtvec: direct mode only
-            12'h306: wval = csr_new & 32'h0000_0007;         // mcounteren: CY/TM/IR
-            12'h320: wval = csr_new & 32'h0000_0005;         // mcountinhibit: TM reserved
+            12'h304: wval = mie_legal;
+            12'h305: wval = mtvec_legal;
+            12'h306: wval = mcounteren_legal;
+            12'h320: wval = mcountinhibit_legal;
             12'h340: wval = csr_new;                         // mscratch
             // mepc: bit 0 is always 0; bit 1 is stored but reads 0 while
             // IALIGN=32 (misa.C=0).
@@ -225,21 +260,11 @@ module csr #(
             12'h342: wval = csr_new;                         // mcause
             12'h343: wval = csr_new;                         // mtval
             12'h344: wval = mip_live;                        // mip: no writable bits
-            // pmpcfg0: a locked byte keeps its value; otherwise bits [6:5]
-            // are reserved and read 0. A = 2'b10 (NA4) is legal at G=0 and
-            // pmp.v implements it, so it is stored as written. R/W/X form a
-            // collective WARL field in which R=0,W=1 is reserved (Priv
-            // §3.7.1): W is legalised to 0 when R is 0, as Spike does.
-            12'h3A0: wval = {pmpcfg0[31] ? pmpcfg0[31:24] : pmpcfg_legal(csr_new[31:24]),
-                             pmpcfg0[23] ? pmpcfg0[23:16] : pmpcfg_legal(csr_new[23:16]),
-                             pmpcfg0[15] ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),
-                             pmpcfg0[7]  ? pmpcfg0[7:0]   : pmpcfg_legal(csr_new[7:0])};
-            // pmpaddr[i]: locked by its own L bit, or by entry i+1 when that
-            // entry is TOR and locked.
-            12'h3B0: wval = tor_lock_addr0 ? pmpaddr0 : csr_new;
-            12'h3B1: wval = tor_lock_addr1 ? pmpaddr1 : csr_new;
-            12'h3B2: wval = tor_lock_addr2 ? pmpaddr2 : csr_new;
-            12'h3B3: wval = tor_lock_addr3 ? pmpaddr3 : csr_new;
+            12'h3A0: wval = pmpcfg0_legal;
+            12'h3B0: wval = pmpaddr0_legal;
+            12'h3B1: wval = pmpaddr1_legal;
+            12'h3B2: wval = pmpaddr2_legal;
+            12'h3B3: wval = pmpaddr3_legal;
             // Counters: the written half takes the value outright.
             12'hB00, 12'hB80, 12'hB02, 12'hB82: wval = csr_new;
             // Everything else that can be written without trapping reads 0
@@ -369,28 +394,28 @@ module csr #(
             // is the older instruction. The trap/MRET arms reassign mstatus
             // afterwards and so still take priority over a write to mstatus
             // itself, but a write to any other CSR now survives.
-            // The stored value is `wval` (the WARL rules live there), except
-            // where noted. Counters are written in their own blocks above;
-            // mip has nothing to store.
+            // Each register stores its legal value (see "Legal values"),
+            // except where noted. Counters are written in their own blocks
+            // above; mip has nothing to store.
             if (we) begin
             case (waddr)
-                12'h300: mstatus       <= wval;
-                12'h301: misa_reg      <= wval;
-                12'h304: mie_reg       <= wval;
-                12'h305: mtvec         <= wval;
-                12'h306: mcounteren    <= wval;
-                12'h320: mcountinhibit <= wval;
-                12'h340: mscratch      <= wval;
+                12'h300: mstatus       <= mstatus_after_we;
+                12'h301: misa_reg      <= misa_after_we;
+                12'h304: mie_reg       <= mie_legal;
+                12'h305: mtvec         <= mtvec_legal;
+                12'h306: mcounteren    <= mcounteren_legal;
+                12'h320: mcountinhibit <= mcountinhibit_legal;
+                12'h340: mscratch      <= csr_new;
                 // mepc keeps bit 1 even while IALIGN=32 hides it on reads, so
                 // it reappears if C is re-enabled.
                 12'h341: mepc          <= {csr_new[31:1], 1'b0};
-                12'h342: mcause        <= wval;
-                12'h343: mtval         <= wval;
-                12'h3A0: pmpcfg0       <= wval;
-                12'h3B0: pmpaddr0      <= wval;
-                12'h3B1: pmpaddr1      <= wval;
-                12'h3B2: pmpaddr2      <= wval;
-                12'h3B3: pmpaddr3      <= wval;
+                12'h342: mcause        <= csr_new;
+                12'h343: mtval         <= csr_new;
+                12'h3A0: pmpcfg0       <= pmpcfg0_legal;
+                12'h3B0: pmpaddr0      <= pmpaddr0_legal;
+                12'h3B1: pmpaddr1      <= pmpaddr1_legal;
+                12'h3B2: pmpaddr2      <= pmpaddr2_legal;
+                12'h3B3: pmpaddr3      <= pmpaddr3_legal;
                 default: ;
             endcase
             end

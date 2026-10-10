@@ -1,9 +1,32 @@
 ---
 name: area-baseline
-description: Measured sky130 synth area of AlphaOneSoC at 4b4ed8b (2026-09-29) and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
+description: Measured sky130 synth area of AlphaOneSoC (recipe ~20-24% below LibreLane; TT-flow 16.58 -> 12.52 t): applied stack 10.04 t (branch area-opt_alfadelta10010), 10a37c3 13.60 t and earlier commits, per block, measurement recipe and the real ABC noise level (up to 0.11 tiles per run)
 metadata:
   type: project
 ---
+
+**CORRECTION 2026-10-10 (pre-PR review): this recipe's tile figures run ~20-24% LOW.**
+It lets yosys use `_1` cells and edfxtp_1, which LibreLane's SYNTH_EXCLUDED_CELL_FILE
+(`no_synth.cells`, 199 cells for sky130A 8afc8346: 141 `_1` cells, edfxtp_1, every dlclkp)
+excludes; TT netlists are dfxtp_2 + `_2` gates + mux2_1/buf_1. LibreLane synth: 10a37c3
+16.58 t / 2,771 ff, branch 12.52 t / 2,238 ff (recipe 13.61 / 10.07). Add no_synth.cells to
+the dont-use list (localFiles/area-opt-review-2026-10-09/ppa/synll.sh, within 0.5% of
+LibreLane) for absolute numbers; paired deltas rank cuts either way, except edfxtp-only
+savings (#1b RF reset: recipe -0.38, TT cells +0.08). Never quote "% of <shape>" from a
+synth figure: post-CTS std-cell area was 1.32x LibreLane synth, and NO harden completes
+(DPL-0036, ~1,000 hold buffers on RF enable loops) -- fit is tested in the TT submission repo.
+
+**Branch area-opt_alfadelta10010 @3c25950 (stack applied, 2026-10-01): SoC flat 10.04 t,
+2,205 ff** (4 seeds). Hier: regFile 3.28, glue 2.19/373, csr 2.08/461, muldiv 0.72/118,
+clint 0.67, pmp 0.37 (one), uart 0.29, qspi 0.25, alu 0.16. Remaining big items: flop RF
+(ICG patch held), CSR file, CLINT + counters (mandatory).
+
+**10a37c3 (main after PR #5, 2026-09-30): SoC flat 13.60 t (6 seeds; seeds 1-4 13.61), 2,736 ff**
+(1,443 dfxtp + 1,293 edfxtp). Hier per block unchanged from 4b4ed8b below (uart 0.29/77,
+qspi 0.25/54). Pair deltas by seed (same synshuf seed on both sides): seed-to-seed spread of a
+paired delta is ~0.05-0.1 t, much tighter than unpaired means. Workspace + scripts for this
+round: `localFiles/area-opt-2026-09-30/` (synmean.sh, summ.sh, psuite.sh = parallel directed
+suites, bench.sh = SoC CPI, synsta.sh = OpenSTA). See [[area-optimizations-measured]].
 
 Tool: local yosys 0.66, `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, `read_liberty -lib`,
 `synth -flatten`, dfflibmap + abc `-dont_use *lpflow* *_0 *probe*`, opt_clean, stat -liberty.
