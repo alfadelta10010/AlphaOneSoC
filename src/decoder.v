@@ -99,3 +99,37 @@ module decoder(
         endcase
     end
 endmodule
+
+// The registers an instruction reads, from its raw fetched bits. fyracore puts
+// them on the register file's read addresses on the cycle IF/EX takes the
+// instruction: the register file reads synchronously, so its data is there on
+// the instruction's first cycle in EX.
+//
+// For a 32-bit instruction these are the rs1/rs2 fields decoder reads. For a
+// compressed one they are the registers its expansion (compressed_decoder)
+// reads, taken from the 16-bit encoding without expanding it. Only a field the
+// expansion has must be right: EX masks each read with decoder's rs1/rs2, which
+// are x0 for a format without that field, so those formats get whatever the
+// shared logic gives. tb/tb_rf_fields.v checks this against decoder and
+// compressed_decoder for every legal compressed encoding.
+module rf_fields(
+    input  wire [31:0] instr,
+    output wire [4:0]  rs1,
+    output wire [4:0]  rs2
+);
+    wire [1:0] q  = instr[1:0];
+    wire [2:0] f3 = instr[15:13];
+    // Quadrant 0: C.ADDI4SPN reads sp, C.LW/C.SW rs1'. Quadrant 1: C.ADDI and
+    // C.ADDI16SP read rd, the funct3 = 1xx ones (shifts, C.ANDI, C.SUB..C.AND,
+    // C.BEQZ/C.BNEZ) rs1'. Quadrant 2: C.LWSP/C.SWSP read sp; C.SLLI, C.JR,
+    // C.JALR and C.ADD read rd.
+    wire sp    = (q == 2'b00) ? !f3[1] : (q == 2'b10) && f3[1];
+    wire prime = (q == 2'b00) ?  f3[1] : (q == 2'b01) && f3[2];
+    assign rs1 = (q == 2'b11) ? instr[19:15] :
+                 sp           ? 5'd2 :
+                 prime        ? {2'b01, instr[9:7]} : instr[11:7];
+    // C.SW and quadrant 1's C.SUB..C.AND read rs2'; quadrant 2's C.MV, C.ADD
+    // and C.SWSP the full rs2 field.
+    assign rs2 = (q == 2'b11) ? instr[24:20] :
+                 (q == 2'b10) ? instr[6:2]   : {2'b01, instr[4:2]};
+endmodule

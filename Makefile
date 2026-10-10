@@ -102,6 +102,9 @@ test-decoder: $(BUILD_DIR)
 	@echo "=== Testing Decoder ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_decoder $(SRC_DIR)/decoder.v $(TB_DIR)/tb_decoder.v
 	@$(call run_tb,tb_decoder)
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_rf_fields $(SRC_DIR)/decoder.v $(SRC_DIR)/compressed_decoder.v \
+		$(TB_DIR)/tb_rf_fields.v
+	@$(call run_tb,tb_rf_fields)
 
 test-signext: $(BUILD_DIR)
 	@echo "=== Testing Sign Extension ==="
