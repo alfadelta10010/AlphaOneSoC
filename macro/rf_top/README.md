@@ -44,3 +44,50 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
   clock-to-output 4.0 ns, minimum period 10 ns, one nominal corner (25 C, 1.8 V),
   re-used for every corner. No silicon timing has been published.
 - The LEF names the power pin `VDPWR`, the liberty `VPWR`; the ground is `VGND` in both.
+
+## Use in this repository
+
+- `src/rf_top.v` is the simulation model (the upstream model plus a 0-or-X start
+  under `+RF_X`); under `SYNTHESIS` it is an empty `(* blackbox *)`, so synthesis
+  keeps one `rf_top` cell and never builds the storage. TinyTapeout's gate-level
+  test compiles it next to the netlist with `GL_TEST`, which gives it its power pins.
+- `src/regFile.v` wraps the one instance, `rf_macro`; in the TinyTapeout top its
+  path is `soc.cpu.rf.rf_macro`. It never writes word 0; `src/fyracore.v` masks
+  reads of x0 and drives the read addresses a cycle ahead (see `rf_hold` there).
+
+## TinyTapeout harden settings
+
+The macro needs these in the submission's `src/config.json`, next to TT's
+defaults. They are FemtoRV's (the integration that ran on sky25b silicon),
+with this design's instance path; `dir::` is relative to `src/`, so the views
+go in a `macro/` directory beside it. The location puts the macro in the middle
+of a 6x2 die (its inputs and outputs are on opposite edges); for 8x2 it was
+[620, 45]. Tried with LibreLane 3.0.5 (ttsky26c tools) on 2026-10-11: at 6x2
+the flow got through placement, CTS and global routing -- 134 hold buffers
+where the flop register file needed ~1,000 and failed placement (DPL-0036),
+0 hold violations, setup slack +4.56 ns, std cells 11.1 tiles at 62.5 %
+utilisation -- but global routing ended congested (85.8 %) and detailed
+routing was not converging (77,435 -> 63,462 violations in four iterations).
+
+```json
+"MACROS": {
+  "rf_top": {
+    "instances": { "soc.cpu.rf.rf_macro": { "location": [450, 45], "orientation": "E" } },
+    "gds": ["dir::../macro/rf_top.gds.gz"],
+    "lef": ["dir::../macro/rf_top.lef"],
+    "lib": { "*": ["dir::../macro/rf_top.lib"] }
+  }
+},
+"PDN_MACRO_CONNECTIONS": ["soc.cpu.rf.rf_macro VPWR VGND VDPWR VGND"],
+"RUN_IRDROP_REPORT": 0,
+"MAGIC_NO_EXT_UNIQUE": 1,
+"ERROR_ON_PDN_VIOLATIONS": 0,
+"FP_PDN_HORIZONTAL_LAYER": "met3",
+"FP_MACRO_HORIZONTAL_HALO": "3",
+"FP_MACRO_VERTICAL_HALO": "0",
+"FP_PDN_VOFFSET": "10"
+```
+
+`src/rf_top.v` must be listed in `info.yaml`'s `source_files` (LibreLane reads the
+liberty as a blackbox first, so the cell is kept either way), and the gate-level
+test must add `$(SRC_DIR)/rf_top.v` to its sources.
