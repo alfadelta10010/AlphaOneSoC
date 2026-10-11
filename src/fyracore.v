@@ -1,7 +1,8 @@
 // FyraCore — 3-stage pipelined RV32IMCA+Zicsr+Zifencei processor
 //
 // Pipeline stages:
-//   IF  — Instruction Fetch
+//   IF  — Instruction Fetch; the register file's read addresses for the
+//         fetched instruction (the read is synchronous)
 //   EX  — C-extension decompression, Decode, Register Read, ALU Execute,
 //         Branch Resolve
 //   WB  — Memory Access, Writeback, CSR commit
@@ -130,6 +131,14 @@ module fyracore #(
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
     wire        ex_nofetch;      // EX decides the next pc (assigned after the PMP-write decode)
+    // The registers the fetched instruction reads, for the register file's
+    // synchronous read on the edge IF/EX takes it (see regFile below).
+    wire [4:0]  if_rs1, if_rs2;
+    rf_fields if_fields(
+        .instr(if_fetched),
+        .rs1  (if_rs1),
+        .rs2  (if_rs2)
+    );
 
     // Is an address inside [base, top]? A window with base > top is empty.
     function automatic in_win(input [31:0] a, input [31:0] base, input [31:0] top);
@@ -311,18 +320,38 @@ module fyracore #(
     wire [4:0]  wb_rd;
     wire [31:0] wb_data;
 
-    // Two read ports: rs1 and rs2 in the same cycle.
-    regFile #(32) rf(
+    // The register file (regFile: the rf_top macro) reads synchronously,
+    // write-first: the read addresses are taken on a clock edge, and the
+    // data that follows is the registers as they stand after that edge's
+    // write -- what a combinational read of flops gives in the cycle after
+    // the edge. So the data is right for the instruction in EX exactly when
+    // the address taken on the edge that started the cycle was its own. The
+    // WB instruction, which writes on the next edge, is forwarded as before.
+    //
+    // On every cycle the addresses are therefore those of the instruction
+    // that will be in EX after the next edge: the EX instruction's own
+    // (ex_rs1/ex_rs2) while it stays (rf_hold), else the fetched
+    // instruction's, which IF/EX takes on that edge (if_rs1/if_rs2, from
+    // the raw fetched bits). Both ports are read at once, so rs1 and rs2 cost
+    // no extra cycle. When IF/EX takes a bubble instead, the read is unused.
+    //
+    // x0: its word in the macro is an ordinary word, never written (regFile)
+    // and never read -- each port's data is masked with the decoded field,
+    // which is x0 for a format without that register, whatever was read.
+    wire        rf_hold;            // assigned with the stall terms below
+    wire [31:0] rf_a, rf_b;
+    regFile rf(
         .clk (clk),
-        .rst (rst),
         .wrEn(wb_regWR),
-        .rs1 (ex_rs1),
-        .rs2 (ex_rs2),
         .rd  (wb_rd),
         .dIn (wb_data),
-        .r1  (rf_r1),
-        .r2  (rf_r2)
+        .ra  (rf_hold ? ex_rs1 : if_rs1),
+        .rb  (rf_hold ? ex_rs2 : if_rs2),
+        .r1  (rf_a),
+        .r2  (rf_b)
     );
+    assign rf_r1 = (ex_rs1 == 5'b0) ? 32'b0 : rf_a;
+    assign rf_r2 = (ex_rs2 == 5'b0) ? 32'b0 : rf_b;
 
     // Data forwarding from WB → EX
     wire fwd_rs1 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs1);
@@ -668,6 +697,15 @@ module fyracore #(
     wire muldiv_have = muldiv_ready || muldiv_done;
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
     wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
+
+    // The register file reads the EX instruction's registers again while
+    // IF/EX holds it, and the fetched instruction's when IF/EX takes that.
+    // IF/EX holds on `stall`; rf_hold is `stall` with the M term's !ex_trap
+    // left out (muldiv_want has it): wherever the two differ, an M op or
+    // shift is trapping, so flush puts a bubble in IF/EX and the read is
+    // unused. Leaving ex_trap out keeps the macro's address inputs off the
+    // path from its own data through the ALU and the PMP check to ex_trap.
+    assign rf_hold = stall_other || (ifex_valid && ex_is_iter && !muldiv_have);
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
