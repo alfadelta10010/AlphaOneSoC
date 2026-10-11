@@ -62,40 +62,53 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
 
 ## TinyTapeout harden settings
 
-The macro needs these in the submission's `src/config.json`, next to TT's
-defaults. They are FemtoRV's (the integration that ran on sky25b silicon),
-with this design's instance path, except the location; `dir::` is relative to `src/`, so the views
-go in a `macro/` directory beside it. FemtoRV ([0.1, 45], 2x2) and KianV put the
-macro at the die's left edge; here it was tried in the middle of the die
-([450, 45] at 6x2, [620, 45] at 8x2), where rotated E it walls off li1-met3
-across 133 of the die's 226 um height. With ERROR_ON_PDN_VIOLATIONS 0 and
-MAGIC_NO_EXT_UNIQUE 1, a power pin piece no strap reaches would pass both the
-PDN check and LVS: check the routed DEF for a via on every VDPWR/VGND shape. Tried with LibreLane 3.0.5 (ttsky26c tools) on 2026-10-11: at 6x2
-the flow got through placement, CTS and global routing -- 134 hold buffers
-where the flop register file needed ~1,000 and failed placement (DPL-0036),
-0 hold violations, setup slack +4.56 ns, std cells 11.1 tiles at 62.5 %
-utilisation -- but global routing ended congested (85.8 %) and detailed
-routing was not converging (77,435 -> 63,462 violations in four iterations).
+What hardened clean: KianV's sky26c regfile edition config (the one that taped
+this macro out at 3x4), with this design's instance path and TT's 20 ns clock,
+at **3x4**, on the sandbox's LibreLane 3.0.14 (2026-10-11). In the submission's
+`src/config.json`, next to TT's defaults (`dir::` is relative to `src/`, so the
+views go in a `macro/` directory beside it):
 
 ```json
+"PL_TARGET_DENSITY_PCT": 56,
 "MACROS": {
   "rf_top": {
-    "instances": { "soc.cpu.rf.rf_macro": { "location": [450, 45], "orientation": "E" } },
+    "instances": { "soc.cpu.rf.rf_macro": { "location": [3, 189.0], "orientation": "E" } },
     "gds": ["dir::../macro/rf_top.gds.gz"],
     "lef": ["dir::../macro/rf_top.lef"],
     "lib": { "*": ["dir::../macro/rf_top.lib"] }
   }
 },
 "PDN_MACRO_CONNECTIONS": ["soc.cpu.rf.rf_macro VPWR VGND VDPWR VGND"],
-"RUN_IRDROP_REPORT": 0,
-"MAGIC_NO_EXT_UNIQUE": 1,
-"ERROR_ON_PDN_VIOLATIONS": 0,
-"FP_PDN_HORIZONTAL_LAYER": "met3",
-"FP_MACRO_HORIZONTAL_HALO": "3",
-"FP_MACRO_VERTICAL_HALO": "0",
-"FP_PDN_VOFFSET": "10"
+"FP_PDN_HORIZONTAL_LAYER": "met3"
 ```
 
-`src/rf_top.v` must be listed in `info.yaml`'s `source_files` (LibreLane reads the
-liberty as a blackbox first, so the cell is kept either way), and the gate-level
-test must add `$(SRC_DIR)/rf_top.v` to its sources.
+No waivers: PDN violations stay errors and Magic keeps same-named nets apart,
+so LVS proves every macro power pin is connected. `src/rf_top.v` must be in
+`info.yaml`'s `source_files` (LibreLane reads the liberty as a blackbox first,
+so the cell is kept either way), and the gate-level test must add
+`$(SRC_DIR)/rf_top.v` to its sources.
+
+Result at 3x4: LibreLane synthesis 8.67 tiles of std cells and exactly one
+`rf_top`; after PnR 11.08 tiles (125,220 um^2) plus the macro (15,744 um^2),
+utilisation 55.4 %; detailed routing converged to 0 violations; DRC 0, LVS 0,
+antenna 0, PDN 0, lint 0 errors; 592 hold buffers, 0 hold violations at every
+corner (worst +0.10 ns, ff); setup at 20 ns +2.55 ns (tt, max), -13.28 ns at
+ss_100C_1v60 (469 endpoints, the worst flop to flop), the macro's address
+inputs -6.31 ns at ss and +5.76 ns at tt -- against a liberty that gives the
+macro its nominal numbers at every corner.
+
+Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
+offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
+in the middle of the die, where rotated E it walls off li1-met3 across 133 of
+the die's 226 um height:
+- 6x2, [450, 45]: placement, CTS and global routing completed (134 hold
+  buffers, where the flop register file needed ~1,000 and failed placement
+  with DPL-0036; 11.1 tiles at 62.5 %), but global routing ended congested
+  (85.8 %) and detailed routing stalled (77,435 -> 63,462 violations in four
+  iterations) before a power loss ended it.
+- 8x2, [620, 45]: 11.4 tiles at 47.9 %, 51 hold buffers; global routing
+  congested (overflow 9,270), detailed routing 70,910 -> 50,554 violations in
+  seven iterations (~3.5 h), stopped. The flop register file at 8x2 converges
+  (658 -> 1 violation by iteration 27 on GitHub), so the 2-row failures are
+  this placement, not the cell area. A 2-row retry belongs at the left edge,
+  as FemtoRV ([0.1, 45]) and KianV place it.
