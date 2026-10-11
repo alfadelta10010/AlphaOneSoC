@@ -83,6 +83,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   completes (RF self-loop hold buffers), #1b saves 0, tip slower at tt (muldiv) — finding_ppa_review_2026-10-09.md
 - 2026-10-10 TT wrapper + pins bench (uncommitted): MAJ reset needs clocks, stock TT firmware resets with clock
   stopped (FIXED same day: async-assert reset); bench's 2nd reset mis-aimed, no-sync mutant passes (both fixed) — finding_tt_wrapper_review_2026-10-10.md
+- 2026-10-11 rf_top macro integration (0367965+wip): no CRIT/MAJ; rf_hold exact; wfi_active term has no functional test (PROVEN),
+  select bugs visible only in zero-IMEM-wait core runs; core 10.84 -> 7.07 t + 0.84 t macro — finding_rf_macro_review_2026-10-11.md
 
 ## Notes index
 
@@ -115,3 +117,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-09 area-opt compliance](finding_areaopt_compliance_2026-10-09.md) — ex_nofetch proven decode-only; repo misses that property; +RF_X blind spot; rgen2/rr.sh tools
 - [2026-10-09 PPA/claims review](finding_ppa_review_2026-10-09.md) — TT-flow area/timing vs recipe, failed hardens, per-cut TT deltas, perf repro
 - [2026-10-10 TT wrapper review](finding_tt_wrapper_review_2026-10-10.md) — TT firmware reset/clock order, async-latched reset fix proven, pin map verified, bench gaps
+- [2026-10-11 RF macro review](finding_rf_macro_review_2026-10-11.md) — sync-read equivalence, rf_hold mutants, WFI-hold probe, macro lib/pin/area/timing facts
