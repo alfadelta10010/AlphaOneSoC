@@ -661,6 +661,60 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  Register-file read check
+    //
+    //  The register file (src/regFile.v, the rf_top macro) reads
+    //  synchronously: in every cycle the core must put on its read
+    //  addresses the registers the instruction in EX will use in the next
+    //  one. A slip reads another register, or the right one a cycle stale,
+    //  and the trace only shows it if the value happens to differ. So on
+    //  every cycle with an instruction in EX, for each source register it
+    //  names other than x0, this checks that the macro took that register's
+    //  address on the edge that started the cycle, and that the data equals
+    //  a shadow register file kept from the write port. A mismatch ends the
+    //  run with an ERROR line and a DUT-ABORT marker in the dump.
+    // ================================================================
+    reg [31:0] rf_shadow [0:31];
+    reg [4:0]  rf_ra_q, rf_rb_q;
+    reg        rf_chk_armed = 1'b0;
+    integer    rf_chk_n = 0;
+    integer    rf_i;
+    initial begin
+        #1;     // after rf_top's own initial block
+        for (rf_i = 0; rf_i < 32; rf_i = rf_i + 1)
+            rf_shadow[rf_i] = `CPU.rf.rf_macro.storage[rf_i];
+    end
+    task rf_read_mismatch(input [8*3-1:0] port, input [4:0] want, input [4:0] took,
+                          input [31:0] got, input [31:0] exp);
+        begin
+            $display("ERROR: register-file read, port %0s at pc 0x%08h cycle %0d: needs x%0d, macro took x%0d, data 0x%08h, shadow 0x%08h",
+                     port, `CPU.ifex_pc, cycle_count, want, took, got, exp);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    endtask
+    always @(posedge clk) begin
+        if (!rst && rf_chk_armed && `CPU.ifex_valid) begin
+            if (`CPU.ex_rs1 != 5'd0) begin
+                rf_chk_n = rf_chk_n + 1;
+                if (rf_ra_q !== `CPU.ex_rs1 || `CPU.rf_a !== rf_shadow[`CPU.ex_rs1])
+                    rf_read_mismatch("rs1", `CPU.ex_rs1, rf_ra_q, `CPU.rf_a, rf_shadow[`CPU.ex_rs1]);
+            end
+            if (`CPU.ex_rs2 != 5'd0) begin
+                rf_chk_n = rf_chk_n + 1;
+                if (rf_rb_q !== `CPU.ex_rs2 || `CPU.rf_b !== rf_shadow[`CPU.ex_rs2])
+                    rf_read_mismatch("rs2", `CPU.ex_rs2, rf_rb_q, `CPU.rf_b, rf_shadow[`CPU.ex_rs2]);
+            end
+        end
+        if (`CPU.wb_regWR && `CPU.wb_rd != 5'd0)
+            rf_shadow[`CPU.wb_rd] = `CPU.wb_data;
+        rf_ra_q = `CPU.rf.ra;
+        rf_rb_q = `CPU.rf.rb;
+        rf_chk_armed = 1'b1;
+    end
+
+    // ================================================================
     //  Main simulation loop
     // ================================================================
     initial begin
@@ -738,6 +792,7 @@ module tb_rivercore;
             $display("  Cycles: %0d   Instructions logged: %0d", cycle_count, instr_count);
             if (instr_count > 0)
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
+            $display("  Register-file reads checked: %0d", rf_chk_n);
             $display("  Dump: %0s", dump_file_str);
         end
     endtask
