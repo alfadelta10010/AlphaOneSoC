@@ -38,7 +38,12 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
   `ra_data`/`rb_data` follow about 4 ns later and hold until the next edge.
 - Write-first: `w_data` is written to `w_addr` while `clk` is high after an edge that
   saw `w_ena`; a read of that word captured on the same edge returns the new data, on
-  either port.
+  either port. The behavioural model does this, the author's slides describe the
+  design as "read-after-write" (the read word line is enabled after the write
+  completes), and KianV's sky25b errata (AMO with rd == rs2) shows it on silicon.
+  Its timing is not characterised. FyraCore depends on it on every load-use and
+  every read two instructions after a write; a one-entry bypass around the macro
+  (about 0.13 tile) would remove that dependence.
 - Word 0 is an ordinary word: writable and unreset. There is no reset at all.
 - The liberty is a placeholder, not a characterisation: setup 2.0 ns, hold 0.2 ns,
   clock-to-output 4.0 ns, minimum period 10 ns, one nominal corner (25 C, 1.8 V),
@@ -59,10 +64,13 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
 
 The macro needs these in the submission's `src/config.json`, next to TT's
 defaults. They are FemtoRV's (the integration that ran on sky25b silicon),
-with this design's instance path; `dir::` is relative to `src/`, so the views
-go in a `macro/` directory beside it. The location puts the macro in the middle
-of a 6x2 die (its inputs and outputs are on opposite edges); for 8x2 it was
-[620, 45]. Tried with LibreLane 3.0.5 (ttsky26c tools) on 2026-10-11: at 6x2
+with this design's instance path, except the location; `dir::` is relative to `src/`, so the views
+go in a `macro/` directory beside it. FemtoRV ([0.1, 45], 2x2) and KianV put the
+macro at the die's left edge; here it was tried in the middle of the die
+([450, 45] at 6x2, [620, 45] at 8x2), where rotated E it walls off li1-met3
+across 133 of the die's 226 um height. With ERROR_ON_PDN_VIOLATIONS 0 and
+MAGIC_NO_EXT_UNIQUE 1, a power pin piece no strap reaches would pass both the
+PDN check and LVS: check the routed DEF for a via on every VDPWR/VGND shape. Tried with LibreLane 3.0.5 (ttsky26c tools) on 2026-10-11: at 6x2
 the flow got through placement, CTS and global routing -- 134 hold buffers
 where the flop register file needed ~1,000 and failed placement (DPL-0036),
 0 hold violations, setup slack +4.56 ns, std cells 11.1 tiles at 62.5 %
