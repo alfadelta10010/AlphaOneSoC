@@ -80,6 +80,11 @@ Verification blind spots
 - Any "present the next cycle's operands" select (sync RF macro, 2026-10-11): slow fetch (SoC, any
   IMEM_WAIT) keeps if_mem_stall high and hides every other hold term; only zero-wait core runs kill
   them. WFI-without-trap (mie=0, or MIE=0 + pending) is the hold nobody tests functionally.
+- Hard-macro behaviour the design relies on but the precedents never exercise (rf_top same-edge
+  write-through, 2026-10-11): the behavioural model is the only evidence, and the GL compare reuses it.
+  Mutate the MODEL (e.g. read-first) to find what depends on it, then check how the precedents sequence it.
+- Macro placement "from the precedent" with a different location: re-derive the PDN alignment
+  (isolated power-pin stubs vs strap offset/pitch) and the routing wall (OBS layers) for the new spot.
 
 PPA / area claims
 - Synthesis recipes that drop LibreLane's dont-use list (no_synth.cells: all common `_1` cells,

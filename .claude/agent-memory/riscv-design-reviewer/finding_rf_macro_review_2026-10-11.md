@@ -1,6 +1,6 @@
 ---
 name: finding-rf-macro-review-2026-10-11
-description: Review of the rf_top (smunaut 32x32 2R1W macro) integration, branch rf-macro_alfadelta10010 (0367965 + uncommitted) -- no Crit/Major; rf_hold select exact; wfi_active term has no functional test; SoC/IMEM_WAIT runs blind to select bugs; area/timing numbers
+description: Review of the rf_top (smunaut 32x32 2R1W macro) integration, branch rf-macro_alfadelta10010 (0367965 + uncommitted) -- no Crit/Major; rf_hold select exact; wfi_active term has no functional test; SoC/IMEM_WAIT runs blind to select bugs; area/timing numbers. FINAL review (88c18f3): MAJ same-edge write-through is model-only but load-use depends on it; README placement/PDN-stub risk; 6x2 harden congested
 metadata:
   type: project
 ---
@@ -37,3 +37,29 @@ Findings:
 **Why:** gate before the macro RTL lands / harden. **How to apply:** next time check a functional
 WFI-hold test landed, the checker runs in zero-wait configs, and a derated-liberty STA exists.
 Related: [[patterns-recurring]], [[finding-ppa-review-2026-10-09]].
+
+## Final review, same day (committed 9263ad3..88c18f3 + uncommitted README TT settings)
+
+RTL committed unchanged. m1 CLOSED: rf_wfi_hold (20eca17) passes core x2, +RF_X and SoC; the
+drop-wfi_active mutant is killed functionally (x12=x13=0x44c, checker off) and by the checker. The
+parent's cited evidence (135/135, 85/85) PREDATES 20eca17 (no rf_wfi_hold in perf/rfm.*.runs).
+
+NEW MAJOR (silicon assumption): the core relies on the macro's SAME-EDGE write-through, which only the
+behavioural model asserts. load_use_hazard (fyracore.v:634) holds EX through the load's whole WB
+cycle, so every load-use pair reads the loaded value from the macro on the edge the load writes it.
+PROVEN with a read-first model mutant (checker off): 11 of 12 core rf/mem tests fail; at SoC level
+t_memstress fails (lw x30 / bne x30 at 0x8000006e/72). Probe: SoC t_memstress has 1223 same-edge
+collisions read by EX in 3027 instructions. Precedents never exercise it: FemtoRV quark captures
+operands in WAIT_INSTR after its write state; KianV is a multicycle FSM. Fix direction: a 1-entry
+bypass (flop hit_a/hit_b + wdata at the edge, mux after the macro), about 0.13 t, or get the macro
+author to confirm write-through. The GL pin compare can't see it because it uses the same model.
+
+README TT settings: location [450,45] is NOT FemtoRV's ([0.1,45] on 2x2) nor KianV-regfile's ([3,45]
+on 6x2, default halos/VOFFSET, NO PDN/LVS waivers, fabbed). The macro's OBS covers li1-met3, so an
+E-rotated macro mid-die is a 132.6 um horizontal routing wall (only met4 crosses). VDPWR/VGND have
+short met3 stubs (N: x 109.8-116, y 1-23) disjoint from the long stripes in the LEF; after E they lie at
+x' 1-23 from the macro's left edge. FemtoRV's x=0.1 + VOFFSET 10 lands straps on them; at x=450 that is
+not guaranteed, and ERROR_ON_PDN_VIOLATIONS 0 + MAGIC_NO_EXT_UNIQUE 1 hide a miss from both checks.
+Parent's 6x2 harden: 11.1 t std cells + macro, 62.5 % util, GRT 85.78 % congestion, DRT 77k->63k
+after 4 iterations. Area: flat 12.46 -> 8.72 t + 0.88 t macro (with halo); PnR inflation 1.27x -> ~12.0 t,
+which fills a 6x2; 8x2 is about 75 %.

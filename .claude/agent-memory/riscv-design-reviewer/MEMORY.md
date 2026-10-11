@@ -85,6 +85,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   stopped (FIXED same day: async-assert reset); bench's 2nd reset mis-aimed, no-sync mutant passes (both fixed) — finding_tt_wrapper_review_2026-10-10.md
 - 2026-10-11 rf_top macro integration (0367965+wip): no CRIT/MAJ; rf_hold exact; wfi_active term has no functional test (PROVEN),
   select bugs visible only in zero-IMEM-wait core runs; core 10.84 -> 7.07 t + 0.84 t macro — finding_rf_macro_review_2026-10-11.md
+- 2026-10-11 rf-macro FINAL 88c18f3: MAJ load-use relies on the macro's same-edge write-through (model-only; read-first mutant
+  fails SoC t_memstress); README macro at [450,45] not the precedent spot (routing wall, PDN stubs); 6x2 harden congested — same file
 
 ## Notes index
 
