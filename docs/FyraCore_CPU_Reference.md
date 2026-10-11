@@ -36,11 +36,12 @@
 - Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window and EX holds no instruction that decides the next pc (`ex_nofetch`: branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write); outside the window nothing is fetched and the instruction faults in EX
 - The PC only changes on a cycle the fetch completes, so the address of an outstanding fetch is never withdrawn
 - Detects compressed instructions (bits `[1:0] != 2'b11`); IF/EX holds the fetched bits (`ifex_raw_instr`), and EX expands them
+- Puts the fetched instruction's source registers (`rf_fields`, from the raw bits, compressed or not) on the register file's read addresses on the cycle IF/EX takes it; the read is synchronous (section 2.2)
 - Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal). While IF/EX holds an instruction, `pc` is that instruction's next PC (there is no `ifex_pc_next`)
 
 **EX (Execute):**
 - Expands a compressed instruction (`compressed_decoder`), decodes instruction fields (`decoder`) and control signals (`controller`)
-- Reads the register file through its one read port (rs2 in a stalled cycle, `rs2_phase`), with WB->EX forwarding
+- Reads rs1 and rs2 from the register file's two ports (data taken on the edge the instruction entered EX, or re-taken on each held cycle), with WB->EX forwarding
 - Executes the ALU operation, or runs the multi-cycle unit (`muldiv`: multiply, divide and the shifts)
 - Evaluates branches
 - Checks the fetch (both halves of a straddling 32-bit instruction) and the data address against the PMA map and PMP
@@ -60,7 +61,7 @@
 | Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
 | Load-use | Stall until the load's data returns |
 | Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
-| rs2 read | One EX cycle reads rs2 into `rs2_hold` (`rs2_phase`), for an instruction whose format has an rs2 field (R, S, B, AMO) that is not x0; `decoder` gives rs2 = x0 to every other format |
+| Register read (synchronous, write-first `rf_top` macro) | No stall. The read addresses on each cycle are those of the instruction in EX after the next edge: its own decoded fields while IF/EX holds it (`rf_hold`), the fetched instruction's (`rf_fields`) when IF/EX takes it. The data is then the registers after that edge's write, as a combinational read would give; the WB instruction is forwarded. Each read is masked to 0 where the decoded field is x0 |
 | CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
 | Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
@@ -71,7 +72,7 @@
 
 ```
 stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active
-                || ex_ifetch_hi_phase || csr_wb_hazard || rs2_phase
+                || ex_ifetch_hi_phase || csr_wb_hazard
 stall_other   = stall_nofetch || if_mem_stall
 wb_mem_stall  = dmem_req && !dmem_ready
 muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap
@@ -79,13 +80,14 @@ muldiv_have   = muldiv_ready || muldiv_done
 muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && !stall_nofetch && !flush
 muldiv_stall  = muldiv_want && !muldiv_have
 stall         = stall_other || muldiv_stall
+rf_hold       = stall_other || (ifex_valid && ex_is_iter && !muldiv_have)   // stall without !ex_trap
 flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr
                || irq_inject
 ```
 
 Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because EX can briefly see not-yet-valid forwarded load data during a load-use or AMO-read stall.
 
-An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (rs2 read, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
+An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
 
 ### 2.3 CSR Values Seen by EX
 
@@ -118,10 +120,11 @@ wire [31:0] mret_target = csr_mepc;
 | `alu.v` | `alu` | RV32I ALU: ADD, XOR, OR, AND, and SUB/SLT/SLTU from the shared comparator (`branchCtrl`). No shifter. |
 | `muldiv.v` | `muldiv` | Iterative unit on one 34-bit adder/subtractor: signed-aware shift-add multiplier (34 cycles), restoring divider on magnitudes (36 cycles), and the RV32I shifts, one bit per cycle (2 + shamt cycles). |
 | `controller.v` | `controller` | Combinational decode of opcode/funct3/funct7 into control signals. Rejects illegal LOAD/STORE/JALR encodings without requesting side effects; the pipeline completes the rs2/rd/rs1 checks for SYSTEM and LR. |
-| `decoder.v` | `decoder` | Instruction field extractor: opcode, rd, rs1, rs2, funct3, funct7. |
+| `decoder.v` | `decoder`, `rf_fields` | Instruction field extractor: opcode, rd, rs1, rs2, funct3, funct7. `rf_fields`: the registers an instruction reads, from its raw fetched bits, compressed or not, for the register file's synchronous read. |
 | `signExt.v` | `signExt` | Immediate generation for all formats. |
 | `branchCtrl.v` | `branchCtrl` | The core's one comparator: rs1 - rs2 for a branch condition, rs1 - (ALU operand 2) for SUB/SLT/SLTU. |
-| `regFile.v` | `regFile` | 32x32-bit register file, x0 hardwired to zero. One write port, one read port. No reset (boot code zeroes x1-x31); simulation starts the registers at 0, or at X with `+RF_X`. |
+| `regFile.v` | `regFile` | The register file: one `rf_top` macro, one write port, two synchronous read ports (address on a rising edge, data after it, write-first). x0 is never written; the caller masks reads of x0. No reset (boot code zeroes x1-x31). |
+| `rf_top.v` | `rf_top` | Simulation model of Sylvain Munaut's 32x32 2R1W sky130 register-file macro (`macro/rf_top/`: GDS, LEF, liberty, provenance); an empty blackbox under `SYNTHESIS`. Starts at 0, or at X with `+RF_X`. |
 | `compressed_decoder.v` | `compressed_decoder` | RV32C expansion. Its legal/illegal verdict matches the RV32IMAC rules on all 49,152 16-bit encodings. |
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, the `*_legal` write values and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |
@@ -547,3 +550,4 @@ EX computes the read-modify-write value, so the CSR unit only ever writes, and t
 12. One external interrupt input and no PLIC.
 13. The memory controller keeps no fetch buffer: a stall with a fetch outstanding refetches, and every access costs a full QSPI transaction (about 42 clocks from PSRAM, 60 from flash).
 14. x1-x31 are not reset; boot code must zero them (`plugins/helpers/boot_flash.S` does).
+15. The register-file macro's timing is a placeholder liberty (setup 2.0, hold 0.2, clock-to-output 4.0 ns, minimum period 10 ns, one nominal corner), not a characterisation.
