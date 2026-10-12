@@ -120,3 +120,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-09 PPA/claims review](finding_ppa_review_2026-10-09.md) — TT-flow area/timing vs recipe, failed hardens, per-cut TT deltas, perf repro
 - [2026-10-10 TT wrapper review](finding_tt_wrapper_review_2026-10-10.md) — TT firmware reset/clock order, async-latched reset fix proven, pin map verified, bench gaps
 - [2026-10-11 RF macro review](finding_rf_macro_review_2026-10-11.md) — sync-read equivalence, rf_hold mutants, WFI-hold probe, macro lib/pin/area/timing facts
+- [2026-10-12 RF macro timing changes](finding_rf_macro_timing_review_2026-10-12.md) — 7 uncommitted timing edits all SOUND; bypass/wb_fwd/cdec-in-IF/inc64 reasoning, area
