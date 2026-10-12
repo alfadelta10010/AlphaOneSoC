@@ -41,7 +41,7 @@
 
 **EX (Execute):**
 - Expands a compressed instruction (`compressed_decoder`), decodes instruction fields (`decoder`) and control signals (`controller`)
-- Reads rs1 and rs2 from the register file's two ports (data taken on the edge the instruction entered EX, or re-taken on each held cycle), with WB->EX forwarding
+- Reads rs1 and rs2 from the register file's two ports (data taken on the edge the instruction entered EX, or re-taken on each held cycle), with WB->EX forwarding of everything but memory data
 - Executes the ALU operation, or runs the multi-cycle unit (`muldiv`: multiply, divide and the shifts)
 - Evaluates branches
 - Checks the fetch (both halves of a straddling 32-bit instruction) and the data address against the PMA map and PMP
@@ -58,7 +58,7 @@
 
 | Hazard | Resolution |
 |---|---|
-| Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
+| Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` (`wb_fwd`: the ALU result, link address, CSR value or SC result; memory data is never forwarded, see load-use) |
 | Load-use | Stall until the load's data returns |
 | Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
 | Register read (synchronous, write-first `rf_top` macro) | No stall. The read addresses on each cycle are those of the instruction in EX after the next edge: its own decoded fields while IF/EX holds it (`rf_hold`), the fetched instruction's (`rf_fields`) when IF/EX takes it. The data is then the registers after that edge's write, as a combinational read would give -- `regFile`'s one-entry bypass supplies the word written on that same edge, so the macro's own write-through is not relied on; the WB instruction is forwarded. Each read is masked to 0 where the decoded field is x0 |
@@ -85,7 +85,7 @@ flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pm
                || irq_inject
 ```
 
-Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because EX can briefly see not-yet-valid forwarded load data during a load-use or AMO-read stall.
+Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because during a load-use or AMO-read stall EX's operand is not the loaded value yet (WB forwards its ALU result, never memory data).
 
 An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
 
