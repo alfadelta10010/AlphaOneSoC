@@ -1,10 +1,9 @@
 // FyraCore — 3-stage pipelined RV32IMCA+Zicsr+Zifencei processor
 //
 // Pipeline stages:
-//   IF  — Instruction Fetch; the register file's read addresses for the
-//         fetched instruction (the read is synchronous)
-//   EX  — C-extension decompression, Decode, Register Read, ALU Execute,
-//         Branch Resolve
+//   IF  — Instruction Fetch; C-extension decompression; the register file's
+//         read addresses for the fetched instruction (the read is synchronous)
+//   EX  — Decode, Register Read, ALU Execute, Branch Resolve
 //   WB  — Memory Access, Writeback, CSR commit
 //
 // Hazard handling:
@@ -129,6 +128,18 @@ module fyracore #(
     // simulation, rather than X.
     wire [31:0] if_fetched    = imem_rdata & {32{imem_req}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
+    // A compressed instruction is expanded here, on its way into IF/EX, so
+    // that EX starts from the 32-bit form. Expanding it in EX put the
+    // decompressor in front of the decoder, the operand selects, the ALU
+    // and the branch decision, the longest paths in the core; here it sits
+    // behind the fetched word, which in the SoC is a register.
+    wire [31:0] if_expanded;
+    wire        if_c_illegal_raw;
+    compressed_decoder cdec(
+        .instr_in (if_fetched[15:0]),
+        .instr_out(if_expanded),
+        .illegal  (if_c_illegal_raw)
+    );
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
     wire        ex_nofetch;      // EX decides the next pc (assigned after the PMP-write decode)
     // The registers the fetched instruction reads, for the register file's
@@ -168,25 +179,20 @@ module fyracore #(
 
     // ================================================================
     reg [31:0] ifex_pc;
-    reg [31:0] ifex_raw_instr;  // Original fetched bytes (16-bit if compressed)
+    reg [31:0] ifex_instr;      // The instruction, a compressed one expanded
+    reg [15:0] ifex_raw16;      // A compressed instruction's own 16 bits
     reg        ifex_compressed;
+    reg        ifex_c_illegal;  // A reserved compressed encoding
     // There is no ifex_pc_next: while IF/EX holds an instruction, pc already
     // is that instruction's pc + 2 or + 4 (pc advances on exactly the cycles
     // IF/EX loads, and every other pc change flushes IF/EX).
     reg        ifex_valid;
 
-    // A compressed instruction is expanded in EX, from the bytes IF/EX
-    // already holds for the trace and for mtval. Expanding it in IF took a
-    // second 32-bit copy of the instruction in IF/EX.
-    wire [31:0] ex_instr_decompressed;
-    wire        ex_c_illegal_raw;
-    compressed_decoder cdec(
-        .instr_in (ifex_raw_instr[15:0]),
-        .instr_out(ex_instr_decompressed),
-        .illegal  (ex_c_illegal_raw)
-    );
-    wire [31:0] ifex_instr     = ifex_compressed ? ex_instr_decompressed : ifex_raw_instr;
-    wire        ifex_c_illegal = ifex_compressed && ex_c_illegal_raw;  // reserved encoding
+    // The bytes as fetched, for the trace and for mtval: the 16-bit halfword
+    // of a compressed instruction, the word otherwise. A 32-bit instruction
+    // is not changed by expansion, so only a compressed one's 16 bits are
+    // kept beside the expanded form.
+    wire [31:0] ifex_raw_instr = ifex_compressed ? {16'h0, ifex_raw16} : ifex_instr;
     reg        ifetch_lo_done;  // PMP has checked the fetch at ifex_pc
     reg        ifetch_lo_denied;// ...and refused it
     reg        ifetch_hi_done;  // upper half of the straddling instruction in EX checked
@@ -335,8 +341,7 @@ module fyracore #(
     // on that edge (if_rs1/if_rs2, from the raw fetched bits). The EX
     // instruction's own are the ones it was fetched with, kept in
     // ifex_rf_rs1/ifex_rf_rs2, not the decoded ex_rs1/ex_rs2: the two agree
-    // wherever the decoded field is not x0, and going through the
-    // decompressor and the decoder to get them put both in front of the
+    // wherever the decoded field is not x0, and the decoder stays off the
     // macro's address inputs. Both ports are read at once, so rs1 and rs2
     // cost no extra cycle. When IF/EX takes a bubble instead, the read is
     // unused.
@@ -1129,8 +1134,9 @@ module fyracore #(
             priv_mode <= 1'b1; // Boot in M-mode
             // IF/EX
             ifex_pc        <= 32'b0;
-            ifex_raw_instr <= 32'h0000_0013; // NOP
+            ifex_instr     <= 32'h0000_0013; // NOP
             ifex_compressed<= 1'b0;
+            ifex_c_illegal <= 1'b0;
             ifex_valid     <= 1'b0;
             ifetch_lo_done <= 1'b0;
             ifetch_lo_denied <= 1'b0;
@@ -1204,16 +1210,19 @@ module fyracore #(
             end else if (flush || ex_nofetch) begin
                 // Insert bubble (nothing was fetched behind ex_nofetch)
                 ifex_valid     <= 1'b0;
-                ifex_raw_instr <= 32'h0000_0013; // NOP
+                ifex_instr     <= 32'h0000_0013; // NOP
                 ifex_compressed<= 1'b0;
+                ifex_c_illegal <= 1'b0;
                 ifetch_lo_done <= 1'b0;
                 ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
                 ifetch_hi_denied <= 1'b0;
             end else begin
                 ifex_pc        <= pc;
-                ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
+                ifex_instr     <= if_compressed ? if_expanded : if_fetched;
+                ifex_raw16     <= if_fetched[15:0];
                 ifex_compressed<= if_compressed;
+                ifex_c_illegal <= if_compressed && if_c_illegal_raw;
                 ifex_valid     <= 1'b1;
                 // The register-file addresses this instruction was read
                 // with, to read it with again while it stays in EX. They
