@@ -143,11 +143,11 @@ module csr #(
     wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
     reg         mcycle_wr_q;
     always @(posedge clk) mcycle_wr_q <= !rst && mcycle_we;
-    wire [63:0] mcycle_inc;                   // + 1 (inc64, below)
+    wire [63:0] mcycle_inc, minstret_inc;     // + 1 (inc64, below)
     wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we && !mcycle_wr_q) ?
                                 mcycle_inc : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
-                                minstret + 64'd1 : minstret;
+                                minstret_inc : minstret;
 
     // mstatus as it will stand after a CSR write in WB commits this cycle:
     // the legal value the write stores. A trap or an MRET never coincides
@@ -275,25 +275,22 @@ module csr #(
     end
     assign wval_out = wval;
 
-    // mcycle's next value is a wire, loaded on every edge, because inc64
-    // keeps its carry flag from it.
+    // Each counter's next value is a wire, loaded on every edge, because
+    // inc64 keeps its carry flags from it.
     wire [63:0] mcycle_d   = rst                    ? 64'b0 :
                              (we && waddr == 12'hB00) ? {mcycle[63:32], csr_new} :
                              (we && waddr == 12'hB80) ? {csr_new, mcycle[31:0]} :
                                                         mcycle_next;
-    always @(posedge clk) mcycle <= mcycle_d;
-    inc64 mcycle_incr  (.clk(clk), .q(mcycle),   .d(mcycle_d),   .q_inc(mcycle_inc));
-
+    wire [63:0] minstret_d = rst                    ? 64'b0 :
+                             (we && waddr == 12'hB02) ? {minstret[63:32], csr_new} :
+                             (we && waddr == 12'hB82) ? {csr_new, minstret[31:0]} :
+                                                        minstret_next;
     always @(posedge clk) begin
-        if (rst)
-            minstret <= 64'b0;
-        else if (we && waddr == 12'hB02)
-            minstret <= {minstret[63:32], csr_new};
-        else if (we && waddr == 12'hB82)
-            minstret <= {csr_new, minstret[31:0]};
-        else
-            minstret <= minstret_next;
+        mcycle   <= mcycle_d;
+        minstret <= minstret_d;
     end
+    inc64 mcycle_incr  (.clk(clk), .q(mcycle),   .d(mcycle_d),   .q_inc(mcycle_inc));
+    inc64 minstret_incr(.clk(clk), .q(minstret), .d(minstret_d), .q_inc(minstret_inc));
 
     // CSRs that must exist on this core but hold nothing: they read 0 and
     // ignore writes (wval's default arm is 0, and nothing stores them).
