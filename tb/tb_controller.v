@@ -7,9 +7,13 @@ module tb_controller;
     wire [1:0] memSize, wbSel, csrOp;
     wire       memUnsigned, doBranch, doJump, csrSrc;
     wire       isAmo, isLR, isSC, isEcall, isEbreak, isMret, isFence, isFenceI, illegal;
+    wire       isMulDiv;
     wire [4:0] amoOp;
     integer pass_count = 0, fail_count = 0;
     integer sweep, sweep_bad;
+    // As fyracore derives them: a shift runs in muldiv like an M instruction.
+    wire       is_shift = !aluOp[4] && (aluOp[1:0] == 2'b01);
+    wire       is_iter  = isMulDiv || is_shift;
 
     controller uut(
         .opcode(opcode), .funct3(funct3), .funct7(funct7),
@@ -19,7 +23,7 @@ module tb_controller;
         .csrOp(csrOp), .csrSrc(csrSrc),
         .isAmo(isAmo), .isLR(isLR), .isSC(isSC), .amoOp(amoOp),
         .isEcall(isEcall), .isEbreak(isEbreak), .isMret(isMret),
-        .isFence(isFence), .isFenceI(isFenceI), .illegal(illegal)
+        .isFence(isFence), .isFenceI(isFenceI), .isMulDiv(isMulDiv), .illegal(illegal)
     );
 
     task check_rtype(input [4:0] exp_aluOp, input exp_illegal, input [159:0] name);
@@ -208,9 +212,13 @@ module tb_controller;
         #1; if (!illegal) begin fail_count=fail_count+1; $display("FAIL: bad opcode"); end
         else pass_count=pass_count+1;
 
-        // A property fyracore's pipeline control is built on, for every
+        // Two properties fyracore's pipeline control is built on, for every
         // opcode, funct3 and funct7 (the controller sees nothing else):
         //
+        //  - An M instruction or a shift makes no memory access and no
+        //    branch or jump. So the only traps it can take are the ones
+        //    known from decode and fetch, and muldiv_want may leave the
+        //    address causes out (ex_trap_decode in fyracore.v).
         //  - Whatever writes memory data to rd (wbSel 01 with regWR) is a
         //    read access (memRD). So load_use_hazard holds every instruction
         //    that reads such an rd, and WB need not forward memory data.
@@ -218,6 +226,12 @@ module tb_controller;
         for (sweep = 0; sweep < (1 << 17); sweep = sweep + 1) begin
             {opcode, funct3, funct7} = sweep[16:0];
             #1;
+            if (is_iter && (memRD || memWR || isAmo || isLR || isSC || doBranch || doJump)) begin
+                sweep_bad = sweep_bad + 1;
+                if (sweep_bad <= 10)
+                    $display("FAIL: iterative op with a memory access or a jump: opcode=%07b funct3=%03b funct7=%07b",
+                             opcode, funct3, funct7);
+            end
             if (regWR && wbSel == 2'b01 && !memRD) begin
                 sweep_bad = sweep_bad + 1;
                 if (sweep_bad <= 10)
@@ -225,7 +239,7 @@ module tb_controller;
                              opcode, funct3, funct7);
             end
         end
-        if (sweep_bad == 0) pass_count = pass_count + 1;
+        if (sweep_bad == 0) pass_count = pass_count + 2;
         else                fail_count = fail_count + sweep_bad;
 
         $display("\n=== Controller Results: %0d passed, %0d failed ===", pass_count, fail_count);
