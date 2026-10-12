@@ -93,14 +93,55 @@ so LVS proves every macro power pin is connected. `src/rf_top.v` must be in
 so the cell is kept either way), and the gate-level test must add
 `$(SRC_DIR)/rf_top.v` to its sources.
 
-Result at 3x4: LibreLane synthesis 8.67 tiles of std cells and exactly one
-`rf_top`; after PnR 11.08 tiles (125,220 um^2) plus the macro (15,744 um^2),
-utilisation 55.4 %; detailed routing converged to 0 violations; DRC 0, LVS 0,
-antenna 0, PDN 0, lint 0 errors; 592 hold buffers, 0 hold violations at every
-corner (worst +0.10 ns, ff); setup at 20 ns +2.55 ns (tt, max), -13.28 ns at
-ss_100C_1v60 (469 endpoints, the worst flop to flop), the macro's address
-inputs -6.31 ns at ss and +5.76 ns at tt -- against a liberty that gives the
-macro its nominal numbers at every corner.
+Results at 3x4, 20 ns, LibreLane 3.0.14 on the sandbox. Every run: detailed
+routing converged to 0, DRC 0, LVS 0, PDN 0, lint 0 errors, exactly one
+`rf_top`, and no hold violation at any corner (worst +0.09 ns, ff). "tt" is
+max_tt_025C_1v80 and "ss" max_ss_100C_1v60; the cell area is after PnR and
+leaves out the macro (15,744 um^2).
+
+| RTL | Settings on top of the block above | Std cells | Util | Setup tt | Setup ss (endpoints) | Max-slew tt / ss | Antenna | Run |
+|---|---|---|---|---|---|---|---|---|
+| 0c0ec3c | none (TT's `AREA 0`) | 11.08 t | 55.4 % | +2.55 ns | -13.28 ns (469) | 1,399 / 5,599 | 0 | 58 min |
+| 4d21e43 | none | 11.72 t | 58.2 % | +5.14 ns | -8.09 ns (459) | 1,929 / 6,171 | 1 | 60 min |
+| 4d21e43 | A: `SYNTH_STRATEGY` `"AREA 3"`, `PL_TARGET_DENSITY_PCT` 65 | 12.54 t | 61.8 % | +5.89 ns | -6.41 ns (330) | 449 / 3,364 | 0 | 43 min |
+| 4d21e43 | A + `PL_TIMING_DRIVEN` 1, `RUN_POST_GRT_RESIZER_TIMING` 1 | 12.31 t | 60.8 % | +6.82 ns | -5.35 ns (252) | 351 / 2,324 | 0 | 59 min |
+| 4d21e43 | A + B: `EXTRA_EXCLUDED_CELLS` `["sky130_fd_sc_hd__clkdlybuf4s*", "sky130_fd_sc_hd__dlymetal6s*"]`, `MAX_FANOUT_CONSTRAINT` 20 | 12.27 t | 60.6 % | +6.80 ns | -4.89 ns (259) | 303 / 3,338 | 0 | 42 min |
+| 4d21e43 | all of the above | 12.17 t | 60.2 % | +6.67 ns | -5.83 ns (315) | 427 / 4,779 | 0 | 54 min |
+
+- 4d21e43 is the tree with the write-first bypass in `regFile.v` and the
+  timing changes in `fyracore.v`, `csr.v` and `clint.v`: 9.03 tiles at
+  LibreLane synthesis where 0c0ec3c had 8.67.
+- `AREA 3` is ABC's script with buffering and sizing. It costs about 0.8 tile
+  after PnR and removes three quarters of the max-slew violations at tt.
+- B is for what TT's default flow does to a high-fan-out net: its fan-out
+  repair picks the smallest buffer it is allowed, which is a delay cell
+  (`clkdlybuf4s25_1`, 0.3 to 1.3 ns each at tt), and chains them. With A alone
+  the worst path was the data address register through three of them, the bus
+  decode, the read mux and five more as wire repeaters: 4.8 of its 13.1 ns.
+  With B that path has slack at ss. `dlygate4sd*` stays available, so hold
+  repair is unchanged.
+- The last three rows differ by 0.15 ns at tt and by under 1 ns at ss:
+  adding the timing-driven settings to A + B bought nothing. A + B has the
+  best ss and is the quickest to harden.
+- What limits the clock now is EX. At tt the worst path starts at the macro's
+  outputs, behind its 4 ns clock-to-output, and runs through operand select
+  and the compare to the next pc; at ss it starts at the forwarding compare
+  (`exwb_rd`) or the instruction register and ends in the EX/WB registers.
+  With A + B every macro input has slack at both corners -- the address
+  inputs +9.97 ns at tt and +2.94 ns at ss, where 0c0ec3c had -6.31 ns at ss
+  -- against a liberty that still gives the macro its nominal numbers at
+  every corner.
+
+Gate level (TT's gl_test defines, `tb/tb_tt_um.v` through the pins, RTL and
+netlist both with `+RF_X +RF_COLLIDE_X`): on the netlists of rows two to five
+the default run and the rd_late run pass and match the RTL pin for pin on
+every clock. `+QSPI_DELAY=19` is not a usable gate-level run. By the Pmod
+model's timing it leaves 1 ns between the data landing and the host's
+sampling point, and gl_test gives every cell a 1 ns delay: two of the four
+netlists sample X, and two pass with pins that differ from the RTL's from
+clock 171 on. On the A + B netlist 14, 16, 17 and 18 ns all pass and match
+the RTL, so a gate-level test of the "just under one SCK period" case should
+use 18.
 
 Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
 offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
@@ -117,3 +158,8 @@ the die's 226 um height:
   (658 -> 1 violation by iteration 27 on GitHub), so the 2-row failures are
   this placement, not the cell area. A 2-row retry belongs at the left edge,
   as FemtoRV ([0.1, 45]) and KianV place it.
+- 4x2, [3, 45] (0c0ec3c; the next shape down from twelve tiles): utilisation
+  83.4 % after CTS and 89.4 % after post-CTS resizing, and global routing
+  ended at 105.6 % usage with an overflow of 14,603. Stopped. This design
+  does not fit eight tiles: at 60 % they hold about 6.5 tiles of cells
+  beside the macro, after PnR, and it has 11 to 12.
