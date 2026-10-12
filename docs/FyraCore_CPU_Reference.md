@@ -35,12 +35,12 @@
 **IF (Instruction Fetch):**
 - Requests the instruction at `imem_addr` (= PC) whenever PC is in the executable window and EX holds no instruction that decides the next pc (`ex_nofetch`: branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write); outside the window nothing is fetched and the instruction faults in EX
 - The PC only changes on a cycle the fetch completes, so the address of an outstanding fetch is never withdrawn
-- Detects compressed instructions (bits `[1:0] != 2'b11`); IF/EX holds the fetched bits (`ifex_raw_instr`), and EX expands them
+- Detects compressed instructions (bits `[1:0] != 2'b11`) and expands them (`compressed_decoder`) on the way into IF/EX, which holds the 32-bit form (`ifex_instr`) and, for a compressed instruction, its own 16 bits (`ifex_raw16`, for the trace and mtval)
 - Puts the fetched instruction's source registers (`rf_fields`, from the raw bits, compressed or not) on the register file's read addresses on the cycle IF/EX takes it; the read is synchronous (section 2.2)
 - Computes `if_pc_next = pc + 2` (compressed) or `pc + 4` (normal). While IF/EX holds an instruction, `pc` is that instruction's next PC (there is no `ifex_pc_next`)
 
 **EX (Execute):**
-- Expands a compressed instruction (`compressed_decoder`), decodes instruction fields (`decoder`) and control signals (`controller`)
+- Decodes instruction fields (`decoder`) and control signals (`controller`)
 - Reads rs1 and rs2 from the register file's two ports (data taken on the edge the instruction entered EX, or re-taken on each held cycle), with WB->EX forwarding of everything but memory data
 - Executes the ALU operation, or runs the multi-cycle unit (`muldiv`: multiply, divide and the shifts)
 - Evaluates branches
