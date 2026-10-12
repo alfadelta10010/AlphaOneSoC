@@ -130,6 +130,8 @@ test-csr: $(BUILD_DIR)
 	@echo "=== Testing CSR ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_csr $(SRC_DIR)/csr.v $(TB_DIR)/tb_csr.v
 	@$(call run_tb,tb_csr)
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_inc64 -s tb_inc64 $(SRC_DIR)/csr.v $(TB_DIR)/tb_inc64.v
+	@$(call run_tb,tb_inc64)
 
 test-compressed: $(BUILD_DIR)
 	@echo "=== Testing Compressed Decoder ==="
