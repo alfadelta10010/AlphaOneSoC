@@ -625,15 +625,18 @@ module fyracore #(
         ex_csr_illegal                 // Invalid/read-only CSR access
     );
 
-    // Trap detection
-    wire ex_trap = ifex_valid && (
+    // Trap detection. ex_trap_decode is the part known from the instruction
+    // and the fetch alone; the other three causes wait for the ALU's address.
+    wire ex_trap_decode = ifex_valid && (
         ex_is_ecall || ex_is_ebreak ||
         ex_ifetch_fault ||             // Instruction access fault (PMP or PMA)
-        ex_illegal_insn ||             // Illegal instruction
+        ex_illegal_insn                // Illegal instruction
+    );
+    wire ex_trap = ex_trap_decode || (ifex_valid && (
         ex_misaligned ||               // Misaligned memory access
         ex_data_fault ||               // Load/store access fault (PMP or PMA)
         ex_inst_misalign               // Instruction address misaligned (branch target)
-    );
+    ));
 
     // ================================================================
     //  Hazard Detection
@@ -686,12 +689,19 @@ module fyracore #(
     //   muldiv_stall: keep pipeline frozen while muldiv is working.
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
-    // !ex_trap: a trapping M instruction (a fetch fault whose garbage word
-    // decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
+    // !ex_trap_decode: a trapping M instruction (a fetch fault whose garbage
+    // word decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
     // flush, which contains ex_trap -- so without this muldiv_stall would
     // wait for a result that never comes and the trap would never commit.
-    // ex_trap depends on neither stall nor flush, so this closes no loop.
-    wire muldiv_want = ifex_valid && ex_is_iter && !ex_trap;
+    // It depends on neither stall nor flush, so this closes no loop.
+    //
+    // ex_trap_decode is all of ex_trap here: an M instruction or a shift is
+    // OP or OP-IMM, which makes no memory access and no jump, so the three
+    // address causes cannot be raised for it (tb_controller checks that for
+    // every opcode, funct3 and funct7). Using ex_trap itself put the ALU,
+    // the PMA compare and the PMP check in front of `stall`, and through it
+    // in front of the enable of every pipeline register.
+    wire muldiv_want = ifex_valid && ex_is_iter && !ex_trap_decode;
 
     // Sticky completion. muldiv_done is a one-cycle pulse; holding it here
     // means the pipeline can take the result on whatever later cycle it is
@@ -709,11 +719,11 @@ module fyracore #(
 
     // The register file reads the EX instruction's registers again while
     // IF/EX holds it, and the fetched instruction's when IF/EX takes that.
-    // IF/EX holds on `stall`; rf_hold is `stall` with the M term's !ex_trap
-    // left out (muldiv_want has it): wherever the two differ, an M op or
-    // shift is trapping, so flush puts a bubble in IF/EX and the read is
-    // unused. Leaving ex_trap out keeps the macro's address inputs off the
-    // path from its own data through the ALU and the PMP check to ex_trap.
+    // IF/EX holds on `stall`; rf_hold is `stall` with the M term's
+    // !ex_trap_decode left out (muldiv_want has it): wherever the two
+    // differ, an M op or shift is trapping, so flush puts a bubble in IF/EX
+    // and the read is unused. Leaving it out keeps the illegal-instruction
+    // and fetch-fault decode off the macro's address inputs.
     assign rf_hold = stall_other || (ifex_valid && ex_is_iter && !muldiv_have);
 
     // A pending fetch does not hold the operation back: it runs during the
