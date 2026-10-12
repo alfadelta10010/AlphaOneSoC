@@ -1225,7 +1225,7 @@ module fyracore #(
                     exwb_rs2_data <= amo_computed;  // the write's data
                     wb_busy     <= 1'b0; // Release pipeline next cycle
                 end
-            end else if (wb_mem_stall && !irq_inject) begin
+            end else if (wb_mem_stall) begin
                 // Hold EX/WB while the data-memory access is still on the bus.
                 // Bubbling here would drop exwb_memRD/exwb_memWR and so
                 // withdraw dmem_addr/dmem_we before dmem_ready — the
@@ -1234,8 +1234,13 @@ module fyracore #(
                 // retries it. Every other stall source still bubbles: by then
                 // the WB instruction has committed, and holding it would
                 // commit it a second time.
-            end else if (stall && !irq_inject) begin
-                // Insert bubble into EX/WB on stall (but not when irq_inject overrides)
+            end else if (stall) begin
+                // Insert bubble into EX/WB on stall. An interrupt is never
+                // injected on a stalled cycle (irq_inject needs !stall_other
+                // and !muldiv_want), so these two arms need no exception for
+                // it; they used to carry one, which put irq_inject's
+                // !ex_trap -- the ALU and the PMP check -- on every EX/WB
+                // register's enable.
                 exwb_valid  <= 1'b0;
                 exwb_regWR  <= 1'b0;
                 exwb_memRD  <= 1'b0;
