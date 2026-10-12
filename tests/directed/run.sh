@@ -59,7 +59,10 @@
 # the registers at X instead of 0 (src/regFile.v), so a test that reads a
 # register it never wrote fails on the X it leaves in the dump -- unless
 # the value only decides a branch that falls through on Spike as well
-# (src/regFile.v says why).
+# (src/regFile.v says why). +RF_COLLIDE_X makes the register-file macro's
+# model return X for a read of the word written on the same edge, which the
+# core must never use (src/regFile.v bypasses it); the suite is run with
+# RUN_PLUSARGS="+RF_X +RF_COLLIDE_X" as well as plain.
 #
 # Tests live beside this script, artifacts go to ./out (gitignored).
 # Toolchain: riscv64-unknown-elf-*, spike and iverilog on PATH.
