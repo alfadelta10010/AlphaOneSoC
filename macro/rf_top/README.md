@@ -137,11 +137,18 @@ netlist both with `+RF_X +RF_COLLIDE_X`): on the netlists of rows two to five
 the default run and the rd_late run pass and match the RTL pin for pin on
 every clock. `+QSPI_DELAY=19` is not a usable gate-level run. By the Pmod
 model's timing it leaves 1 ns between the data landing and the host's
-sampling point, and gl_test gives every cell a 1 ns delay: two of the four
-netlists sample X, and two pass with pins that differ from the RTL's from
-clock 171 on. On the A + B netlist 14, 16, 17 and 18 ns all pass and match
-the RTL, so a gate-level test of the "just under one SCK period" case should
-use 18.
+sampling edge. gl_test's cell models give every flop and latch a 1 ns
+clock-to-output and every other cell none, so at gate level SCK reaches its
+pin 1 ns later and the data lands in the very time step of the sampling edge:
+a race inside the simulator, and since the model drives X between hold and
+landing, the loser reads X. Two of the four netlists lose it and fail with X
+on `uio_oe` a few clocks later (the X comes in through the read shift
+register, which has no reset by design; everything that drives `uio_oe` is
+reset). The two that win it pass; their pins differ from the RTL's from clock
+171 on only because the bench's two aimed resets each land a clock later for
+the same reason, and from there the traces match two clocks apart. On the
+A + B netlist 14, 16, 17 and 18 ns all pass and match the RTL, so a gate-level
+test of the "just under one SCK period" case should use 18.
 
 Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
 offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
