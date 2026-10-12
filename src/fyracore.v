@@ -330,24 +330,30 @@ module fyracore #(
     // WB instruction, which writes on the next edge, is forwarded as before.
     //
     // On every cycle the addresses are therefore those of the instruction
-    // that will be in EX after the next edge: the EX instruction's own
-    // (ex_rs1/ex_rs2) while it stays (rf_hold), else the fetched
-    // instruction's, which IF/EX takes on that edge (if_rs1/if_rs2, from
-    // the raw fetched bits). Both ports are read at once, so rs1 and rs2 cost
-    // no extra cycle. When IF/EX takes a bubble instead, the read is unused.
+    // that will be in EX after the next edge: the EX instruction's own while
+    // it stays (rf_hold), else the fetched instruction's, which IF/EX takes
+    // on that edge (if_rs1/if_rs2, from the raw fetched bits). The EX
+    // instruction's own are the ones it was fetched with, kept in
+    // ifex_rf_rs1/ifex_rf_rs2, not the decoded ex_rs1/ex_rs2: the two agree
+    // wherever the decoded field is not x0, and going through the
+    // decompressor and the decoder to get them put both in front of the
+    // macro's address inputs. Both ports are read at once, so rs1 and rs2
+    // cost no extra cycle. When IF/EX takes a bubble instead, the read is
+    // unused.
     //
     // x0: its word in the macro is an ordinary word, never written (regFile)
     // and never read -- each port's data is masked with the decoded field,
     // which is x0 for a format without that register, whatever was read.
     wire        rf_hold;            // assigned with the stall terms below
+    reg  [4:0]  ifex_rf_rs1, ifex_rf_rs2;
     wire [31:0] rf_a, rf_b;
     regFile rf(
         .clk (clk),
         .wrEn(wb_regWR),
         .rd  (wb_rd),
         .dIn (wb_data),
-        .ra  (rf_hold ? ex_rs1 : if_rs1),
-        .rb  (rf_hold ? ex_rs2 : if_rs2),
+        .ra  (rf_hold ? ifex_rf_rs1 : if_rs1),
+        .rb  (rf_hold ? ifex_rf_rs2 : if_rs2),
         .r1  (rf_a),
         .r2  (rf_b)
     );
@@ -1209,6 +1215,12 @@ module fyracore #(
                 ifex_raw_instr <= if_compressed ? {16'h0, if_fetched[15:0]} : if_fetched;
                 ifex_compressed<= if_compressed;
                 ifex_valid     <= 1'b1;
+                // The register-file addresses this instruction was read
+                // with, to read it with again while it stays in EX. They
+                // have no reset and a bubble leaves them alone: a bubble
+                // reads no register.
+                ifex_rf_rs1    <= if_rs1;
+                ifex_rf_rs2    <= if_rs2;
                 ifetch_lo_done <= 1'b0;
                 ifetch_lo_denied <= 1'b0;
                 ifetch_hi_done <= 1'b0;
