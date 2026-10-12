@@ -4,8 +4,10 @@
 // The contract fyracore relies on: ra/rb are taken on a rising edge; r1/r2 then
 // give those registers, as they stand after that edge's write (write-first),
 // and hold them until the next edge, whatever ra/rb do in between. x0 is
-// never written. Run twice by make test-regfile: plain (registers start at 0)
-// and with +RF_X (they start at X).
+// never written. Run three times by make test-regfile: plain (registers start
+// at 0), with +RF_X (they start at X), and with +RF_COLLIDE_X as well, where
+// the macro model returns X for a read of the word being written -- so
+// write-first has to come from regFile's own bypass, not from the macro.
 module tb_regFile;
     reg         clk, wrEn;
     reg  [4:0]  ra, rb, rd;
