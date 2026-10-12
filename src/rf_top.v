@@ -20,6 +20,12 @@
 // There is no reset. The storage starts at 0, as Spike's registers do, unless
 // +RF_X is given; then it starts at X like the silicon's unknown state, so a
 // read of a register nothing wrote shows up as an X (see tests/directed/run.sh).
+//
+// +RF_COLLIDE_X departs from the macro's model on purpose: a read of the word
+// written on the same edge returns X instead of the new data. The write
+// itself still lands. That read-through path has no timing in the macro's
+// liberty, so regFile.v bypasses it; with this plusarg any use of the macro's
+// own answer for such a read shows up as an X.
 module rf_top (
 `ifdef GL_TEST
     inout  wire        VDPWR,
@@ -36,12 +42,14 @@ module rf_top (
 );
 `ifndef SYNTHESIS
     reg [31:0] storage [0:31];
+    reg        collide_x;
     integer i;
 
     initial begin
         if (!$test$plusargs("RF_X"))
             for (i = 0; i < 32; i = i + 1)
                 storage[i] = 32'h0000_0000;
+        collide_x = $test$plusargs("RF_COLLIDE_X") ? 1'b1 : 1'b0;
     end
 
     always @(posedge clk) begin
@@ -49,12 +57,12 @@ module rf_top (
             storage[w_addr] <= w_data;
 
         if (w_ena && (ra_addr == w_addr))
-            ra_data <= w_data;
+            ra_data <= collide_x ? 32'hxxxx_xxxx : w_data;
         else
             ra_data <= storage[ra_addr];
 
         if (w_ena && (rb_addr == w_addr))
-            rb_data <= w_data;
+            rb_data <= collide_x ? 32'hxxxx_xxxx : w_data;
         else
             rb_data <= storage[rb_addr];
     end
