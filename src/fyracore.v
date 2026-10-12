@@ -319,6 +319,7 @@ module fyracore #(
     wire        wb_regWR;
     wire [4:0]  wb_rd;
     wire [31:0] wb_data;
+    wire [31:0] wb_fwd;             // what WB forwards to EX (assigned with wb_data)
 
     // The register file (regFile: the rf_top macro) reads synchronously,
     // write-first: the read addresses are taken on a clock edge, and the
@@ -353,11 +354,19 @@ module fyracore #(
     assign rf_r1 = (ex_rs1 == 5'b0) ? 32'b0 : rf_a;
     assign rf_r2 = (ex_rs2 == 5'b0) ? 32'b0 : rf_b;
 
-    // Data forwarding from WB → EX
+    // Data forwarding from WB → EX. What is forwarded is wb_fwd: everything
+    // WB can write except data read from memory. A load, LR or AMO in WB
+    // whose rd the EX instruction reads holds that instruction in EX for as
+    // long as it is in WB (load_use_hazard), and nothing EX computes on a
+    // stalled cycle is kept, so memory data was never consumed through this
+    // path: the instruction reads it from the register file in the cycle
+    // after it is written. Forwarding wb_data ran the bus's read path --
+    // address decode, device mux, byte select -- on into the ALU and the
+    // trap logic for nothing.
     wire fwd_rs1 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs1);
     wire fwd_rs2 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs2);
-    wire [31:0] ex_rs1_val = fwd_rs1 ? wb_data : rf_r1;
-    wire [31:0] ex_rs2_val = fwd_rs2 ? wb_data : rf_r2;
+    wire [31:0] ex_rs1_val = fwd_rs1 ? wb_fwd : rf_r1;
+    wire [31:0] ex_rs2_val = fwd_rs2 ? wb_fwd : rf_r2;
 
     // ALU operand selection
     wire [31:0] alu_d1 = ctrl_aluSrc1 ? ifex_pc   : ex_rs1_val;
@@ -877,6 +886,9 @@ module fyracore #(
     // The link address (wbSel 10) and a CSR's old value (11) are already in
     // exwb_alu_result.
     assign wb_data = (exwb_wbSel == 2'b01) ? wb_load_or_amo : wb_alu_or_sc;
+    // wbSel 01 is a load, an LR or an AMO, and those are never forwarded
+    // (see the forwarding muxes in EX).
+    assign wb_fwd  = wb_alu_or_sc;
 
     // !wb_mem_stall: with EX/WB now held across a memory stall, writeback would
     // otherwise fire on every cycle of it, and a load would latch dmem_rdata
