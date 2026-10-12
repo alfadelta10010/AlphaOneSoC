@@ -61,7 +61,7 @@
 | Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` |
 | Load-use | Stall until the load's data returns |
 | Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
-| Register read (synchronous, write-first `rf_top` macro) | No stall. The read addresses on each cycle are those of the instruction in EX after the next edge: its own decoded fields while IF/EX holds it (`rf_hold`), the fetched instruction's (`rf_fields`) when IF/EX takes it. The data is then the registers after that edge's write, as a combinational read would give; the WB instruction is forwarded. Each read is masked to 0 where the decoded field is x0 |
+| Register read (synchronous, write-first `rf_top` macro) | No stall. The read addresses on each cycle are those of the instruction in EX after the next edge: its own decoded fields while IF/EX holds it (`rf_hold`), the fetched instruction's (`rf_fields`) when IF/EX takes it. The data is then the registers after that edge's write, as a combinational read would give -- `regFile`'s one-entry bypass supplies the word written on that same edge, so the macro's own write-through is not relied on; the WB instruction is forwarded. Each read is masked to 0 where the decoded field is x0 |
 | CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
 | Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
@@ -123,8 +123,8 @@ wire [31:0] mret_target = csr_mepc;
 | `decoder.v` | `decoder`, `rf_fields` | Instruction field extractor: opcode, rd, rs1, rs2, funct3, funct7. `rf_fields`: the registers an instruction reads, from its raw fetched bits, compressed or not, for the register file's synchronous read. |
 | `signExt.v` | `signExt` | Immediate generation for all formats. |
 | `branchCtrl.v` | `branchCtrl` | The core's one comparator: rs1 - rs2 for a branch condition, rs1 - (ALU operand 2) for SUB/SLT/SLTU. |
-| `regFile.v` | `regFile` | The register file: one `rf_top` macro, one write port, two synchronous read ports (address on a rising edge, data after it, write-first). x0 is never written; the caller masks reads of x0. No reset (boot code zeroes x1-x31). |
-| `rf_top.v` | `rf_top` | Simulation model of Sylvain Munaut's 32x32 2R1W sky130 register-file macro (`macro/rf_top/`: GDS, LEF, liberty, provenance); an empty blackbox under `SYNTHESIS`. Starts at 0, or at X with `+RF_X`. |
+| `regFile.v` | `regFile` | The register file: one `rf_top` macro, one write port, two synchronous read ports (address on a rising edge, data after it, write-first). Write-first comes from a one-entry bypass here (`hit1`/`hit2`, `byp`), not from the macro. x0 is never written; the caller masks reads of x0. No reset (boot code zeroes x1-x31). |
+| `rf_top.v` | `rf_top` | Simulation model of Sylvain Munaut's 32x32 2R1W sky130 register-file macro (`macro/rf_top/`: GDS, LEF, liberty, provenance); an empty blackbox under `SYNTHESIS`. Starts at 0, or at X with `+RF_X`; with `+RF_COLLIDE_X` a read of the word written on the same edge returns X. |
 | `compressed_decoder.v` | `compressed_decoder` | RV32C expansion. Its legal/illegal verdict matches the RV32IMAC rules on all 49,152 16-bit encodings. |
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, the `*_legal` write values and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |

@@ -41,9 +41,10 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
   either port. The behavioural model does this, the author's slides describe the
   design as "read-after-write" (the read word line is enabled after the write
   completes), and KianV's sky25b errata (AMO with rd == rs2) shows it on silicon.
-  Its timing is not characterised. FyraCore depends on it on every load-use and
-  every read two instructions after a write; a one-entry bypass around the macro
-  (about 0.13 tile) would remove that dependence.
+  Its timing is not characterised. FyraCore needs write-first on every load-use
+  and every read two instructions after a write, so `src/regFile.v` provides it
+  with a one-entry bypass of its own and never uses what the macro returns for
+  such a read; all it asks of the macro is that the write lands.
 - Word 0 is an ordinary word: writable and unreset. There is no reset at all.
 - The liberty is a placeholder, not a characterisation: setup 2.0 ns, hold 0.2 ns,
   clock-to-output 4.0 ns, minimum period 10 ns, one nominal corner (25 C, 1.8 V),
@@ -57,8 +58,12 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
   keeps one `rf_top` cell and never builds the storage. TinyTapeout's gate-level
   test compiles it next to the netlist with `GL_TEST`, which gives it its power pins.
 - `src/regFile.v` wraps the one instance, `rf_macro`; in the TinyTapeout top its
-  path is `soc.cpu.rf.rf_macro`. It never writes word 0; `src/fyracore.v` masks
-  reads of x0 and drives the read addresses a cycle ahead (see `rf_hold` there).
+  path is `soc.cpu.rf.rf_macro`. It never writes word 0, and bypasses a read of
+  the word written on the same edge; `src/fyracore.v` masks reads of x0 and
+  drives the read addresses a cycle ahead (see `rf_hold` there).
+- `+RF_COLLIDE_X` makes the model return X for a read of the word written on
+  the same edge, which the macro's own model answers with the new data. Every
+  simulation must be clean with it: it shows that nothing uses that answer.
 
 ## TinyTapeout harden settings
 
