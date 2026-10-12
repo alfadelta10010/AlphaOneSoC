@@ -143,8 +143,9 @@ module csr #(
     wire        minstret_we   = we && (waddr == 12'hB02 || waddr == 12'hB82);
     reg         mcycle_wr_q;
     always @(posedge clk) mcycle_wr_q <= !rst && mcycle_we;
+    wire [63:0] mcycle_inc;                   // + 1 (inc64, below)
     wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we && !mcycle_wr_q) ?
-                                mcycle + 64'd1 : mcycle;
+                                mcycle_inc : mcycle;
     wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?
                                 minstret + 64'd1 : minstret;
 
@@ -274,16 +275,14 @@ module csr #(
     end
     assign wval_out = wval;
 
-    always @(posedge clk) begin
-        if (rst)
-            mcycle <= 64'b0;
-        else if (we && waddr == 12'hB00)
-            mcycle <= {mcycle[63:32], csr_new};
-        else if (we && waddr == 12'hB80)
-            mcycle <= {csr_new, mcycle[31:0]};
-        else
-            mcycle <= mcycle_next;
-    end
+    // mcycle's next value is a wire, loaded on every edge, because inc64
+    // keeps its carry flag from it.
+    wire [63:0] mcycle_d   = rst                    ? 64'b0 :
+                             (we && waddr == 12'hB00) ? {mcycle[63:32], csr_new} :
+                             (we && waddr == 12'hB80) ? {csr_new, mcycle[31:0]} :
+                                                        mcycle_next;
+    always @(posedge clk) mcycle <= mcycle_d;
+    inc64 mcycle_incr  (.clk(clk), .q(mcycle),   .d(mcycle_d),   .q_inc(mcycle_inc));
 
     always @(posedge clk) begin
         if (rst)
@@ -443,4 +442,27 @@ module csr #(
             end
         end
     end
+endmodule
+
+// q + 1 for a 64-bit counter register, with the carry into the upper half
+// taken from a flop instead of rippling up from bit 0. c32 says the low 32
+// bits of q are all ones. It is kept by looking at d, the value the owner
+// loads into q on this same edge, so the owner must load d on every edge,
+// reset included.
+//
+// A plain q + 64'd1 synthesises, area first, to a single 64-bit ripple. With
+// the three of them -- mcycle and minstret here, mtime in clint.v -- that was
+// the longest register-to-register path outside the core's EX stage, and for
+// minstret it sat behind the data bus's ready. One flag halves it; a flag per
+// 16 bits was measured too and cost three times the area for paths that no
+// longer mattered.
+module inc64 (
+    input  wire        clk,
+    input  wire [63:0] q,
+    input  wire [63:0] d,
+    output wire [63:0] q_inc
+);
+    reg c32;
+    always @(posedge clk) c32 <= &d[31:0];
+    assign q_inc = {q[63:32] + {31'b0, c32}, q[31:0] + 32'd1};
 endmodule
