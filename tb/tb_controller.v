@@ -223,8 +223,10 @@ module tb_controller;
         //    causes only the controller's own `illegal` is left for it
         //    (ex_trap_iter in fyracore.v).
         //  - Whatever writes memory data to rd (wbSel 01 with regWR) is a
-        //    read access (memRD). So load_use_hazard holds every instruction
-        //    that reads such an rd, and WB need not forward memory data.
+        //    read access (memRD). The core no longer rests on it: use_hazard
+        //    holds every instruction that reads the rd of any instruction in
+        //    WB, and nothing is forwarded (the load-use stall on memRD did).
+        //    It stays as a statement of what wbSel 01 means.
         sweep_bad = 0;
         for (sweep = 0; sweep < (1 << 17); sweep = sweep + 1) begin
             {opcode, funct3, funct7} = sweep[16:0];
