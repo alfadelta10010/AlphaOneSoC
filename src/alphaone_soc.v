@@ -15,7 +15,8 @@
 // uo_out[4] and [5], and RX is ui_in[3]; gpio_out drives the other six
 // uo_out pins (gpio_out[5:4] are always 0 -- those pins are the UART's),
 // and gpio_in reads all eight ui_in pins, RX and the rd_late strap
-// included. The TinyTapeout wrapper (not built yet) maps these to the pins.
+// included. The TinyTapeout top level
+// (src/tt_um_alfadelta10010_alphaone_soc.v) maps these to the pins.
 //
 // qspi_rd_late is a strap for the QSPI read-sampling point: 0 samples two
 // clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick

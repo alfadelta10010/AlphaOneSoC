@@ -37,7 +37,8 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph asm \
+        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph \
+        test-wrapper asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -59,6 +60,7 @@ help:
 	@echo "  make test-uart         Run UART testbench"
 	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
+	@echo "  make test-wrapper      Run the TinyTapeout top level, pins only"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -204,7 +206,35 @@ test-soc-periph: $(BUILD_DIR)
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
 	done; exit $$bad
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph
+# The TinyTapeout top level through its pins alone (tb/tb_tt_um.v):
+# tests/soc/tt_pins.S boots from the QSPI Pmod model's flash and reports over
+# the UART. Three runs:
+#   default            2 ns device delay, ui_in[0] = 0 through reset
+#   QSPI_DELAY=19      just under one SCK period, which rd_late = 0 must take
+#   RD_LATE, 25 ns     ui_in[0] = 1 through reset: only rd_late = 1 reads this
+WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
+                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v \
+                $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
+WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)"
+WRAPPER_DIR  := $(BUILD_DIR)/wrapper
+test-wrapper: $(BUILD_DIR)
+	@echo "=== Testing the TinyTapeout top level ==="
+	@mkdir -p $(WRAPPER_DIR)
+	@$(IVERILOG) -g2012 -o $(WRAPPER_DIR)/sim -s tb_tt_um $(WRAPPER_SRC) \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_tt_um.v
+	@cd $(WRAPPER_DIR) && \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/tt_pins.S -o tt_pins.elf && \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 tt_pins.elf tt_pins.hex && \
+		for args in $(WRAPPER_RUNS); do \
+			$(VVP) -n sim +FLASH_FILE=$(CURDIR)/$(WRAPPER_DIR)/tt_pins.hex $$args > tt_pins.log 2>&1; \
+			grep -E '^(PASS|FAIL|ERROR|TIMEOUT)' tt_pins.log | head -6; \
+			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_pins.log || ! grep -q '^PASS' tt_pins.log; then exit 1; fi; \
+		done
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 

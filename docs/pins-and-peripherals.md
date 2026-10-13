@@ -6,9 +6,9 @@ them.
 
 **Status: the pinout is final. The UART (`src/uart.v`), the GPIO block with
 the SPI transmitter (`src/gpio.v`) and the bus and top-level changes are
-built and wired into `src/alphaone_soc.v`. The TinyTapeout wrapper is not
-built yet.** The address map, boot flow and QSPI engine are in
-`docs/soc-architecture.md`.
+built and wired into `src/alphaone_soc.v`, and the TinyTapeout wrapper
+(`src/tt_um_alfadelta10010_alphaone_soc.v`) puts that on the pins.** The
+address map, boot flow and QSPI engine are in `docs/soc-architecture.md`.
 
 The board is the TinyTapeout ETR demo board v3.2
 ([tt-demo-pcb](https://github.com/TinyTapeout/tt-demo-pcb)), with the
@@ -157,7 +157,7 @@ columns).
 
 | # | Block | Where | Status | Size (measured) | Linux |
 |---|---|---|---|---|---|
-| 1 | TinyTapeout wrapper | `tt_um_*` top | not built | reset synchroniser, wiring | — |
+| 1 | TinyTapeout wrapper | `src/tt_um_alfadelta10010_alphaone_soc.v` | built | 2 flops, about 10 gates | — |
 | 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.29 tiles, 77 flops | `ns16550a` (8250 driver), polled |
 | 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
 | 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
@@ -171,16 +171,57 @@ In LibreLane the whole SoC is 12.52 tiles with the area cuts, about 1.8x the
 seven-tile budget (see "Area" in `docs/soc-architecture.md`); these two add
 about 0.4 tiles of that.
 
-### 1. TinyTapeout wrapper (not built)
+### 1. TinyTapeout wrapper
 
-* `rst_n` passes through a two-flop synchroniser and becomes the active-high
-  `rst`. `ena` is unused.
+`src/tt_um_alfadelta10010_alphaone_soc.v`, module
+`tt_um_alfadelta10010_alphaone_soc`.
+
+* **Reset is asserted asynchronously and released synchronously.** `rst`, the
+  SoC's active-high reset, is set by `rst_n` itself, with or without a clock,
+  and cleared by the second clock edge after `rst_n` rises.
+  * It has to be set without a clock. The demo board's firmware, loading a
+    project that has no section in its `config.ini`, stops the clock, pulses
+    `rst_n` low for 2 ms and only then starts the clock
+    (`tt-micropython-firmware`, `demoboard.py`: `clock_project_stop()`,
+    `_first_encouter_reset()`, `clock_project_PWM()`). A reset that waited for
+    a clock edge would never see that pulse.
+  * Those two edges are what carries the reset into the SoC's flops, so any
+    pulse on `rst_n` resets the chip, however short.
+  * `ena` is unused.
+* **While `rst` is high the pins depend on neither a clock nor on what the
+  SoC's flops powered up with:**
+  * `uio_oe` is 0. Every bit is ANDed with `!rst`: bits 0, 3, 6, 7 =
+    `qspi_ctl_oe`, bits 1, 2, 4, 5 = `qspi_io_oe`. So whoever holds the chip
+    in reset owns the QSPI bus without needing a clock, and the pins stay
+    inputs after `rst_n` rises until the SoC has really been reset.
+  * `uo_out` is `0x39`, the SoC's own reset values (TX and RTS# high, GPIO
+    OUT `0x09`: the OLED held in reset with its panel supply off). Nothing
+    moves when `rst` falls, because the SoC is driving the same values by
+    then.
 * `uio_out`: `[0]` cs_n[0], `[1]` io_out[0], `[2]` io_out[1], `[3]` sck,
   `[4]` io_out[2], `[5]` io_out[3], `[6]` cs_n[1], `[7]` cs_n[2].
-* `uio_oe`: bits 0, 3, 6, 7 = `qspi_ctl_oe`; bits 1, 2, 4, 5 = `qspi_io_oe`.
-* `qspi_io_in` = `{uio_in[5], uio_in[4], uio_in[2], uio_in[1]}`.
-* `uo_out` and `ui_in` as in the pinout table. `qspi_rd_late` = `ui_in[0]`,
-  latched in reset as today. The whole `ui_in` byte also feeds GPIO IN.
+* `qspi_io_in` = `{uio_in[5], uio_in[4], uio_in[2], uio_in[1]}`. The other
+  four `uio_in` bits are unused; SCK's floats while the pins are released.
+* `ui_in` as in the pinout table. `qspi_rd_late` = `ui_in[0]`, straight from
+  the pin; the QSPI engine samples it on every clock edge while `rst` is
+  high, the last of them the second edge after `rst_n` rises. **Hold
+  `ui_in[0]` until then.** The whole `ui_in` byte also feeds GPIO IN.
+* The demo board starts the clock by itself only if the project's `clock_hz`
+  in `info.yaml` is not 0. With 0 the clock has to be started by hand, or
+  from a `config.ini` section for the project.
+
+`make test-wrapper` (`tb/tb_tt_um.v`, `tests/soc/tt_pins.S`) checks all of
+this through the pins alone, with the board wired from the pinout table
+above: the Pmod model on `uio` with pulled-up chip selects and floating SCK
+and data, and the RP2350's UART. The program is reset three times and has to
+start again each time: the firmware's way (clock stopped, pulse, clock
+started), in the middle of a flash read with the clock running, and by a
+pulse shorter than a clock. The pins are checked in reset and on each of the
+three clock edges that follow it. Then every GPIO pin in both directions,
+which chip select each PSRAM answers on, and the strap in both positions,
+changed at the first moment it is allowed to. Because the bench refers to
+nothing inside the design, it also runs on a gate-level netlist of the top
+level.
 
 ### 2. UART at `0x1000_0000`
 
@@ -391,6 +432,7 @@ writing the driver.
    `tb/ssd1331_model.v`, `tb/keypad_model.v`, driven by `make
    test-soc-periph` (`tests/soc/`) rather than `run.sh soc`, whose IO window
    is off to match Spike. Unit benches: `make test-uart`, `make test-gpio`.
+   The top level's pins: `make test-wrapper`.
 6. **Stall path timing:** the IO `ready` now sits in the core's global stall
    path (request decode → UART/GPIO ready → `wb_mem_stall`); check it in
    STA once the design is hardened.

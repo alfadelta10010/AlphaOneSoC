@@ -208,8 +208,12 @@ wrap set with `77h`, deep power-down (`B9h`), and a cleared Quad Enable bit
 
 **Board prerequisites.** While reset is held the chip selects are released;
 the Pmod's 10 kΩ pull-ups (R1–R3) keep every chip deselected. The data lines
-have no pull-ups. The TinyTapeout wrapper, which does not exist yet, must
-synchronise `rst_n` before it reaches this reset.
+have no pull-ups. The TinyTapeout wrapper
+(`src/tt_um_alfadelta10010_alphaone_soc.v`) makes this reset from `rst_n`: set
+at once, clock or no clock, and released on the second clock edge after
+`rst_n` rises. It releases the eight pins from that same reset, so they are
+let go before the first clock edge and stay let go until the SoC has been
+reset (`docs/pins-and-peripherals.md`).
 
 **Device prerequisites.**
 * The flash's Quad Enable bit (SR2 bit 1) must be set once. It is
