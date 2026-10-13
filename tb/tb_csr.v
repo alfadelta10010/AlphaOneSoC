@@ -115,6 +115,28 @@ module tb_csr;
             else begin fail_count = fail_count+1; $display("FAIL: mcycle not incrementing"); end
         end
 
+        // A write to mcycle is done instead of that clock's increment, also
+        // on the clock the low half is all ones: the high half must not take
+        // the carry of the increment the write replaced. (The directed test
+        // cnt_xhalf does this through the pipeline, where landing on that
+        // clock depends on EX's latency; here the clock is chosen.)
+        addr = 12'hB80; wdata = 32'h0;         we = 1; @(posedge clk);
+        addr = 12'hB00; wdata = 32'hFFFF_FFFE;         @(posedge clk);
+        we = 0;
+        @(posedge clk);                 // held for the clock after a write
+        @(posedge clk);                 // counts once
+        @(negedge clk);
+        if (uut.mcycle !== 64'h0000_0000_FFFF_FFFF) begin
+            fail_count = fail_count+1;
+            $display("FAIL: mcycle is %h, not 00000000ffffffff, before the write", uut.mcycle);
+        end else pass_count = pass_count+1;
+        addr = 12'hB00; wdata = 32'h7; we = 1; @(posedge clk); we = 0;
+        @(negedge clk);
+        if (uut.mcycle !== 64'h0000_0000_0000_0007) begin
+            fail_count = fail_count+1;
+            $display("FAIL: mcycle write over ffffffff gave %h, want 0000000000000007", uut.mcycle);
+        end else pass_count = pass_count+1;
+
         // Instret counter
         @(posedge clk);
         instret_inc = 1;

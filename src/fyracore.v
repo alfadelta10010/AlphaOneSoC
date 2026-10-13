@@ -1,11 +1,11 @@
 // FyraCore — 3-stage pipelined RV32IMCA+Zicsr+Zifencei processor
 //
 // Pipeline stages:
-//   IF  — Instruction Fetch; C-extension decompression; the register file's
-//         read addresses for the fetched instruction (the read is synchronous)
-//   EX  — Decode, Register Read, ALU Execute, Branch Resolve; two cycles at
-//         least: the ALU and the comparator, then what is decided from them
-//         (ex_ph)
+//   IF  — Instruction Fetch; C-extension decompression; the numbers of the
+//         registers the fetched instruction reads
+//   EX  — Decode, Register Read, ALU Execute, Branch Resolve; three cycles
+//         at least: the register file's (synchronous) read, the ALU and the
+//         comparator, then what is decided from them (ex_rf_ok, ex_ph)
 //   WB  — Memory Access, Writeback, CSR commit
 //
 // Hazard handling:
@@ -153,8 +153,9 @@ module fyracore #(
     );
     wire [31:0] if_pc_next    = pc + (if_compressed ? 32'd2 : 32'd4);
     wire        ex_nofetch;      // EX decides the next pc (assigned after the PMP-write decode)
-    // The registers the fetched instruction reads, for the register file's
-    // synchronous read on the edge IF/EX takes it (see regFile below).
+    // The registers the fetched instruction reads, kept in IF/EX for the
+    // register file's read addresses (ifex_rf_rs1/ifex_rf_rs2, see regFile
+    // below).
     wire [4:0]  if_rs1, if_rs2;
     rf_fields if_fields(
         .instr(if_fetched),
@@ -342,35 +343,47 @@ module fyracore #(
     // write-first: the read addresses are taken on a clock edge, and the
     // data that follows is the registers as they stand after that edge's
     // write -- what a combinational read of flops gives in the cycle after
-    // the edge. So the data is right for the instruction in EX exactly when
-    // the address taken on the edge that started the cycle was its own. The
-    // WB instruction writes on the next edge; an instruction that reads its
-    // register waits for that (use_hazard).
+    // the edge.
     //
-    // On every cycle the addresses are therefore those of the instruction
-    // that will be in EX after the next edge: the EX instruction's own while
-    // it stays (rf_hold), else the fetched instruction's, which IF/EX takes
-    // on that edge (if_rs1/if_rs2, from the raw fetched bits). The EX
-    // instruction's own are the ones it was fetched with, kept in
-    // ifex_rf_rs1/ifex_rf_rs2, not the decoded ex_rs1/ex_rs2: the two agree
+    // The addresses are the EX instruction's own, straight from IF/EX
+    // (ifex_rf_rs1/ifex_rf_rs2), for as long as it is in EX. So in its
+    // first EX cycle the data still belongs to whatever was there before,
+    // and from its second cycle on (ex_rf_ok) it is the instruction's
+    // registers, read again on every edge. A write lands on the edge that
+    // ends WB, so the cycle after it the data includes it; an instruction
+    // that reads the register the WB instruction is still to write waits
+    // for that (use_hazard, below).
+    //
+    // The addresses used to be those of the instruction that would be in EX
+    // after the next edge -- the fetched instruction's when IF/EX was about
+    // to take it, the EX instruction's own while it stayed -- which saved
+    // the first cycle and put `stall` in front of the macro's address pins:
+    // every wait the pipeline knows (a data access's ready, a fetch's, the
+    // M unit, a fetch PMP check) and the fetched word's own decode, all in
+    // front of a hard macro's setup time and of regFile's bypass compare.
+    // On the routed design those were the three longest slow-corner path
+    // groups. The first cycle is not seen in the SoC behind an instruction
+    // with a fetch outstanding; see ex_ph for what waits and what pays.
+    //
+    // The numbers are the ones the instruction was fetched with (rf_fields,
+    // from the raw bits), not the decoded ex_rs1/ex_rs2: the two agree
     // wherever the decoded field is not x0, and the decoder stays off the
-    // macro's address inputs. Both ports are read at once, so rs1 and rs2
-    // cost no extra cycle. When IF/EX takes a bubble instead, the read is
-    // unused.
+    // macro's address inputs. They have no reset and a bubble leaves them
+    // alone: a bubble uses no register.
     //
     // x0: its word in the macro is an ordinary word, never written (regFile)
     // and never read -- each port's data is masked with the decoded field,
     // which is x0 for a format without that register, whatever was read.
-    wire        rf_hold;            // assigned with the stall terms below
     reg  [4:0]  ifex_rf_rs1, ifex_rf_rs2;
+    reg         ex_rf_ok;           // rf_a/rf_b are the EX instruction's registers
     wire [31:0] rf_a, rf_b;
     regFile rf(
         .clk (clk),
         .wrEn(wb_regWR),
         .rd  (wb_rd),
         .dIn (wb_data),
-        .ra  (rf_hold ? ifex_rf_rs1 : if_rs1),
-        .rb  (rf_hold ? ifex_rf_rs2 : if_rs2),
+        .ra  (ifex_rf_rs1),
+        .rb  (ifex_rf_rs2),
         .r1  (rf_a),
         .r2  (rf_b)
     );
@@ -381,18 +394,16 @@ module fyracore #(
     // the WB instruction writes waits in EX for as long as that instruction
     // is in WB (use_hazard, with the stall terms below), and nothing EX
     // computes on a stalled cycle is kept. The write lands on the edge that
-    // ends WB, the read addresses are held meanwhile (rf_hold), so in the
-    // next cycle the register file gives the new value (regFile is
+    // ends WB, the read addresses are the instruction's own throughout, so
+    // in the next cycle the register file gives the new value (regFile is
     // write-first). A load, LR or AMO in WB always worked this way; now every
     // instruction does.
     //
     // The forwarding it replaces was the head of the core's longest paths:
     // exwb_rd, a five-bit compare, the select of two 32-bit muxes, then the
-    // ALU or the comparator and everything behind them. The wait costs one
-    // cycle, which the SoC never sees behind an instruction that has a fetch
-    // outstanding (a fetch is at least 40 clocks, and EX waits for it
-    // anyway); only a branch or jump that reads its predecessor's result
-    // pays it.
+    // ALU or the comparator and everything behind them. The wait costs
+    // nothing after an instruction that spends one cycle in WB: that cycle
+    // is the reader's first in EX, in which it has no data yet anyway.
     wire [31:0] ex_rs1_val = rf_r1;
     wire [31:0] ex_rs2_val = rf_r2;
 
@@ -419,9 +430,10 @@ module fyracore #(
         .control    (ctrl_aluOp)
     );
 
-    // EX takes two cycles. In the first the ALU and the comparator work from
-    // the operands, and their results are taken into alu_r and br_r; from
-    // the second on (ex_ph) everything that is decided from those results --
+    // After the register read (ex_rf_ok) EX takes two more cycles. In the
+    // first the ALU and the comparator work from the operands, and their
+    // results are taken into alu_r and br_r; from the next on (ex_ph)
+    // everything that is decided from those results --
     // the PMA and PMP checks of a data address, the traps, the branch, the
     // next pc, and through flush the enables of every pipeline register --
     // starts at these flops instead of at the register file. In one cycle
@@ -431,15 +443,16 @@ module fyracore #(
     //
     // alu_r and br_r are taken on every clock, with no enable. They are the
     // EX instruction's own once it has sat in EX for one whole cycle with its
-    // operands final (no use_hazard): from then on no instruction that writes
-    // a register can enter WB before this one leaves EX, so the operands do
-    // not change again. ex_ph says that cycle has passed; the instruction
-    // waits in EX until it has (ex_wait, with the stall terms below), so
-    // nothing below is acted on before it holds.
+    // operands read (ex_rf_ok) and final (no use_hazard): from then on no
+    // instruction that writes a register can enter WB before this one leaves
+    // EX, so the operands do not change again. ex_ph says that cycle has
+    // passed; the instruction waits in EX until it has (ex_wait, with the
+    // stall terms below), so nothing below is acted on before it holds.
     //
-    // The extra cycle is not seen in the SoC behind an instruction that has
-    // a fetch outstanding: a fetch is at least 40 clocks and EX waits for it
-    // anyway. An instruction that holds the fetch back (ex_nofetch) pays it.
+    // The two extra cycles are not seen in the SoC behind an instruction
+    // that has a fetch outstanding: a fetch is at least 40 clocks and EX
+    // waits for it anyway. An instruction that holds the fetch back
+    // (ex_nofetch) pays them.
     reg  [31:0] alu_r;
     reg         br_r;
     reg         ex_ph;
@@ -749,8 +762,7 @@ module fyracore #(
     // register can enter WB before that instruction leaves EX (the
     // testbench checks, on every clock, that it never does). As a stall
     // term it put the decoder's register fields and a five-bit compare with
-    // exwb_rd in front of `stall`, and through rf_hold in front of the
-    // register file's read addresses.
+    // exwb_rd in front of `stall`.
     wire ex_wait = ifex_valid && !ex_ph;
     wire stall_nofetch = wb_busy || wb_mem_stall || wfi_active ||
                          ex_ifetch_hi_phase || csr_wb_hazard || ex_wait;
@@ -796,15 +808,6 @@ module fyracore #(
     wire muldiv_have = muldiv_ready || muldiv_done;
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
     wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
-
-    // The register file reads the EX instruction's registers again while
-    // IF/EX holds it, and the fetched instruction's when IF/EX takes that.
-    // IF/EX holds on `stall`; rf_hold is `stall` with the M term's
-    // !ex_trap_decode left out (muldiv_want has it): wherever the two
-    // differ, an M op or shift is trapping, so flush puts a bubble in IF/EX
-    // and the read is unused. Leaving it out keeps the illegal-instruction
-    // and fetch-fault decode off the macro's address inputs.
-    assign rf_hold = stall_other || (ifex_valid && ex_is_iter && !muldiv_have);
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
@@ -1205,6 +1208,7 @@ module fyracore #(
             ifex_compressed<= 1'b0;
             ifex_c_illegal <= 1'b0;
             ifex_valid     <= 1'b0;
+            ex_rf_ok       <= 1'b0;
             ex_ph          <= 1'b0;
             ifetch_lo_done <= 1'b0;
             ifetch_lo_denied <= 1'b0;
@@ -1266,10 +1270,13 @@ module fyracore #(
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
-                // Hold IF/EX on stall. The instruction's operands were final
-                // in this cycle unless it waited for a register write, so
-                // alu_r and br_r are its own from the next cycle on.
-                ex_ph <= !use_hazard;
+                // Hold IF/EX on stall. The register file has taken the
+                // instruction's addresses by the end of its first cycle
+                // here. Its operands were final in this cycle if they had
+                // been read and it was not waiting for a register write;
+                // alu_r and br_r are then its own from the next cycle on.
+                ex_rf_ok <= 1'b1;
+                ex_ph    <= ex_rf_ok && !use_hazard;
                 // If the stall is a fetch PMP check,
                 // record its verdict; the next cycle checks the next thing.
                 if (ex_ifetch_lo_phase) begin
@@ -1282,6 +1289,7 @@ module fyracore #(
             end else if (flush || ex_nofetch) begin
                 // Insert bubble (nothing was fetched behind ex_nofetch)
                 ifex_valid     <= 1'b0;
+                ex_rf_ok       <= 1'b0;
                 ex_ph          <= 1'b0;
                 ifex_instr     <= 32'h0000_0013; // NOP
                 ifex_compressed<= 1'b0;
@@ -1297,11 +1305,10 @@ module fyracore #(
                 ifex_compressed<= if_compressed;
                 ifex_c_illegal <= if_compressed && if_c_illegal_raw;
                 ifex_valid     <= 1'b1;
+                ex_rf_ok       <= 1'b0;
                 ex_ph          <= 1'b0;
-                // The register-file addresses this instruction was read
-                // with, to read it with again while it stays in EX. They
-                // have no reset and a bubble leaves them alone: a bubble
-                // reads no register.
+                // The register file's read addresses while this
+                // instruction is in EX.
                 ifex_rf_rs1    <= if_rs1;
                 ifex_rf_rs2    <= if_rs2;
                 ifetch_lo_done <= 1'b0;

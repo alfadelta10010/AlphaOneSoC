@@ -4,6 +4,7 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
+  li   s10, 0                # the handler's count, before anything can interrupt
   li   s8, 0x02000000
   li   t1, 0x4000
   add  s7, s8, t1            # mtimecmp
@@ -24,7 +25,6 @@ rvtest_entry_point:
   csrs mstatus, t0
   li   s0, 0
   li   s1, 20
-  li   s10, 0
 loop:
   mul  t0, s0, s1            # 34-cycle multiply
   addi s0, s0, 1

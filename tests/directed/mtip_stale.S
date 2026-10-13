@@ -1,8 +1,9 @@
 # The CLINT registers MTIP (src/clint.v), so it lags a change of mtimecmp:
 # after a store moves mtimecmp into the future, mip.MTIP still reads 1 for
-# two clocks -- one for the store to commit in WB, one for the register;
-# with a fast fetch that is the next instruction, which reads mip in the
-# second of its two EX cycles. An interrupt enabled
+# two clocks -- one for the store to commit in WB, one for the register.
+# The next instruction reads mip in its third EX cycle at the earliest, so
+# with a fast memory it no longer sees the stale bit; it does when the store
+# waits for its memory, having done its EX cycles meanwhile. An interrupt enabled
 # in that window would be taken although nothing is pending by the time the
 # handler reads mip. Priv 3.2.1 allows it ("... reflected in MTIP
 # eventually, but not necessarily immediately. A spurious timer interrupt
@@ -15,8 +16,9 @@
 # that a change to it shows.
 #
 #   x19  mip with mtimecmp = 0: 0x80
-#   x22  mip on the instruction after the store to mtimecmp_hi
-#   x23  mip on the one after that: 0, the window has closed
+#   x22  mip on the instruction after the store to mtimecmp_hi: 0 (the
+#        window has closed), or 0x80 behind a store that waited
+#   x23  mip on the one after that: 0
 #   x24  mip on the third: 0
 #   x20  mip two instructions after MIE is set: 0
 #   x18  timer interrupts taken after MIE was set (spurious ones): 0

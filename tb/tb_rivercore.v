@@ -664,15 +664,17 @@ module tb_rivercore;
     //  Register-file read check
     //
     //  The register file (src/regFile.v, the rf_top macro) reads
-    //  synchronously: in every cycle the core must put on its read
-    //  addresses the registers the instruction in EX will use in the next
-    //  one. A slip reads another register, or the right one a cycle stale,
-    //  and the trace only shows it if the value happens to differ. So on
-    //  every cycle with an instruction in EX, for each source register it
-    //  names other than x0, this checks that the macro took that register's
-    //  address on the edge that started the cycle, and that the data equals
-    //  a shadow register file kept from the write port. A mismatch ends the
-    //  run with an ERROR line and a DUT-ABORT marker in the dump.
+    //  synchronously, and the core keeps the EX instruction's register
+    //  numbers on its read addresses for as long as the instruction is in
+    //  EX; from the instruction's second cycle there (ex_rf_ok) the data
+    //  must be its registers. A slip reads another register, or the right
+    //  one a cycle stale, and the trace only shows it if the value happens
+    //  to differ. So on every such cycle, for each source register the
+    //  instruction names other than x0, this checks that the macro took
+    //  that register's address on the edge that started the cycle, and that
+    //  the data equals a shadow register file kept from the write port. A
+    //  mismatch ends the run with an ERROR line and a DUT-ABORT marker in
+    //  the dump.
     // ================================================================
     reg [31:0] rf_shadow [0:31];
     reg [4:0]  rf_ra_q, rf_rb_q;
@@ -695,7 +697,7 @@ module tb_rivercore;
         end
     endtask
     always @(posedge clk) begin
-        if (!rst && rf_chk_armed && `CPU.ifex_valid) begin
+        if (!rst && rf_chk_armed && `CPU.ifex_valid && `CPU.ex_rf_ok) begin
             if (`CPU.ex_rs1 != 5'd0) begin
                 rf_chk_n = rf_chk_n + 1;
                 if (rf_ra_q !== `CPU.ex_rs1 || `CPU.rf_a !== rf_shadow[`CPU.ex_rs1])

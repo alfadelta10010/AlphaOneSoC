@@ -7,8 +7,8 @@
 // register written on the same edge gets the new value (write-first), so r1/r2
 // show the registers as they stand after that edge's write: what a
 // combinational read of a flop register file gives in the cycle after the
-// edge. fyracore keeps that equivalence by putting on ra/rb, in each cycle,
-// the registers the instruction in EX will need in the next one.
+// edge. fyracore keeps the EX instruction's own register numbers on ra/rb
+// for as long as it is in EX, and uses r1/r2 from its second cycle there.
 //
 // Write-first is done here, not left to the macro. The macro's model and its
 // author's slides both describe a read of the word being written as returning
