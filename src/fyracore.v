@@ -7,8 +7,8 @@
 //   WB  — Memory Access, Writeback, CSR commit
 //
 // Hazard handling:
-//   - Data forwarding from WB → EX
-//   - Load-use stall (1 cycle)
+//   - A register the WB instruction writes is not forwarded: the EX
+//     instruction that reads it waits and reads the register file (use_hazard)
 //   - Branch/jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write: no fetch
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
 //   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
@@ -325,7 +325,6 @@ module fyracore #(
     wire        wb_regWR;
     wire [4:0]  wb_rd;
     wire [31:0] wb_data;
-    wire [31:0] wb_fwd;             // what WB forwards to EX (assigned with wb_data)
 
     // The register file (regFile: the rf_top macro) reads synchronously,
     // write-first: the read addresses are taken on a clock edge, and the
@@ -333,7 +332,8 @@ module fyracore #(
     // write -- what a combinational read of flops gives in the cycle after
     // the edge. So the data is right for the instruction in EX exactly when
     // the address taken on the edge that started the cycle was its own. The
-    // WB instruction, which writes on the next edge, is forwarded as before.
+    // WB instruction writes on the next edge; an instruction that reads its
+    // register waits for that (use_hazard).
     //
     // On every cycle the addresses are therefore those of the instruction
     // that will be in EX after the next edge: the EX instruction's own while
@@ -365,19 +365,24 @@ module fyracore #(
     assign rf_r1 = (ex_rs1 == 5'b0) ? 32'b0 : rf_a;
     assign rf_r2 = (ex_rs2 == 5'b0) ? 32'b0 : rf_b;
 
-    // Data forwarding from WB → EX. What is forwarded is wb_fwd: everything
-    // WB can write except data read from memory. A load, LR or AMO in WB
-    // whose rd the EX instruction reads holds that instruction in EX for as
-    // long as it is in WB (load_use_hazard), and nothing EX computes on a
-    // stalled cycle is kept, so memory data was never consumed through this
-    // path: the instruction reads it from the register file in the cycle
-    // after it is written. Forwarding wb_data ran the bus's read path --
-    // address decode, device mux, byte select -- on into the ALU and the
-    // trap logic for nothing.
-    wire fwd_rs1 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs1);
-    wire fwd_rs2 = (exwb_valid && exwb_regWR && exwb_rd != 5'b0 && exwb_rd == ex_rs2);
-    wire [31:0] ex_rs1_val = fwd_rs1 ? wb_fwd : rf_r1;
-    wire [31:0] ex_rs2_val = fwd_rs2 ? wb_fwd : rf_r2;
+    // Nothing is forwarded from WB. An EX instruction that reads the register
+    // the WB instruction writes waits in EX for as long as that instruction
+    // is in WB (use_hazard, with the stall terms below), and nothing EX
+    // computes on a stalled cycle is kept. The write lands on the edge that
+    // ends WB, the read addresses are held meanwhile (rf_hold), so in the
+    // next cycle the register file gives the new value (regFile is
+    // write-first). A load, LR or AMO in WB always worked this way; now every
+    // instruction does.
+    //
+    // The forwarding it replaces was the head of the core's longest paths:
+    // exwb_rd, a five-bit compare, the select of two 32-bit muxes, then the
+    // ALU or the comparator and everything behind them. The wait costs one
+    // cycle, which the SoC never sees behind an instruction that has a fetch
+    // outstanding (a fetch is at least 40 clocks, and EX waits for it
+    // anyway); only a branch or jump that reads its predecessor's result
+    // pays it.
+    wire [31:0] ex_rs1_val = rf_r1;
+    wire [31:0] ex_rs2_val = rf_r2;
 
     // ALU operand selection
     wire [31:0] alu_d1 = ctrl_aluSrc1 ? ifex_pc   : ex_rs1_val;
@@ -530,7 +535,7 @@ module fyracore #(
     // trap), MRET (it returns, or traps when malformed or in U-mode),
     // FENCE.I and a PMP CSR write (they refetch the fall-through, which is
     // pc). Decode-only terms: ex_trap and ex_illegal_insn can change while
-    // EX waits (forwarded operands, misa.C during a CSR-write stall), and
+    // EX waits (operands not yet written, misa.C during a CSR-write stall), and
     // imem_req must not drop while a fetch is outstanding.
     assign ex_nofetch = ex_pmp_csr_wr || (ifex_valid &&
                         (ctrl_doBranch || ctrl_doJump || ctrl_isEcall || ctrl_isEbreak ||
@@ -653,10 +658,13 @@ module fyracore #(
     //  Hazard Detection
     // ================================================================
 
-    // Load-use hazard: WB stage has a load and EX needs the result
-    wire load_use_hazard = exwb_valid && exwb_memRD &&
-                           exwb_rd != 5'b0 &&
-                           (exwb_rd == ex_rs1 || exwb_rd == ex_rs2);
+    // Use hazard: the WB instruction writes a register the EX instruction
+    // reads. EX waits for the write (see ex_rs1_val above). A trapping
+    // instruction writes nothing; the trap has flushed EX by then, so the
+    // term only says so.
+    wire use_hazard = exwb_valid && exwb_regWR && !exwb_trap &&
+                      exwb_rd != 5'b0 &&
+                      (exwb_rd == ex_rs1 || exwb_rd == ex_rs2);
 
     // WB busy (AMO second cycle)
     reg wb_busy;
@@ -691,7 +699,7 @@ module fyracore #(
     // a 32-bit mux per consumer and a copy of every WARL rule on the read
     // path. In the SoC the cycle is hidden behind the next fetch.
     wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
-    wire stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active ||
+    wire stall_nofetch = use_hazard || wb_busy || wb_mem_stall || wfi_active ||
                          ex_ifetch_hi_phase || csr_wb_hazard;
     wire stall_other = stall_nofetch || if_mem_stall;
 
@@ -907,9 +915,6 @@ module fyracore #(
     // The link address (wbSel 10) and a CSR's old value (11) are already in
     // exwb_alu_result.
     assign wb_data = (exwb_wbSel == 2'b01) ? wb_load_or_amo : wb_alu_or_sc;
-    // wbSel 01 is a load, an LR or an AMO, and those are never forwarded
-    // (see the forwarding muxes in EX).
-    assign wb_fwd  = wb_alu_or_sc;
 
     // !wb_mem_stall: with EX/WB now held across a memory stall, writeback would
     // otherwise fire on every cycle of it, and a load would latch dmem_rdata
@@ -995,7 +1000,7 @@ module fyracore #(
     //   - Never while the pipeline is stalled
     //
     // stall_other subsumes the old wb_busy and wfi_active terms and adds
-    // load_use_hazard, if_mem_stall and wb_mem_stall. Without those, an
+    // use_hazard, if_mem_stall and wb_mem_stall. Without those, an
     // interrupt arriving during a memory stall was injected on every cycle of
     // it: the second injection latched MPIE from the MIE the first had already
     // cleared, so the following MRET restored MIE=0 and the hart never took
@@ -1080,8 +1085,8 @@ module fyracore #(
     always @(*) begin
         // !stall: the trap is only real on the cycle its instruction leaves
         // EX. During a stall EX can be looking at operands that are not valid
-        // yet -- a load-use or AMO-read stall forwards wb_data, i.e. dmem_rdata
-        // before dmem_ready -- and a garbage address can raise ex_misaligned
+        // yet -- during a use_hazard stall the register file still holds the
+        // old value -- and a garbage address can raise ex_misaligned
         // or ex_data_fault for a cycle. Redirecting then sent fetch to mtvec
         // while IF/EX held the instruction; when the data arrived the trap
         // vanished, the instruction retired normally, and the handler ran
@@ -1415,7 +1420,7 @@ module fyracore #(
             // already latched the request performed the store anyway -- so
             // software retried an atomic update that had happened. An EX
             // clear could also fire on a trap that was never taken (EX
-            // briefly sees not-yet-valid forwarded data during a stall).
+            // briefly sees not-yet-written operands during a stall).
             if (csr_trap_signal)
                 reservation_valid <= 1'b0;
         end
