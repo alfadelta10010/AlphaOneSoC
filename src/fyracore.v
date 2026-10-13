@@ -742,8 +742,17 @@ module fyracore #(
     wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
     // ex_wait: the EX instruction's ALU and comparator results are not in
     // alu_r and br_r yet (see ex_ph).
+    //
+    // use_hazard is not a stall term of its own. It keeps ex_ph from being
+    // set, so the instruction it holds is already held by ex_wait; and once
+    // ex_ph is set it cannot rise again, because nothing that writes a
+    // register can enter WB before that instruction leaves EX (the
+    // testbench checks, on every clock, that it never does). As a stall
+    // term it put the decoder's register fields and a five-bit compare with
+    // exwb_rd in front of `stall`, and through rf_hold in front of the
+    // register file's read addresses.
     wire ex_wait = ifex_valid && !ex_ph;
-    wire stall_nofetch = use_hazard || wb_busy || wb_mem_stall || wfi_active ||
+    wire stall_nofetch = wb_busy || wb_mem_stall || wfi_active ||
                          ex_ifetch_hi_phase || csr_wb_hazard || ex_wait;
     wire stall_other = stall_nofetch || if_mem_stall;
 
@@ -1052,7 +1061,7 @@ module fyracore #(
     //   - Never while the pipeline is stalled
     //
     // stall_other subsumes the old wb_busy and wfi_active terms and adds
-    // use_hazard, if_mem_stall and wb_mem_stall. Without those, an
+    // ex_wait (so use_hazard), if_mem_stall and wb_mem_stall. Without those, an
     // interrupt arriving during a memory stall was injected on every cycle of
     // it: the second injection latched MPIE from the MIE the first had already
     // cleared, so the following MRET restored MIE=0 and the hart never took

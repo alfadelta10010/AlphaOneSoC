@@ -734,6 +734,24 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  use_hazard check
+    //
+    //  use_hazard holds an instruction in EX only by keeping ex_ph clear
+    //  (src/fyracore.v, ex_wait). That is enough only if it can never rise
+    //  once ex_ph is set: no instruction that writes a register the EX
+    //  instruction reads may reach WB before that instruction leaves.
+    // ================================================================
+    always @(posedge clk) begin
+        if (!rst && `CPU.ifex_valid && `CPU.ex_ph && `CPU.use_hazard) begin
+            $display("ERROR: use_hazard with ex_ph set at pc 0x%08h cycle %0d (WB writes x%0d)",
+                     `CPU.ifex_pc, cycle_count, `CPU.exwb_rd);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    end
+
+    // ================================================================
     //  Main simulation loop
     // ================================================================
     initial begin

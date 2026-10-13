@@ -75,8 +75,9 @@
 use_hazard    = exwb_valid && exwb_regWR && !exwb_trap && exwb_rd != 0
                 && (exwb_rd == ex_rs1 || exwb_rd == ex_rs2)
 ex_wait       = ifex_valid && !ex_ph
-stall_nofetch = use_hazard || wb_busy || wb_mem_stall || wfi_active
+stall_nofetch = wb_busy || wb_mem_stall || wfi_active
                 || ex_ifetch_hi_phase || csr_wb_hazard || ex_wait
+                // use_hazard acts through ex_wait: it keeps ex_ph clear
 stall_other   = stall_nofetch || if_mem_stall
 wb_mem_stall  = dmem_req && !dmem_ready
 muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap_iter
