@@ -218,7 +218,10 @@ module tb_controller;
         //  - An M instruction or a shift makes no memory access and no
         //    branch or jump. So the only traps it can take are the ones
         //    known from decode and fetch, and muldiv_want may leave the
-        //    address causes out (ex_trap_decode in fyracore.v).
+        //    address causes out. Nor is it an ECALL, EBREAK, MRET, LR, FENCE,
+        //    CSR access or any other SYSTEM instruction, so of the decode
+        //    causes only the controller's own `illegal` is left for it
+        //    (ex_trap_iter in fyracore.v).
         //  - Whatever writes memory data to rd (wbSel 01 with regWR) is a
         //    read access (memRD). So load_use_hazard holds every instruction
         //    that reads such an rd, and WB need not forward memory data.
@@ -232,6 +235,13 @@ module tb_controller;
                     $display("FAIL: iterative op with a memory access or a jump: opcode=%07b funct3=%03b funct7=%07b",
                              opcode, funct3, funct7);
             end
+            if (is_iter && (isEcall || isEbreak || isMret || isLR || isFence || isFenceI ||
+                            csrOp != 2'b00 || opcode == 7'b1110011)) begin
+                sweep_bad = sweep_bad + 1;
+                if (sweep_bad <= 10)
+                    $display("FAIL: iterative op that is a SYSTEM, CSR, LR or FENCE instruction: opcode=%07b funct3=%03b funct7=%07b",
+                             opcode, funct3, funct7);
+            end
             if (regWR && wbSel == 2'b01 && !memRD) begin
                 sweep_bad = sweep_bad + 1;
                 if (sweep_bad <= 10)
@@ -239,7 +249,7 @@ module tb_controller;
                              opcode, funct3, funct7);
             end
         end
-        if (sweep_bad == 0) pass_count = pass_count + 2;
+        if (sweep_bad == 0) pass_count = pass_count + 3;
         else                fail_count = fail_count + sweep_bad;
 
         $display("\n=== Controller Results: %0d passed, %0d failed ===", pass_count, fail_count);

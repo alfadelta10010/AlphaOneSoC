@@ -742,19 +742,27 @@ module fyracore #(
     //   muldiv_stall: keep pipeline frozen while muldiv is working.
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
-    // !ex_trap_decode: a trapping M instruction (a fetch fault whose garbage
+    // !ex_trap_iter: a trapping M instruction (a fetch fault whose garbage
     // word decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
     // flush, which contains ex_trap -- so without this muldiv_stall would
     // wait for a result that never comes and the trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
-    // ex_trap_decode is all of ex_trap here: an M instruction or a shift is
-    // OP or OP-IMM, which makes no memory access and no jump, so the three
-    // address causes cannot be raised for it (tb_controller checks that for
-    // every opcode, funct3 and funct7). Using ex_trap itself put the ALU,
-    // the PMA compare and the PMP check in front of `stall`, and through it
-    // in front of the enable of every pipeline register.
-    wire muldiv_want = ifex_valid && ex_is_iter && !ex_trap_decode;
+    // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
+    // or OP-IMM: it makes no memory access and no jump, so the three address
+    // causes cannot be raised for it, and it is no SYSTEM instruction, CSR
+    // access, LR or FENCE, which leaves a fetch fault, a bad funct7 and the
+    // two compressed-instruction causes (tb_controller checks both halves
+    // for every opcode, funct3 and funct7; the testbench checks
+    // muldiv_want against ex_trap_decode on every clock). Using ex_trap
+    // itself put the ALU, the PMA compare and the PMP check in front of
+    // `stall`, and through it in front of the enable of every pipeline
+    // register; all of ex_trap_decode still put the SYSTEM and CSR checks
+    // there, 3.6 ns of the 21.4 ns from the opcode to those enables at the
+    // slow corner.
+    wire ex_trap_iter = ex_ifetch_fault || ctrl_illegal || ifex_c_illegal ||
+                        (ifex_compressed && !csr_misa_c);
+    wire muldiv_want = ifex_valid && ex_is_iter && !ex_trap_iter;
 
     // Sticky completion. muldiv_done is a one-cycle pulse; holding it here
     // means the pipeline can take the result on whatever later cycle it is

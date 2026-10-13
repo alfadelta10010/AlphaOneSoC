@@ -715,6 +715,25 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  Reduced-term check
+    //
+    //  muldiv_want leaves most of the trap decode out, on the argument
+    //  that those causes cannot be raised for an M instruction or a shift
+    //  (src/fyracore.v, ex_trap_iter). This holds it to the full term on
+    //  every clock of every run.
+    // ================================================================
+    always @(posedge clk) begin
+        if (!rst && `CPU.muldiv_want !==
+                    (`CPU.ifex_valid && `CPU.ex_is_iter && !`CPU.ex_trap_decode)) begin
+            $display("ERROR: muldiv_want %b differs from the full trap decode at pc 0x%08h cycle %0d (ex_trap_decode %b)",
+                     `CPU.muldiv_want, `CPU.ifex_pc, cycle_count, `CPU.ex_trap_decode);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    end
+
+    // ================================================================
     //  Main simulation loop
     // ================================================================
     initial begin
