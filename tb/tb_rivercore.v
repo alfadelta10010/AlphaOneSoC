@@ -184,7 +184,7 @@ module tb_rivercore;
         .done(soc.memc.d_ready),
         .payload({soc.memc.d_addr, soc.memc.d_we, soc.memc.d_be,
                   soc.memc.d_we ? soc.memc.d_wdata : 32'h0}));
-    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1)) chk_qspi (
+    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1), .LATE(1)) chk_qspi (
         .clk(clk), .rst(rst), .take(soc.qspi.idle && soc.qspi.start),
         .hold(soc.qspi.start), .done(soc.qspi.done),
         .payload({soc.qspi.cs_sel, soc.qspi.addr, soc.qspi.we, soc.qspi.nbytes_m1,

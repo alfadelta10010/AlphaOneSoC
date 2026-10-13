@@ -3,9 +3,10 @@
 //
 // Both ports follow the core's request/ready contract (src/fyracore.v): a
 // request is held, address and data unchanged, until the cycle ready is
-// returned with it. The QSPI engine reads its transaction parameters
-// combinationally for the whole transaction, so they are derived here from
-// the held request and two bits of state, and nothing is copied.
+// returned with it. The QSPI engine takes the chip and the direction with
+// the start of a transaction and reads the rest combinationally from the
+// cycle after, so the parameters are derived here from the held request and
+// two bits of state, and nothing is copied.
 //
 // Arbitration: data first. The pipeline only issues a new data request on
 // the cycle after a fetch completes, so the fetch port cannot be starved; and
@@ -111,29 +112,36 @@ module mem_ctrl (
     end
 
     // The port the engine is working for: the latched grant while a
-    // transaction runs, the one about to be granted while idle.
+    // transaction runs, the one about to be granted while idle. Only the
+    // chip select and the direction follow it, because only they are taken
+    // on the start cycle; address, byte count and data follow the latched
+    // grant alone, which is the same port on every cycle the engine reads
+    // them. With use_d on them too, the choice of port -- the core's data
+    // request, which waits for an SC's reservation compare -- was in front
+    // of the address nibbles on the pins, on a cycle nothing is driven.
     wire use_d = q_idle ? pick_d : gnt_d;
 
-    wire [31:0] a = use_d ? d_addr : i_addr;
+    wire [31:0] a = gnt_d ? d_addr : i_addr;
 
     // Chip select and chip address. The second half of a split fetch starts
     // at byte 0 of the next page.
-    wire psram  = a[31];
-    wire chip_b = second ? next_page[13] : a[23];
+    wire psram  = use_d ? d_addr[31] : i_addr[31];
+    wire a23    = use_d ? d_addr[23] : i_addr[23];
+    wire chip_b = second ? next_page[13] : a23;
     assign q_cs = !psram ? 2'd0 : (chip_b ? 2'd2 : 2'd1);
 
     // Store: first enabled lane, and the number of enabled lanes.
     wire [1:0] st_lane  = d_be[0] ? 2'd0 : d_be[1] ? 2'd1 : d_be[2] ? 2'd2 : 2'd3;
     wire [1:0] st_n_m1  = {d_be[0] & d_be[3], (d_be[0] & d_be[1]) | (d_be[2] & d_be[3])};
 
-    wire [23:0] chip_addr = {a[23] & !psram, a[22:0]};
+    wire [23:0] chip_addr = {a[23] & !a[31], a[22:0]};
     assign q_addr = second      ? {1'b0, next_page[12:0], 10'b0} :
-                    !use_d      ? chip_addr :                        // fetch: the halfword
+                    !gnt_d      ? chip_addr :                        // fetch: the halfword
                     d_we        ? {chip_addr[23:2], st_lane} :       // store: first lane
                                   {chip_addr[23:2], 2'b00};          // load: the word
     assign q_we        = use_d && d_we;
-    assign q_nbytes_m1 = (use_d && d_we) ? st_n_m1 :
-                         (!use_d && (split || second)) ? 2'd1 : 2'd3;
+    assign q_nbytes_m1 = (gnt_d && d_we) ? st_n_m1 :
+                         (!gnt_d && (split || second)) ? 2'd1 : 2'd3;
     assign q_wdata     = d_wdata;
 
     assign i_rdata = q_rdata;
