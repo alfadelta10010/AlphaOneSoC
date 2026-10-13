@@ -122,6 +122,9 @@ csrfwd              spike
 csrlog_probe        spike
 cnt_alias           spike
 cnt_xhalf           spike
+# Reads mcycle, which counts clocks where Spike counts instructions; the test
+# compares two of its own readings instead (cnt_xcycle.S says how).
+cnt_xcycle          expect x13=0xfffffffe x15=0x9 x16=0x9
 cnt_instret         spike
 cnt_instret         spike +DMEM_WAIT=3
 cnt_instret         spike +IMEM_WAIT=2 +DMEM_WAIT=1

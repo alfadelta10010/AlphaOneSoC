@@ -22,12 +22,8 @@ rvtest_entry_point:
   csrw minstret, t2        # old lo = ffffffff: must NOT carry into hi
   csrr a1, minstreth       # 0
   csrr a2, minstreth       # 0
-  # 3: mcycleh write, adjacent mcycle read
-  li   t1, 0x200
-  csrw mcycle, t1
-  li   t2, 0x9
-  csrw mcycleh, t2
-  csrr a3, mcycle
+  # 3: an mcycleh write with an adjacent mcycle read is cnt_xcycle.S: what
+  # it reads counts clocks, so it cannot be compared with Spike line by line
   # 4: mcycle write with old lo = ffffffff, adjacent mcycleh read
   li   t1, -1
   li   t2, 0x7
