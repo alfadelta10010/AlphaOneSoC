@@ -100,18 +100,18 @@ lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77
 lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +DMEM_WAIT=3
 lrsc_trap_clear     expect x10=0x1 x12=0x0 x19=0x1 x11=0x77 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 # The registered MTIP's stale window (mtip_stale.S says more): after a store
-# moves mtimecmp away, mip.MTIP still reads 1 for two clocks (two
-# instructions with a fast fetch) and 0 on the third instruction. MIE set
-# straight after the store no longer catches it: the instruction behind a
-# CSR write waits a clock in EX, and by then MTIP has cleared, so no
+# moves mtimecmp away, mip.MTIP still reads 1 for two clocks (the next
+# instruction with a fast fetch: EX takes two) and 0 from the second
+# instruction on. MIE set straight after the store no longer catches it:
+# the instruction behind a CSR write waits in EX, MTIP has cleared, so no
 # spurious timer interrupt is taken (x18 = 0, the handler never runs).
 # Legal either way (Priv 3.2.1); Spike updates MTIP at once, so DUT-only.
 # Fetch waits close the window before the reads, so the first line (the one
 # the SoC run takes) accepts either outcome; the others pin it where the
 # fetch is fast.
 mtip_stale          expect x19=0x80 x20=0x0 x22=0x80|0x0 x23=0x80|0x0 x24=0x0 x18=0x1|0x0 x12=0x0|0xffffffff
-mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x0 x12=0xffffffff
-mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x80 x24=0x0 x18=0x0 x12=0xffffffff -- +DMEM_WAIT=3 +DMEM_RANDOM=1
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x0 x24=0x0 x18=0x0 x12=0xffffffff
+mtip_stale          expect x19=0x80 x20=0x0 x22=0x80 x23=0x0 x24=0x0 x18=0x0 x12=0xffffffff -- +DMEM_WAIT=3 +DMEM_RANDOM=1
 
 # ---- FENCE.I -------------------------------------------------------------------
 fencei_smc          spike

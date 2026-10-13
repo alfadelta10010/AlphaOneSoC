@@ -3,7 +3,9 @@
 // Pipeline stages:
 //   IF  — Instruction Fetch; C-extension decompression; the register file's
 //         read addresses for the fetched instruction (the read is synchronous)
-//   EX  — Decode, Register Read, ALU Execute, Branch Resolve
+//   EX  — Decode, Register Read, ALU Execute, Branch Resolve; two cycles at
+//         least: the ALU and the comparator, then what is decided from them
+//         (ex_ph)
 //   WB  — Memory Access, Writeback, CSR commit
 //
 // Hazard handling:
@@ -393,6 +395,7 @@ module fyracore #(
     // SLT(I)(U) is exactly the ALU's d1 - d2 (their d1 is always rs1).
     wire [31:0] cmp_diff;
     wire        cmp_lts, cmp_ltu;
+    wire        ex_branch_valid;
 
     // ALU (RV32I only — M-extension handled by muldiv below)
     wire [31:0] ex_alu_result;
@@ -405,6 +408,35 @@ module fyracore #(
         .result     (ex_alu_result),
         .control    (ctrl_aluOp)
     );
+
+    // EX takes two cycles. In the first the ALU and the comparator work from
+    // the operands, and their results are taken into alu_r and br_r; from
+    // the second on (ex_ph) everything that is decided from those results --
+    // the PMA and PMP checks of a data address, the traps, the branch, the
+    // next pc, and through flush the enables of every pipeline register --
+    // starts at these flops instead of at the register file. In one cycle
+    // that was operands, a 32-bit add or compare, the PMP checker, the trap
+    // priority chain and the fan-out to the pipeline registers: the core's
+    // longest paths, whichever operand they started from.
+    //
+    // alu_r and br_r are taken on every clock, with no enable. They are the
+    // EX instruction's own once it has sat in EX for one whole cycle with its
+    // operands final (no use_hazard): from then on no instruction that writes
+    // a register can enter WB before this one leaves EX, so the operands do
+    // not change again. ex_ph says that cycle has passed; the instruction
+    // waits in EX until it has (ex_wait, with the stall terms below), so
+    // nothing below is acted on before it holds.
+    //
+    // The extra cycle is not seen in the SoC behind an instruction that has
+    // a fetch outstanding: a fetch is at least 40 clocks and EX waits for it
+    // anyway. An instruction that holds the fetch back (ex_nofetch) pays it.
+    reg  [31:0] alu_r;
+    reg         br_r;
+    reg         ex_ph;
+    always @(posedge clk) begin
+        alu_r <= ex_alu_result;
+        br_r  <= ex_branch_valid;
+    end
 
     // ── Multi-cycle multiply/divide unit (RV32M) ──────────────────────────────
     // Wire declarations; stall/start logic is in the Hazard Detection section
@@ -436,7 +468,6 @@ module fyracore #(
     );
 
     // Branch evaluation
-    wire ex_branch_valid;
     branchCtrl bcmp(
         .funct3     (ex_funct3),
         .r1         (ex_rs1_val),
@@ -447,10 +478,10 @@ module fyracore #(
         .lt_unsigned(cmp_ltu)
     );
 
-    wire ex_branch_taken = (ctrl_doBranch && ex_branch_valid) || ctrl_doJump;
+    wire ex_branch_taken = (ctrl_doBranch && br_r) || ctrl_doJump;
     // JALR clears bit 0 of target
     wire [31:0] ex_branch_target = (ex_opcode == 7'b1100111) ?
-                                   {ex_alu_result[31:1], 1'b0} : ex_alu_result;
+                                   {alu_r[31:1], 1'b0} : alu_r;
 
     // CSR read (in EX, write deferred to WB)
     wire [31:0] csr_rdata;
@@ -549,13 +580,13 @@ module fyracore #(
         ex_csr_priv_fail                       // Insufficient privilege
     );
 
-    // Misalignment detection on computed address (ALU result)
+    // Misalignment detection on computed address (the ALU result, in alu_r)
     // RISC-V: LH/SH require 2-byte alignment, LW/SW require 4-byte alignment.
     // Atomics (LR/SC/AMO) always require 4-byte alignment.
     // Rather than silently aliasing to an aligned address, trap per spec.
     wire ex_mem_active = ctrl_memRD || ctrl_memWR || ctrl_isAmo || ctrl_isLR || ctrl_isSC;
-    wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (ex_alu_result[0] != 1'b0);
-    wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (ex_alu_result[1:0] != 2'b00);
+    wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (alu_r[0] != 1'b0);
+    wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (alu_r[1:0] != 2'b00);
     wire ex_misaligned = ifex_valid && ex_mem_active &&
                          (ex_misaligned_half || ex_misaligned_word);
     wire ex_misalign_is_store = ctrl_memWR || ctrl_isSC || ctrl_isAmo;
@@ -586,10 +617,10 @@ module fyracore #(
     // and that word is where the upper half lives.
     wire [31:0] ex_pc_hi = {pc[31:2], 2'b00};
     wire ex_pma_fetch_hi_ok = in_exec(ex_pc_hi);
-    wire ex_pma_in_rom = in_win(ex_alu_result, PMA_ROM_BASE, PMA_ROM_TOP);
-    wire ex_pma_in_ram = in_win(ex_alu_result, PMA_RAM_BASE, PMA_RAM_TOP);
-    wire ex_pma_in_io  = in_win(ex_alu_result, PMA_IO0_BASE, PMA_IO0_TOP) ||
-                         in_win(ex_alu_result, PMA_IO1_BASE, PMA_IO1_TOP);
+    wire ex_pma_in_rom = in_win(alu_r, PMA_ROM_BASE, PMA_ROM_TOP);
+    wire ex_pma_in_ram = in_win(alu_r, PMA_RAM_BASE, PMA_RAM_TOP);
+    wire ex_pma_in_io  = in_win(alu_r, PMA_IO0_BASE, PMA_IO0_TOP) ||
+                         in_win(alu_r, PMA_IO1_BASE, PMA_IO1_TOP);
     // LR/SC need a reservation set, which only PSRAM can provide -- an IO
     // window is not idempotent and has no reservation set to track, and flash
     // cannot be written. The reference model agrees about IO: its reservable()
@@ -614,7 +645,7 @@ module fyracore #(
     // instruction's upper half, one stalled EX cycle each
     // (ex_ifetch_hi_phase), and the verdicts are kept in ifetch_lo_denied and
     // ifetch_hi_denied. No fault is raised during those cycles. The data
-    // access is checked on the instruction's last EX cycle.
+    // access is checked, at alu_r, on the instruction's last EX cycle.
     wire ex_ifetch_fault_lo = !ex_pma_fetch_ok || ifetch_lo_denied;
     wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok || ifetch_hi_denied);
     wire ex_ifetch_fault = ifex_valid && !ex_ifetch_hi_phase &&
@@ -699,8 +730,11 @@ module fyracore #(
     // a 32-bit mux per consumer and a copy of every WARL rule on the read
     // path. In the SoC the cycle is hidden behind the next fetch.
     wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
+    // ex_wait: the EX instruction's ALU and comparator results are not in
+    // alu_r and br_r yet (see ex_ph).
+    wire ex_wait = ifex_valid && !ex_ph;
     wire stall_nofetch = use_hazard || wb_busy || wb_mem_stall || wfi_active ||
-                         ex_ifetch_hi_phase || csr_wb_hazard;
+                         ex_ifetch_hi_phase || csr_wb_hazard || ex_wait;
     wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
@@ -1045,7 +1079,8 @@ module fyracore #(
     assign ex_ifetch_hi_phase = ex_ifetch_lo_phase ||
                                 (ifex_valid && fetch_can_deny && ex_straddle && !ifetch_hi_done);
 
-    // Data access: check ex_alu_result with R or W permission (EX stage, address ready).
+    // Data access: check alu_r with R or W permission (the address is ready on
+    // every cycle the verdict is used: ex_ph).
     wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b011 : // AMO: R+W
                                      ex_misalign_is_store ? 3'b010 : // Store/SC: W
                                      3'b001;                          // Load/LR: R
@@ -1062,7 +1097,7 @@ module fyracore #(
         .pmpaddr2   (csr_pmpaddr2),
         .pmpaddr3   (csr_pmpaddr3),
         .addr       (ex_ifetch_lo_phase ? ifex_pc :
-                     ex_ifetch_hi_phase ? ex_pc_hi : ex_alu_result),
+                     ex_ifetch_hi_phase ? ex_pc_hi : alu_r),
         .access_type(ex_ifetch_hi_phase ? 3'b100 : ex_pmp_access_type),  // Execute
         .priv_mode  (ex_ifetch_hi_phase ? priv_mode : data_priv_mode),
         .pmp_allow  (pmp_allow)
@@ -1143,6 +1178,7 @@ module fyracore #(
             ifex_compressed<= 1'b0;
             ifex_c_illegal <= 1'b0;
             ifex_valid     <= 1'b0;
+            ex_ph          <= 1'b0;
             ifetch_lo_done <= 1'b0;
             ifetch_lo_denied <= 1'b0;
             ifetch_hi_done <= 1'b0;
@@ -1203,7 +1239,11 @@ module fyracore #(
 
             // ---- IF/EX Pipeline Register ----
             if (stall) begin
-                // Hold IF/EX on stall. If the stall is a fetch PMP check,
+                // Hold IF/EX on stall. The instruction's operands were final
+                // in this cycle unless it waited for a register write, so
+                // alu_r and br_r are its own from the next cycle on.
+                ex_ph <= !use_hazard;
+                // If the stall is a fetch PMP check,
                 // record its verdict; the next cycle checks the next thing.
                 if (ex_ifetch_lo_phase) begin
                     ifetch_lo_done   <= 1'b1;
@@ -1215,6 +1255,7 @@ module fyracore #(
             end else if (flush || ex_nofetch) begin
                 // Insert bubble (nothing was fetched behind ex_nofetch)
                 ifex_valid     <= 1'b0;
+                ex_ph          <= 1'b0;
                 ifex_instr     <= 32'h0000_0013; // NOP
                 ifex_compressed<= 1'b0;
                 ifex_c_illegal <= 1'b0;
@@ -1229,6 +1270,7 @@ module fyracore #(
                 ifex_compressed<= if_compressed;
                 ifex_c_illegal <= if_compressed && if_c_illegal_raw;
                 ifex_valid     <= 1'b1;
+                ex_ph          <= 1'b0;
                 // The register-file addresses this instruction was read
                 // with, to read it with again while it stays in EX. They
                 // have no reset and a bubble leaves them alone: a bubble
@@ -1283,7 +1325,7 @@ module fyracore #(
                 exwb_alu_result <= ex_is_iter             ? muldiv_result :
                                    (ctrl_wbSel == 2'b10)  ? pc            :
                                    (ctrl_wbSel == 2'b11)  ? csr_rdata_eff :
-                                                            ex_alu_result;
+                                                            alu_r;
                 exwb_rs2_data   <= ex_csr_active ? ex_csr_wdata : ex_rs2_val;
                 exwb_rd         <= ex_rd;
                 exwb_regWR      <= ctrl_regWR;
@@ -1335,17 +1377,17 @@ module fyracore #(
                         exwb_trap_val   <= ifex_pc;
                     end else if (ex_misaligned && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd4;  // Load address misaligned
-                        exwb_trap_val   <= ex_alu_result;
+                        exwb_trap_val   <= alu_r;
                     end else if (ex_misaligned && ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned
-                        exwb_trap_val   <= ex_alu_result;
+                        exwb_trap_val   <= alu_r;
                     end else if (ex_data_fault && !ex_misalign_is_store) begin
                         exwb_trap_cause <= 32'd5;  // Load access fault
-                        exwb_trap_val   <= ex_alu_result;
+                        exwb_trap_val   <= alu_r;
                     end else begin
                         // Only ex_data_fault on a store is left in ex_trap.
                         exwb_trap_cause <= 32'd7;  // Store/AMO access fault
-                        exwb_trap_val   <= ex_alu_result;
+                        exwb_trap_val   <= alu_r;
                     end
                 end else if (irq_inject) begin
                     // Asynchronous interrupt: suppress instruction effects, inject trap
