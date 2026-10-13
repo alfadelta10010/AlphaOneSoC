@@ -128,7 +128,16 @@ module fyracore #(
     // They are forced to 0 so the doomed instruction decodes to something
     // harmless rather than whatever the port happens to hold -- in
     // simulation, rather than X.
-    wire [31:0] if_fetched    = imem_rdata & {32{imem_req}};
+    //
+    // The mask is the window alone (if_exec), not imem_req: imem_req is also
+    // low behind an instruction that decides the next pc (ex_nofetch), but
+    // then IF/EX takes a bubble or holds, the register-file read goes
+    // unused and pc does not take if_pc_next, so nothing looks at the
+    // fetched word. Masking with imem_req put that instruction's decode in
+    // front of everything IF computes: the expansion, the register file's
+    // read addresses and the next pc.
+    wire        if_exec;         // pc is in an executable window (assigned with imem_req)
+    wire [31:0] if_fetched    = imem_rdata & {32{if_exec}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     // A compressed instruction is expanded here, on its way into IF/EX, so
     // that EX starts from the 32-bit form. Expanding it in EX put the
@@ -170,7 +179,8 @@ module fyracore #(
     // not fetched speculatively behind it: on the SoC's one QSPI bus that
     // fetch would have to complete (~42 clocks) before the redirect could be
     // taken. See ex_nofetch. A not-taken branch then costs one bubble.
-    assign imem_req  = in_exec(pc) && !ex_nofetch;
+    assign if_exec   = in_exec(pc);
+    assign imem_req  = if_exec && !ex_nofetch;
 
     // ================================================================
     //  IF/EX Pipeline Register
