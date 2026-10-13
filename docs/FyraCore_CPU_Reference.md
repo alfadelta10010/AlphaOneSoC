@@ -41,7 +41,8 @@
 
 **EX (Execute):**
 - Decodes instruction fields (`decoder`) and control signals (`controller`)
-- Reads rs1 and rs2 from the register file's two ports (data taken on the edge the instruction entered EX, or re-taken on each held cycle), with WB->EX forwarding of everything but memory data
+- Reads rs1 and rs2 from the register file's two ports (data taken on the edge the instruction entered EX, or re-taken on each held cycle). Nothing is forwarded from WB: an instruction that reads the register the WB instruction writes waits for the write (`use_hazard`)
+- Takes at least two cycles. In the first the ALU and the comparator work from the operands and their results go into `alu_r` and `br_r`; from the second on (`ex_ph`) the address checks, the traps, the branch and the next PC are decided from those flops
 - Executes the ALU operation, or runs the multi-cycle unit (`muldiv`: multiply, divide and the shifts)
 - Evaluates branches
 - Checks the fetch (both halves of a straddling 32-bit instruction) and the data address against the PMA map and PMP
@@ -58,10 +59,10 @@
 
 | Hazard | Resolution |
 |---|---|
-| Data dependency (RAW) | WB -> EX forwarding via `fwd_rs1`/`fwd_rs2` (`wb_fwd`: the ALU result, link address, CSR value or SC result; memory data is never forwarded, see load-use) |
-| Load-use | Stall until the load's data returns |
+| Data dependency (RAW) | No forwarding. The instruction that reads the register the WB instruction writes waits in EX until the write has landed (`use_hazard`: any WB instruction with `exwb_regWR`, a load, LR and AMO included), then reads it from the register file, which is write-first |
+| ALU and comparator results | Registered (`alu_r`, `br_r`, free-running). An instruction waits in EX (`ex_wait`) until it has sat there for one whole cycle with its operands final; `ex_ph` marks the cycles on which the flops hold its own results |
 | Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
-| Register read (synchronous, write-first `rf_top` macro) | No stall. The read addresses on each cycle are those of the instruction in EX after the next edge: its own fields as fetched (`ifex_rf_rs1`/`ifex_rf_rs2`) while IF/EX holds it (`rf_hold`), the fetched instruction's (`rf_fields`) when IF/EX takes it. The data is then the registers after that edge's write, as a combinational read would give -- `regFile`'s one-entry bypass supplies the word written on that same edge, so the macro's own write-through is not relied on; the WB instruction is forwarded. Each read is masked to 0 where the decoded field is x0 |
+| Register read (synchronous, write-first `rf_top` macro) | No stall. The read addresses on each cycle are those of the instruction in EX after the next edge: its own fields as fetched (`ifex_rf_rs1`/`ifex_rf_rs2`) while IF/EX holds it (`rf_hold`), the fetched instruction's (`rf_fields`) when IF/EX takes it. The data is then the registers after that edge's write, as a combinational read would give -- `regFile`'s one-entry bypass supplies the word written on that same edge, so the macro's own write-through is not relied on; a reader of the WB instruction's register waits for it (`use_hazard`). Each read is masked to 0 where the decoded field is x0 |
 | CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
 | Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
@@ -71,11 +72,14 @@
 | PMP CSR write | The next instruction is refetched, like FENCE.I |
 
 ```
-stall_nofetch = load_use_hazard || wb_busy || wb_mem_stall || wfi_active
-                || ex_ifetch_hi_phase || csr_wb_hazard
+use_hazard    = exwb_valid && exwb_regWR && !exwb_trap && exwb_rd != 0
+                && (exwb_rd == ex_rs1 || exwb_rd == ex_rs2)
+ex_wait       = ifex_valid && !ex_ph
+stall_nofetch = use_hazard || wb_busy || wb_mem_stall || wfi_active
+                || ex_ifetch_hi_phase || csr_wb_hazard || ex_wait
 stall_other   = stall_nofetch || if_mem_stall
 wb_mem_stall  = dmem_req && !dmem_ready
-muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap
+muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap_iter
 muldiv_have   = muldiv_ready || muldiv_done
 muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && !stall_nofetch && !flush
 muldiv_stall  = muldiv_want && !muldiv_have
@@ -85,9 +89,13 @@ flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pm
                || irq_inject
 ```
 
-Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends, because during a load-use or AMO-read stall EX's operand is not the loaded value yet (WB forwards its ALU result, never memory data).
+Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is taken only on a `!stall` cycle. A trap detected while EX is stalled is ignored until the stall ends: during a `use_hazard` stall EX's operand is not the written value yet, and before `ex_ph` the address in `alu_r` is not the instruction's own.
 
-An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
+`ex_ph` is cleared whenever IF/EX loads, and set at the end of a held cycle without `use_hazard`. From that cycle on the operands cannot change: the WB stage can only take a bubble while EX is held, so no further register write can precede the instruction. `ex_trap_iter` is the part of the trap decode an M instruction or a shift can raise (a fetch fault, the controller's `illegal`, the two compressed-instruction causes); it keeps the SYSTEM and CSR checks out of `stall`.
+
+The second EX cycle exists for timing. In one cycle the path was operand, 32-bit add or compare, the PMP check, the trap chain, and the enables of the pipeline registers; at the slow corner that was 24.5 ns on the routed design, and forwarding added a 5-bit compare and a 32-bit mux select at its head. Both waits are hidden behind the next fetch (below) except on the `ex_nofetch` instructions.
+
+An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (the second EX cycle, the wait for a register write, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
 
 ### 2.3 CSR Values Seen by EX
 
@@ -248,7 +256,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 
 **Checks in the pipeline:**
 - One checker (`pmp_unit`) serves the fetch and the data access in turn. Whenever PMP could deny a fetch (U-mode, or any entry locked) the instruction spends one stalled EX cycle checking `ifex_pc` with X permission and, for a 32-bit instruction at an address with bit 1 set, one more on the upper half at `{pc[31:2], 2'b00}` (`ex_ifetch_hi_phase`); the verdicts are latched in `ifetch_lo_denied` / `ifetch_hi_denied`. The upper half also has a dedicated PMA compare. A fault in only the upper half reports that half's address in mtval. An M-mode kernel with no locked entry never spends these cycles.
-- On the instruction's last EX cycle the checker looks at `ex_alu_result` with R (load, LR), W (store, SC) or R+W (AMO). With `mstatus.MPRV = 1`, the privilege checked is MPP.
+- On the instruction's last EX cycle the checker looks at the data address in `alu_r` with R (load, LR), W (store, SC) or R+W (AMO). With `mstatus.MPRV = 1`, the privilege checked is MPP.
 
 ---
 
@@ -506,7 +514,7 @@ Memory-timing plusargs for the lockstep sim: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RA
 ## 12. Design Decisions and Rationale
 
 ### 12.1 Why 3 Stages?
-Area is the primary constraint. IF/EX/WB keeps pipeline registers minimal while most instructions still take one cycle; the QSPI memory bottleneck dominates throughput anyway.
+Area is the primary constraint. IF/EX/WB keeps pipeline registers minimal, and the QSPI memory bottleneck dominates throughput: a fetch is at least 40 clocks and the instruction in EX waits for the one behind it. That is why EX can spend a second cycle (and a third when it reads its predecessor's result) for the sake of the clock period at no cost in throughput, where a fourth pipeline stage would have cost registers and bypasses.
 
 ### 12.2 Why Iterative MulDiv?
 The combinational operators cost more than 10k gates. The iterative unit, with one shared adder, costs about 0.9 tile (0.93 with TT's cells, 0.72 in the audit's yosys recipe) for 34-36 cycles per operation, which run during the next instruction's QSPI fetch. The shifts use it too, instead of a barrel shifter.
