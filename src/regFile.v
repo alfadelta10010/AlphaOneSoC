@@ -14,12 +14,13 @@
 // author's slides both describe a read of the word being written as returning
 // the new data, but its liberty gives that path no timing and no silicon
 // measurement of it has been published. fyracore reads the word being written
-// on every load-use pair and whenever an instruction reads what the one two
-// ahead of it wrote, so it must not rest on that. On an edge that writes the
-// word a port is reading, the written data is kept in `byp` and the port
-// gives that for the cycle instead of the macro's output (hit1/hit2). What
-// the macro returns for such a read is never used; all that is asked of it is
-// that the write itself lands, which KianV's sky25b silicon shows.
+// whenever an instruction reads what the one before it wrote (the write lands
+// on the edge that takes the reader's addresses), so it must not rest on that.
+// On an edge that writes the word a port is reading, the written data is kept
+// in `byp` and the port gives that for the cycle instead of the macro's output
+// (hit1/hit2). What the macro returns for such a read is never used; all that
+// is asked of it is that the write itself lands, which KianV's sky25b silicon
+// shows.
 // +RF_COLLIDE_X makes the model return X there, so a run proves nothing
 // depends on it (tests/directed/run.sh).
 //

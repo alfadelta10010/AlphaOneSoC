@@ -42,8 +42,8 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
   either port. The behavioural model does this, the author's slides describe the
   design as "read-after-write" (the read word line is enabled after the write
   completes), and KianV's sky25b errata (AMO with rd == rs2) shows it on silicon.
-  Its timing is not characterised. FyraCore needs write-first on every load-use
-  and every read two instructions after a write, so `src/regFile.v` provides it
+  Its timing is not characterised. FyraCore needs write-first whenever an
+  instruction reads what the one before it wrote, so `src/regFile.v` provides it
   with a one-entry bypass of its own and never uses what the macro returns for
   such a read; all it asks of the macro is that the write lands.
 - Word 0 is an ordinary word: writable and unreset. There is no reset at all.
