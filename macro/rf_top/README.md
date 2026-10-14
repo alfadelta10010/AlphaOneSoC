@@ -61,7 +61,8 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
 - `src/regFile.v` wraps the one instance, `rf_macro`; in the TinyTapeout top its
   path is `soc.cpu.rf.rf_macro`. It never writes word 0, and bypasses a read of
   the word written on the same edge; `src/fyracore.v` masks reads of x0 and
-  drives the read addresses a cycle ahead (see `rf_hold` there).
+  keeps the EX instruction's register numbers on the read addresses, from
+  flops, for as long as it is in EX (see `ex_rf_ok` there).
 - `+RF_COLLIDE_X` makes the model return X for a read of the word written on
   the same edge, which the macro's own model answers with the new data. Every
   simulation must be clean with it: it shows that nothing uses that answer.
@@ -216,6 +217,62 @@ reset). The two that win it pass; their pins differ from the RTL's from clock
 the same reason, and from there the traces match two clocks apart. On the
 A + B netlist 14, 16, 17 and 18 ns all pass and match the RTL, so a gate-level
 test of the "just under one SCK period" case should use 18.
+
+### After EX was split over three cycles
+
+The -4.89 ns at ss above was one path shape: `exwb_rd`, the forwarding
+compare and mux select, the ALU, the PMP check, the trap chain and the
+enables of the pipeline registers, all in one EX cycle (24.5 ns). The
+`setup-timing` series took it apart in the RTL (no forwarding; the register
+file read, the ALU and the decisions each in an EX cycle of their own; see
+`src/fyracore.v`, `ex_rf_ok` and `ex_ph`) and found a second cause in the
+flow. Same die, same LibreLane, A + B throughout; every run routed to 0,
+DRC 0, LVS 0, antenna 0, no hold violation at any corner.
+
+| RTL | Settings on top of A + B | Clock | Std cells | Util | Setup tt | Setup ss | Max-slew tt / ss | Hold, worst corner | Hold buffers | Run |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 4d21e43 | none (the A + B row above) | 20 ns | 12.27 t | 60.6 % | +6.80 ns | -4.89 ns | 303 / 3,338 | +0.105 ns | 624 | 42 min |
+| ba7cd35 | none | 20 ns | 12.61 t | 62.2 % | +8.64 ns | +2.38 ns | 249 / 2,597 | +0.108 ns | 668 | 45 min |
+| bc7d28d | none | 20 ns | 12.75 t | 62.8 % | +9.32 ns | +3.35 ns | 246 / 2,763 | +0.111 ns | 673 | 34 min |
+| ba7cd35 | C | 20 ns | 13.53 t | 66.2 % | +9.42 ns | +3.41 ns | 22 / 108 | +0.027 ns | 407 | 36 min |
+| ba7cd35 | C | 16 ns | 13.53 t | 66.2 % | +6.51 ns | +0.36 ns | 21 / 90 | +0.023 ns | 16 | 40 min |
+| bc7d28d | C with cap 2.16e-4, `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2 | 16 ns | 14.34 t | 69.8 % | +6.44 ns | +0.52 ns | 16 / 97 | +0.180 ns | 97 | 36 min |
+
+C is `LAYERS_RC` `{"*": {met1, met2: res 8.929e-4, cap 2.4e-4; met3, met4:
+res 1.567e-4, cap 2.4e-4}}`, `SIGNAL_WIRE_RC_LAYERS` and
+`CLOCK_WIRE_RC_LAYERS` met1 to met4, `PL_RESIZER_SETUP_SLACK_MARGIN` 0.5.
+
+- The RTL alone moves the slow corner from 40 MHz to 60 MHz (bc7d28d, 16.65 ns)
+  and tt from 76 to 94 MHz, for half a tile.
+- C is a calibration, not a tuning. LibreLane estimates wire capacitance
+  before routing at the technology LEF's average, 0.0815 fF/um; extraction of
+  the routed design gives 0.21 to 0.23 fF/um, and congested nets route up to
+  2.3 times longer than placement suggests. Measured on the 4d21e43 run: with
+  the flow's estimate the finished layout has +2.24 ns at max_ss, with its own
+  extraction -4.89 ns. So the resizer reported "No setup violations", repaired
+  nothing, and left 3,338 slow-corner slew violations it could not see.
+  With the estimate at 2.4e-4 pF/um the design repair inserts 1,126 buffers
+  instead of 495, the slew violations go from 2,597 to 108, and a 16 ns clock
+  closes at every corner.
+- It costs area: 0.9 tile at a 20 ns target, 1.6 at 16 ns with the hold
+  margin raised. 69.8 % still routed in 22 iterations.
+- It also moves hold. The larger estimate makes short paths look slower than
+  they are at the min corner, so with TT's 0.1 ns hold margin the worst hold
+  slack at signoff fell to +0.02 ns, and the paths at the bottom were the
+  macro's `w_data` pins, whose 0.2 ns hold is a placeholder. With the margin
+  at 0.2 ns the worst hold is +0.180 ns, on a macro pin again. Do not use C
+  without it. (Only the `nom_*` key of a per-corner `LAYERS_RC` showed in the
+  flow's RC report; whether the others reach the estimator was not
+  established.)
+- What limits the 16 ns run: the opcode through the trap decode to the next
+  pc (+0.52 ns), and `pmpcfg0` through the PMP check, the trap chain and
+  flush (+0.67 ns).
+
+Gate level on the last row's netlist and on the bc7d28d 20 ns netlist, as
+above (TT's gl_test defines, `+RF_X +RF_COLLIDE_X`): the default run, the
+18 ns run and the rd_late run pass, and from the first reset on the pins
+carry the same value as the RTL's on every clock (30,516, 30,518 and 31,041
+changes).
 
 Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
 offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
