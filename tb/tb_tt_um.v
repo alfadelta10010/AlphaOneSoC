@@ -66,10 +66,15 @@ module tb_tt_um;
     wire [7:0] ui_in = {tb_in[7:4], uart_rx, tb_in[2:1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
+`ifdef USE_POWER_PINS
+    // Nets, not constants: a hardened netlist declares its power pins inout.
+    wire       VPWR = 1'b1;
+    wire       VGND = 1'b0;
+`endif
 
     tt_um_alfadelta10010_alphaone_soc dut (
 `ifdef USE_POWER_PINS
-        .VPWR(1'b1), .VGND(1'b0),
+        .VPWR(VPWR), .VGND(VGND),
 `endif
         .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_pin), .uio_out(uio_out), .uio_oe(uio_oe),
         .ena(1'b1), .clk(clk), .rst_n(rst_n));
