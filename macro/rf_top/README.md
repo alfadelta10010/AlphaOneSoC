@@ -127,12 +127,28 @@ and the CI logs that are still downloadable):
   real hold a design survives at that corner: 0.62 ns here, 0.68 and 0.70 ns
   for the two exact figures above.
 
-With 0.4 ns the hold repair has to leave every macro input able to take about
-0.75 ns, level with or above every fabricated design; the cost should be a few
-dozen hold buffers in front of the macro's 48 inputs. tt and ss keep the
-original file: there the same inputs already have +0.58 and +1.60 ns of hold
-slack, and more hold delay at those corners would land on the paths that
-limit the clock.
+With 0.4 ns the hold repair has to leave every macro input able to take at
+least 0.75 ns. tt and ss keep the original file: there the same inputs
+already had +0.58 and +1.60 ns of hold slack, and more hold delay at those
+corners would land on the paths that limit the clock.
+
+Measured on A + B below (`rfm2-a3fo-hg`, the "hold guard" row, against
+`rfm2-a3fo`; OpenSTA 2.0.17 on each run's SPEF, all 48 macro inputs; LibreLane's
+own reports agree within 0.01 ns):
+
+| | without | with the guard |
+|---|---|---|
+| worst macro-input hold slack, min_ff | +0.173 ns (vs 0.2) | +0.316 ns (vs 0.4) |
+| real hold the inputs survive, ff | 0.62 ns | 0.97 ns |
+| same, tt | 1.03 ns | 1.55 ns |
+| delay cells (`dlygate4sd*`) | 624 | 671 |
+| std cells after PnR | 12.27 t | 12.31 t |
+
+The fabricated designs survive 0.68 to 0.70 ns at ff and 1.09 to 1.14 ns at
+tt by the same measure, so this design is now the most conservative of them
+at both corners, for 0.04 tile. Setup changed only as much as placement
+varies between runs (tt +6.80 -> +6.68 ns, ss -4.89 -> -3.53 ns), and hold
+is still met at every corner (worst +0.106 ns, ff, flop to flop).
 
 No waivers: PDN violations stay errors and Magic keeps same-named nets apart,
 so LVS proves every macro power pin is connected. `src/rf_top.v` must be in
@@ -154,6 +170,7 @@ leaves out the macro (15,744 um^2).
 | 4d21e43 | A + `PL_TIMING_DRIVEN` 1, `RUN_POST_GRT_RESIZER_TIMING` 1 | 12.31 t | 60.8 % | +6.82 ns | -5.35 ns (252) | 351 / 2,324 | 0 | 59 min |
 | 4d21e43 | A + B: `EXTRA_EXCLUDED_CELLS` `["sky130_fd_sc_hd__clkdlybuf4s*", "sky130_fd_sc_hd__dlymetal6s*"]`, `MAX_FANOUT_CONSTRAINT` 20 | 12.27 t | 60.6 % | +6.80 ns | -4.89 ns (259) | 303 / 3,338 | 0 | 42 min |
 | 4d21e43 | all of the above | 12.17 t | 60.2 % | +6.67 ns | -5.83 ns (315) | 427 / 4,779 | 0 | 54 min |
+| 4d21e43 | A + B + hold guard (ff corners read `rf_top.ff-hold-guard.lib`) | 12.31 t | 60.8 % | +6.68 ns | -3.53 ns (257) | 307 / 3,347 | 0 | 57 min |
 
 - 4d21e43 is the tree with the write-first bypass in `regFile.v` and the
   timing changes in `fyracore.v`, `csr.v` and `clint.v`: 9.03 tiles at
@@ -167,7 +184,7 @@ leaves out the macro (15,744 um^2).
   decode, the read mux and five more as wire repeaters: 4.8 of its 13.1 ns.
   With B that path has slack at ss. `dlygate4sd*` stays available, so hold
   repair is unchanged.
-- The last three rows differ by 0.15 ns at tt and by under 1 ns at ss:
+- Rows four to six differ by 0.15 ns at tt and by under 1 ns at ss:
   adding the timing-driven settings to A + B bought nothing. A + B has the
   best ss and is the quickest to harden.
 - What limits the clock now is EX. At tt the worst path starts at the macro's
@@ -182,8 +199,11 @@ leaves out the macro (15,744 um^2).
 Gate level (TT's gl_test defines, `tb/tb_tt_um.v` through the pins, RTL and
 netlist both with `+RF_X +RF_COLLIDE_X`): on the netlists of rows two to five
 the default run and the rd_late run pass and match the RTL pin for pin on
-every clock. `+QSPI_DELAY=19` is not a usable gate-level run. By the Pmod
-model's timing it leaves 1 ns between the data landing and the host's
+every clock. On the hold-guard netlist the default, rd_late and 18 ns runs
+pass, and every pin matches the RTL on every clock of the RTL's run (31,180,
+31,705 and 31,182 clocks); each netlist run saw the program's last UART byte
+one clock later and so ran one clock longer. `+QSPI_DELAY=19` is not a
+usable gate-level run. By the Pmod model's timing it leaves 1 ns between the data landing and the host's
 sampling edge. gl_test's cell models give every flop and latch a 1 ns
 clock-to-output and every other cell none, so at gate level SCK reaches its
 pin 1 ns later and the data lands in the very time step of the sampling edge:
