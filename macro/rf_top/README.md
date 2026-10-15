@@ -2,7 +2,8 @@
 
 Sylvain Munaut's ("tnt", smunaut) register file for TinyTapeout: 32 words of 32 bits,
 one write port and two read ports, a custom 12-transistor bit cell with latches at its
-ports, 132.64 x 118.70 um. These are vendored copies; nothing here is modified.
+ports, 132.64 x 118.70 um. The GDS, LEF, liberty and model are vendored copies, not
+modified; `rf_top.ff-hold-guard.lib` is the one file derived here (see *Hold guard band*).
 
 ## Provenance
 
@@ -80,12 +81,58 @@ views go in a `macro/` directory beside it):
     "instances": { "soc.cpu.rf.rf_macro": { "location": [3, 189.0], "orientation": "E" } },
     "gds": ["dir::../macro/rf_top.gds.gz"],
     "lef": ["dir::../macro/rf_top.lef"],
-    "lib": { "*": ["dir::../macro/rf_top.lib"] }
+    "lib": {
+      "*_tt_025C_1v80": ["dir::../macro/rf_top.lib"],
+      "*_ss_100C_1v60": ["dir::../macro/rf_top.lib"],
+      "*_ff_n40C_1v95": ["dir::../macro/rf_top.ff-hold-guard.lib"]
+    }
   }
 },
 "PDN_MACRO_CONNECTIONS": ["soc.cpu.rf.rf_macro VPWR VGND VDPWR VGND"],
 "FP_PDN_HORIZONTAL_LAYER": "met3"
 ```
+
+The `lib` keys are corner wildcards, and LibreLane loads every file whose key
+matches the corner, so they must not overlap: `"*"` next to an ff key would
+read two models of `rf_top` at ff. Every run in the table below used
+`{ "*": ["dir::../macro/rf_top.lib"] }` except the one marked "hold guard".
+
+### Hold guard band
+
+`rf_top.ff-hold-guard.lib` is `rf_top.lib` with the ten input `hold_rising`
+values (`w_addr`, `ra_addr`, `rb_addr`, `w_data`, `w_ena`, rise and fall)
+raised from 0.2 ns to 0.4 ns; nothing else differs. It is used at the ff
+corners only. The macro's real hold has never been measured, and a hold
+failure, unlike a setup one, does not go away with a slower clock.
+
+The case for it, from every design that has fabricated this macro (survey of
+2026-10-14; the shuttle repositories' `commit_id.json`, metrics and netlists,
+and the CI logs that are still downloadable):
+
+- All of them -- FemtoRV, KianV's regfile edition, SIC-1 and SPELL on sky25b,
+  KianV and SIC-1 again on sky26c -- use this byte-identical liberty with
+  `"*"`, so 0.2 ns at every corner, and TT's default hold margins. None has a
+  guard band; nor have the unfabricated designs checked.
+- The sky25b chips work: FemtoRV ran MicroPython up to 80 MHz, KianV "mostly
+  works" (the write-first erratum above), SIC-1 and SPELL ran their demo
+  programs (author's FSiC 2026 slides). Nobody has measured the macro's
+  timing on them, and the slides give neither die counts nor conditions.
+- Macro-input hold slack at min_ff: SIC-1 +0.234 ns (its own STA report),
+  KianV sky26c +0.248 ns (OpenSTA on its SPEF), FemtoRV, KianV sky25b and
+  SPELL at least +0.11 ns and an estimated +0.20 to +0.35 ns (their
+  parasitics no longer exist anywhere; netlist-only STA, calibrated on the
+  designs that have both). This design without the guard (`rfm2-a3fo`):
+  +0.166 ns, the lowest of the set.
+- Slack + 0.45 ns (the 0.2 ns hold plus TT's 0.25 ns clock uncertainty) is the
+  real hold a design survives at that corner: 0.62 ns here, 0.68 and 0.70 ns
+  for the two exact figures above.
+
+With 0.4 ns the hold repair has to leave every macro input able to take about
+0.75 ns, level with or above every fabricated design; the cost should be a few
+dozen hold buffers in front of the macro's 48 inputs. tt and ss keep the
+original file: there the same inputs already have +0.58 and +1.60 ns of hold
+slack, and more hold delay at those corners would land on the paths that
+limit the clock.
 
 No waivers: PDN violations stay errors and Magic keeps same-named nets apart,
 so LVS proves every macro power pin is connected. `src/rf_top.v` must be in
