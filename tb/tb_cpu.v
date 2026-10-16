@@ -164,21 +164,21 @@ module tb_cpu;
             $display("--- Instruction #%0d | PC=0x%08h | Instr=0x%08h ---",
                      instr_count, dbg_pc, dbg_instr);
             $display("  x0 (zero)=%08h  x1  (ra) =%08h  x2  (sp) =%08h  x3  (gp) =%08h",
-                     32'h0, cpu.rf.reg_file[1], cpu.rf.reg_file[2], cpu.rf.reg_file[3]);
+                     32'h0, cpu.rf.rf_macro.storage[1], cpu.rf.rf_macro.storage[2], cpu.rf.rf_macro.storage[3]);
             $display("  x4  (tp) =%08h  x5  (t0) =%08h  x6  (t1) =%08h  x7  (t2) =%08h",
-                     cpu.rf.reg_file[4], cpu.rf.reg_file[5], cpu.rf.reg_file[6], cpu.rf.reg_file[7]);
+                     cpu.rf.rf_macro.storage[4], cpu.rf.rf_macro.storage[5], cpu.rf.rf_macro.storage[6], cpu.rf.rf_macro.storage[7]);
             $display("  x8  (s0) =%08h  x9  (s1) =%08h  x10 (a0) =%08h  x11 (a1) =%08h",
-                     cpu.rf.reg_file[8], cpu.rf.reg_file[9], cpu.rf.reg_file[10], cpu.rf.reg_file[11]);
+                     cpu.rf.rf_macro.storage[8], cpu.rf.rf_macro.storage[9], cpu.rf.rf_macro.storage[10], cpu.rf.rf_macro.storage[11]);
             $display("  x12 (a2) =%08h  x13 (a3) =%08h  x14 (a4) =%08h  x15 (a5) =%08h",
-                     cpu.rf.reg_file[12], cpu.rf.reg_file[13], cpu.rf.reg_file[14], cpu.rf.reg_file[15]);
+                     cpu.rf.rf_macro.storage[12], cpu.rf.rf_macro.storage[13], cpu.rf.rf_macro.storage[14], cpu.rf.rf_macro.storage[15]);
             $display("  x16 (a6) =%08h  x17 (a7) =%08h  x18 (s2) =%08h  x19 (s3) =%08h",
-                     cpu.rf.reg_file[16], cpu.rf.reg_file[17], cpu.rf.reg_file[18], cpu.rf.reg_file[19]);
+                     cpu.rf.rf_macro.storage[16], cpu.rf.rf_macro.storage[17], cpu.rf.rf_macro.storage[18], cpu.rf.rf_macro.storage[19]);
             $display("  x20 (s4) =%08h  x21 (s5) =%08h  x22 (s6) =%08h  x23 (s7) =%08h",
-                     cpu.rf.reg_file[20], cpu.rf.reg_file[21], cpu.rf.reg_file[22], cpu.rf.reg_file[23]);
+                     cpu.rf.rf_macro.storage[20], cpu.rf.rf_macro.storage[21], cpu.rf.rf_macro.storage[22], cpu.rf.rf_macro.storage[23]);
             $display("  x24 (s8) =%08h  x25 (s9) =%08h  x26 (s10)=%08h  x27 (s11)=%08h",
-                     cpu.rf.reg_file[24], cpu.rf.reg_file[25], cpu.rf.reg_file[26], cpu.rf.reg_file[27]);
+                     cpu.rf.rf_macro.storage[24], cpu.rf.rf_macro.storage[25], cpu.rf.rf_macro.storage[26], cpu.rf.rf_macro.storage[27]);
             $display("  x28 (t3) =%08h  x29 (t4) =%08h  x30 (t5) =%08h  x31 (t6) =%08h",
-                     cpu.rf.reg_file[28], cpu.rf.reg_file[29], cpu.rf.reg_file[30], cpu.rf.reg_file[31]);
+                     cpu.rf.rf_macro.storage[28], cpu.rf.rf_macro.storage[29], cpu.rf.rf_macro.storage[30], cpu.rf.rf_macro.storage[31]);
             $display("");
         end
     endtask
@@ -198,21 +198,21 @@ module tb_cpu;
             // Register dump
             $display("--- Register File ---");
             $display("  x0 (zero)=%08h  x1  (ra) =%08h  x2  (sp) =%08h  x3  (gp) =%08h",
-                     32'h0, cpu.rf.reg_file[1], cpu.rf.reg_file[2], cpu.rf.reg_file[3]);
+                     32'h0, cpu.rf.rf_macro.storage[1], cpu.rf.rf_macro.storage[2], cpu.rf.rf_macro.storage[3]);
             $display("  x4  (tp) =%08h  x5  (t0) =%08h  x6  (t1) =%08h  x7  (t2) =%08h",
-                     cpu.rf.reg_file[4], cpu.rf.reg_file[5], cpu.rf.reg_file[6], cpu.rf.reg_file[7]);
+                     cpu.rf.rf_macro.storage[4], cpu.rf.rf_macro.storage[5], cpu.rf.rf_macro.storage[6], cpu.rf.rf_macro.storage[7]);
             $display("  x8  (s0) =%08h  x9  (s1) =%08h  x10 (a0) =%08h  x11 (a1) =%08h",
-                     cpu.rf.reg_file[8], cpu.rf.reg_file[9], cpu.rf.reg_file[10], cpu.rf.reg_file[11]);
+                     cpu.rf.rf_macro.storage[8], cpu.rf.rf_macro.storage[9], cpu.rf.rf_macro.storage[10], cpu.rf.rf_macro.storage[11]);
             $display("  x12 (a2) =%08h  x13 (a3) =%08h  x14 (a4) =%08h  x15 (a5) =%08h",
-                     cpu.rf.reg_file[12], cpu.rf.reg_file[13], cpu.rf.reg_file[14], cpu.rf.reg_file[15]);
+                     cpu.rf.rf_macro.storage[12], cpu.rf.rf_macro.storage[13], cpu.rf.rf_macro.storage[14], cpu.rf.rf_macro.storage[15]);
             $display("  x16 (a6) =%08h  x17 (a7) =%08h  x18 (s2) =%08h  x19 (s3) =%08h",
-                     cpu.rf.reg_file[16], cpu.rf.reg_file[17], cpu.rf.reg_file[18], cpu.rf.reg_file[19]);
+                     cpu.rf.rf_macro.storage[16], cpu.rf.rf_macro.storage[17], cpu.rf.rf_macro.storage[18], cpu.rf.rf_macro.storage[19]);
             $display("  x20 (s4) =%08h  x21 (s5) =%08h  x22 (s6) =%08h  x23 (s7) =%08h",
-                     cpu.rf.reg_file[20], cpu.rf.reg_file[21], cpu.rf.reg_file[22], cpu.rf.reg_file[23]);
+                     cpu.rf.rf_macro.storage[20], cpu.rf.rf_macro.storage[21], cpu.rf.rf_macro.storage[22], cpu.rf.rf_macro.storage[23]);
             $display("  x24 (s8) =%08h  x25 (s9) =%08h  x26 (s10)=%08h  x27 (s11)=%08h",
-                     cpu.rf.reg_file[24], cpu.rf.reg_file[25], cpu.rf.reg_file[26], cpu.rf.reg_file[27]);
+                     cpu.rf.rf_macro.storage[24], cpu.rf.rf_macro.storage[25], cpu.rf.rf_macro.storage[26], cpu.rf.rf_macro.storage[27]);
             $display("  x28 (t3) =%08h  x29 (t4) =%08h  x30 (t5) =%08h  x31 (t6) =%08h",
-                     cpu.rf.reg_file[28], cpu.rf.reg_file[29], cpu.rf.reg_file[30], cpu.rf.reg_file[31]);
+                     cpu.rf.rf_macro.storage[28], cpu.rf.rf_macro.storage[29], cpu.rf.rf_macro.storage[30], cpu.rf.rf_macro.storage[31]);
 
             // Memory dump: first 256 bytes and data section (0x800-0x8FF)
             $display("\n--- Memory Dump (0x0000-0x00FF) ---");

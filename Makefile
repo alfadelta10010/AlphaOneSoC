@@ -31,6 +31,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
               $(SRC_DIR)/muldiv.v \
               $(SRC_DIR)/pmp.v \
               $(SRC_DIR)/regFile.v \
+              $(SRC_DIR)/rf_top.v \
               $(SRC_DIR)/regs.v \
               $(SRC_DIR)/signExt.v
 
@@ -102,6 +103,9 @@ test-decoder: $(BUILD_DIR)
 	@echo "=== Testing Decoder ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_decoder $(SRC_DIR)/decoder.v $(TB_DIR)/tb_decoder.v
 	@$(call run_tb,tb_decoder)
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_rf_fields $(SRC_DIR)/decoder.v $(SRC_DIR)/compressed_decoder.v \
+		$(TB_DIR)/tb_rf_fields.v
+	@$(call run_tb,tb_rf_fields)
 
 test-signext: $(BUILD_DIR)
 	@echo "=== Testing Sign Extension ==="
@@ -115,13 +119,19 @@ test-controller: $(BUILD_DIR)
 
 test-regfile: $(BUILD_DIR)
 	@echo "=== Testing Register File ==="
-	@$(IVERILOG) -o $(BUILD_DIR)/tb_regFile $(SRC_DIR)/regFile.v $(TB_DIR)/tb_regFile.v
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_regFile $(SRC_DIR)/regFile.v $(SRC_DIR)/rf_top.v $(TB_DIR)/tb_regFile.v
 	@$(call run_tb,tb_regFile)
+	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X | tee tb_regFile_x.log && \
+		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_x.log && grep -q '^ALL REGFILE TESTS PASSED' tb_regFile_x.log
+	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X +RF_COLLIDE_X | tee tb_regFile_cx.log && \
+		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_cx.log && grep -q '^ALL REGFILE TESTS PASSED' tb_regFile_cx.log
 
 test-csr: $(BUILD_DIR)
 	@echo "=== Testing CSR ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_csr $(SRC_DIR)/csr.v $(TB_DIR)/tb_csr.v
 	@$(call run_tb,tb_csr)
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_inc64 -s tb_inc64 $(SRC_DIR)/csr.v $(TB_DIR)/tb_inc64.v
+	@$(call run_tb,tb_inc64)
 
 test-compressed: $(BUILD_DIR)
 	@echo "=== Testing Compressed Decoder ==="

@@ -51,26 +51,31 @@ module clint(
     end
 
     // mtime: increment every cycle, but a write takes priority on the same edge.
-    // Using a single always block avoids the two-driver race condition.
-    always @(posedge clk) begin
+    // The next value is a wire, loaded on every edge, because inc64 (csr.v)
+    // keeps its carry flags from it.
+    wire [63:0] mtime_inc;
+    reg  [63:0] mtime_d;
+    always @(*) begin
         if (rst) begin
-            mtime <= 64'b0;
+            mtime_d = 64'b0;
         end else if (we && addr == 16'hBFF8) begin
-            mtime <= {mtime[63:32],
-                      wmask[3] ? wdata[31:24] : mtime[31:24],
-                      wmask[2] ? wdata[23:16] : mtime[23:16],
-                      wmask[1] ? wdata[15:8]  : mtime[15:8],
-                      wmask[0] ? wdata[7:0]   : mtime[7:0]};
+            mtime_d = {mtime[63:32],
+                       wmask[3] ? wdata[31:24] : mtime[31:24],
+                       wmask[2] ? wdata[23:16] : mtime[23:16],
+                       wmask[1] ? wdata[15:8]  : mtime[15:8],
+                       wmask[0] ? wdata[7:0]   : mtime[7:0]};
         end else if (we && addr == 16'hBFFC) begin
-            mtime <= {wmask[3] ? wdata[31:24] : mtime[63:56],
-                      wmask[2] ? wdata[23:16] : mtime[55:48],
-                      wmask[1] ? wdata[15:8]  : mtime[47:40],
-                      wmask[0] ? wdata[7:0]   : mtime[39:32],
-                      mtime[31:0]};
+            mtime_d = {wmask[3] ? wdata[31:24] : mtime[63:56],
+                       wmask[2] ? wdata[23:16] : mtime[55:48],
+                       wmask[1] ? wdata[15:8]  : mtime[47:40],
+                       wmask[0] ? wdata[7:0]   : mtime[39:32],
+                       mtime[31:0]};
         end else begin
-            mtime <= mtime + 64'd1;
+            mtime_d = mtime_inc;
         end
     end
+    always @(posedge clk) mtime <= mtime_d;
+    inc64 mtime_incr(.clk(clk), .q(mtime), .d(mtime_d), .q_inc(mtime_inc));
 
     reg mtip;
     always @(posedge clk) begin

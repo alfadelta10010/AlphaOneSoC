@@ -159,6 +159,30 @@ rs2_snoop           spike
 cjal_link           spike
 t_umode             spike
 
+# ---- register file: synchronous, write-first reads (the rf_top macro) -----------
+# Destinations that are also sources (AMOs, LR/SC, loads into their base),
+# read-after-write across every EX stall, the fetch PMP check cycles, the write
+# landing on the next reader's capture edge for every way an instruction names
+# its registers (32-bit formats and each compressed form), and x0 everywhere.
+rf_amo_alias        spike
+rf_amo_alias        spike  +DMEM_WAIT=3
+rf_amo_alias        spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+rf_load_alias       spike
+rf_load_alias       spike  +DMEM_WAIT=2 +NOTREADY_DATA=1
+rf_load_alias       spike  +IMEM_WAIT=1 +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+rf_raw_stall        spike
+rf_raw_stall        spike  +IMEM_WAIT=2
+rf_raw_stall        spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+rf_pmp_raw          spike
+rf_pmp_raw          spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=1
+rf_capture          spike
+rf_capture          spike  +IMEM_WAIT=1
+rf_capture          spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+# An instruction held behind a WFI that wakes without a trap (rf_wfi_hold.S
+# says why); Spike waits in such a WFI, so DUT-only.
+rf_wfi_hold         expect x12=0xc x13=0xc
+rf_wfi_hold         expect x12=0xc x13=0xc -- +DMEM_WAIT=2 +DMEM_RANDOM=1
+
 # ---- straddling 32-bit fetch ------------------------------------------------------
 straddle_top        spike
 straddle_top        spike  +IMEM_WAIT=2 +IMEM_RANDOM=1

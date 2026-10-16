@@ -59,7 +59,10 @@
 # the registers at X instead of 0 (src/regFile.v), so a test that reads a
 # register it never wrote fails on the X it leaves in the dump -- unless
 # the value only decides a branch that falls through on Spike as well
-# (src/regFile.v says why).
+# (src/regFile.v says why). +RF_COLLIDE_X makes the register-file macro's
+# model return X for a read of the word written on the same edge, which the
+# core must never use (src/regFile.v bypasses it); the suite is run with
+# RUN_PLUSARGS="+RF_X +RF_COLLIDE_X" as well as plain.
 #
 # Tests live beside this script, artifacts go to ./out (gitignored).
 # Toolchain: riscv64-unknown-elf-*, spike and iverilog on PATH.
@@ -78,7 +81,7 @@ TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
 ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 
-CORE_SRC=("$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,signExt}.v)
+CORE_SRC=("$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,rf_top,signExt}.v)
 build() {
   if [ $SOC = 1 ]; then
     iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \

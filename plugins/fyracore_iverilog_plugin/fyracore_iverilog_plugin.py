@@ -25,6 +25,7 @@ FYRACORE_SRC = [
     'src/muldiv.v',
     'src/pmp.v',
     'src/regFile.v',
+    'src/rf_top.v',
     'src/regs.v',
     'src/signExt.v',
 ]
