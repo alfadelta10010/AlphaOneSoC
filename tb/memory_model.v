@@ -201,21 +201,37 @@ module memory_model #(
     assign ext_irq = extirq_reg;
 
     // ── SRAM array ──────────────────────────────────────────────────────────
+    // Not zero-filled. A loop over all MEM_SIZE bytes took 9.9 of the 10
+    // seconds of every directed run (and doubled the simulator's memory), for
+    // a program of a few kilobytes. Instead a byte nothing has written is X
+    // in the array, and z8 returns it as 0 -- what the fill gave it, and
+    // what Spike's zero-filled RAM returns. The one difference: a byte the
+    // core wrote with X data reads back 0, not X. The store that wrote it
+    // already put the X into the trace (its data is part of the store's
+    // line), which fails the run on its own. Past the end of the array z8
+    // gives X, as the array did (a 32-bit fetch at the last halfword of
+    // PSRAM, whose upper half the core must not use).
+    //
+    // The array word is z8's argument, not read inside it: a continuous
+    // assignment is re-evaluated when its operands change, and a function's
+    // operands are its arguments, so a function that read mem[] itself
+    // returned the value from before a store to the same address.
     reg [7:0] mem [0:MEM_SIZE-1];
-    integer i;
 
     initial begin
-        // Zero-fill first, then overlay the program hex
-        for (i = 0; i < MEM_SIZE; i = i + 1)
-            mem[i] = 8'h00;
         if (INIT_FILE != "")
             $readmemh(INIT_FILE, mem);
     end
 
+    function [7:0] z8(input [7:0] v, input [31:0] a);
+        z8 = (a >= MEM_SIZE)  ? 8'hxx :
+             (^v === 1'bx)    ? 8'h00 : v;
+    endfunction
+
     // --- Instruction read (combinational) ---
     // PSRAM by its 24-bit offset; a fetch from flash reads zeros.
     wire [23:0] ia = imem_addr[23:0];
-    wire [31:0] imem_word = imem_addr[31] ? {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]}
+    wire [31:0] imem_word = imem_addr[31] ? {z8(mem[ia+3], ia+3), z8(mem[ia+2], ia+2), z8(mem[ia+1], ia+1), z8(mem[ia], ia)}
                                           : 32'h0000_0000;
     // Not valid until the handshake completes: a core that captures the fetch
     // while imem_ready is low latches junk rather than the right instruction.
@@ -227,7 +243,7 @@ module memory_model #(
 
     // --- Data read (combinational) ---
     wire [23:0] da = dmem_addr[23:0];
-    wire [31:0] mem_rdata = dmem_addr[31] ? {mem[da+3], mem[da+2], mem[da+1], mem[da]}
+    wire [31:0] mem_rdata = dmem_addr[31] ? {z8(mem[da+3], da+3), z8(mem[da+2], da+2), z8(mem[da+1], da+1), z8(mem[da], da)}
                                           : 32'h0000_0000;   // flash
 
     // --- Data write (synchronous, byte-lane masked) ---

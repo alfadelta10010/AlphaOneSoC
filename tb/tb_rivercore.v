@@ -357,17 +357,16 @@ module tb_rivercore;
 
     // Program load, deliberately at #1 rather than time 0.
     //
-    // memory_model's own initial block zero-fills all MEM_SIZE bytes before
-    // applying its compile-time INIT_FILE. Verilog does not define the relative
-    // order of initial blocks in different modules, so loading the program at
-    // time 0 here could be undone by that fill. #1 is strictly after every
-    // time-0 initial block, and reset is held until #25, so the core has not
-    // fetched anything yet.
+    // memory_model's own initial block applies its compile-time INIT_FILE.
+    // Verilog does not define the relative order of initial blocks in
+    // different modules, so loading the program at time 0 here could be
+    // undone by it (and, in the SoC build, by the Pmod model's zero-fill of
+    // its PSRAM). #1 is strictly after every time-0 initial block, and reset
+    // is held until #25, so the core has not fetched anything yet.
     //
-    // This also drops a second 33.5M-iteration zero-fill that used to run here.
-    // Duplicating memory_model's fill cost roughly half of each simulation's
-    // startup, which across a 1000+ test regression was the single largest
-    // contributor to wall-clock time.
+    // There used to be a 33.5M-iteration zero-fill here, and memory_model
+    // had another: together nearly all of each run's start-up time. Neither
+    // is needed -- memory_model reads a byte nothing wrote as 0.
     initial begin
         #1;
         if (have_init_file) begin
@@ -377,7 +376,10 @@ module tb_rivercore;
             // failure the comparison stage reports as a DUT bug. Empty dumps
             // also compare equal to each other, so this must fail loudly.
             // boot_addr 0x80000000 is mem[0] (memory_model indexes PSRAM by [23:0]).
-            if ({`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 32'h0) begin
+            // memory_model's array is not zero-filled, so a byte nothing
+            // loaded is X there (it reads 0 through the model's ports).
+            if ({`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 32'h0 ||
+                ^{`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 1'bx) begin
                 $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
                          init_file_str);
                 $fatal(1);
