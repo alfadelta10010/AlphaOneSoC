@@ -66,13 +66,20 @@
 #
 # Tests live beside this script, artifacts go to ./out (gitignored).
 # Toolchain: riscv64-unknown-elf-*, spike and iverilog on PATH.
+#
+# For mutation testing (tb/mutate/run.py) three environment variables
+# point a run somewhere else; none changes what a run checks:
+#   FYRA_SRC=<dir>  build the simulator from this copy of src/
+#   OUT_DIR=<dir>   artifacts there instead of ./out (./out/soc for soc)
+#   FAILFAST=1      stop the suite at its first failing run
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
 SOC=0
 [ "${1:-}" = soc ] && { SOC=1; shift; }
-OUT="$HERE/out"
-[ $SOC = 1 ] && OUT="$HERE/out/soc"
+SRC="${FYRA_SRC:-$ROOT/src}"
+OUT="${OUT_DIR:-$HERE/out}"
+[ $SOC = 1 ] && OUT="$OUT/soc"
 mkdir -p "$OUT"
 SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
             -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
@@ -81,11 +88,11 @@ TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
 ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 
-CORE_SRC=("$ROOT"/src/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,rf_top,signExt}.v)
+CORE_SRC=("$SRC"/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,rf_top,signExt}.v)
 build() {
   if [ $SOC = 1 ]; then
     iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
-      "${CORE_SRC[@]}" "$ROOT"/src/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,alphaone_soc}.v \
+      "${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,alphaone_soc}.v \
       "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v || return 1
   else
     iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
@@ -155,7 +162,9 @@ rd()   { grep -oE "\b$2 +0x[0-9a-fxzXZ]+" "$1" 2>/dev/null | tail -1 | awk '{pri
 
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf "  PASS %s\n" "$1"; }
-bad() { fail=$((fail+1)); printf "  FAIL %s\n" "$1"; [ -n "${2:-}" ] && printf "%s\n" "$2"; }
+bad() { fail=$((fail+1)); printf "  FAIL %s\n" "$1"; [ -n "${2:-}" ] && printf "%s\n" "$2"
+        [ -n "${FAILFAST:-}" ] && { echo "REGRESS pass=$pass fail=$fail (FAILFAST: stopped at the first failure)"; exit 1; }
+        return 0; }
 
 # Checks common to both modes; prints a reason and returns 1 on failure.
 sane() { # sane <name>
