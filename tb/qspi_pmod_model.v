@@ -346,6 +346,18 @@ module qspi_pmod_model #(
                 phase = P_DCRM;
                 mode  = 8'h00;
             end
+        end else if (cs_n == 3'b001 && !both && phase == P_CMD && n == 0 && t_rise < 0.0) begin
+            // The other PSRAM's select fell after the first one, before any SCK
+            // edge: a broadcast. Each chip sees its own select, so this is the same
+            // transaction for both. In a zero-delay simulation the two fall on one
+            // event; with real delays they fall picoseconds apart.
+            chip  = which(cs_n);
+            both  = 1'b1;
+            mixed = psram_qpi[0] != psram_qpi[1];
+            if ((!cs_n[1] && ($realtime - t_rst[0]) < TRST_NS) ||
+                (!cs_n[2] && ($realtime - t_rst[1]) < TRST_NS))
+                fail("PSRAM selected within tRST of its reset");
+            psram_rsten = rsten_q & cs_n[2:1];
         end else if (!any_sel && phase != P_IDLE) begin
             if (chip != 2'd0 && ($realtime - t_sel) > TCEM_NS)
                 fail("PSRAM chip select held low longer than tCEM");

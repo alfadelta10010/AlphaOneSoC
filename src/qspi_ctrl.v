@@ -108,9 +108,14 @@
 // overlap for a moment. Every other transaction ends on SCK's falling edge
 // (mode 0), since there the device drives nothing new.
 //
-// Interface. The requester (mem_ctrl) raises `start` and holds cs_sel, addr,
-// we, nbytes_m1 and wdata stable until `done`. They are read combinationally
-// throughout the transaction, so none of them is copied here. `done` is high
+// Interface. The requester (mem_ctrl) raises `start`. cs_sel and we are taken
+// on the cycle the transaction starts (`start` with `idle`) and kept here (two
+// flops); addr, nbytes_m1 and wdata are read combinationally from the cycle
+// after that until `done`, and must be stable over those cycles. So the
+// requester may still be choosing whom to serve on the start cycle, where
+// only the chip and the direction have to be right, and that choice is not
+// in front of the pins: the command, address and data nibbles are driven
+// from this module's state and from what the requester holds steady. `done` is high
 // for one cycle, the first cycle after the last data clock, and read data is
 // valid in that cycle. `start` is taken only on a cycle `idle` is high, and
 // `idle` is never high on the cycle `done` is, so a requester's request is
@@ -131,9 +136,9 @@ module qspi_ctrl (
     input  wire        rd_late,    // strap, sampled during reset: read data one clock later
     // Transaction request, held by the requester until done
     input  wire        start,
-    input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2)
+    input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2); taken at the start
     input  wire [23:0] addr,       // byte address within the chip
-    input  wire        we,         // 1 = quad write 0x38, 0 = quad I/O read 0xEB
+    input  wire        we,         // 1 = quad write 0x38, 0 = quad I/O read 0xEB; taken at the start
     input  wire [1:0]  nbytes_m1,  // bytes to transfer, minus one
     input  wire [31:0] wdata,      // write data, first byte sent in [7:0]
     output wire        idle,       // no transaction in progress: start is taken
@@ -163,6 +168,8 @@ module qspi_ctrl (
     reg [2:0]  step;    // which command of it
     reg        late;    // rd_late, as sampled during reset
     reg        again;   // start-up step 4: second 8 clocks of its 16
+    reg        t_we;    // the transaction in flight: its `we`...
+    reg        t_psram; // ...and whether its chip is a PSRAM
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -175,7 +182,11 @@ module qspi_ctrl (
     // (flash); 6 = 35h (PSRAMs). Steps 3 and 4 are FFh in SPI form, step 4
     // sent twice under one chip select. After it, PSRAM traffic is QPI form
     // and flash traffic SPI form.
-    wire       psram    = (cs_sel != 2'd0);
+    // start_*: of a transaction starting on this clock, from the request.
+    // psram and qpi_form: of the transaction in flight, from t_psram.
+    wire       start_psram = (cs_sel != 2'd0);
+    wire       start_qpi   = init ? (step == 3'd0 || step == 3'd5) : start_psram;
+    wire       psram    = t_psram;
     wire       qpi_form = init ? (step == 3'd0 || step == 3'd5) : psram;
     reg  [7:0] cmd;
     always @(*) begin
@@ -188,7 +199,7 @@ module qspi_ctrl (
                 default: cmd = 8'hFF;
             endcase
         else
-            cmd = we ? 8'h38 : psram ? 8'h0B : 8'hEB;
+            cmd = t_we ? 8'h38 : psram ? 8'h0B : 8'hEB;
     end
 
     // The data phase counts cnt down from 7 and stops at 8 - 2*nbytes. The
@@ -212,7 +223,7 @@ module qspi_ctrl (
 
     // Where a read nibble is captured (see Timing above). Late: on each
     // rising-edge clock of the data phase but the first, and in S_TAIL.
-    wire sample = !we && (late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
+    wire sample = !t_we && (late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
                                :  (state == S_DATA &&  sck));
 
     // Chip selects for a transaction starting now. A write never selects
@@ -242,9 +253,11 @@ module qspi_ctrl (
                 // counts them; see Start-up sequence).
                 S_IDLE: if (ctl_oe && (init ? (step != 3'd0 || cnt == 3'd7) : start)) begin
                     state <= S_CMD;
-                    cnt   <= qpi_form ? 3'd1 : 3'd7;
+                    cnt   <= start_qpi ? 3'd1 : 3'd7;
                     cs_n  <= ~sel_now;
                     io_oe <= 1'b1;
+                    t_we    <= we;
+                    t_psram <= start_psram;
                 end else if (init)
                     cnt <= cnt + 3'd1;
                 S_TAIL: begin
@@ -286,15 +299,15 @@ module qspi_ctrl (
                                 // released; the flash's 6 start with its
                                 // driven mode byte (released at cnt 4 below).
                                 S_ADDR: begin
-                                    state <= we ? S_DATA : S_DUMMY;
-                                    cnt   <= we ? 3'd7 : psram ? 3'd3 : 3'd5;
-                                    if (!we && psram)
+                                    state <= t_we ? S_DATA : S_DUMMY;
+                                    cnt   <= t_we ? 3'd7 : psram ? 3'd3 : 3'd5;
+                                    if (!t_we && psram)
                                         io_oe <= 1'b0;
                                 end
                                 S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
                                 default: begin  // S_DATA
                                     io_oe <= 1'b0;
-                                    if (late && !we)
+                                    if (late && !t_we)
                                         state <= S_TAIL;
                                     else begin
                                         state <= S_END;

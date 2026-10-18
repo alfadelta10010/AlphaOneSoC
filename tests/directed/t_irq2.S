@@ -4,6 +4,11 @@
 rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
+  # The handler's counters, before anything can interrupt: the first
+  # interrupt is 37 clocks after the timer is armed, which need not be
+  # after the five instructions that follow the enable.
+  li   s10, 0                 # irq count
+  li   s9, 0                  # MIE-lost count
   li   s8, 0x02000000
   li   t1, 0x4000
   add  s7, s8, t1
@@ -21,8 +26,6 @@ rvtest_entry_point:
   li   s0, 0
   li   s1, 2000
   li   s2, 0x80100000
-  li   s10, 0                 # irq count
-  li   s9, 0                  # MIE-lost count
 loop:
   sw   s0, 0(s2)
   lw   t1, 0(s2)

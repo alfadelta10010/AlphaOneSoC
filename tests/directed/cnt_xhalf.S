@@ -22,14 +22,18 @@ rvtest_entry_point:
   csrw minstret, t2        # old lo = ffffffff: must NOT carry into hi
   csrr a1, minstreth       # 0
   csrr a2, minstreth       # 0
-  # 3: mcycleh write, adjacent mcycle read
-  li   t1, 0x200
-  csrw mcycle, t1
-  li   t2, 0x9
-  csrw mcycleh, t2
-  csrr a3, mcycle
-  # 4: mcycle write with old lo = ffffffff, adjacent mcycleh read
-  li   t1, -1
+  # 3: an mcycleh write with an adjacent mcycle read is cnt_xcycle.S: what
+  # it reads counts clocks, so it cannot be compared with Spike line by line
+  # 4: mcycle write with old lo = ffffffff, then mcycleh reads. mcycle
+  # counts clocks, so the second write has to land on the clock the low
+  # half is ffffffff: it is written as fffffffe, held for the clock after
+  # the write (csr.v, mcycle_wr_q), counts once, and the next csrw commits
+  # on the clock after that -- with a fast fetch, where EX takes three
+  # cycles (the first of them the write's own WB cycle). This is pinned to
+  # that latency: a clock earlier and the case tests nothing, a clock later
+  # and the low half has wrapped and mcycleh reads 1. tb_csr checks the same
+  # write on the exact clock at the module.
+  li   t1, -2
   li   t2, 0x7
   csrw mcycleh, x0
   csrw mcycle, t1

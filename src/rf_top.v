@@ -19,7 +19,7 @@
 //
 // There is no reset. The storage starts at 0, as Spike's registers do, unless
 // +RF_X is given; then it starts at X like the silicon's unknown state, so a
-// read of a register nothing wrote shows up as an X (see tests/directed/run.sh).
+// read of a register nothing wrote shows up as an X.
 //
 // +RF_COLLIDE_X departs from the macro's model on purpose: a read of the word
 // written on the same edge returns X instead of the new data. The write

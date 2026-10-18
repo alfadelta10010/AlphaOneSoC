@@ -10,12 +10,18 @@ rvtest_entry_point:
   li   t1, 0x7
   csrw minstreth, t1
   csrr a1, instreth
+  # mcycle counts clocks (Spike: instructions), so it is stopped for its
+  # two cases (mcountinhibit.CY): the alias must show the value written,
+  # whatever the read's distance from the write.
+  li   t0, 1
+  csrw mcountinhibit, t0
   li   t1, 0x2000
   csrw mcycle, t1
   csrr a2, cycle
   li   t1, 0x9
   csrw mcycleh, t1
   csrr a3, cycleh
+  csrw mcountinhibit, x0
   li   t0, 1
   la   t1, tohost
   sw   t0, 0(t1)

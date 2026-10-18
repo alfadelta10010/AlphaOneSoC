@@ -53,6 +53,18 @@ module tt_um_alfadelta10010_alphaone_soc (
         else        rst_sync <= {rst_sync[0], 1'b0};
     wire rst = rst_sync[1];
 
+    // The pins' own copy of the reset, the other way up: `run` is !rst, from
+    // a flop of its own. rst reaches every flop of the SoC through a buffer
+    // tree about a dozen cells deep, and the gates below sat at the far end
+    // of it, so the pins left reset several nanoseconds after the clock
+    // edge that released it. It is kept inverted (cleared by rst_n, loading
+    // !rst_sync[0]) so that synthesis does not fold it back into rst_sync[1],
+    // which has the same inputs.
+    reg run;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) run <= 1'b0;
+        else        run <= !rst_sync[0];
+
     // ── SoC ─────────────────────────────────────────────────────────────────
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe;
     wire [2:0] qspi_cs_n;
@@ -80,17 +92,17 @@ module tt_um_alfadelta10010_alphaone_soc (
     // ── Pins ────────────────────────────────────────────────────────────────
     // UO_RESET is what the SoC itself drives once reset has reached it (the
     // UART's and the GPIO block's reset values), so nothing moves when rst
-    // falls. Each bit comes down to one two-input gate of rst and the SoC's
-    // bit, which cannot glitch when only rst changes.
+    // falls. Each bit comes down to one two-input gate of run and the SoC's
+    // bit, which cannot glitch when only run changes.
     localparam [7:0] UO_RESET = 8'h39;
-    assign uo_out  = rst ? UO_RESET
-                         : {gpio_out[7:6], uart_rts_n, uart_tx, gpio_out[3:0]};
+    assign uo_out  = run ? {gpio_out[7:6], uart_rts_n, uart_tx, gpio_out[3:0]}
+                         : UO_RESET;
 
     assign uio_out = {qspi_cs_n[2], qspi_cs_n[1], qspi_io_out[3], qspi_io_out[2],
                       qspi_sck, qspi_io_out[1], qspi_io_out[0], qspi_cs_n[0]};
 
-    wire ctl_oe = qspi_ctl_oe && !rst;    // SCK and the chip selects
-    wire io_oe  = qspi_io_oe  && !rst;    // SD0..SD3
+    wire ctl_oe = qspi_ctl_oe && run;     // SCK and the chip selects
+    wire io_oe  = qspi_io_oe  && run;     // SD0..SD3
     assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, ctl_oe, io_oe, io_oe, ctl_oe};
 
     // gpio_out[5:4] are always 0: those two pins are the UART's.

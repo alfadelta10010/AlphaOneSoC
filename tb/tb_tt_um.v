@@ -46,8 +46,25 @@
 
 `timescale 1ns / 1ps
 
+// For a simulation with real delays (an SDF-annotated netlist) the clock
+// period, the two inputs driven just after an edge, and the reset-to-pins
+// check are defines. The defaults are this bench as it always ran. With
+// delays, IN_DLY_NS belongs at the SDC's input delay (0.2 * TCLK_NS): 1 ns is
+// inside the window STA assumes no input moves in, and a release there can
+// beat the clock edge it follows to the flops. The Pmod model's delays are
+// nanoseconds for a 10 ns clock; scale them with TCLK_NS.
+`ifndef TCLK_NS
+`define TCLK_NS 10.0
+`endif
+`ifndef IN_DLY_NS
+`define IN_DLY_NS 1
+`endif
+`ifndef RST_CHK_NS
+`define RST_CHK_NS 2
+`endif
+
 module tb_tt_um;
-    localparam real    TCLK  = 10.0;  // as tb_qspi: the Makefile's QSPI delays assume it
+    localparam real    TCLK  = `TCLK_NS;  // 10 by default, as tb_qspi: the Makefile's QSPI delays assume it
     localparam integer N_OUT = 9;     // tests/soc/tt_pins.S has the same two
     localparam integer N_IN  = 9;
 
@@ -104,6 +121,10 @@ module tb_tt_um;
     rp2350_uart_model #(.BIT_NS(16.0 * TCLK)) rp (
         .tx(uo_out[4]), .rx(uart_rx), .cts_n(uo_out[5]));
 
+`ifdef SDF_FILE
+    initial $sdf_annotate(`SDF_FILE, dut);
+`endif
+
     integer errors = 0;
     task automatic fail(input string m);
         begin
@@ -132,8 +153,8 @@ module tb_tt_um;
 
     // 2 ns after rst_n falls, wherever the clock is.
     always @(negedge rst_n) begin
-        #2;
-        if (!rst_n) check_reset_pins("2 ns after rst_n fell");
+        #(`RST_CHK_NS);
+        if (!rst_n) check_reset_pins($sformatf("%0g ns after rst_n fell", 1.0 * `RST_CHK_NS));
     end
 
     // ── Checks on every clock ───────────────────────────────────────────────
@@ -307,7 +328,7 @@ module tb_tt_um;
         aim_at_flash_read;
         #3 rst_n = 1'b0;
         repeat (6) @(posedge clk);
-        #1 rst_n = 1'b1;
+        #(`IN_DLY_NS) rst_n = 1'b1;
 
         // 3. A pulse that fits between two clock edges.
         aim_at_flash_read;
@@ -318,7 +339,7 @@ module tb_tt_um;
         cs0_falls = 0; sck_rises = 0;
         // The strap is free to change once the second edge has gone.
         repeat (2) @(posedge clk);
-        #1 strap = !rd_late;
+        #(`IN_DLY_NS) strap = !rd_late;
 
         while (!done && cyc < max_cycles) @(posedge clk);
         if (!done)

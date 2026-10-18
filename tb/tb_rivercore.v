@@ -184,7 +184,7 @@ module tb_rivercore;
         .done(soc.memc.d_ready),
         .payload({soc.memc.d_addr, soc.memc.d_we, soc.memc.d_be,
                   soc.memc.d_we ? soc.memc.d_wdata : 32'h0}));
-    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1)) chk_qspi (
+    req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1), .LATE(1)) chk_qspi (
         .clk(clk), .rst(rst), .take(soc.qspi.idle && soc.qspi.start),
         .hold(soc.qspi.start), .done(soc.qspi.done),
         .payload({soc.qspi.cs_sel, soc.qspi.addr, soc.qspi.we, soc.qspi.nbytes_m1,
@@ -664,15 +664,17 @@ module tb_rivercore;
     //  Register-file read check
     //
     //  The register file (src/regFile.v, the rf_top macro) reads
-    //  synchronously: in every cycle the core must put on its read
-    //  addresses the registers the instruction in EX will use in the next
-    //  one. A slip reads another register, or the right one a cycle stale,
-    //  and the trace only shows it if the value happens to differ. So on
-    //  every cycle with an instruction in EX, for each source register it
-    //  names other than x0, this checks that the macro took that register's
-    //  address on the edge that started the cycle, and that the data equals
-    //  a shadow register file kept from the write port. A mismatch ends the
-    //  run with an ERROR line and a DUT-ABORT marker in the dump.
+    //  synchronously, and the core keeps the EX instruction's register
+    //  numbers on its read addresses for as long as the instruction is in
+    //  EX; from the instruction's second cycle there (ex_rf_ok) the data
+    //  must be its registers. A slip reads another register, or the right
+    //  one a cycle stale, and the trace only shows it if the value happens
+    //  to differ. So on every such cycle, for each source register the
+    //  instruction names other than x0, this checks that the macro took
+    //  that register's address on the edge that started the cycle, and that
+    //  the data equals a shadow register file kept from the write port. A
+    //  mismatch ends the run with an ERROR line and a DUT-ABORT marker in
+    //  the dump.
     // ================================================================
     reg [31:0] rf_shadow [0:31];
     reg [4:0]  rf_ra_q, rf_rb_q;
@@ -695,7 +697,7 @@ module tb_rivercore;
         end
     endtask
     always @(posedge clk) begin
-        if (!rst && rf_chk_armed && `CPU.ifex_valid) begin
+        if (!rst && rf_chk_armed && `CPU.ifex_valid && `CPU.ex_rf_ok) begin
             if (`CPU.ex_rs1 != 5'd0) begin
                 rf_chk_n = rf_chk_n + 1;
                 if (rf_ra_q !== `CPU.ex_rs1 || `CPU.rf_a !== rf_shadow[`CPU.ex_rs1])
@@ -712,6 +714,43 @@ module tb_rivercore;
         rf_ra_q = `CPU.rf.ra;
         rf_rb_q = `CPU.rf.rb;
         rf_chk_armed = 1'b1;
+    end
+
+    // ================================================================
+    //  Reduced-term check
+    //
+    //  muldiv_want leaves most of the trap decode out, on the argument
+    //  that those causes cannot be raised for an M instruction or a shift
+    //  (src/fyracore.v, ex_trap_iter). This holds it to the full term on
+    //  every clock of every run.
+    // ================================================================
+    always @(posedge clk) begin
+        if (!rst && `CPU.muldiv_want !==
+                    (`CPU.ifex_valid && `CPU.ex_is_iter && !`CPU.ex_trap_decode)) begin
+            $display("ERROR: muldiv_want %b differs from the full trap decode at pc 0x%08h cycle %0d (ex_trap_decode %b)",
+                     `CPU.muldiv_want, `CPU.ifex_pc, cycle_count, `CPU.ex_trap_decode);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    end
+
+    // ================================================================
+    //  use_hazard check
+    //
+    //  use_hazard holds an instruction in EX only by keeping ex_ph clear
+    //  (src/fyracore.v, ex_wait). That is enough only if it can never rise
+    //  once ex_ph is set: no instruction that writes a register the EX
+    //  instruction reads may reach WB before that instruction leaves.
+    // ================================================================
+    always @(posedge clk) begin
+        if (!rst && `CPU.ifex_valid && `CPU.ex_ph && `CPU.use_hazard) begin
+            $display("ERROR: use_hazard with ex_ph set at pc 0x%08h cycle %0d (WB writes x%0d)",
+                     `CPU.ifex_pc, cycle_count, `CPU.exwb_rd);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
     end
 
     // ================================================================

@@ -22,6 +22,7 @@ rvtest_entry_point:
   csrs mie, t0
   li   t0, 0x8
   csrs mstatus, t0
+enabled:
   # workload: muldiv + memory, interrupts land wherever
   li   s0, 0
   li   s1, 400
@@ -51,9 +52,11 @@ handler:
   lw   t5, 0(s6)
   addi t5, t5, 40
   sw   t5, 0(s7)
-  # sanity: mepc must be in [loop, loop_end]
+  # sanity: mepc must not be below the first instruction that ran with
+  # interrupts enabled (the first one can land before the loop: the timer
+  # was armed 40 clocks before, eleven instructions back)
   csrr t6, mepc
-  la   t3, loop
+  la   t3, enabled
   blt  t6, t3, badmepc
   j    hret
 badmepc:

@@ -42,8 +42,8 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
   either port. The behavioural model does this, the author's slides describe the
   design as "read-after-write" (the read word line is enabled after the write
   completes), and KianV's sky25b errata (AMO with rd == rs2) shows it on silicon.
-  Its timing is not characterised. FyraCore needs write-first on every load-use
-  and every read two instructions after a write, so `src/regFile.v` provides it
+  Its timing is not characterised. FyraCore needs write-first whenever an
+  instruction reads what the one before it wrote, so `src/regFile.v` provides it
   with a one-entry bypass of its own and never uses what the macro returns for
   such a read; all it asks of the macro is that the write lands.
 - Word 0 is an ordinary word: writable and unreset. There is no reset at all.
@@ -61,7 +61,8 @@ his work is not stated anywhere; settle that before the macro ships in a submiss
 - `src/regFile.v` wraps the one instance, `rf_macro`; in the TinyTapeout top its
   path is `soc.cpu.rf.rf_macro`. It never writes word 0, and bypasses a read of
   the word written on the same edge; `src/fyracore.v` masks reads of x0 and
-  drives the read addresses a cycle ahead (see `rf_hold` there).
+  keeps the EX instruction's register numbers on the read addresses, from
+  flops, for as long as it is in EX (see `ex_rf_ok` there).
 - `+RF_COLLIDE_X` makes the model return X for a read of the word written on
   the same edge, which the macro's own model answers with the new data. Every
   simulation must be clean with it: it shows that nothing uses that answer.
@@ -216,6 +217,199 @@ reset). The two that win it pass; their pins differ from the RTL's from clock
 the same reason, and from there the traces match two clocks apart. On the
 A + B netlist 14, 16, 17 and 18 ns all pass and match the RTL, so a gate-level
 test of the "just under one SCK period" case should use 18.
+
+### After EX was split over three cycles
+
+The -4.89 ns at ss above was one path shape: `exwb_rd`, the forwarding
+compare and mux select, the ALU, the PMP check, the trap chain and the
+enables of the pipeline registers, all in one EX cycle (24.5 ns). The
+`setup-timing` series took it apart in the RTL (no forwarding; the register
+file read, the ALU and the decisions each in an EX cycle of their own; see
+`src/fyracore.v`, `ex_rf_ok` and `ex_ph`) and found a second cause in the
+flow. Same die, same LibreLane, A + B throughout; every run routed to 0,
+DRC 0, LVS 0, antenna 0, no hold violation at any corner.
+
+| RTL | Settings on top of A + B | Clock | Std cells | Util | Setup tt | Setup ss | Max-slew tt / ss | Hold, worst corner | Hold buffers | Run |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 4d21e43 | none (the A + B row above) | 20 ns | 12.27 t | 60.6 % | +6.80 ns | -4.89 ns | 303 / 3,338 | +0.105 ns | 624 | 42 min |
+| 2da5b5d | none | 20 ns | 12.61 t | 62.2 % | +8.64 ns | +2.38 ns | 249 / 2,597 | +0.108 ns | 668 | 45 min |
+| b5077cd | none | 20 ns | 12.75 t | 62.8 % | +9.32 ns | +3.35 ns | 246 / 2,763 | +0.111 ns | 673 | 34 min |
+| 2da5b5d | C | 20 ns | 13.53 t | 66.2 % | +9.42 ns | +3.41 ns | 22 / 108 | +0.027 ns | 407 | 36 min |
+| 2da5b5d | C | 16 ns | 13.53 t | 66.2 % | +6.51 ns | +0.36 ns | 21 / 90 | +0.023 ns | 16 | 40 min |
+| b5077cd | C with cap 2.16e-4, `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2 | 16 ns | 14.34 t | 69.8 % | +6.44 ns | +0.52 ns | 16 / 97 | +0.180 ns | 97 | 36 min |
+| b5077cd | hold guard | 20 ns | 12.77 t | 62.9 % | +9.19 ns | +3.28 ns | 234 / 2,762 | +0.110 ns | 703 | 36 min |
+| b5077cd | C with cap 2.16e-4, `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2, hold guard | 16 ns | 14.36 t | 69.9 % | +6.49 ns | +0.54 ns | 15 / 71 | +0.183 ns | 92 | 38 min |
+
+C is `LAYERS_RC` `{"*": {met1, met2: res 8.929e-4, cap 2.4e-4; met3, met4:
+res 1.567e-4, cap 2.4e-4}}`, `SIGNAL_WIRE_RC_LAYERS` and
+`CLOCK_WIRE_RC_LAYERS` met1 to met4, `PL_RESIZER_SETUP_SLACK_MARGIN` 0.5.
+"Hold guard" is the ff-corner `rf_top.ff-hold-guard.lib` mapping above; the
+rows without it read `rf_top.lib` at every corner.
+
+- The RTL alone moves the slow corner from 40 MHz to 60 MHz (b5077cd, 16.65 ns)
+  and tt from 76 to 94 MHz, for half a tile.
+- C is a calibration, not a tuning. LibreLane estimates wire capacitance
+  before routing at the technology LEF's average, 0.0815 fF/um; extraction of
+  the routed design gives 0.21 to 0.23 fF/um, and congested nets route up to
+  2.3 times longer than placement suggests. Measured on the 4d21e43 run: with
+  the flow's estimate the finished layout has +2.24 ns at max_ss, with its own
+  extraction -4.89 ns. So the resizer reported "No setup violations", repaired
+  nothing, and left 3,338 slow-corner slew violations it could not see.
+  With the estimate at 2.4e-4 pF/um the design repair inserts 1,126 buffers
+  instead of 495, the slew violations go from 2,597 to 108, and a 16 ns clock
+  closes at every corner.
+- It costs area: 0.9 tile at a 20 ns target, 1.6 at 16 ns with the hold
+  margin raised. 69.8 % still routed in 22 iterations.
+- It also moves hold. The larger estimate makes short paths look slower than
+  they are at the min corner, so with TT's 0.1 ns hold margin the worst hold
+  slack at signoff fell to +0.02 ns, and the paths at the bottom were the
+  macro's `w_data` pins, whose 0.2 ns hold is a placeholder. With the margin
+  at 0.2 ns the worst hold is +0.180 ns, on a macro pin again. Do not use C
+  without it. (Only the `nom_*` key of a per-corner `LAYERS_RC` showed in the
+  flow's RC report; whether the others reach the estimator was not
+  established.)
+- What limits the 16 ns run: the opcode through the trap decode to the next
+  pc (+0.52 ns), and `pmpcfg0` through the PMP check, the trap chain and
+  flush (+0.67 ns).
+- The hold guard costs 0.02 tile on either flow and moves setup only by
+  placement noise (+3.35 -> +3.28 ns at 20 ns, +0.52 -> +0.54 ns at 16 ns).
+
+Hold at the macro's 48 inputs, by the measure of *Hold guard band*: OpenSTA
+(LibreLane 3.0.14's) on each run's SPEF, with the liberty the run read at each
+corner. It reproduces LibreLane's own min.rpt to the picosecond; on
+`rfm2-a3fo-hg` it gives +0.305 ns (`w_data[29]`, also LibreLane's figure)
+where that section, with OpenSTA 2.0.17, has +0.316 ns. "Survives" is slack plus
+the liberty hold plus the 0.25 ns clock uncertainty.
+
+| RTL | Settings on top of A + B | Clock | Worst slack, min_ff | Survives, ff | Worst slack, min_tt | Survives, tt | Worst pin |
+|---|---|---|---|---|---|---|---|
+| 4d21e43 | hold guard | 20 ns | +0.305 ns (vs 0.4) | 0.96 ns | +0.999 ns | 1.45 ns | `w_data` |
+| b5077cd | none | 20 ns | +0.202 ns (vs 0.2) | 0.65 ns | +0.539 ns | 0.99 ns | `w_data` |
+| b5077cd | C, hold margin 0.2 | 16 ns | +0.180 ns (vs 0.2) | 0.63 ns | +0.494 ns | 0.94 ns | `w_ena` |
+| b5077cd | hold guard | 20 ns | +0.176 ns (vs 0.4) | 0.83 ns | +0.795 ns | 1.25 ns | `w_addr` |
+| b5077cd | C, hold margin 0.2, hold guard | 16 ns | +0.183 ns (vs 0.4) | 0.83 ns | +0.806 ns | 1.26 ns | `w_addr` |
+
+- Without the guard the split EX sits below the fabricated designs (0.68 to
+  0.70 ns at ff, 1.09 to 1.14 ns at tt), with either flow. With it, both
+  flows are above them at both corners, though short of the old RTL with the
+  guard (0.13 ns at ff, 0.20 ns at tt).
+- The guard is what sets these pins; the flow does not. Calibrated or not,
+  the hold repair brings the worst macro input to the same +0.18 ns
+  against 0.4 ns. On the calibrated 16 ns run that pin is the worst hold
+  path in the design; on the 20 ns run a flop-to-flop path is lower
+  (+0.110 ns).
+- The calibrated run inserts a seventh of the hold buffers (92 against 703):
+  its estimate gives the short paths more wire delay, more than routing then
+  gives them (hence the 0.2 ns margin), so the repair pads fewer of them.
+
+Gate level on the two b5077cd netlists without the guard (16 ns with C, and
+20 ns), as above (TT's gl_test defines, `+RF_X +RF_COLLIDE_X`): the default
+run, the 18 ns run and the rd_late run pass, and from the first reset on the
+pins carry the same value as the RTL's on every clock (30,516, 30,518 and
+31,041 changes).
+
+#### The two hold-guard netlists: gate level, timing simulation, IR drop
+
+The 16 ns run with C and the guard is the one to ship. Its settings, on top of
+A + B and the hold-guard `lib` mapping above:
+
+```json
+"CLOCK_PERIOD": 16,
+"LAYERS_RC": {
+  "min_*": { "met1": { "res": 8.929e-4, "cap": 1.92e-4 }, "met2": { "res": 8.929e-4, "cap": 1.92e-4 },
+             "met3": { "res": 1.567e-4, "cap": 1.92e-4 }, "met4": { "res": 1.567e-4, "cap": 1.92e-4 } },
+  "nom_*": { "met1": { "res": 8.929e-4, "cap": 2.16e-4 }, "met2": { "res": 8.929e-4, "cap": 2.16e-4 },
+             "met3": { "res": 1.567e-4, "cap": 2.16e-4 }, "met4": { "res": 1.567e-4, "cap": 2.16e-4 } },
+  "max_*": { "met1": { "res": 8.929e-4, "cap": 2.4e-4 },  "met2": { "res": 8.929e-4, "cap": 2.4e-4 },
+             "met3": { "res": 1.567e-4, "cap": 2.4e-4 },  "met4": { "res": 1.567e-4, "cap": 2.4e-4 } }
+},
+"SIGNAL_WIRE_RC_LAYERS": ["met1", "met2", "met3", "met4"],
+"CLOCK_WIRE_RC_LAYERS": ["met1", "met2", "met3", "met4"],
+"PL_RESIZER_SETUP_SLACK_MARGIN": 0.5,
+"PL_RESIZER_HOLD_SLACK_MARGIN": 0.2
+```
+
+**Gate level** on both netlists, as above (TT's gl_test defines, unit
+delays, `+RF_X +RF_COLLIDE_X`): the default run, the rd_late run and the 18 ns
+run pass, and the pins match the RTL's on every clock of the RTL's run
+(31,392, 31,917 and 31,394 clocks). The netlist runs one clock longer, as
+every gate-level run here has: the program's last UART byte reaches the bench
+one clock later.
+
+**Timing simulation**: the same bench on each netlist with the corner's SDF
+from LibreLane (cell and wire delays), at the run's own clock, against the
+RTL at that clock. The sky130 timing models were used with Icarus 12
+(`-gspecify`), which needs three changes to read a LibreLane netlist: each
+timing check's delayed net tied to its signal (Icarus does not drive them),
+the SDF's `INTERCONNECT` delays moved into the netlist as delayed assigns
+(Icarus ignores them; 26,443 pins, the largest 0.466 ns on the clock root),
+and the macro instance renamed (Icarus cannot resolve the escaped dots).
+`rf_top`'s model gives its read data the liberty's 4.0 ns. Icarus does not
+evaluate timing checks, so a violation shows only as a wrong value at the pins.
+
+| netlist | clock | max_ss | min_ff | nom_tt |
+|---|---|---|---|---|
+| 16 ns, C, hold guard | 16 ns | 3 of 3 pass | 3 of 3 pass | pass |
+| 20 ns, hold guard | 20 ns | 3 of 3 pass | 3 of 3 pass | pass |
+
+Each pass has the pins equal to the RTL's on every clock of the RTL's run.
+The three runs are the default, rd_late and the late-read run, with the Pmod
+model's delays scaled to the clock (the bench's are nanoseconds for its 10 ns
+clock): `+QSPI_DELAY` 28 and 36 ns, rd_late 40/19 and 50/24 ns.
+
+What this does not show is setup. The 16 ns netlist at max_ss also passes,
+pins equal on every clock, at 14 and 12 ns, where STA has it short by about
+1.5 and 3.5 ns, and at 16 ns with every SDF delay times 1.5. Only at times 2
+does it fail, at the reset checks on the pins. The bench program spends most
+clocks waiting for QSPI, and an instruction sits in EX for at least three, so
+the long paths' results are rarely used on the clock STA times them for.
+STA remains the setup signoff. The runs do show the routed netlist working
+with its real delays at both corners, and no hold failure on any path the
+program exercises.
+
+The bench needed two changes for this, now in `tb/tb_tt_um.v` (defines whose
+defaults keep the bench as it was) and `tb/qspi_pmod_model.v`; neither is a
+fault of the design:
+- It releases `rst_n` and moves the `ui_in[0]` strap 1 ns after a clock edge.
+  The SDC puts every input at 3.2 ns (20 % of the period), and at ss the clock
+  reaches the flops 2.65 ns after the pin while `rst_n` takes 1.55 ns, so the
+  release beat the edge it was meant to follow: the reset ended a clock early
+  and the strap was read the wrong way. `-DIN_DLY_NS` moves both; the
+  runs used 0.2 x TCLK, with `TCLK_NS` the clock and `RST_CHK_NS` half of it.
+- The Pmod model decides who a transaction is for on the first chip-select
+  change. The PSRAM broadcasts (reset, enter QPI) select both chips, and at
+  gate level CS2 falls 8 ps before CS1, so the model treated them as PSRAM B's
+  alone and PSRAM A stayed in SPI mode until its first access failed. The model
+  now lets the second select join until the first SCK edge, as two separate
+  chips would.
+
+**IR drop**, static, OpenROAD PDNSim as LibreLane's IR drop step runs it
+(final odb and SPEF, VPWR at the library voltage, VGND at 0), at tt and ff.
+LibreLane uses the tile's own VPWR and VGND pins as the sources, the whole
+length of the met4 stripes, so two more feeds bracket how TinyTapeout's grid
+reaches them: each stripe fed only at its two ends, and only at its bottom
+end. Activity is OpenSTA's default (mostly the clock), then 0.2 and 0.5
+toggles per clock on every net. The figure is the VPWR drop plus the VGND
+bounce at the worst cell.
+
+| netlist | corner | activity | power | stripes | stripe ends | bottom end only |
+|---|---|---|---|---|---|---|
+| 20 ns, hold guard | tt | default | 5.3 mW | 0.64 mV | 1.4 mV | 3.8 mV |
+| | tt | 0.5 | 20.8 mW | 1.1 mV | 4.1 mV | 13.5 mV (0.75 %) |
+| | ff | 0.5 | 23.3 mW | 1.1 mV | 4.2 mV | 14.0 mV (0.72 %) |
+| 16 ns, C, hold guard | tt | default | 7.7 mW | 0.47 mV | 1.5 mV | 5.2 mV |
+| | tt | 0.2 | 16.1 mW | 0.71 mV | 3.1 mV | 10.6 mV |
+| | tt | 0.5 | 29.1 mW | 1.1 mV | 5.4 mV | 19.1 mV (1.06 %) |
+| | ff | 0.5 | 32.7 mW | 1.1 mV | 5.6 mV | 19.8 mV (1.01 %) |
+
+- The density is not a power problem. The worst case, the 16 ns layout at
+  69.9 % with half the nets toggling every clock and every stripe fed from one
+  end, drops 1.1 % of the supply; LibreLane's own setup gives about 1 mV.
+- The worst cell with the stripes or their ends as sources is at the die's
+  left edge just above the macro (x 4 to 38 um, y 332 um); with one end fed it
+  is at the far end, the top edge.
+- The macro's own current is not in it: `rf_top.lib` has no power data, so
+  PDNSim sees the macro as drawing nothing.
 
 Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
 offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
