@@ -232,17 +232,21 @@ DRC 0, LVS 0, antenna 0, no hold violation at any corner.
 | RTL | Settings on top of A + B | Clock | Std cells | Util | Setup tt | Setup ss | Max-slew tt / ss | Hold, worst corner | Hold buffers | Run |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 4d21e43 | none (the A + B row above) | 20 ns | 12.27 t | 60.6 % | +6.80 ns | -4.89 ns | 303 / 3,338 | +0.105 ns | 624 | 42 min |
-| ba7cd35 | none | 20 ns | 12.61 t | 62.2 % | +8.64 ns | +2.38 ns | 249 / 2,597 | +0.108 ns | 668 | 45 min |
-| bc7d28d | none | 20 ns | 12.75 t | 62.8 % | +9.32 ns | +3.35 ns | 246 / 2,763 | +0.111 ns | 673 | 34 min |
-| ba7cd35 | C | 20 ns | 13.53 t | 66.2 % | +9.42 ns | +3.41 ns | 22 / 108 | +0.027 ns | 407 | 36 min |
-| ba7cd35 | C | 16 ns | 13.53 t | 66.2 % | +6.51 ns | +0.36 ns | 21 / 90 | +0.023 ns | 16 | 40 min |
-| bc7d28d | C with cap 2.16e-4, `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2 | 16 ns | 14.34 t | 69.8 % | +6.44 ns | +0.52 ns | 16 / 97 | +0.180 ns | 97 | 36 min |
+| 2da5b5d | none | 20 ns | 12.61 t | 62.2 % | +8.64 ns | +2.38 ns | 249 / 2,597 | +0.108 ns | 668 | 45 min |
+| b5077cd | none | 20 ns | 12.75 t | 62.8 % | +9.32 ns | +3.35 ns | 246 / 2,763 | +0.111 ns | 673 | 34 min |
+| 2da5b5d | C | 20 ns | 13.53 t | 66.2 % | +9.42 ns | +3.41 ns | 22 / 108 | +0.027 ns | 407 | 36 min |
+| 2da5b5d | C | 16 ns | 13.53 t | 66.2 % | +6.51 ns | +0.36 ns | 21 / 90 | +0.023 ns | 16 | 40 min |
+| b5077cd | C with cap 2.16e-4, `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2 | 16 ns | 14.34 t | 69.8 % | +6.44 ns | +0.52 ns | 16 / 97 | +0.180 ns | 97 | 36 min |
+| b5077cd | hold guard | 20 ns | 12.77 t | 62.9 % | +9.19 ns | +3.28 ns | 234 / 2,762 | +0.110 ns | 703 | 36 min |
+| b5077cd | C with cap 2.16e-4, `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2, hold guard | 16 ns | 14.36 t | 69.9 % | +6.49 ns | +0.54 ns | 15 / 71 | +0.183 ns | 92 | 38 min |
 
 C is `LAYERS_RC` `{"*": {met1, met2: res 8.929e-4, cap 2.4e-4; met3, met4:
 res 1.567e-4, cap 2.4e-4}}`, `SIGNAL_WIRE_RC_LAYERS` and
 `CLOCK_WIRE_RC_LAYERS` met1 to met4, `PL_RESIZER_SETUP_SLACK_MARGIN` 0.5.
+"Hold guard" is the ff-corner `rf_top.ff-hold-guard.lib` mapping above; the
+rows without it read `rf_top.lib` at every corner.
 
-- The RTL alone moves the slow corner from 40 MHz to 60 MHz (bc7d28d, 16.65 ns)
+- The RTL alone moves the slow corner from 40 MHz to 60 MHz (b5077cd, 16.65 ns)
   and tt from 76 to 94 MHz, for half a tile.
 - C is a calibration, not a tuning. LibreLane estimates wire capacitance
   before routing at the technology LEF's average, 0.0815 fF/um; extraction of
@@ -267,12 +271,42 @@ res 1.567e-4, cap 2.4e-4}}`, `SIGNAL_WIRE_RC_LAYERS` and
 - What limits the 16 ns run: the opcode through the trap decode to the next
   pc (+0.52 ns), and `pmpcfg0` through the PMP check, the trap chain and
   flush (+0.67 ns).
+- The hold guard costs 0.02 tile on either flow and moves setup only by
+  placement noise (+3.35 -> +3.28 ns at 20 ns, +0.52 -> +0.54 ns at 16 ns).
 
-Gate level on the last row's netlist and on the bc7d28d 20 ns netlist, as
-above (TT's gl_test defines, `+RF_X +RF_COLLIDE_X`): the default run, the
-18 ns run and the rd_late run pass, and from the first reset on the pins
-carry the same value as the RTL's on every clock (30,516, 30,518 and 31,041
-changes).
+Hold at the macro's 48 inputs, by the measure of *Hold guard band*: OpenSTA
+(LibreLane 3.0.14's) on each run's SPEF, with the liberty the run read at each
+corner. It reproduces LibreLane's own min.rpt to the picosecond; on
+`rfm2-a3fo-hg` it gives +0.305 ns (`w_data[29]`, also LibreLane's figure)
+where that section, with OpenSTA 2.0.17, has +0.316 ns. "Survives" is slack plus
+the liberty hold plus the 0.25 ns clock uncertainty.
+
+| RTL | Settings on top of A + B | Clock | Worst slack, min_ff | Survives, ff | Worst slack, min_tt | Survives, tt | Worst pin |
+|---|---|---|---|---|---|---|---|
+| 4d21e43 | hold guard | 20 ns | +0.305 ns (vs 0.4) | 0.96 ns | +0.999 ns | 1.45 ns | `w_data` |
+| b5077cd | none | 20 ns | +0.202 ns (vs 0.2) | 0.65 ns | +0.539 ns | 0.99 ns | `w_data` |
+| b5077cd | C, hold margin 0.2 | 16 ns | +0.180 ns (vs 0.2) | 0.63 ns | +0.494 ns | 0.94 ns | `w_ena` |
+| b5077cd | hold guard | 20 ns | +0.176 ns (vs 0.4) | 0.83 ns | +0.795 ns | 1.25 ns | `w_addr` |
+| b5077cd | C, hold margin 0.2, hold guard | 16 ns | +0.183 ns (vs 0.4) | 0.83 ns | +0.806 ns | 1.26 ns | `w_addr` |
+
+- Without the guard the split EX sits below the fabricated designs (0.68 to
+  0.70 ns at ff, 1.09 to 1.14 ns at tt), with either flow. With it, both
+  flows are above them at both corners, though short of the old RTL with the
+  guard (0.13 ns at ff, 0.20 ns at tt).
+- The guard is what sets these pins; the flow does not. Calibrated or not,
+  the hold repair brings the worst macro input to the same +0.18 ns
+  against 0.4 ns. On the calibrated 16 ns run that pin is the worst hold
+  path in the design; on the 20 ns run a flop-to-flop path is lower
+  (+0.110 ns).
+- The calibrated run inserts a seventh of the hold buffers (92 against 703):
+  its estimate gives the short paths more wire delay, more than routing then
+  gives them (hence the 0.2 ns margin), so the repair pads fewer of them.
+
+Gate level on the two b5077cd netlists without the guard (16 ns with C, and
+20 ns), as above (TT's gl_test defines, `+RF_X +RF_COLLIDE_X`): the default
+run, the 18 ns run and the rd_late run pass, and from the first reset on the
+pins carry the same value as the RTL's on every clock (30,516, 30,518 and
+31,041 changes).
 
 Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
 offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
