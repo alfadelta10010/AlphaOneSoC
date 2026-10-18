@@ -308,6 +308,107 @@ run, the 18 ns run and the rd_late run pass, and from the first reset on the
 pins carry the same value as the RTL's on every clock (30,516, 30,518 and
 31,041 changes).
 
+#### The two hold-guard netlists: gate level, timing simulation, IR drop
+
+The 16 ns run with C and the guard is the one to ship. Its settings, on top of
+A + B and the hold-guard `lib` mapping above:
+
+```json
+"CLOCK_PERIOD": 16,
+"LAYERS_RC": {
+  "min_*": { "met1": { "res": 8.929e-4, "cap": 1.92e-4 }, "met2": { "res": 8.929e-4, "cap": 1.92e-4 },
+             "met3": { "res": 1.567e-4, "cap": 1.92e-4 }, "met4": { "res": 1.567e-4, "cap": 1.92e-4 } },
+  "nom_*": { "met1": { "res": 8.929e-4, "cap": 2.16e-4 }, "met2": { "res": 8.929e-4, "cap": 2.16e-4 },
+             "met3": { "res": 1.567e-4, "cap": 2.16e-4 }, "met4": { "res": 1.567e-4, "cap": 2.16e-4 } },
+  "max_*": { "met1": { "res": 8.929e-4, "cap": 2.4e-4 },  "met2": { "res": 8.929e-4, "cap": 2.4e-4 },
+             "met3": { "res": 1.567e-4, "cap": 2.4e-4 },  "met4": { "res": 1.567e-4, "cap": 2.4e-4 } }
+},
+"SIGNAL_WIRE_RC_LAYERS": ["met1", "met2", "met3", "met4"],
+"CLOCK_WIRE_RC_LAYERS": ["met1", "met2", "met3", "met4"],
+"PL_RESIZER_SETUP_SLACK_MARGIN": 0.5,
+"PL_RESIZER_HOLD_SLACK_MARGIN": 0.2
+```
+
+**Gate level** on both netlists, as above (TT's gl_test defines, unit
+delays, `+RF_X +RF_COLLIDE_X`): the default run, the rd_late run and the 18 ns
+run pass, and the pins match the RTL's on every clock of the RTL's run
+(31,392, 31,917 and 31,394 clocks). The netlist runs one clock longer, as
+every gate-level run here has: the program's last UART byte reaches the bench
+one clock later.
+
+**Timing simulation**: the same bench on each netlist with the corner's SDF
+from LibreLane (cell and wire delays), at the run's own clock, against the
+RTL at that clock. The sky130 timing models were used with Icarus 12
+(`-gspecify`), which needs three changes to read a LibreLane netlist: each
+timing check's delayed net tied to its signal (Icarus does not drive them),
+the SDF's `INTERCONNECT` delays moved into the netlist as delayed assigns
+(Icarus ignores them; 26,443 pins, the largest 0.466 ns on the clock root),
+and the macro instance renamed (Icarus cannot resolve the escaped dots).
+`rf_top`'s model gives its read data the liberty's 4.0 ns. Icarus does not
+evaluate timing checks, so a violation shows only as a wrong value at the pins.
+
+| netlist | clock | max_ss | min_ff | nom_tt |
+|---|---|---|---|---|
+| 16 ns, C, hold guard | 16 ns | 3 of 3 pass | 3 of 3 pass | pass |
+| 20 ns, hold guard | 20 ns | 3 of 3 pass | 3 of 3 pass | pass |
+
+Each pass has the pins equal to the RTL's on every clock of the RTL's run.
+The three runs are the default, rd_late and the late-read run, with the Pmod
+model's delays scaled to the clock (the bench's are nanoseconds for its 10 ns
+clock): `+QSPI_DELAY` 28 and 36 ns, rd_late 40/19 and 50/24 ns.
+
+What this does not show is setup. The 16 ns netlist at max_ss also passes,
+pins equal on every clock, at 14 and 12 ns, where STA has it short by about
+1.5 and 3.5 ns, and at 16 ns with every SDF delay times 1.5. Only at times 2
+does it fail, at the reset checks on the pins. The bench program spends most
+clocks waiting for QSPI, and an instruction sits in EX for at least three, so
+the long paths' results are rarely used on the clock STA times them for.
+STA remains the setup signoff. The runs do show the routed netlist working
+with its real delays at both corners, and no hold failure on any path the
+program exercises.
+
+The bench needed two changes for this, both in a copy used only here; neither
+is a fault of the design:
+- It releases `rst_n` and moves the `ui_in[0]` strap 1 ns after a clock edge.
+  The SDC puts every input at 3.2 ns (20 % of the period), and at ss the clock
+  reaches the flops 2.65 ns after the pin while `rst_n` takes 1.55 ns, so the
+  release beat the edge it was meant to follow: the reset ended a clock early
+  and the strap was read the wrong way. The copy moves both to 0.2 x TCLK.
+- The Pmod model decides who a transaction is for on the first chip-select
+  change. The PSRAM broadcasts (reset, enter QPI) select both chips, and at
+  gate level CS2 falls 8 ps before CS1, so the model treated them as PSRAM B's
+  alone and PSRAM A stayed in SPI mode until its first access failed. The copy
+  lets the second select join until the first SCK edge, as two separate chips
+  would.
+
+**IR drop**, static, OpenROAD PDNSim as LibreLane's IR drop step runs it
+(final odb and SPEF, VPWR at the library voltage, VGND at 0), at tt and ff.
+LibreLane uses the tile's own VPWR and VGND pins as the sources, the whole
+length of the met4 stripes, so two more feeds bracket how TinyTapeout's grid
+reaches them: each stripe fed only at its two ends, and only at its bottom
+end. Activity is OpenSTA's default (mostly the clock), then 0.2 and 0.5
+toggles per clock on every net. The figure is the VPWR drop plus the VGND
+bounce at the worst cell.
+
+| netlist | corner | activity | power | stripes | stripe ends | bottom end only |
+|---|---|---|---|---|---|---|
+| 20 ns, hold guard | tt | default | 5.3 mW | 0.64 mV | 1.4 mV | 3.8 mV |
+| | tt | 0.5 | 20.8 mW | 1.1 mV | 4.1 mV | 13.5 mV (0.75 %) |
+| | ff | 0.5 | 23.3 mW | 1.1 mV | 4.2 mV | 14.0 mV (0.72 %) |
+| 16 ns, C, hold guard | tt | default | 7.7 mW | 0.47 mV | 1.5 mV | 5.2 mV |
+| | tt | 0.2 | 16.1 mW | 0.71 mV | 3.1 mV | 10.6 mV |
+| | tt | 0.5 | 29.1 mW | 1.1 mV | 5.4 mV | 19.1 mV (1.06 %) |
+| | ff | 0.5 | 32.7 mW | 1.1 mV | 5.6 mV | 19.8 mV (1.01 %) |
+
+- The density is not a power problem. The worst case, the 16 ns layout at
+  69.9 % with half the nets toggling every clock and every stripe fed from one
+  end, drops 1.1 % of the supply; LibreLane's own setup gives about 1 mV.
+- The worst cell with the stripes or their ends as sources is at the die's
+  left edge just above the macro (x 4 to 38 um, y 332 um); with one end fed it
+  is at the far end, the top edge.
+- The macro's own current is not in it: `rf_top.lib` has no power data, so
+  PDNSim sees the macro as drawing nothing.
+
 Placements that did not route, both with FemtoRV's settings (halos 3/0, PDN
 offset 10, `ERROR_ON_PDN_VIOLATIONS` 0, `MAGIC_NO_EXT_UNIQUE` 1) and the macro
 in the middle of the die, where rotated E it walls off li1-met3 across 133 of
