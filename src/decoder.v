@@ -110,7 +110,7 @@ endmodule
 // reads, taken from the 16-bit encoding without expanding it. Only a field the
 // expansion has must be right: EX masks each read with decoder's rs1/rs2, which
 // are x0 for a format without that field, so those formats get whatever the
-// shared logic gives. tb/tb_rf_fields.v checks this against decoder and
+// shared logic gives. Its testbench checks this against decoder and
 // compressed_decoder for every legal compressed encoding.
 module rf_fields(
     input  wire [31:0] instr,

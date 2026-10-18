@@ -22,13 +22,13 @@
 // is asked of it is that the write itself lands, which KianV's sky25b silicon
 // shows.
 // +RF_COLLIDE_X makes the model return X there, so a run proves nothing
-// depends on it (tests/directed/run.sh).
+// depends on it.
 //
 // x0: the macro's word 0 is an ordinary word, so it is never written here,
 // and r1/r2 are raw -- the caller masks a read of x0 (fyracore masks with the
 // decoded register field). There is no reset: x1-x31 are unspecified after
 // reset (Priv spec, "Reset"), and boot code that relies on them clears them
-// itself (plugins/helpers/boot_flash.S zeroes x1-x31 first thing). The
+// itself (the test programs' boot code zeroes x1-x31 first thing). The
 // simulation model starts them at 0 like Spike, or at X under +RF_X.
 // hit1/hit2 need no reset either: nothing is written while the core is in
 // reset, so they are 0 from its second clock on.
