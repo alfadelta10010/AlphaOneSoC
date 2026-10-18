@@ -1,0 +1,334 @@
+# Mutant definitions for tb/mutate/run.py.
+#
+# Each entry is one fault injected into a throwaway copy of src/ (under
+# build/mut/, never into src/ itself): (id, file, find, replace, intent).
+# `find` must occur exactly once in the file; run.py refuses the mutant
+# otherwise, so an RTL edit that moves the text shows up as a broken mutant
+# instead of silently testing nothing. The intent says which bug class the
+# mutant stands for: inverted condition, off-by-one, stuck bit, dropped
+# reset, swapped priority, removed stall or hazard term, broken bypass,
+# wrong field. Some are equivalent at the core level (fyracore never
+# exercises the difference) and can only be killed by the unit bench; the
+# intent says so where it is known.
+
+M = []
+def m(mid, f, find, rep, why):
+    M.append((mid, f, find, rep, why))
+
+# ── alu.v ────────────────────────────────────────────────────────────────
+m("ALU01", "alu.v", "5'b00000: result = d1 + d2;", "5'b00000: result = d1 - d2;", "ADD computes SUB")
+m("ALU02", "alu.v", "5'b00000: result = d1 + d2;",
+  "5'b00000: result = {d1[31:16] + d2[31:16], d1[15:0] + d2[15:0]};", "ADD carry chain broken at bit 16")
+m("ALU03", "alu.v", "5'b00100: result = d1 ^ d2;", "5'b00100: result = d1 | d2;", "XOR computes OR")
+m("ALU04", "alu.v", "5'b00110: result = d1 | d2;", "5'b00110: result = (d1 | d2) & 32'hFFFF7FFF;", "OR bit 15 stuck at 0")
+m("ALU05", "alu.v", "5'b00111: result = d1 & d2;", "5'b00111: result = (d1 & d2) | 32'h00000001;", "AND bit 0 stuck at 1")
+m("ALU06", "alu.v", "5'b00010: result = {31'b0, lt_signed};", "5'b00010: result = {31'b0, lt_unsigned};", "SLT uses the unsigned compare")
+m("ALU07", "alu.v", "default:  result = 32'b0;", "default:  result = d1;", "unissued codes give d1, not 0 (unit contract only)")
+
+# ── branchCtrl.v ─────────────────────────────────────────────────────────
+m("BR01", "branchCtrl.v", "assign lt_signed   = (r1[31] != r2[31]) ? r1[31] : sub33[32];",
+  "assign lt_signed   = (r1[31] != r2[31]) ? r2[31] : sub33[32];", "signed compare inverted when signs differ")
+m("BR02", "branchCtrl.v", "3'b101:  branchValid = !lt_signed;     // BGE",
+  "3'b101:  branchValid =  lt_signed;     // BGE", "BGE inverted")
+m("BR03", "branchCtrl.v", "wire eq          = (sub33[31:0] == 32'b0);",
+  "wire eq          = (sub33[30:0] == 31'b0);", "equality ignores bit 31")
+m("BR04", "branchCtrl.v", "assign lt_unsigned = sub33[32];", "assign lt_unsigned = sub33[31];", "unsigned compare from the wrong borrow bit")
+m("BR05", "branchCtrl.v", "3'b110:  branchValid =  lt_unsigned;   // BLTU",
+  "3'b110:  branchValid =  lt_signed;   // BLTU", "BLTU uses the signed compare")
+m("BR06", "branchCtrl.v", "default: branchValid = 1'b0;", "default: branchValid = eq;", "reserved funct3 010/011 taken on equal")
+m("BR07", "branchCtrl.v", "assign diff        = sub33[31:0];", "assign diff        = {sub33[31:1], 1'b0};", "SUB result bit 0 stuck at 0")
+
+# ── signExt.v ────────────────────────────────────────────────────────────
+m("SE01", "signExt.v", "immOut = {{12{instIn[31]}}, instIn[19:12], instIn[20], instIn[30:21], 1'b0};",
+  "immOut = {{12{instIn[31]}}, instIn[19:12], instIn[31], instIn[30:21], 1'b0};", "JAL imm[11] from the sign bit")
+m("SE02", "signExt.v", "immOut = {{20{instIn[31]}}, instIn[7], instIn[30:25], instIn[11:8], 1'b0};",
+  "immOut = {{20{instIn[31]}}, instIn[31], instIn[30:25], instIn[11:8], 1'b0};", "branch imm[11] from the sign bit")
+m("SE03", "signExt.v", "immOut = {{20{instIn[31]}}, instIn[31:25], instIn[11:7]};",
+  "immOut = {{20{instIn[31]}}, instIn[31:25], instIn[11:8], 1'b0};", "store imm[0] stuck at 0")
+m("SE04", "signExt.v", "if (instIn[14:12] == 3'b001 || instIn[14:12] == 3'b101)",
+  "if (instIn[14:12] == 3'b001)", "SRLI/SRAI immediate sign-extended (core-equivalent: shamt is b[4:0])")
+m("SE05", "signExt.v", "immOut = {27'b0, instIn[19:15]}; // zimm", "immOut = {27'b0, instIn[24:20]}; // zimm", "zimm from the wrong field (core-equivalent: fyracore takes zimm from rs1)")
+m("SE06", "signExt.v", "immOut = {instIn[31:12], 12'b0};", "immOut = {instIn[31:13], 13'b0};", "U-type imm[12] lost")
+m("SE07", "signExt.v", "7'b0000011: // Load (I-type)\n                immOut = {{20{instIn[31]}}, instIn[31:20]};",
+  "7'b0000011: // Load (I-type)\n                immOut = {{20{instIn[30]}}, instIn[31:20]};", "load offset sign-extended from bit 30")
+m("SE08", "signExt.v", "7'b1100111: // JALR (I-type)\n                immOut = {{20{instIn[31]}}, instIn[31:20]};",
+  "7'b1100111: // JALR (I-type)\n                immOut = {{20{instIn[31]}}, instIn[31:21], 1'b0};", "JALR offset bit 0 dropped")
+
+# ── decoder.v (decoder + rf_fields) ──────────────────────────────────────
+m("DE01", "decoder.v", "7'b0110011: begin // R-type (ADD, SUB, SLL, SLT, ... and M-ext)\n                rd     = instIn[11:7];\n                rs1    = instIn[19:15];\n                rs2    = instIn[24:20];",
+  "7'b0110011: begin // R-type (ADD, SUB, SLL, SLT, ... and M-ext)\n                rd     = instIn[11:7];\n                rs1    = instIn[19:15];\n                rs2    = {1'b0, instIn[23:20]};", "R-type rs2 bit 4 lost")
+m("DE02", "decoder.v", "7'b0101111: begin // A-extension (AMO)\n                rd     = instIn[11:7];\n                rs1    = instIn[19:15];\n                rs2    = instIn[24:20];",
+  "7'b0101111: begin // A-extension (AMO)\n                rd     = instIn[11:7];\n                rs1    = instIn[19:15];\n                rs2    = 5'b0;", "AMO/SC rs2 not decoded")
+m("DE03", "decoder.v", "7'b0100011: begin // S-type (SB, SH, SW)\n                rs1    = instIn[19:15];\n                rs2    = instIn[24:20];",
+  "7'b0100011: begin // S-type (SB, SH, SW)\n                rs1    = instIn[19:15];\n                rs2    = instIn[11:7];", "store rs2 from the imm field")
+m("DE04", "decoder.v", "7'b1100111: begin // JALR\n                rd     = instIn[11:7];\n                rs1    = instIn[19:15];",
+  "7'b1100111: begin // JALR\n                rd     = instIn[11:7];\n                rs1    = 5'b0;", "JALR rs1 not decoded")
+m("DE05", "decoder.v", "funct7 = instIn[31:25]; // upper bits for ECALL/EBREAK/MRET",
+  "funct7 = instIn[30:24]; // upper bits for ECALL/EBREAK/MRET", "SYSTEM funct7 off by one bit")
+m("DE06", "decoder.v", "if (instIn[14:12] == 3'b001 || instIn[14:12] == 3'b101)\n                    funct7 = instIn[31:25];",
+  "if (instIn[14:12] == 3'b001)\n                    funct7 = instIn[31:25];", "SRAI decoded as SRLI")
+m("DE07", "decoder.v", "7'b1100011: begin // B-type (BEQ, BNE, BLT, BGE, BLTU, BGEU)\n                rs1    = instIn[19:15];\n                rs2    = instIn[24:20];",
+  "7'b1100011: begin // B-type (BEQ, BNE, BLT, BGE, BLTU, BGEU)\n                rs1    = instIn[19:15];\n                rs2    = instIn[19:15];", "branch compares rs1 with itself")
+m("RF01", "decoder.v", "wire sp    = (q == 2'b00) ? !f3[1] : (q == 2'b10) && f3[1];",
+  "wire sp    = (q == 2'b00) ? !f3[1] : (q == 2'b10) && f3[2];", "rf_fields: wrong quadrant-2 sp detect")
+m("RF02", "decoder.v", "prime        ? {2'b01, instr[9:7]} : instr[11:7];",
+  "prime        ? {2'b00, instr[9:7]} : instr[11:7];", "rf_fields: rs1' maps to x0-x7")
+m("RF03", "decoder.v", "(q == 2'b10) ? instr[6:2]   : {2'b01, instr[4:2]};",
+  "(q == 2'b10) ? instr[6:2]   : {2'b01, instr[5:3]};", "rf_fields: rs2' from the wrong bits")
+m("RF04", "decoder.v", "assign rs1 = (q == 2'b11) ? instr[19:15] :",
+  "assign rs1 = (q == 2'b11) ? instr[20:16] :", "rf_fields: 32-bit rs1 off by one")
+
+# ── controller.v ─────────────────────────────────────────────────────────
+m("CT01", "controller.v", "3'b100:  begin memSize = 2'b00; memUnsigned = 1'b1; end // LBU",
+  "3'b100:  begin memSize = 2'b00; memUnsigned = 1'b0; end // LBU", "LBU sign-extends")
+m("CT02", "controller.v", "3'b001:  begin memSize = 2'b01; memUnsigned = 1'b0; end // LH",
+  "3'b001:  begin memSize = 2'b10; memUnsigned = 1'b0; end // LH", "LH loads a word")
+m("CT03", "controller.v", "3'b001:  memSize = 2'b01; // SH", "3'b001:  memSize = 2'b00; // SH", "SH stores a byte")
+m("CT04", "controller.v", "aluOp   = 5'b00000; // ADD (PC + imm)\n                aluSrc1 = 1'b1;     // PC",
+  "aluOp   = 5'b00000; // ADD (PC + imm)\n                aluSrc1 = 1'b0;     // PC", "AUIPC adds to rs1")
+m("CT05", "controller.v", "if (funct3 != 3'b000) begin", "if (1'b0) begin", "JALR with funct3 != 0 accepted")
+m("CT06", "controller.v", "3'b011: begin // CSRRC\n                        regWR  = 1'b1;\n                        wbSel  = 2'b11;\n                        csrOp  = 2'b11;",
+  "3'b011: begin // CSRRC\n                        regWR  = 1'b1;\n                        wbSel  = 2'b11;\n                        csrOp  = 2'b10;", "CSRRC sets instead of clearing")
+m("CT07", "controller.v", "3'b110: begin // CSRRSI\n                        regWR  = 1'b1;\n                        wbSel  = 2'b11;\n                        csrOp  = 2'b10;\n                        csrSrc = 1'b1;",
+  "3'b110: begin // CSRRSI\n                        regWR  = 1'b1;\n                        wbSel  = 2'b11;\n                        csrOp  = 2'b10;\n                        csrSrc = 1'b0;", "CSRRSI uses rs1's value, not zimm")
+m("CT08", "controller.v", "5'b00100, // AMOXOR", "5'b11111, // AMOXOR", "AMOXOR illegal, a reserved AMO code accepted")
+m("CT09", "controller.v", "wbSel = 2'b00; // rd gets 0 (success) or 1 (fail)", "wbSel = 2'b01; // rd gets 0 (success) or 1 (fail)", "SC writes memory data to rd")
+m("CT10", "controller.v", "if (funct3 == 3'b000 || funct3 == 3'b101)", "if (funct3 == 3'b000 || funct3 == 3'b101 || funct3 == 3'b001)", "funct7=0100000 SLL accepted")
+m("CT11", "controller.v", "if (funct3 == 3'b000)\n                    isFence = 1'b1;", "if (funct3 == 3'b000 || funct3 == 3'b010)\n                    isFence = 1'b1;", "MISC-MEM funct3 010 accepted as FENCE")
+m("CT12", "controller.v", "3'b000, 3'b001, 3'b100, 3'b101, 3'b110, 3'b111: ; // valid",
+  "3'b000, 3'b001, 3'b010, 3'b100, 3'b101, 3'b110, 3'b111: ; // valid", "branch funct3 010 accepted")
+m("CT13", "controller.v", "memRD   = 1'b0;  // and no access, so no address exception",
+  "memRD   = 1'b1;  // and no access, so no address exception", "illegal load still accesses memory (misaligned outranks illegal)")
+m("CT14", "controller.v", "default: aluOp = {2'b00, funct3};", "default: aluOp = (funct3 == 3'b011) ? 5'b00010 : {2'b00, funct3};", "SLTIU computes SLTI")
+m("CT15", "controller.v", "else if (funct7 == 7'b0001000)\n                            ;", "else if (funct7 == 7'b0001000)\n                            illegal = 1'b1;", "WFI illegal")
+m("CT16", "controller.v", "isMulDiv = 1'b1;\n                    aluOp    = {2'b10, funct3};", "isMulDiv = !funct3[2];\n                    aluOp    = {2'b10, funct3};", "divides not routed to muldiv")
+m("CT17", "controller.v", "memWR   = 1'b0;  // no access, so no address exception", "memWR   = 1'b1;  // no access, so no address exception", "illegal store still accesses memory")
+m("CT18", "controller.v", "isLR  = 1'b1;\n                            regWR = 1'b1;", "isLR  = 1'b1;\n                            regWR = 1'b0;", "LR does not write rd")
+
+# ── compressed_decoder.v ─────────────────────────────────────────────────
+m("CD01", "compressed_decoder.v", "instr_in[5],     // nzuimm[3]\n                                instr_in[6],     // nzuimm[2]",
+  "instr_in[6],     // nzuimm[3]\n                                instr_in[5],     // nzuimm[2]", "C.ADDI4SPN nzuimm[3:2] swapped")
+m("CD02", "compressed_decoder.v", "instr_in[5],      // uimm[6]\n                            instr_in[12:10],  // uimm[5:3]",
+  "instr_in[6],      // uimm[6]\n                            instr_in[12:10],  // uimm[5:3]", "C.LW uimm[6] from bit 6")
+m("CD03", "compressed_decoder.v", "instr_in[11:10],  // uimm[4:3]", "instr_in[12:11],  // uimm[4:3]", "C.SW uimm[4:3] shifted")
+m("CD04", "compressed_decoder.v", "instr_in[8],                     // imm[10]", "instr_in[7],                     // imm[10]", "C.JAL imm[10] from bit 7")
+m("CD05", "compressed_decoder.v", "instr_in[5],         // imm[6]\n                                    instr_in[2],         // imm[5]",
+  "instr_in[2],         // imm[6]\n                                    instr_in[5],         // imm[5]", "C.ADDI16SP imm[6:5] swapped")
+m("CD06", "compressed_decoder.v", "// nzimm=0 is reserved for every rd.\n                            if ({instr_in[12], instr_in[6:2]} == 6'b0)",
+  "// nzimm=0 is reserved for every rd.\n                            if (instr_in[6:2] == 5'b0)", "C.LUI with only nzimm[17] set called reserved")
+m("CD07", "compressed_decoder.v", "7'b0100000,\n                                        instr_in[6:2],  // shamt",
+  "7'b0000000,\n                                        instr_in[6:2],  // shamt", "C.SRAI expands to SRLI")
+m("CD08", "compressed_decoder.v", "instr_out = {7'b0000000, rs2_p, rs1_p, 3'b100, rs1_p, 7'b0110011};",
+  "instr_out = {7'b0000000, rs2_p, rs1_p, 3'b110, rs1_p, 7'b0110011};", "C.XOR expands to OR")
+m("CD09", "compressed_decoder.v", "instr_in[12],         // imm[11] sign bit", "instr_in[11],         // imm[11] sign bit", "C.BEQZ imm[11] from bit 11")
+m("CD10", "compressed_decoder.v", "3'b001,              // BNE", "3'b000,              // BNE", "C.BNEZ expands to BEQ")
+m("CD11", "compressed_decoder.v", "if (rd_full == 5'd0)\n                            illegal = 1'b1;\n                        else begin\n                            // LW rd, uimm(x2)",
+  "if (1'b0)\n                            illegal = 1'b1;\n                        else begin\n                            // LW rd, uimm(x2)", "C.LWSP rd=0 accepted")
+m("CD12", "compressed_decoder.v", "if (rd_full == 5'd0)\n                                    illegal = 1'b1;\n                                else\n                                    // JALR x0, rs1, 0",
+  "if (1'b0)\n                                    illegal = 1'b1;\n                                else\n                                    // JALR x0, rs1, 0", "C.JR rs1=0 accepted")
+m("CD13", "compressed_decoder.v", "instr_in[8:7],     // uimm[7:6]", "instr_in[10:9],     // uimm[7:6]", "C.SWSP uimm[7:6] from the wrong bits")
+m("CD14", "compressed_decoder.v", "3'b000: begin // C.SLLI\n                        if (instr_in[12]) // shamt[5] must be 0 on RV32",
+  "3'b000: begin // C.SLLI\n                        if (1'b0) // shamt[5] must be 0 on RV32", "C.SLLI shamt[5]=1 accepted")
+m("CD15", "compressed_decoder.v", "instr_out = {7'b0000000, rs2_full, 5'd0, 3'b000, rd_full, 7'b0110011};",
+  "instr_out = {7'b0000000, rs2_full, rd_full, 3'b000, rd_full, 7'b0110011};", "C.MV expands to ADD")
+m("CD16", "compressed_decoder.v", "instr_out = {12'b0, rd_full, 3'b000, 5'd1, 7'b1100111};",
+  "instr_out = {12'b0, rd_full, 3'b000, 5'd0, 7'b1100111};", "C.JALR does not link")
+m("CD17", "compressed_decoder.v", "3'b111,         // ANDI", "3'b110,         // ANDI", "C.ANDI expands to ORI")
+m("CD18", "compressed_decoder.v", "5'd0,                // rs1 = x0", "rd_full,                // rs1 = x0", "C.LI adds to rd")
+
+# ── muldiv.v ─────────────────────────────────────────────────────────────
+m("MD01", "muldiv.v", "sa <= (op == 3'd1) | (op == 3'd2);", "sa <= (op == 3'd1);", "MULHSU multiplicand treated unsigned")
+m("MD02", "muldiv.v", "sb <= (op == 3'd1);", "sb <= (op == 3'd1) | (op == 3'd2);", "MULHSU multiplier treated signed")
+m("MD03", "muldiv.v", "wire        negres = isdiv & (hi ? na : ((na ^ nb) & ~mzero));",
+  "wire        negres = isdiv & (hi ? na : ((na ^ nb)));", "negative / 0 gives +1, not -1")
+m("MD04", "muldiv.v", "wire        negres = isdiv & (hi ? na : ((na ^ nb) & ~mzero));",
+  "wire        negres = isdiv & (hi ? (na ^ nb) : ((na ^ nb) & ~mzero));", "remainder takes the quotient's sign")
+m("MD05", "muldiv.v", "fill <= sra & a[31];", "fill <= a[31];", "SRL fills with the sign bit")
+m("MD06", "muldiv.v", "cnt  <= ~b[4:0];", "cnt  <= ~{1'b0, b[3:0]};", "shift amount bit 4 lost")
+m("MD07", "muldiv.v", "acc <= sum[33] ? {1'b0, trial[31:0]} : {1'b0, sum[31:0]};",
+  "acc <= sum[32] ? {1'b0, trial[31:0]} : {1'b0, sum[31:0]};", "restoring step tests the wrong borrow bit")
+m("MD08", "muldiv.v", "lo   <= sum[31:0];\n                busy <= 1'b0;\n                done <= 1'b1;",
+  "lo   <= sum[31:0];\n                busy <= 1'b0;\n                done <= 1'b0;", "M ops never signal done (hang)")
+m("MD09", "muldiv.v", "lo   <= sum[31:0];\n                busy <= 1'b0;", "lo   <= sum[31:0];\n                busy <= 1'b1;", "busy stuck after an M op")
+m("MD10", "muldiv.v", "hi <= (op != 3'd0);", "hi <= op[0];", "MULHSU returns the low word")
+m("MD11", "muldiv.v", "na <= ~op[0] & a[31];", "na <= a[31];", "DIVU/REMU treat the dividend as signed")
+m("MD12", "muldiv.v", "if (rst) begin\n            st   <= S_IDLE;\n            busy <= 1'b0;", "if (rst) begin\n            busy <= 1'b0;", "reset does not return the FSM to idle")
+m("MD13", "muldiv.v", "            end\n            S_NEGA: begin", "            end else lo <= 32'b0;\n            S_NEGA: begin", "result cleared the cycle after done (not held until the next start)")
+m("MD14", "muldiv.v", "sub = (cnt == 5'd31) & sb;", "sub = (cnt == 5'd30) & sb;", "signed multiply subtracts on the wrong step")
+m("MD15", "muldiv.v", "shr  <= op[2];", "shr  <= op[1];", "right shifts shift left")
+m("MD16", "muldiv.v", "lo  <= {lo[30:0], ~sum[33]};", "lo  <= {lo[30:0], sum[33]};", "quotient bits inverted")
+
+# ── regFile.v ────────────────────────────────────────────────────────────
+m("RG01", "regFile.v", "wire        w_ena = wrEn && (rd != 5'b0);", "wire        w_ena = wrEn;", "x0 writable (core-equivalent: fyracore masks x0 reads)")
+m("RG02", "regFile.v", "hit1 <= w_ena && (ra == rd);", "hit1 <= w_ena && (rb == rd);", "port 1 bypass compares port 2's address")
+m("RG03", "regFile.v", "hit2 <= w_ena && (rb == rd);", "hit2 <= 1'b0;", "port 2 bypass removed (only +RF_COLLIDE_X shows it)")
+m("RG04", "regFile.v", "hit1 <= w_ena && (ra == rd);", "hit1 <= wrEn && (ra == rd);", "port 1 bypass fires on a write to x0")
+m("RG05", "regFile.v", "assign r1 = hit1 ? byp : m1;", "assign r1 = m1;", "port 1 bypass removed (only +RF_COLLIDE_X shows it)")
+
+# ── csr.v ────────────────────────────────────────────────────────────────
+m("CS01", "csr.v", "wire [31:0] mie_legal     = csr_new & 32'h0000_0888;", "wire [31:0] mie_legal     = csr_new & 32'h0000_088A;", "mie.SSIE writable")
+m("CS02", "csr.v", "wire [31:0] mtvec_legal   = {csr_new[31:2], 2'b00};", "wire [31:0] mtvec_legal   = {csr_new[31:1], 1'b0};", "mtvec bit 1 stored")
+m("CS03", "csr.v", "wire [31:0] mcountinhibit_legal = csr_new & 32'h0000_0005;", "wire [31:0] mcountinhibit_legal = csr_new & 32'h0000_0007;", "mcountinhibit.TM writable")
+m("CS04", "csr.v", "pmpcfg_legal = {b[7], 2'b00, b[4:2], b[1] & b[0], b[0]};", "pmpcfg_legal = {b[7], 2'b00, b[4:2], b[1], b[0]};", "pmpcfg R=0,W=1 stored")
+m("CS05", "csr.v", "pmpcfg0[15] ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),", "1'b0 ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),", "pmpcfg entry 1 lock ignored")
+m("CS06", "csr.v", "wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);", "wire tor_lock_addr0 = pmpcfg0[7];", "TOR lock of entry 1 does not lock pmpaddr0")
+m("CS07", "csr.v", "mstatus_after_we[12:11] = {2{csr_new[12] & csr_new[11]}};", "mstatus_after_we[12:11] = csr_new[12:11];", "MPP stores 01/10")
+m("CS08", "csr.v", "mstatus_after_we[3], mstatus_after_we[6:4], 1'b0, mstatus_after_we[2:0]};", "1'b1, mstatus_after_we[6:4], 1'b0, mstatus_after_we[2:0]};", "trap sets MPIE=1 whatever MIE was")
+m("CS09", "csr.v", "& ((mstatus_after_we[12:11] == 2'b11) ? 32'hFFFF_FFFF", "& ((mstatus_after_we[12:11] != 2'b11) ? 32'hFFFF_FFFF", "MRET clears MPRV on return to M, keeps it on return to U")
+m("CS10", "csr.v", "1'b1, mstatus_after_we[6:4], mstatus_after_we[7], mstatus_after_we[2:0]}", "1'b1, mstatus_after_we[6:4], mstatus_after_we[3], mstatus_after_we[2:0]}", "MRET leaves MIE alone")
+m("CS11", "csr.v", "wire [31:0] mepc_eff = {mepc[31:2], (misa_c ? mepc[1] : 1'b0), 1'b0};", "wire [31:0] mepc_eff = {mepc[31:1], 1'b0};", "mepc[1] not masked while misa.C=0")
+m("CS12", "csr.v", "wire        misa_we_ok    = we && waddr == 12'h301 &&\n                                (csr_new[2] || !pc_next_misaligned);",
+  "wire        misa_we_ok    = we && waddr == 12'h301 &&\n                                1'b1;", "misa.C clear accepted with a misaligned next pc")
+m("CS13", "csr.v", "(we && waddr == 12'hB00) ? {mcycle[63:32], csr_new} :", "(we && waddr == 12'hB00) ? {mcycle_inc[63:32], csr_new} :", "mcycle low write keeps the replaced increment's carry")
+m("CS14", "csr.v", "wire [63:0] minstret_next = (instret_inc && !mcountinhibit[2] && !minstret_we) ?", "wire [63:0] minstret_next = (instret_inc && !mcountinhibit[0] && !minstret_we) ?", "minstret inhibited by CY")
+m("CS15", "csr.v", "wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we && !mcycle_wr_q) ?", "wire [63:0] mcycle_next   = (!mcountinhibit[0] && !mcycle_we) ?", "mcycle counts the clock after a write")
+m("CS16", "csr.v", "12'hC02: begin rdata = minstret_next[31:0];  if (!priv_mode && !mcounteren[2]) addr_valid = 1'b0; end", "12'hC02: begin rdata = minstret_next[31:0];  if (!priv_mode && !mcounteren[0]) addr_valid = 1'b0; end", "instret gated by mcounteren.CY")
+m("CS17", "csr.v", "(raddr[11:5] == 7'b1011_000 && raddr[4:0] >= 5'd3) ||   // mhpmcounter3-31", "(raddr[11:5] == 7'b1011_000 && raddr[4:0] >= 5'd4) ||   // mhpmcounter3-31", "mhpmcounter3 illegal")
+m("CS18", "csr.v", "(timer_irq    ? 32'h0000_0080 : 32'b0) |  // MTIP bit 7", "(timer_irq    ? 32'h0000_0020 : 32'b0) |  // MTIP bit 7", "mip.MTIP read at bit 5")
+m("CS19", "csr.v", "mtvec    <= 32'h0000_0000;", "mtvec    <= mtvec;", "mtvec reset dropped")
+m("CS20", "csr.v", "always @(posedge clk) c32 <= &d[31:0];", "always @(posedge clk) c32 <= &d[30:0];", "inc64 carries into the high half one count early")
+m("CS21", "csr.v", "wire [31:0] mcounteren_legal    = csr_new & 32'h0000_0007;", "wire [31:0] mcounteren_legal    = csr_new & 32'h0000_0005;", "mcounteren.TM not writable")
+m("CS22", "csr.v", "12'hF15: rdata = 32'b0;  // mconfigptr: no config data structure", "12'hF16: rdata = 32'b0;  // mconfigptr: no config data structure", "mconfigptr missing, 0xF16 present")
+m("CS23", "csr.v", "mstatus <= {mstatus_after_we[31:13], {priv_mode, priv_mode}, mstatus_after_we[10:8],", "mstatus <= {mstatus_after_we[31:13], 2'b11, mstatus_after_we[10:8],", "trap from U saves MPP=M")
+m("CS24", "csr.v", "wire [31:0] pmpaddr3_legal = tor_lock_addr3 ? pmpaddr3 : csr_new;", "wire [31:0] pmpaddr3_legal = csr_new;", "locked pmpaddr3 writable")
+m("CS25", "csr.v", "mtval    <= trap_val;", "mtval    <= mtval;", "mtval not written on a trap")
+m("CS26", "csr.v", "(we && waddr == 12'hB02) ? {minstret[63:32], csr_new} :", "(we && waddr == 12'hB02) ? {minstret_inc[63:32], csr_new} :", "minstret low write keeps the replaced increment's carry")
+m("CS27", "csr.v", "mstatus_after_we[21] = csr_new[21];  // TW", "mstatus_after_we[21] = 1'b0;  // TW", "mstatus.TW not writable")
+m("CS28", "csr.v", "mstatus_after_we[17] = csr_new[17];  // MPRV", "mstatus_after_we[17] = 1'b0;  // MPRV", "mstatus.MPRV not writable")
+m("CS29", "csr.v", "12'hC01: begin rdata = mtime_in[31:0];        if (!priv_mode && !mcounteren[1])", "12'hC01: begin rdata = mtime_in[31:0];        if (1'b0)", "U-mode time read ignores mcounteren.TM")
+
+# ── pmp.v ────────────────────────────────────────────────────────────────
+m("PM01", "pmp.v", "A_TOR:   match0 = (waddr < pmpaddr0);", "A_TOR:   match0 = (waddr <= pmpaddr0);", "TOR entry 0 top inclusive")
+m("PM02", "pmp.v", "A_TOR:   match2 = (waddr >= pmpaddr1) && (waddr < pmpaddr2);", "A_TOR:   match2 = (waddr > pmpaddr1) && (waddr < pmpaddr2);", "TOR entry 2 bottom exclusive")
+m("PM03", "pmp.v", "A_NA4:   match1 = (waddr == pmpaddr1);", "A_NA4:   match1 = (waddr[31:1] == pmpaddr1[31:1]);", "NA4 entry 1 matches 8 bytes")
+m("PM04", "pmp.v", "mask = ~(pa ^ (pa + 1'b1));", "mask = ~(pa | (pa + 1'b1));", "NAPOT mask drops set address bits (an old bug)")
+m("PM05", "pmp.v", "A_TOR:   match1 = (waddr >= pmpaddr0) && (waddr < pmpaddr1);", "A_TOR:   match1 = (waddr[29:0] >= pmpaddr0[29:0]) && (waddr[29:0] < pmpaddr1[29:0]);", "TOR entry 1 drops pmpaddr[31:30] (an old bug)")
+m("PM06", "pmp.v", "if      (match0) pmp_allow = check_perm(cfg0, access_type, priv_mode);\n        else if (match1) pmp_allow = check_perm(cfg1, access_type, priv_mode);",
+  "if      (match1) pmp_allow = check_perm(cfg1, access_type, priv_mode);\n        else if (match0) pmp_allow = check_perm(cfg0, access_type, priv_mode);", "entry 1 outranks entry 0")
+m("PM07", "pmp.v", "if (cfg_in[7]) // Locked", "if (1'b0) // Locked", "lock does not bind M-mode")
+m("PM08", "pmp.v", "else             pmp_allow = priv_mode; // no match: M=allow, U=deny", "else             pmp_allow = 1'b1; // no match: M=allow, U=deny", "no match allows U-mode")
+m("PM09", "pmp.v", "check_perm = priv || ((cfg_in[2:0] & atype) == atype);", "check_perm = priv || ((cfg_in[2:0] & atype) != 3'b0);", "U-mode AMO needs only R or W")
+m("PM10", "pmp.v", "case (cfg3[4:3])", "case (cfg2[4:3])", "entry 3 uses entry 2's A field")
+m("PM11", "pmp.v", "wire [31:0] waddr = {2'b00, addr[31:2]};", "wire [31:0] waddr = {2'b00, addr[31:3], 1'b0};", "PMP compares 8-byte granules")
+m("PM12", "pmp.v", "A_NA4:   match0 = (waddr == pmpaddr0);", "A_NA4:   match0 = (waddr < pmpaddr0);", "NA4 entry 0 behaves as TOR")
+
+# ── clint.v ──────────────────────────────────────────────────────────────
+m("CL01", "clint.v", "else     mtip <= (mtime >= mtimecmp);", "else     mtip <= (mtime > mtimecmp);", "MTIP one count late")
+m("CL02", "clint.v", "if (wmask[1]) mtimecmp[47:40] <= wdata[15:8];", "if (wmask[2]) mtimecmp[47:40] <= wdata[15:8];", "mtimecmp_hi byte 1 written by lane 2")
+m("CL03", "clint.v", "16'h0000: if (wmask[0]) msip <= wdata[0];", "16'h0000: msip <= wdata[0];", "msip written by any lane")
+m("CL04", "clint.v", "mtimecmp <= 64'hFFFF_FFFF_FFFF_FFFF;", "mtimecmp <= 64'h0;", "mtimecmp resets to 0 (timer pending out of reset)")
+m("CL05", "clint.v", "16'h4004: rdata = mtimecmp[63:32];", "16'h4004: rdata = mtimecmp[31:0];", "mtimecmp_hi reads the low half")
+m("CL06", "clint.v", "wmask[3] ? wdata[31:24] : mtime[63:56],", "wmask[0] ? wdata[31:24] : mtime[63:56],", "mtime_hi byte 3 written by lane 0")
+m("CL07", "clint.v", "end else if (we && addr == 16'hBFF8) begin", "end else if (1'b0) begin", "mtime_lo not writable")
+m("CL08", "clint.v", "16'h0000: rdata = {31'b0, msip};", "16'h0000: rdata = {30'b0, msip, 1'b0};", "msip reads at bit 1")
+
+# ── fyracore.v ───────────────────────────────────────────────────────────
+m("FC01", "fyracore.v", "(exwb_rd == ex_rs1 || exwb_rd == ex_rs2);", "(exwb_rd == ex_rs1);", "use hazard ignores rs2")
+m("FC02", "fyracore.v", "wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;", "wire csr_wb_hazard = 1'b0;", "no stall behind a CSR write")
+m("FC03", "fyracore.v", "wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (alu_r[0] != 1'b0);", "wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (alu_r[1] != 1'b0);", "halfword alignment checks bit 1")
+m("FC04", "fyracore.v", "wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (alu_r[1:0] != 2'b00);", "wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (alu_r[0] != 1'b0);", "word alignment ignores bit 1")
+m("FC05", "fyracore.v", "(ex_pma_in_rom && !ex_misalign_is_store && !ctrl_isLR) ||", "(ex_pma_in_rom && !ctrl_isLR) ||", "stores to flash allowed")
+m("FC06", "fyracore.v", "(ex_pma_in_io && !ctrl_isLR && !ctrl_isSC);", "(ex_pma_in_io && !ctrl_isSC);", "LR to an IO window allowed")
+m("FC07", "fyracore.v", "end else if (ex_illegal_insn) begin", "end else if (ex_illegal_insn && !ex_misaligned) begin", "misaligned outranks illegal")
+m("FC08", "fyracore.v", "exwb_trap_cause <= priv_mode ? 32'd11 : 32'd8; // M-mode=11, U-mode=8", "exwb_trap_cause <= 32'd11; // M-mode=11, U-mode=8", "ECALL from U reports cause 11")
+m("FC09", "fyracore.v", "exwb_trap_val   <= ifex_pc;\n                    end else if (ex_misaligned && !ex_misalign_is_store) begin", "exwb_trap_val   <= 32'b0;\n                    end else if (ex_misaligned && !ex_misalign_is_store) begin", "EBREAK mtval 0")
+m("FC10", "fyracore.v", "exwb_trap_cause <= 32'd4;  // Load address misaligned\n                        exwb_trap_val   <= alu_r;", "exwb_trap_cause <= 32'd4;  // Load address misaligned\n                        exwb_trap_val   <= ifex_pc;", "load-misaligned mtval is the pc")
+m("FC11", "fyracore.v", "irq_external_pend ? {1'b1, 31'd11} :  // Machine External Interrupt\n        irq_sw_pend       ? {1'b1, 31'd3}  :  // Machine Software Interrupt",
+  "irq_sw_pend       ? {1'b1, 31'd3}  :  // Machine Software Interrupt\n        irq_external_pend ? {1'b1, 31'd11} :  // Machine External Interrupt", "MSI outranks MEI")
+m("FC12", "fyracore.v", "wire irq_global_en     = !priv_mode || csr_mstatus_mie;", "wire irq_global_en     = csr_mstatus_mie;", "U-mode interrupts masked by MIE")
+m("FC13", "fyracore.v", "&& !muldiv_want && !stall_other;", "&& !muldiv_want;", "interrupt injected during a stall")
+m("FC14", "fyracore.v", "&& !muldiv_want && !stall_other;", "&& !stall_other;", "interrupt injected while an M op is in EX")
+m("FC15", "fyracore.v", "exwb_trap_pc    <= ex_is_wfi ? pc : ifex_pc;", "exwb_trap_pc    <= ifex_pc;", "interrupt at WFI saves the WFI's pc")
+m("FC16", "fyracore.v", "wire       sc_success = reservation_valid &&\n                            (reservation_addr == exwb_alu_result[31:2]);", "wire       sc_success = reservation_valid;", "SC ignores the reservation address")
+m("FC17", "fyracore.v", "if (csr_trap_signal)\n                reservation_valid <= 1'b0;", "if (1'b0)\n                reservation_valid <= 1'b0;", "trap does not clear the reservation")
+m("FC18", "fyracore.v", "end else if (exwb_isSC) begin\n                    reservation_valid <= 1'b0;", "end else if (exwb_isSC) begin\n                    reservation_valid <= reservation_valid;", "SC does not clear the reservation")
+m("FC19", "fyracore.v", "5'b10000: amo_computed = ($signed(load_data) < $signed(exwb_rs2_data)) ? load_data : exwb_rs2_data; // AMOMIN",
+  "5'b10000: amo_computed = (load_data < exwb_rs2_data) ? load_data : exwb_rs2_data; // AMOMIN", "AMOMIN unsigned")
+m("FC20", "fyracore.v", "5'b11100: amo_computed = (load_data > exwb_rs2_data) ? load_data : exwb_rs2_data; // AMOMAXU",
+  "5'b11100: amo_computed = ($signed(load_data) > $signed(exwb_rs2_data)) ? load_data : exwb_rs2_data; // AMOMAXU", "AMOMAXU signed")
+m("FC21", "fyracore.v", "wire [31:0] wb_load_or_amo = (exwb_isAmo && amo_phase) ? amo_old_val : load_data;", "wire [31:0] wb_load_or_amo = (exwb_isAmo && amo_phase) ? exwb_rs2_data : load_data;", "AMO writes the new value to rd")
+m("FC22", "fyracore.v", "access_be = 4'b0001 << mem_byte_offset;", "access_be = 4'b0001;", "byte access always lane 0")
+m("FC23", "fyracore.v", "access_be = (mem_byte_offset[1]) ? 4'b1100 : 4'b0011;", "access_be = 4'b0011;", "halfword access always lanes 0-1")
+m("FC24", "fyracore.v", "store_data_shifted = {4{exwb_rs2_data[7:0]}};", "store_data_shifted = {24'b0, exwb_rs2_data[7:0]};", "byte store data not replicated")
+m("FC25", "fyracore.v", "2'b11: load_data = exwb_memUnsigned ? {24'b0, raw_load[31:24]} : {{24{raw_load[31]}}, raw_load[31:24]};",
+  "2'b11: load_data = exwb_memUnsigned ? {24'b0, raw_load[31:24]} : {{24{raw_load[23]}}, raw_load[31:24]};", "LB of byte 3 sign-extends from bit 23")
+m("FC26", "fyracore.v", "load_data = exwb_memUnsigned ? {16'b0, raw_load[31:16]} : {{16{raw_load[31]}}, raw_load[31:16]};",
+  "load_data = exwb_memUnsigned ? {16'b0, raw_load[31:16]} : {{16{raw_load[15]}}, raw_load[31:16]};", "LH of the upper half sign-extends from bit 15")
+m("FC27", "fyracore.v", "!wb_mem_stall;\n    assign wb_rd    = exwb_rd;", "1'b1;\n    assign wb_rd    = exwb_rd;", "register write on every cycle of a memory stall")
+m("FC28", "fyracore.v", "!(exwb_isSC && !sc_success);", "1'b1;", "failing SC issues a bus read")
+m("FC30", "fyracore.v", "wire ex_mret_commit = ex_is_mret && !stall && !ex_trap && !irq_inject;", "wire ex_mret_commit = ex_is_mret && !ex_trap && !irq_inject;", "MRET commits on every stalled cycle")
+m("FC31", "fyracore.v", "wire ex_mret_commit = ex_is_mret && !stall && !ex_trap && !irq_inject;", "wire ex_mret_commit = ex_is_mret && !stall && !ex_trap;", "MRET commits as well as the interrupt taken at it")
+m("FC32", "fyracore.v", "(ex_csr_addr == 12'h3A0 || ex_csr_addr[11:2] == 10'b0011_1011_00);", "(ex_csr_addr == 12'h3A0);", "pmpaddr write does not refetch")
+m("FC33", "fyracore.v", "wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok || ifetch_hi_denied);", "wire ex_ifetch_fault_hi = 1'b0;", "straddling fetch's upper half never faults")
+m("FC34", "fyracore.v", "wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok || ifetch_hi_denied);", "wire ex_ifetch_fault_hi = ex_straddle && (!ex_pma_fetch_hi_ok);", "straddling fetch's upper half skips PMP")
+m("FC35", "fyracore.v", "wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;", "wire data_priv_mode = priv_mode;", "MPRV ignored")
+m("FC36", "fyracore.v", "wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b011 : // AMO: R+W", "wire [2:0] ex_pmp_access_type = ctrl_isAmo           ? 3'b001 : // AMO: R+W", "AMO checked for R only")
+m("FC37", "fyracore.v", "wire fetch_can_deny = !priv_mode || pmp_any_locked;", "wire fetch_can_deny = !priv_mode;", "locked entries never deny an M-mode fetch")
+m("FC38", "fyracore.v", "wire ex_csr_priv_fail = !priv_mode && (ex_csr_addr[9:8] != 2'b00);", "wire ex_csr_priv_fail = 1'b0;", "U-mode may access M CSRs")
+m("FC39", "fyracore.v", "(ex_csr_writes && ex_csr_readonly) ||  // Write to read-only CSR", "1'b0 ||  // Write to read-only CSR", "writes to read-only CSRs accepted")
+m("FC40", "fyracore.v", "ex_rs1 != 5'b0            // CSRRS/CSRRC write only if rs1/uimm != 0", "1'b1            // CSRRS/CSRRC write only if rs1/uimm != 0", "CSRRS/CSRRC with rs1=x0 write")
+m("FC41", "fyracore.v", "(ifex_compressed && !csr_misa_c) ||", "1'b0 ||", "compressed instructions execute with misa.C=0")
+m("FC42", "fyracore.v", "!csr_misa_c && ex_branch_target[1];", "!csr_misa_c && ex_branch_target[0];", "IALIGN=32 target check looks at bit 0")
+m("FC43", "fyracore.v", "{alu_r[31:1], 1'b0} : alu_r;", "alu_r : alu_r;", "JALR does not clear bit 0")
+m("FC44", "fyracore.v", "!wfi_has_enabled_irq;  // NOP when no sources enabled", "1'b0;  // NOP when no sources enabled", "WFI with mie=0 waits forever")
+m("FC45", "fyracore.v", "!priv_mode &&\n                        csr_mstatus_tw;", "!priv_mode &&\n                        1'b1;", "U-mode WFI illegal even with TW=0")
+m("FC46", "fyracore.v", "wire ex_bad_lr = ifex_valid && ctrl_isLR && (ex_rs2 != 5'b0);", "wire ex_bad_lr = 1'b0;", "LR.W with rs2 != 0 accepted")
+m("FC47", "fyracore.v", "wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok && priv_mode &&", "wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok &&", "MRET executes in U-mode")
+m("FC48", "fyracore.v", "wire ex_system_fields_ok = (ex_rd == 5'b0) && (ex_rs1 == 5'b0);", "wire ex_system_fields_ok = 1'b1;", "ECALL/EBREAK/MRET with rd/rs1 != 0 accepted")
+m("FC49", "fyracore.v", "if (rst || flush)        muldiv_ready <= 1'b0;", "if (rst)        muldiv_ready <= 1'b0;", "sticky M result survives a flush")
+m("FC50", "fyracore.v", "wire muldiv_have = muldiv_ready || muldiv_done;", "wire muldiv_have = muldiv_ready;", "M unit restarted on its done cycle (the 2e6718b bug)")
+m("FC51", "fyracore.v", "wire wb_mem_stall = dmem_req && !dmem_ready;", "wire wb_mem_stall = 1'b0;", "data-memory wait ignored")
+m("FC52", "fyracore.v", "wire if_mem_stall = imem_req && !imem_ready;", "wire if_mem_stall = 1'b0;", "fetch wait ignored")
+m("FC53", "fyracore.v", "if (ex_trap && !stall)\n            next_pc = trap_target;", "if (ex_trap)\n            next_pc = trap_target;", "trap redirect on a stalled cycle")
+m("FC54", "fyracore.v", "if (csr_trap_signal)\n                priv_mode <= 1'b1;", "if (1'b0)\n                priv_mode <= 1'b1;", "trap does not enter M-mode")
+m("FC55", "fyracore.v", "assign rf_r2 = (ex_rs2 == 5'b0) ? 32'b0 : rf_b;", "assign rf_r2 = rf_b;", "x0 read on port 2 unmasked (only +RF_X shows it)")
+m("FC56", "fyracore.v", "ex_ph    <= ex_rf_ok && !use_hazard;", "ex_ph    <= ex_rf_ok;", "use hazard does not hold EX")
+m("FC57", "fyracore.v", "exwb_trap_cause <= 32'd6;  // Store/AMO address misaligned", "exwb_trap_cause <= 32'd4;  // Store/AMO address misaligned", "store misaligned reports cause 4")
+m("FC58", "fyracore.v", "exwb_trap_cause <= 32'd7;  // Store/AMO access fault", "exwb_trap_cause <= 32'd5;  // Store/AMO access fault", "store access fault reports cause 5")
+m("FC59", "fyracore.v", "exwb_trap_val   <= ex_ifetch_fault_lo ? ifex_pc : ex_pc_hi;", "exwb_trap_val   <= ifex_pc;", "upper-half fetch fault reports the start address")
+m("FC60", "fyracore.v", "exwb_trap_val   <= 32'b0;\n                    // mepc: if interrupted instruction is WFI", "exwb_trap_val   <= ifex_pc;\n                    // mepc: if interrupted instruction is WFI", "interrupt writes the pc to mtval")
+m("FC61", "fyracore.v", "wire irq_timer_pend    = timer_irq    & csr_mie[7]  & irq_global_en;", "wire irq_timer_pend    = timer_irq    & csr_mie[5]  & irq_global_en;", "timer interrupt enabled by mie bit 5")
+m("FC62", "fyracore.v", "in_exec = in_win(a, PMA_ROM_BASE, PMA_ROM_TOP) || in_win(a, PMA_RAM_BASE, PMA_RAM_TOP);", "in_exec = 1'b1;", "fetch allowed from any address")
+m("FC63", "fyracore.v", "in_win = (a >= base) && (a <= top);", "in_win = (a >= base) && (a < top);", "the last byte of every window unmapped")
+m("FC67", "fyracore.v", "end else if (wb_mem_stall) begin", "end else if (1'b0) begin", "EX/WB not held across a memory wait")
+m("FC69", "fyracore.v", "wire ex_bad_wfi = ifex_valid && (ifex_instr[31:25] == 7'b0001000) &&", "wire ex_bad_wfi = 1'b0 && (ifex_instr[31:25] == 7'b0001000) &&", "SRET and malformed WFI execute as NOPs")
+m("FC70", "fyracore.v", "wire [31:0] ex_csr_wdata_src = ctrl_csrSrc ? {27'b0, ex_rs1} : ex_rs1_val; // zimm or rs1", "wire [31:0] ex_csr_wdata_src = ctrl_csrSrc ? {28'b0, ex_rs1[3:0]} : ex_rs1_val; // zimm or rs1", "zimm bit 4 lost")
+m("FC71", "fyracore.v", "(ctrl_csrOp == 2'b11) ? (csr_rdata_eff & ~ex_csr_wdata_src): // CSRRC", "(ctrl_csrOp == 2'b11) ? (csr_rdata_eff & ex_csr_wdata_src): // CSRRC", "CSRRC keeps the bits it should clear")
+m("FC72", "fyracore.v", "(ctrl_wbSel == 2'b10)  ? pc            :", "(ctrl_wbSel == 2'b10)  ? ifex_pc + 32'd4 :", "link address is pc+4 for compressed jumps too")
+
+# ── mem_ctrl.v / soc_bus.v / qspi_ctrl.v ─────────────────────────────────
+m("MC01", "mem_ctrl.v", "wire        split     = i_addr[31] && (&i_addr[9:1]);", "wire        split     = i_addr[31] && (&i_addr[9:2]);", "split also at the page's second-last halfword")
+m("MC02", "mem_ctrl.v", "wire        split     = i_addr[31] && (&i_addr[9:1]);", "wire        split     = i_addr[31] && (&i_addr[22:1]);", "split only at the PSRAM A/B boundary")
+m("MC03", "mem_ctrl.v", "wire pick_d = d_req && !second;", "wire pick_d = d_req && !second && !i_req;", "fetch first")
+m("MC04", "mem_ctrl.v", "wire pick_d = d_req && !second;", "wire pick_d = d_req;", "data request breaks into a split fetch")
+m("MC05", "mem_ctrl.v", "wire [1:0] st_n_m1  = {d_be[0] & d_be[3], (d_be[0] & d_be[1]) | (d_be[2] & d_be[3])};", "wire [1:0] st_n_m1  = {d_be[0] & d_be[3], (d_be[0] & d_be[1])};", "upper-half store sends one byte")
+m("MC06", "mem_ctrl.v", "wire [1:0] st_lane  = d_be[0] ? 2'd0 : d_be[1] ? 2'd1 : d_be[2] ? 2'd2 : 2'd3;", "wire [1:0] st_lane  = d_be[0] ? 2'd0 : d_be[1] ? 2'd1 : d_be[2] ? 2'd3 : 2'd2;", "store lanes 2 and 3 swapped")
+m("MC07", "mem_ctrl.v", "wire chip_b = second ? next_page[13] : a23;", "wire chip_b = a23;", "split fetch's second half stays on PSRAM A")
+m("MC08", "mem_ctrl.v", "assign i_ready = q_done && !gnt_d && (second || !split);", "assign i_ready = q_done && !gnt_d;", "split fetch completes after its first half")
+m("SB01", "soc_bus.v", "assign d_ready = is_mem ? mem_ready : (uart_ready && gpio_ready);", "assign d_ready = is_mem ? mem_ready : uart_ready;", "GPIO back-pressure ignored")
+m("SB02", "soc_bus.v", "assign gpio_sel   = d_req && is_io && (io_idx == 2'd1);", "assign gpio_sel   = d_req && is_io && (io_idx == 2'd2);", "GPIO decoded at the syscon slot")
+m("SB03", "soc_bus.v", "assign clint_sel  = d_req && !is_mem && !d_addr[28];", "assign clint_sel  = d_req && !is_mem;", "IO stores also hit the CLINT")
+m("QS01", "qspi_ctrl.v", ": ((3'b001 << cs_sel) & {2'b11, !we});", ": (3'b001 << cs_sel);", "a write may select the flash")
+m("QS02", "qspi_ctrl.v", "default: io_out = 4'b1111;       // mode byte 0xFF, and idle", "default: io_out = 4'b1010;       // mode byte 0xFF, and idle", "flash mode byte 0xAA (continuous read)")
+m("QS03", "qspi_ctrl.v", ":  (state == S_DATA &&  sck));", ":  (state == S_DATA && !sck));", "rd_late=0 samples on the wrong clock")
+m("QS04", "qspi_ctrl.v", "cnt   <= t_we ? 3'd7 : psram ? 3'd3 : 3'd5;", "cnt   <= t_we ? 3'd7 : psram ? 3'd2 : 3'd5;", "PSRAM read with 3 wait cycles")
+m("QS05", "qspi_ctrl.v", "3'd2:    cmd = 8'h99;", "3'd2:    cmd = 8'h98;", "start-up never resets the PSRAMs")
+m("QS06", "qspi_ctrl.v", "ctl_oe <= 1'b1;\n            if (sample)", "ctl_oe <= 1'b1;\n            late <= rd_late;\n            if (sample)", "rd_late strap followed after reset")
+m("QS07", "qspi_ctrl.v", "wire [2:0] wnib      = {~cnt[2:1], cnt[0]};", "wire [2:0] wnib      = {~cnt[2:1], ~cnt[0]};", "write nibbles low half first")
+m("QS08", "qspi_ctrl.v", "S_CMD: if (init && step == 3'd4 && !again) begin", "S_CMD: if (1'b0) begin", "start-up step 4 sends 8 clocks, not 16")
+
+# ── uart.v / gpio.v / tt_um ──────────────────────────────────────────────
+m("UA01", "uart.v", "assign ready = !(thr_sel && !tx_idle);", "assign ready = 1'b1;", "no THR back-pressure")
+m("UA02", "uart.v", "if (rx_bit == 4'd0 && rx_s)\n                        rx_busy <= 1'b0;               // glitch, not a start bit", "if (1'b0)\n                        rx_busy <= 1'b0;               // glitch, not a start bit", "start bit not re-checked at mid-bit")
+m("UA03", "uart.v", "else if (rd_lsr)\n                oe <= 1'b0;", "else if (1'b0)\n                oe <= 1'b0;", "OE never cleared")
+m("UA04", "uart.v", "rts_n <= !(!rx_busy && !dr);", "rts_n <= dr;", "RTS# asserted while a frame is being received")
+m("UA05", "uart.v", "if (rst || wr_dll || wr_dlm) brg <= 16'd0;", "if (rst) brg <= 16'd0;", "divisor write does not restart the baud counter")
+m("UA06", "uart.v", "wire [7:0] lsr = {1'b0, tx_idle, tx_idle, bi, 2'b00, oe, dr};", "wire [7:0] lsr = {1'b0, 1'b1, tx_idle, bi, 2'b00, oe, dr};", "LSR.TEMT always 1")
+m("UA07", "uart.v", "(rx_s ? !rx_chk : rx_zero);", "(rx_s ? 1'b1 : rx_zero);", "frame after a framing error accepted")
+m("GP01", "gpio.v", "assign ready = !(sel && we && be[0] && spi_busy);", "assign ready = !(sel && we && spi_busy);", "writes without lane 0 wait too")
+m("GP02", "gpio.v", "spi_mosi <= spi_sh[8];", "spi_mosi <= spi_sh[7];", "MOSI one bit early")
+m("GP03", "gpio.v", "out_r <= {wdata[7:6], 2'b00, wdata[3:0]};", "out_r <= {wdata[7:4], wdata[3:0]};", "OUT bits 5:4 stored")
+m("GP04", "gpio.v", "wire [2:0] div_mask = {spi_div == 2'd3, spi_div[1], spi_div != 2'd0};", "wire [2:0] div_mask = {1'b0, spi_div[1], spi_div != 2'd0};", "DIV 3 runs at DIV 2")
+m("GP05", "gpio.v", "in_s <= in_m;", "in_s <= in;", "one-flop input synchroniser")
+m("TT01", "tt_um_alfadelta10010_alphaone_soc.v", "else        run <= !rst_sync[0];", "else        run <= 1'b1;", "reset released on the first edge")
+m("TT02", "tt_um_alfadelta10010_alphaone_soc.v", "assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, ctl_oe, io_oe, io_oe, ctl_oe};", "assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, io_oe, io_oe, io_oe, ctl_oe};", "SCK's output enable follows the data pins")
