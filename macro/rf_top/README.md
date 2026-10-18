@@ -367,19 +367,21 @@ STA remains the setup signoff. The runs do show the routed netlist working
 with its real delays at both corners, and no hold failure on any path the
 program exercises.
 
-The bench needed two changes for this, both in a copy used only here; neither
-is a fault of the design:
+The bench needed two changes for this, now in `tb/tb_tt_um.v` (defines whose
+defaults keep the bench as it was) and `tb/qspi_pmod_model.v`; neither is a
+fault of the design:
 - It releases `rst_n` and moves the `ui_in[0]` strap 1 ns after a clock edge.
   The SDC puts every input at 3.2 ns (20 % of the period), and at ss the clock
   reaches the flops 2.65 ns after the pin while `rst_n` takes 1.55 ns, so the
   release beat the edge it was meant to follow: the reset ended a clock early
-  and the strap was read the wrong way. The copy moves both to 0.2 x TCLK.
+  and the strap was read the wrong way. `-DIN_DLY_NS` moves both; the
+  runs used 0.2 x TCLK, with `TCLK_NS` the clock and `RST_CHK_NS` half of it.
 - The Pmod model decides who a transaction is for on the first chip-select
   change. The PSRAM broadcasts (reset, enter QPI) select both chips, and at
   gate level CS2 falls 8 ps before CS1, so the model treated them as PSRAM B's
-  alone and PSRAM A stayed in SPI mode until its first access failed. The copy
-  lets the second select join until the first SCK edge, as two separate chips
-  would.
+  alone and PSRAM A stayed in SPI mode until its first access failed. The model
+  now lets the second select join until the first SCK edge, as two separate
+  chips would.
 
 **IR drop**, static, OpenROAD PDNSim as LibreLane's IR drop step runs it
 (final odb and SPEF, VPWR at the library voltage, VGND at 0), at tt and ff.
