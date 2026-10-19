@@ -310,7 +310,9 @@ As built (`src/uart.v`):
   arrived, and an X there would spread in an X-accurate simulation.
 * **The divisor resets to 27**, 115200 baud at a 50 MHz clock (+0.5%), so a
   program in flash can print before it sets the divisor
-  (`alphaone_soc`'s `UART_DIV_RESET`). A divisor of 0 behaves as 1.
+  (`alphaone_soc`'s `UART_DIV_RESET`). At 62.5 MHz, the clock the 3x4
+  harden closes at, 27 gives 144,676 baud and 115200 needs 34 (-0.3%). A
+  divisor of 0 behaves as 1.
 * Every register write waits for `ready`, so a word store that writes THR
   and LCR together while the transmitter is busy writes LCR once, when THR
   is taken, and cannot flip DLAB under its own THR write.
