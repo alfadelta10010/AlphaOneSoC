@@ -1,327 +1,235 @@
-// Testbench for muldiv.v — RV32M multi-cycle multiply/divide unit
+// muldiv (src/muldiv.v) against a model written from the specification:
 //
-// Tests all 8 operations: MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU
-// Covers: normal values, boundary cases (0, 1, -1, INT_MIN, INT_MAX),
-//         division-by-zero, and signed overflow (INT_MIN / -1).
-
+//   * results: MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU per the M chapter of
+//     the Unprivileged ISA, x/0 = all ones and remainder x, INT_MIN/-1 =
+//     INT_MIN and remainder 0 (REQ-MD-001); SLL/SRL/SRA by b[4:0] per RV32I
+//     (REQ-MD-002). Directed corners, then a seeded random run (+SEED=,
+//     +NOPS=) whose operands are drawn mostly from the boundary values;
+//   * the handshake in muldiv.v's header, on every clock (REQ-MD-003): busy
+//     from the cycle after start until done; done a one-cycle pulse on the
+//     cycle busy drops, exactly one per start; the result valid from done
+//     until the next start, whatever the inputs do meanwhile -- the
+//     operands, op and shift inputs are scrambled from the cycle after start;
+//   * the latency in docs/FyraCore_CPU_Reference.md 9.2 (REQ-MD-004): done
+//     34 cycles after start for a multiply, 36 for a divide, 2 + shamt for
+//     a shift;
+//   * reset in the middle of an operation leaves the unit idle and the next
+//     operation correct (REQ-MD-005).
+// A new operation is started 0-3 cycles after done (0: on the done cycle
+// itself). Prints PASS/FAIL with the number of checks; a watchdog fails a
+// hang.
 `timescale 1ns/1ps
-
 module tb_muldiv;
-
-    // ── DUT signals ──────────────────────────────────────────────────────────
-    reg         clk, rst, start;
-    reg  [2:0]  op;
-    reg         shift, sra;     // a shift (SRA when sra) instead of an M op
-    reg  [31:0] a, b;
+    reg         clk = 0, rst = 1, start = 0;
+    reg  [2:0]  op = 0;
+    reg         shift = 0, sra = 0;
+    reg  [31:0] a = 0, b = 0;
     wire [31:0] result;
     wire        busy, done;
 
-    // ── op encodings ─────────────────────────────────────────────────────────
-    localparam MUL    = 3'd0;
-    localparam MULH   = 3'd1;
-    localparam MULHSU = 3'd2;
-    localparam MULHU  = 3'd3;
-    localparam DIV    = 3'd4;
-    localparam DIVU   = 3'd5;
-    localparam REM    = 3'd6;
-    localparam REMU   = 3'd7;
-
-    // ── Score tracking ────────────────────────────────────────────────────────
-    integer pass_count, fail_count;
-
-    muldiv dut(
-        .clk   (clk),
-        .rst   (rst),
-        .start (start),
-        .op    (op),
-        .shift (shift),
-        .sra   (sra),
-        .a     (a),
-        .b     (b),
-        .result(result),
-        .busy  (busy),
-        .done  (done)
-    );
-
-    // 10 ns clock
-    initial clk = 0;
+    muldiv dut(.clk(clk), .rst(rst), .start(start), .op(op), .shift(shift), .sra(sra),
+               .a(a), .b(b), .result(result), .busy(busy), .done(done));
     always #5 clk = ~clk;
 
-    // ── Task: issue one operation and wait for done ───────────────────────────
-    task run_op;
-        input [2:0]  t_op;
-        input [31:0] t_a, t_b;
-        begin
-            @(negedge clk);
-            op    = t_op;
-            a     = t_a;
-            b     = t_b;
-            start = 1'b1;
-            @(negedge clk);
-            start = 1'b0;
-            // Wait for done pulse
-            @(posedge done);
-            @(negedge clk); // settle
-        end
-    endtask
+    integer checks = 0, fails = 0, seed = 1, nops = 40000, cyc = 0;
+    integer seed0 = 1;
+    integer n_op [0:10];
+    always @(posedge clk) cyc <= cyc + 1;
 
-    // ── Task: issue one shift (dir: 0 SLL, 1 SRL/SRA) and wait for done ──────
-    task run_sh;
-        input        t_right, t_sra;
-        input [31:0] t_a, t_b;
+    task automatic chk(input [8*40-1:0] what, input [31:0] got, input [31:0] want);
         begin
-            @(negedge clk);
-            op    = {t_right, 2'b01};   // aluOp[2:0] of SLL / SRL / SRA
-            shift = 1'b1;
-            sra   = t_sra;
-            a     = t_a;
-            b     = t_b;
-            start = 1'b1;
-            @(negedge clk);
-            start = 1'b0;
-            @(posedge done);
-            @(negedge clk);
-            shift = 1'b0;
-            sra   = 1'b0;
-        end
-    endtask
-
-    // ── Task: check result ────────────────────────────────────────────────────
-    task check;
-        input [31:0]  got;
-        input [31:0]  exp;
-        input [255:0] name;
-        begin
-            if (got === exp) begin
-                pass_count = pass_count + 1;
-            end else begin
-                fail_count = fail_count + 1;
-                $display("FAIL  %-40s | got=0x%08h  exp=0x%08h", name, got, exp);
+            checks = checks + 1;
+            if (got !== want) begin
+                fails = fails + 1;
+                if (fails <= 30) $display("FAIL %0s: got %08h want %08h (cycle %0d)", what, got, want, cyc);
             end
         end
     endtask
 
-    // ── Main test sequence ────────────────────────────────────────────────────
-    initial begin
-        pass_count = 0;
-        fail_count = 0;
-        start = 0; op = 0; a = 0; b = 0; shift = 0; sra = 0;
+    // ── the model ────────────────────────────────────────────────────────
+    // kind: 0-7 the M ops (muldiv.v's op table), 8 SLL, 9 SRL, 10 SRA
+    function [31:0] model(input integer kind, input [31:0] x, input [31:0] y);
+        reg signed [63:0] ps; reg [63:0] pu; reg signed [64:0] psu;
+        reg signed [31:0] qs, rs, sx, sy, sh;
+        reg ovf;
+        begin
+            ps  = $signed(x) * $signed(y);
+            pu  = x * y;
+            psu = $signed({x[31], x}) * $signed({1'b0, y});
+            sx = x; sy = y;
+            ovf = (x == 32'h8000_0000 && y == 32'hFFFF_FFFF);
+            // Signed quotient and remainder in signed variables: inside a ?:
+            // with unsigned arms, $signed(x) / $signed(y) would divide unsigned.
+            if (y != 0 && !ovf) begin qs = sx / sy; rs = sx % sy; end
+            else begin qs = 0; rs = 0; end
+            sh = sx >>> y[4:0];
+            case (kind)
+                0: model = ps[31:0];
+                1: model = ps[63:32];
+                2: model = psu[63:32];
+                3: model = pu[63:32];
+                4: if (y == 0) model = 32'hFFFF_FFFF; else if (ovf) model = 32'h8000_0000; else model = qs;
+                5: if (y == 0) model = 32'hFFFF_FFFF; else model = x / y;
+                6: if (y == 0) model = x; else if (ovf) model = 32'h0; else model = rs;
+                7: if (y == 0) model = x; else model = x % y;
+                8: model = x << y[4:0];
+                9: model = x >> y[4:0];
+                default: model = sh;
+            endcase
+        end
+    endfunction
+    function integer latency(input integer kind, input [31:0] y);
+        latency = (kind < 4) ? 34 : (kind < 8) ? 36 : 2 + y[4:0];
+    endfunction
 
-        // Reset
-        rst = 1;
-        repeat(4) @(posedge clk);
+    // ── handshake monitor (every clock) ──────────────────────────────────
+    reg        pend = 0, busy_q = 0, done_q = 0, have = 0;
+    reg        ign = 0;      // an operation abandoned to a reset: not checked
+    reg [31:0] held;
+    integer    t_start, want_lat, n_done = 0, n_start = 0;
+    always @(posedge clk) begin
+        #1;
+        if (rst) begin
+            pend = 0; have = 0; ign = 0;
+            checks = checks + 1;
+            if (done) begin fails = fails + 1; $display("FAIL done during reset (cycle %0d)", cyc); end
+        end else if (!ign) begin
+            if (pend && !done) begin
+                checks = checks + 1;
+                if (busy !== 1'b1) begin fails = fails + 1; if (fails <= 30) $display("FAIL busy low while the operation runs (cycle %0d)", cyc); end
+            end
+            if (done) begin
+                checks = checks + 3;
+                if (!pend) begin fails = fails + 1; if (fails <= 30) $display("FAIL done with no operation running (cycle %0d)", cyc); end
+                if (busy !== 1'b0 || busy_q !== 1'b1) begin fails = fails + 1; if (fails <= 30) $display("FAIL done not on the cycle busy drops (busy %b, before %b, cycle %0d)", busy, busy_q, cyc); end
+                if (done_q) begin fails = fails + 1; if (fails <= 30) $display("FAIL done longer than one cycle (cycle %0d)", cyc); end
+                if (pend && cyc - t_start != want_lat) begin
+                    fails = fails + 1;
+                    if (fails <= 30) $display("FAIL latency %0d cycles, want %0d (cycle %0d)", cyc - t_start, want_lat, cyc);
+                end
+                pend = 0; have = 1; held = result; n_done = n_done + 1;
+            end else if (have) begin
+                checks = checks + 1;
+                if (result !== held) begin
+                    fails = fails + 1;
+                    if (fails <= 30) $display("FAIL result changed after done before the next start: %08h -> %08h (cycle %0d)", held, result, cyc);
+                end
+            end
+            if (!pend && !done && busy !== 1'b0) begin
+                checks = checks + 1; fails = fails + 1;
+                if (fails <= 30) $display("FAIL busy with nothing running (cycle %0d)", cyc);
+            end
+        end
+        busy_q = busy; done_q = done;
+    end
+
+    // ── driver ───────────────────────────────────────────────────────────
+    integer gap = 1;
+    reg [31:0] r_res;
+    // Start one operation on the next clock (unless `now`: this clock),
+    // scramble every input from the next cycle on, and wait for done.
+    task automatic run(input integer kind, input [31:0] x, input [31:0] y);
+        integer n;
+        begin
+            @(negedge clk);
+            if (kind < 8) begin op = kind[2:0]; shift = 0; sra = 0; end
+            else begin op = (kind == 8) ? 3'b001 : 3'b101; shift = 1; sra = (kind == 10); end
+            a = x; b = y; start = 1;
+            @(posedge clk);
+            t_start = cyc; want_lat = latency(kind, y); pend = 1; have = 0;
+            n_start = n_start + 1; n_op[kind] = n_op[kind] + 1;
+            @(negedge clk);
+            start = 0; a = $random(seed); b = $random(seed); op = $random(seed); shift = $random(seed); sra = $random(seed);
+            n = 0;
+            while (!done && n < 200) begin @(posedge clk); #2; n = n + 1; end
+            if (!done) begin
+                fails = fails + 1;
+                $display("FAIL no done within 200 cycles (kind %0d, %08h, %08h)", kind, x, y);
+            end else
+                chk("result", result, model(kind, x, y));
+            if (fails > 0 && fails <= 30 && result !== model(kind, x, y))
+                $display("     kind %0d a=%08h b=%08h", kind, x, y);
+            // the next start: on this done cycle (gap 0) or 1-3 cycles later
+            gap = $unsigned($random(seed)) % 4;
+            repeat (gap) @(posedge clk);
+        end
+    endtask
+
+    function [31:0] pick;
+        input integer dummy;
+        reg [3:0] c;
+        begin
+            c = $random(seed);
+            case (c)
+                0: pick = 32'h0;          1: pick = 32'h1;          2: pick = 32'hFFFF_FFFF;
+                3: pick = 32'h8000_0000;  4: pick = 32'h7FFF_FFFF;  5: pick = 32'h8000_0001;
+                6: pick = 32'hFFFF_FFFE;  7: pick = 32'h1 << ($unsigned($random(seed)) % 32);
+                8: pick = ~(32'h1 << ($unsigned($random(seed)) % 32));
+                9: pick = $random(seed) & 32'hFF;
+                10: pick = -($random(seed) & 32'hFF);
+                default: pick = $random(seed);
+            endcase
+        end
+    endfunction
+
+    integer i, k, x, y;
+    reg [31:0] corners [0:9];
+    initial begin
+        if ($value$plusargs("SEED=%d", seed)) ;
+        seed0 = seed;   // $random(seed) moves seed on: report the one that reproduces the run
+        if ($value$plusargs("NOPS=%d", nops)) ;
+        for (k = 0; k <= 10; k = k + 1) n_op[k] = 0;
+        $display("=== MulDiv Testbench (model, seed %0d, %0d random ops) ===", seed, nops);
+        corners[0] = 0; corners[1] = 1; corners[2] = 32'hFFFF_FFFF; corners[3] = 32'h8000_0000;
+        corners[4] = 32'h7FFF_FFFF; corners[5] = 2; corners[6] = 32'hFFFF_FFFE; corners[7] = 7;
+        corners[8] = 32'hFFFF_FFF9; corners[9] = 32'h8000_0001;
+        repeat (3) @(posedge clk);
         @(negedge clk); rst = 0;
 
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== MUL (lower 32 bits of signed product) ===");
-        // ──────────────────────────────────────────────────────────────────────
+        // every op on every pair of corners: x/0, -x/0, INT_MIN/-1, ...
+        for (k = 0; k < 11; k = k + 1)
+            for (x = 0; x < 10; x = x + 1)
+                for (y = 0; y < 10; y = y + 1)
+                    run(k, corners[x], (k >= 8) ? (y * 7) : corners[y]);
+        // every shift amount, both directions, bit 5 and up ignored
+        for (k = 8; k < 11; k = k + 1)
+            for (y = 0; y < 64; y = y + 1)
+                run(k, 32'hC3A5_96F1, y | (y[0] ? 32'hFFFF_FF00 : 0));
 
-        run_op(MUL, 32'd3, 32'd7);
-        check(result, 32'd21, "MUL  3 * 7");
+        // reset in the middle of an operation, at every point of a divide
+        for (i = 1; i < 40; i = i + 1) begin
+            @(negedge clk); op = 3'd4; shift = 0; a = 32'h8000_0000; b = 3; start = 1;
+            @(posedge clk); pend = 0; ign = 1;     // the operation is abandoned
+            @(negedge clk); start = 0;
+            repeat (i - 1) @(negedge clk);
+            rst = 1; @(negedge clk); rst = 0; have = 0;
+            repeat (2) begin
+                @(posedge clk); #1;
+                chk("idle after reset (busy)", {31'b0, busy}, 32'b0);
+                chk("idle after reset (done)", {31'b0, done}, 32'b0);
+            end
+            run(i % 11, pick(0), pick(0));
+        end
 
-        run_op(MUL, 32'hFFFFFFFF, 32'hFFFFFFFF);   // (-1)*(-1) lower = 1
-        check(result, 32'd1, "MUL -1 * -1 (lower)");
+        // random, boundary-biased
+        for (i = 0; i < nops; i = i + 1) run($unsigned($random(seed)) % 11, pick(0), pick(0));
 
-        run_op(MUL, 32'd0, 32'hDEADBEEF);
-        check(result, 32'd0, "MUL  0 * x");
-
-        run_op(MUL, 32'h80000000, 32'd2);           // INT_MIN * 2 lower = 0
-        check(result, 32'd0, "MUL  INT_MIN * 2 (lower)");
-
-        run_op(MUL, 32'd1, 32'hDEADBEEF);
-        check(result, 32'hDEADBEEF, "MUL  1 * DEADBEEF");
-
-        run_op(MUL, 32'hFFFFFFFF, 32'd2);           // (-1)*2 lower = -2 = 0xFFFFFFFE
-        check(result, 32'hFFFFFFFE, "MUL -1 * 2 (lower)");
-
-        run_op(MUL, 32'd100, 32'd200);
-        check(result, 32'd20000, "MUL  100 * 200");
-
-        run_op(MUL, 32'h00010001, 32'h00010001);   // 65537 * 65537 = 4295098369 → lower = 0x00020001
-        check(result, 32'h00020001, "MUL  65537 * 65537 (lower)");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== MULH (upper 32 bits, signed × signed) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(MULH, 32'd3, 32'd7);                 // upper = 0
-        check(result, 32'd0, "MULH  3 * 7 (upper)");
-
-        run_op(MULH, 32'hFFFFFFFF, 32'hFFFFFFFF);  // (-1)*(-1) = 1; upper = 0
-        check(result, 32'd0, "MULH -1 * -1 (upper)");
-
-        run_op(MULH, 32'h80000000, 32'h80000000);  // (-2^31)*(-2^31) = 2^62; upper = 0x40000000
-        check(result, 32'h40000000, "MULH  INT_MIN * INT_MIN (upper)");
-
-        run_op(MULH, 32'h80000000, 32'd1);          // (-2^31)*1; upper = -1 = 0xFFFFFFFF
-        check(result, 32'hFFFFFFFF, "MULH  INT_MIN * 1 (upper)");
-
-        run_op(MULH, 32'hFFFFFFFF, 32'd1);          // (-1)*1; upper = -1 = 0xFFFFFFFF
-        check(result, 32'hFFFFFFFF, "MULH -1 * 1 (upper)");
-
-        run_op(MULH, 32'h7FFFFFFF, 32'h7FFFFFFF);  // INT_MAX^2 upper = 0x3FFFFFFF
-        check(result, 32'h3FFFFFFF, "MULH  INT_MAX * INT_MAX (upper)");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== MULHSU (upper 32 bits, signed × unsigned) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(MULHSU, 32'hFFFFFFFF, 32'hFFFFFFFF);// (-1)*0xFFFFFFFF; upper = -1
-        check(result, 32'hFFFFFFFF, "MULHSU -1 * 0xFFFFFFFF (upper)");
-
-        run_op(MULHSU, 32'd1, 32'hFFFFFFFF);        // 1 * 0xFFFFFFFF; upper = 0
-        check(result, 32'd0, "MULHSU  1 * 0xFFFFFFFF (upper)");
-
-        run_op(MULHSU, 32'h80000000, 32'hFFFFFFFF); // -2^31 * (2^32-1) = -(2^63-2^31); upper = 0x80000000
-        check(result, 32'h80000000, "MULHSU  INT_MIN * 0xFFFFFFFF (upper)");
-
-        run_op(MULHSU, 32'd0, 32'hFFFFFFFF);
-        check(result, 32'd0, "MULHSU  0 * 0xFFFFFFFF");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== MULHU (upper 32 bits, unsigned × unsigned) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(MULHU, 32'hFFFFFFFF, 32'hFFFFFFFF); // (2^32-1)^2 upper = 0xFFFFFFFE
-        check(result, 32'hFFFFFFFE, "MULHU  0xFFFF * 0xFFFF (upper)");
-
-        run_op(MULHU, 32'd1, 32'hFFFFFFFF);         // 1*(2^32-1); upper = 0
-        check(result, 32'd0, "MULHU  1 * 0xFFFFFFFF (upper)");
-
-        run_op(MULHU, 32'd0, 32'hFFFFFFFF);
-        check(result, 32'd0, "MULHU  0 * 0xFFFFFFFF");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== DIV (signed division) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(DIV, 32'd20, 32'd5);
-        check(result, 32'd4, "DIV  20 / 5");
-
-        run_op(DIV, 32'hFFFFFFEB, 32'hFFFFFFFF);   // (-21) / (-1) = 21
-        check(result, 32'd21, "DIV -21 / -1");
-
-        run_op(DIV, 32'hFFFFFFEB, 32'd7);           // (-21) / 7 = -3
-        check(result, 32'hFFFFFFFD, "DIV -21 / 7");
-
-        run_op(DIV, 32'd20, 32'hFFFFFFFB);          // 20 / (-5) = -4
-        check(result, 32'hFFFFFFFC, "DIV  20 / -5");
-
-        run_op(DIV, 32'd7, 32'd0);                  // div-by-zero → 0xFFFFFFFF
-        check(result, 32'hFFFFFFFF, "DIV  7 / 0 (div-by-zero)");
-
-        run_op(DIV, 32'h80000000, 32'hFFFFFFFF);   // overflow → INT_MIN
-        check(result, 32'h80000000, "DIV  INT_MIN / -1 (overflow)");
-
-        run_op(DIV, 32'd0, 32'd5);                  // 0 / 5 = 0
-        check(result, 32'd0, "DIV  0 / 5");
-
-        run_op(DIV, 32'd1, 32'd1);
-        check(result, 32'd1, "DIV  1 / 1");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== DIVU (unsigned division) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(DIVU, 32'd20, 32'd5);
-        check(result, 32'd4, "DIVU  20 / 5");
-
-        run_op(DIVU, 32'hFFFFFFFF, 32'd1);          // (2^32-1) / 1
-        check(result, 32'hFFFFFFFF, "DIVU  0xFFFFFFFF / 1");
-
-        run_op(DIVU, 32'hFFFFFFFF, 32'hFFFFFFFF);   // 1
-        check(result, 32'd1, "DIVU  0xFFFFFFFF / 0xFFFFFFFF");
-
-        run_op(DIVU, 32'd5, 32'd0);                 // div-by-zero → 0xFFFFFFFF
-        check(result, 32'hFFFFFFFF, "DIVU  5 / 0 (div-by-zero)");
-
-        run_op(DIVU, 32'h80000000, 32'h7FFFFFFF);   // 2^31 / (2^31-1) = 1
-        check(result, 32'd1, "DIVU  0x80000000 / 0x7FFFFFFF");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== REM (signed remainder) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(REM, 32'd20, 32'd6);                 // 20 % 6 = 2
-        check(result, 32'd2, "REM  20 % 6");
-
-        run_op(REM, 32'hFFFFFFEB, 32'd7);           // (-21) % 7 = 0
-        check(result, 32'd0, "REM -21 % 7");
-
-        run_op(REM, 32'hFFFFFFEC, 32'd5);           // (-20) % 5 = 0
-        check(result, 32'd0, "REM -20 % 5");
-
-        run_op(REM, 32'hFFFFFFED, 32'd5);           // (-19) % 5 = -4 = 0xFFFFFFFC
-        check(result, 32'hFFFFFFFC, "REM -19 % 5");
-
-        run_op(REM, 32'd7, 32'd0);                  // div-by-zero → dividend = 7
-        check(result, 32'd7, "REM  7 % 0 (div-by-zero)");
-
-        run_op(REM, 32'h80000000, 32'hFFFFFFFF);    // overflow → 0
-        check(result, 32'd0, "REM  INT_MIN % -1 (overflow)");
-
-        run_op(REM, 32'd0, 32'd7);                  // 0 % 7 = 0
-        check(result, 32'd0, "REM  0 % 7");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== REMU (unsigned remainder) ===");
-        // ──────────────────────────────────────────────────────────────────────
-
-        run_op(REMU, 32'd20, 32'd6);                // 20 % 6 = 2
-        check(result, 32'd2, "REMU  20 % 6");
-
-        run_op(REMU, 32'hFFFFFFFF, 32'hFFFFFFFE);   // (2^32-1) % (2^32-2) = 1
-        check(result, 32'd1, "REMU  0xFFFFFFFF % 0xFFFFFFFE");
-
-        run_op(REMU, 32'd5, 32'd0);                 // div-by-zero → dividend = 5
-        check(result, 32'd5, "REMU  5 % 0 (div-by-zero)");
-
-        run_op(REMU, 32'hFFFFFFFF, 32'hFFFFFFFF);   // 0
-        check(result, 32'd0, "REMU  0xFFFFFFFF % 0xFFFFFFFF");
-
-        run_op(REMU, 32'h80000000, 32'h7FFFFFFF);   // 2^31 % (2^31-1) = 1
-        check(result, 32'd1, "REMU  0x80000000 % 0x7FFFFFFF");
-
-        // ──────────────────────────────────────────────────────────────────────
-        $display("=== SLL / SRL / SRA (one bit per cycle; shamt = b[4:0]) ===");
-        // ──────────────────────────────────────────────────────────────────────
-        run_sh(0, 0, 32'h1, 32'd0);         check(result, 32'h1, "SLL by 0");
-        run_sh(0, 0, 32'h1, 32'd1);         check(result, 32'h2, "SLL by 1");
-        run_sh(0, 0, 32'h1, 32'd31);        check(result, 32'h80000000, "SLL by 31");
-        run_sh(0, 0, 32'hFFFFFFFF, 32'd4);  check(result, 32'hFFFFFFF0, "SLL fill");
-        run_sh(0, 0, 32'hABCDEF01, 32'h20); check(result, 32'hABCDEF01, "SLL shamt masked to 5 bits");
-        run_sh(0, 0, 32'h12345678, 32'h10); check(result, 32'h56780000, "SLL by 16");
-        run_sh(1, 0, 32'h80000000, 32'd1);  check(result, 32'h40000000, "SRL sign>>1");
-        run_sh(1, 0, 32'hFFFFFFFF, 32'd4);  check(result, 32'h0FFFFFFF, "SRL fill 0");
-        run_sh(1, 0, 32'h80000000, 32'd31); check(result, 32'h1, "SRL >>31");
-        run_sh(1, 0, 32'hDEADBEEF, 32'd0);  check(result, 32'hDEADBEEF, "SRL >>0");
-        run_sh(1, 0, 32'h12345678, 32'd8);  check(result, 32'h00123456, "SRL >>8");
-        run_sh(1, 1, 32'h80000000, 32'd1);  check(result, 32'hC0000000, "SRA neg>>1");
-        run_sh(1, 1, 32'h80000000, 32'd31); check(result, 32'hFFFFFFFF, "SRA neg>>31");
-        run_sh(1, 1, 32'h7FFFFFFF, 32'd1);  check(result, 32'h3FFFFFFF, "SRA pos>>1");
-        run_sh(1, 1, 32'h40000000, 32'd0);  check(result, 32'h40000000, "SRA >>0");
-        run_sh(1, 1, 32'hFFFFFF00, 32'd8);  check(result, 32'hFFFFFFFF, "SRA neg>>8");
-        run_sh(1, 1, 32'h00FF0000, 32'd16); check(result, 32'h000000FF, "SRA pos>>16");
-        run_sh(1, 1, 32'hDEADBEEF, 32'hFFFFFFE3); check(result, 32'hFBD5B7DD, "SRA shamt masked (3)");
-        // an M operation straight after a shift still works
-        run_op(MUL, 32'd3, 32'd7);          check(result, 32'd21, "MUL 3 * 7 after shifts");
-
-        // ── Summary ──────────────────────────────────────────────────────────
-        $display("");
-        $display("=== MulDiv Results: %0d passed, %0d failed ===",
-                 pass_count, fail_count);
-        if (fail_count == 0)
-            $display("ALL PASSED");
-        else
-            $display("FAILURES DETECTED");
+        repeat (5) @(posedge clk);
+        checks = checks + 1;
+        if (n_done != n_start) begin
+            fails = fails + 1;
+            $display("FAIL %0d operations started, %0d done", n_start, n_done);
+        end
+        for (k = 0; k <= 10; k = k + 1)
+            if (n_op[k] < 100) begin fails = fails + 1; $display("FAIL coverage: kind %0d ran %0d times", k, n_op[k]); end
+        if (fails == 0) $display("PASS tb_muldiv (%0d checks, %0d operations, seed %0d)", checks, n_start, seed0);
+        else            $display("FAIL tb_muldiv: %0d failures, %0d checks, seed %0d", fails, checks, seed0);
         $finish;
     end
 
-    // Safety timeout
     initial begin
-        #500000;
-        $display("TIMEOUT — simulation hung");
+        #(64'd400_000_000);
+        $display("TIMEOUT tb_muldiv");
         $finish;
     end
-
 endmodule
