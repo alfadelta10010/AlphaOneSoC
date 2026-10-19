@@ -3,7 +3,8 @@
 Sylvain Munaut's ("tnt", smunaut) register file for TinyTapeout: 32 words of 32 bits,
 one write port and two read ports, a custom 12-transistor bit cell with latches at its
 ports, 132.64 x 118.70 um. The GDS, LEF, liberty and model are vendored copies, not
-modified; `rf_top.ff-hold-guard.lib` is the one file derived here (see *Hold guard band*).
+modified; `rf_top.ff-hold-guard.lib` is the one file derived here (see *Hold guard band*),
+and `src/rf_top.v` the model as this design uses it. *License* has the terms.
 
 ## Provenance
 
@@ -18,6 +19,7 @@ Taken from **MichaelBell/ttsky25b-femtorv-soc @ 50aa37fdb7befa4fe2fac69f71a10d64
 | `rf_top.lib` | `macro/rf_top.lib` | `4c85936bb8a29385b9953ab8797041570082bdd860f0a46a28644be7c8e8ccb8` |
 | `rf_top.upstream.v` | `src/rf_top.v` (behavioural model) | `4383d71915abd1c0e301f6dced3315760a6b99cea32eec6a25112c377f79cc39` |
 | `LICENSE` | `LICENSE` (Apache-2.0) | `c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4` |
+| `LICENSE.CERN-OHL-W-2.0` | the SPDX license list, `text/CERN-OHL-W-2.0.txt` | `c1432111d0aeefc9d1ced8105d2d4ed07d5dcb1fd43abb5d4616c4f9ef96e08f` |
 
 The GDS, LEF and liberty are byte-identical to the copies in the KianV regfile edition
 (`ttsky26c-kianv-regfile/regfile_macro/`). That repository's behavioural model differs
@@ -27,11 +29,40 @@ with 0p1 RF release"), which publishes no macro views and no measurements.
 
 ## License
 
-**The macro has no license of its own.** smunaut's own repositories for it carry no
-LICENSE file. The repositories that integrate it -- FemtoRV, KianV's regfile edition and
-georgc4/rv32-linux-soc -- are Apache-2.0, and `LICENSE` here is FemtoRV's, the terms
-under which these copies were obtained. Whether the author has granted those terms for
-his work is not stated anywhere; settle that before the macro ships in a submission.
+The author's terms, from Sylvain Munaut on 2026-10-19 (his repositories for the macro
+carry no LICENSE file):
+
+> The final assembled GDS is dual-licensed Apache 2.0 (required for TT) / CERN-OHL-W.
+> Any other hw design files ( including LEF, liberty, model and sources files for that
+> GDS ) are only available under CERN-OHL-W.
+>
+> So in short, it's fine to use for TT if the sources are on github. And it's fine to
+> use anywhere if you use it "as-is" and provide attribution. If you want to use it
+> without attribution in some closed design, PM me to find an acceptable license.
+
+File by file:
+
+| file | license |
+|---|---|
+| `rf_top.gds.gz` | Apache-2.0 (`LICENSE`) or CERN-OHL-W-2.0 (`LICENSE.CERN-OHL-W-2.0`) |
+| `rf_top.lef`, `rf_top.lib`, `rf_top.upstream.v` | CERN-OHL-W-2.0, unmodified |
+| `rf_top.ff-hold-guard.lib`, `src/rf_top.v` | CERN-OHL-W-2.0, modified here |
+
+`LICENSE` is FemtoRV's copy of Apache-2.0, the terms under which these copies were first
+obtained; `LICENSE.CERN-OHL-W-2.0` is the licence text from the SPDX license list. What
+the CERN-OHL-W asks of this repository:
+
+- **Attribution and notices kept.** This README credits the author, and the unmodified
+  files are byte-identical to his.
+- **Modified files** (its section 3.3) stay under CERN-OHL-W-2.0 and carry a notice of
+  what was changed and when, and a Source Location: `rf_top.ff-hold-guard.lib` in its
+  header comment, `src/rf_top.v` in its header.
+- **A chip made with the macro** (a Product, section 4.1) must point whoever receives it
+  to the complete source. That is the TinyTapeout submission repository on GitHub,
+  https://github.com/alfadelta10010/alphaOneSoC-sky26d, the Source Location both notices
+  give.
+- The licence is weakly reciprocal: the rest of the design only interfaces with the
+  macro and keeps its own terms.
 
 ## What the views say
 
