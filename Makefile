@@ -80,10 +80,14 @@ help:
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
-# Run a unit testbench and fail the target if it reported a failure. The
-# testbenches print FAIL/TIMEOUT lines and then $finish, which exits 0, so
-# without this check `make test-all` reported success over failing tests.
-run_tb = cd $(BUILD_DIR) && $(VVP) $(1) | tee $(1).log && ! grep -qE '^(FAIL|TIMEOUT)' $(1).log
+# Run a unit testbench: $(1) the simulator, $(2) its plusargs, $(3) a suffix
+# for the log. The target fails unless the run exits 0 (a $fatal exits 1,
+# which a pipe through tee used to hide), prints a PASS line, and prints no
+# FAIL, TIMEOUT, ERROR or FATAL line. The testbenches print FAIL/TIMEOUT
+# lines and then $finish, which exits 0, and one that ends early or checks
+# nothing prints no PASS, so the exit status alone is not enough either.
+run_tb = cd $(BUILD_DIR) && { $(VVP) -n $(1) $(2) > $(1)$(3).log 2>&1; rc=$$?; cat $(1)$(3).log; \
+         [ $$rc -eq 0 ] && grep -q '^PASS' $(1)$(3).log && ! grep -qE '^(FAIL|TIMEOUT|ERROR|FATAL)' $(1)$(3).log; }
 
 # ============================================================
 #  Component Testbenches
@@ -121,10 +125,8 @@ test-regfile: $(BUILD_DIR)
 	@echo "=== Testing Register File ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_regFile $(SRC_DIR)/regFile.v $(SRC_DIR)/rf_top.v $(TB_DIR)/tb_regFile.v
 	@$(call run_tb,tb_regFile)
-	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X | tee tb_regFile_x.log && \
-		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_x.log && grep -q '^PASS' tb_regFile_x.log
-	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X +RF_COLLIDE_X | tee tb_regFile_cx.log && \
-		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_cx.log && grep -q '^PASS' tb_regFile_cx.log
+	@$(call run_tb,tb_regFile,+RF_X,_x)
+	@$(call run_tb,tb_regFile,+RF_X +RF_COLLIDE_X,_cx)
 
 test-csr: $(BUILD_DIR)
 	@echo "=== Testing CSR ==="
