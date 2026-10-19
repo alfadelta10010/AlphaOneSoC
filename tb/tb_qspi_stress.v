@@ -23,6 +23,13 @@
 //     written its bytes; the shadow takes the model's word for those. The
 //     model keeps the PSRAMs' contents across their reset (99h), which the
 //     datasheet does not promise; this checks the engine, not that.
+//   * on every clock, a bound on how long either port's request may wait
+//     for ready (WAIT_LIMIT clocks: a transaction is about 50, a fetch
+//     behind a data access about 150, a start-up sequence after a reset a
+//     few hundred), so a deadlock or a port starved by the other fails at
+//     once instead of running out the clock; and at the end a floor on the
+//     traffic served (about half of what an unbroken run serves), so a path
+//     that slowed to a crawl fails too.
 // Plusargs as tb_qspi (+QSPI_DELAY, +RD_LATE, the model's), plus +SEED=n and
 // +RESETS.
 // Written by the 2026-09-26 RTL review; it caught both deliberate breakages
@@ -171,6 +178,24 @@ module tb_qspi_stress;
         $display("INFO injected d_req during the first half of a split fetch at t=%0t", $time);
     end
 
+    // Request wait bound (see the header).
+    localparam integer WAIT_LIMIT = 4000;
+    integer i_wait = 0, d_wait = 0, max_i_wait = 0, max_d_wait = 0;
+    always @(posedge clk) begin
+        if (rst) begin i_wait = 0; d_wait = 0; end
+        else begin
+            i_wait = (i_req && !i_ready) ? i_wait + 1 : 0;
+            d_wait = (d_req && !d_ready) ? d_wait + 1 : 0;
+            if (i_wait > max_i_wait) max_i_wait = i_wait;
+            if (d_wait > max_d_wait) max_d_wait = d_wait;
+            if (i_wait == WAIT_LIMIT || d_wait == WAIT_LIMIT) begin
+                $display("FAIL %0s request waited %0d clocks for ready (t=%0t)",
+                         (i_wait == WAIT_LIMIT) ? "fetch" : "data", WAIT_LIMIT, $time);
+                errors = errors + 1;
+            end
+        end
+    end
+
     integer i, nrst = 0, rlen, rst_again = 0, nrst_init = 0, nrst_step4 = 0;
     reg     resets_on;
     initial resets_on = $test$plusargs("RESETS");
@@ -231,6 +256,11 @@ module tb_qspi_stress;
                      nrst, nrst_init, nrst_step4);
             errors = errors + 1;
         end
+        if (n_i < 2500 || n_d < 1200) begin
+            $display("FAIL tb_qspi_stress: only %0d fetches and %0d data accesses served", n_i, n_d);
+            errors = errors + 1;
+        end
+        $display("longest wait for ready: fetch %0d, data %0d clocks", max_i_wait, max_d_wait);
         if (errors == 0) $display("PASS tb_qspi_stress fetches=%0d data=%0d resets=%0d (%0d in start-up, %0d in step 4) (rd_late=%0d delay=%0d)",
                                   n_i, n_d, nrst, nrst_init, nrst_step4, rd_late, pmod.delay_ns);
         else $display("FAIL tb_qspi_stress: %0d errors", errors);
