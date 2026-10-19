@@ -34,6 +34,9 @@ make test-decoder
 make test-signext
 make test-branchctrl
 make test-regfile
+make test-pmp           # PMP checker vs a Privileged 3.7.1 model
+make test-clint         # CLINT vs its register map and timer rules
+make test-seeds SEEDS="1 2 3"   # the ten seeded unit benches, once per seed
 make test-qspi          # memory controller + QSPI engine vs the QSPI Pmod model
 make test-uart          # UART unit testbench (scoreboard + reference TX/RX)
 make test-gpio          # GPIO + SPI transmitter unit testbench
@@ -44,17 +47,21 @@ make test-wrapper       # the TinyTapeout top level through its 24 pins only (tb
 make clean
 ```
 
-`make test-all` fails if any unit testbench prints a FAIL or TIMEOUT line.
+`make test-all` fails a unit testbench unless it exits 0, prints a `PASS` line, and prints no FAIL, TIMEOUT, ERROR or FATAL line. Each prints its check count, and the seeded ones (`+SEED=`) the seed that reproduces the run.
 
 The directed regression against Spike lives in `tests/directed/` (full-trace comparison, every test listed in its `MANIFEST`):
 
 ```bash
 cd tests/directed && ./run.sh build && ./run.sh      # all runs
 ./run.sh one <name> +DMEM_WAIT=3                      # one test, any plusargs
-./run.sh refs                                         # regenerate Spike references
+./run.sh refs [<name>...]                             # regenerate Spike references (all, or the named tests)
 ./run.sh soc                                          # the suite through the whole SoC
 ./run.sh soc one <name> +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12   # one test through the SoC
 ```
+
+The runner also takes `FYRA_SRC=<dir>` (build from another copy of src/), `OUT_DIR=<dir>` (artifacts elsewhere) and `FAILFAST=1` (stop at the first failing run); none changes what a run checks. `tb/memory_model.v` and `tb/tb_rivercore.v` stop a run on any request outside the core's bus contract (CPU reference 5.1) and on any bus transaction that does not match the retiring access the trace shows (address, lanes, direction, store data).
+
+Mutation testing measures whether the benches can fail (`tb/mutate/`): `python3 tb/mutate/run.py --check` (every fault applies and compiles), `python3 tb/mutate/run.py -j 2 [--only ID,...] [--file csr.v] [--benches unit,dir,soc,dir-soc,formal]` (each mutant is a throwaway copy of src/ under build/mut/, scored and deleted), `--report` for the kill matrix; `--tree <dir>` runs a frozen copy of the benches against the same faults. Formal: `tb/formal/run.sh` proves the CSR file's WARL invariants by k-induction with yosys's built-in SAT solver (no sby needed).
 
 Memory-timing plusargs: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2` (read data while not ready: X, zeros, garbage). Deterministic waits, random waits, zero waits and garbage data each expose different bugs; sweep them independently. A pipeline change is not verified until the directed suite and the relevant riscv-arch-test tests pass.
 
