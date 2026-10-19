@@ -78,7 +78,8 @@ module tb_rf_fields;
             fails = fails + 1;
         end
         $display("\n=== rf_fields Results: %0d checks, %0d failed ===", checks, fails);
-        if (fails == 0) $display("ALL RF_FIELDS TESTS PASSED");
+        if (fails == 0) $display("PASS tb_rf_fields (%0d checks)", checks);
+        else            $display("FAIL tb_rf_fields: %0d failures, %0d checks", fails, checks);
         $finish;
     end
 endmodule

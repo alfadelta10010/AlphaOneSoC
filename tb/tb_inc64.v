@@ -49,7 +49,8 @@ module tb_inc64;
             @(posedge clk); #1;
         end
         $display("\n=== inc64 Results: %0d passed, %0d failed ===", pass_count, fail_count);
-        if (fail_count == 0) $display("ALL INC64 TESTS PASSED");
+        if (fail_count == 0) $display("PASS tb_inc64 (%0d checks)", pass_count);
+        else                 $display("FAIL tb_inc64: %0d failures", fail_count);
         $finish;
     end
 endmodule

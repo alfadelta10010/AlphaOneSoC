@@ -122,9 +122,9 @@ test-regfile: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_regFile $(SRC_DIR)/regFile.v $(SRC_DIR)/rf_top.v $(TB_DIR)/tb_regFile.v
 	@$(call run_tb,tb_regFile)
 	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X | tee tb_regFile_x.log && \
-		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_x.log && grep -q '^ALL REGFILE TESTS PASSED' tb_regFile_x.log
+		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_x.log && grep -q '^PASS' tb_regFile_x.log
 	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X +RF_COLLIDE_X | tee tb_regFile_cx.log && \
-		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_cx.log && grep -q '^ALL REGFILE TESTS PASSED' tb_regFile_cx.log
+		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_cx.log && grep -q '^PASS' tb_regFile_cx.log
 
 test-csr: $(BUILD_DIR)
 	@echo "=== Testing CSR ==="
