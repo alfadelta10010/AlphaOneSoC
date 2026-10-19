@@ -96,6 +96,12 @@ irq_at_trap         expect x10=0x1 x11=0x1 x12=0x0|0x4|0x8 x13=0x55
 irq_at_trap         expect x10=0x1 x11=0x1 x12=0x0|0x4|0x8 x13=0x55 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 irq_umode           spike
 irq_umode           spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2
+# irq_prio: MEI, MSI, MTI all pending, taken in that order. MEIP comes from
+# the testbench's hook (tb/memory_model.v), which Spike has no device for,
+# so the run checks the order the causes were taken in (x10, a byte each)
+# and that there were three (x11).
+irq_prio            expect x10=0xb0307 x11=0x3
+irq_prio            expect x10=0xb0307 x11=0x3 -- +IMEM_WAIT=2 +DMEM_WAIT=2 +DMEM_RANDOM=1
 mie_enable          spike
 # Spike takes this interrupt before the csrc (its msip store is visible at
 # once); the core takes it after the store lands, by which time mie is off --
@@ -269,4 +275,5 @@ irq_stress          soc expect x9=0x1 x21=0xf08894e2 x25=0x0 -- +RD_LATE +QSPI_D
 t_ctl_slow          soc expect x8=0x64 x25=0x64 x20=0x1
 
 #soc-skip cnt_xhalf -- its mcycle cases read the cycle counter, which counts clocks: at QSPI speed each instruction is tens of clocks, while Spike counts one per instruction. The minstret cases are covered at the core level.
+#soc-skip irq_prio -- it raises MEIP through tb/memory_model.v's hook, which the SoC build has no counterpart of.
 #soc-skip t_irq t_irq2 t_mulirq t_ctl -- their timer periods (40, 37, 50 and 100 clocks) are shorter than an interrupt handler at QSPI speed (about 60 clocks per instruction), so the handler never finishes before the next interrupt and the loop never advances. Legal; these tests assume a fast memory. t_ctl_slow runs t_ctl's LR/SC loop at SoC speed instead.
