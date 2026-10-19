@@ -756,6 +756,69 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  Bus transaction check
+    //
+    //  The trace prints an access as the instruction sees it -- its
+    //  address (exwb_alu_result) and, for a store, the data at its width --
+    //  and the comparison with Spike checks those. Nothing in the trace
+    //  shows what went on the bus, so a store in the wrong byte lanes, with
+    //  unreplicated data, or to the wrong word, passed until a later load
+    //  happened to read it back. On every retire of a memory instruction
+    //  this checks the transaction completing with it against what the
+    //  trace says (CPU reference 5.1): the word address, the lanes the
+    //  size and offset give (loads too), the direction, and a store's data
+    //  in those lanes. And every completed transaction belongs to a
+    //  retiring load, store, LR, successful SC or AMO write, or is an AMO's
+    //  read; a failing SC makes none. A mismatch ends the run with an ERROR
+    //  line and a DUT-ABORT marker in the dump.
+    // ================================================================
+    integer   bus_chk_n = 0;
+    reg [3:0] bx_be;
+    reg       bx_want, bx_xfer;
+    integer   bx_k;
+    task bus_mismatch(input [8*64-1:0] what);
+        begin
+            $display("ERROR: bus transaction: %0s at pc 0x%08h cycle %0d (dmem_req %b ready %b we %b addr %08h be %b wdata %08h; access %08h size %0d)",
+                     what, dbg_pc, cycle_count, dmem_req, dmem_ready, dmem_we, dmem_addr, dmem_be,
+                     dmem_wdata, `CPU.exwb_alu_result, `CPU.exwb_memSize);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    endtask
+    always @(posedge clk) begin
+        if (!rst) begin
+            bx_xfer = dmem_req && dmem_ready;
+            bx_want = (`CPU.exwb_memRD || `CPU.exwb_memWR) && !(`CPU.exwb_isSC && !`CPU.sc_success);
+            case (`CPU.exwb_memSize)
+                2'b00:   bx_be = 4'b0001 << `CPU.exwb_alu_result[1:0];
+                2'b01:   bx_be = `CPU.exwb_alu_result[1] ? 4'b1100 : 4'b0011;
+                default: bx_be = 4'b1111;
+            endcase
+            if (dbg_retired) begin
+                if (bx_want) begin
+                    bus_chk_n = bus_chk_n + 1;
+                    if (!bx_xfer)
+                        bus_mismatch("memory instruction retired without a transaction");
+                    else if (dmem_addr !== {`CPU.exwb_alu_result[31:2], 2'b00})
+                        bus_mismatch("address is not the access's word");
+                    else if (dmem_be !== bx_be)
+                        bus_mismatch("byte lanes do not match the size and offset");
+                    else if (dmem_we !== `CPU.exwb_memWR)
+                        bus_mismatch("direction does not match the instruction");
+                    else if (dmem_we && !`CPU.exwb_isAmo)
+                        for (bx_k = 0; bx_k < 4; bx_k = bx_k + 1)
+                            if (bx_be[bx_k] && dmem_wdata[8*bx_k +: 8] !==
+                                `CPU.exwb_rs2_data[8*(bx_k - `CPU.exwb_alu_result[1:0]) +: 8])
+                                bus_mismatch("store data in its lanes is not the stored value");
+                end else if (bx_xfer)
+                    bus_mismatch("transaction where the retiring instruction makes none");
+            end else if (bx_xfer && !(`CPU.exwb_isAmo && !`CPU.amo_phase && !dmem_we))
+                bus_mismatch("transaction with no retiring access (not an AMO's read)");
+        end
+    end
+
+    // ================================================================
     //  Main simulation loop
     // ================================================================
     initial begin
@@ -834,6 +897,7 @@ module tb_rivercore;
             if (instr_count > 0)
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
             $display("  Register-file reads checked: %0d", rf_chk_n);
+            $display("  Bus transactions checked: %0d", bus_chk_n);
             $display("  Dump: %0s", dump_file_str);
         end
     endtask
