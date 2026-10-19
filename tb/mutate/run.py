@@ -13,7 +13,7 @@ counts as a kill (a hang is a failure), and is labelled TIMEOUT.
   tb/mutate/run.py --check              every find string occurs once and
                                         every mutant compiles
   tb/mutate/run.py [-j 2] [--only CS01,CS02] [--file csr.v]
-                   [--benches unit,dir] [--keep]
+                   [--benches unit,dir,soc,dir-soc,formal] [--keep]
   tb/mutate/run.py --report             kill matrix from the results file
 
 --tree DIR runs the benches of another verification tree -- DIR/Makefile,
@@ -58,7 +58,9 @@ UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
 SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
              "gpio.v", "tt_um_alfadelta10010_alphaone_soc.v"}
 
-TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600}
+TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
+# Formal harnesses (tb/formal/<name>_props.sv) per source file.
+FORMAL = {"csr.v": ["csr"]}
 
 
 def make_has(target):
@@ -73,6 +75,9 @@ def benches_for(f, kinds):
         units = list(UNIT.get(f, []))
         units += [t for t in UNIT_EXTRA.get(f, []) if make_has(t)]
         out += [("unit", t) for t in units]
+    if "formal" in kinds:
+        out += [("formal", h) for h in FORMAL.get(f, [])
+                if os.path.exists(os.path.join(ROOT, "tb/formal/%s_props.sv" % h))]
     if f in SOC_FILES:
         if "soc" in kinds:
             out += [("soc", "test-soc-periph"), ("soc", "test-wrapper")]
@@ -116,7 +121,7 @@ def run(cmd, env, timeout, log):
 
 
 def first_fail(log):
-    pat = re.compile(r"^(FAIL|TIMEOUT|ERROR|FATAL)|  FAIL |DUT-ABORT|make: \*\*\*")
+    pat = re.compile(r"^(FAIL|TIMEOUT|ERROR|FATAL)|  FAIL |DUT-ABORT|make: \*\*\*|^FAILED ")
     try:
         with open(log, errors="replace") as fh:
             for line in fh:
@@ -146,7 +151,11 @@ def score(entry, kinds, keep):
         for kind, b in benches_for(f, kinds):
             env = dict(os.environ)
             log = os.path.join(absbase, "%s-%s.log" % (kind, b))
-            if kind in ("unit", "soc"):
+            if kind == "formal":
+                env["FYRA_SRC"] = os.path.join(absbase, "src")
+                env["OUT_DIR"] = absbase
+                rc, dt = run(["bash", "tb/formal/run.sh", b], env, TIMEOUT[kind], log)
+            elif kind in ("unit", "soc"):
                 cmd = ["make", "-s", "SRC_DIR=%s/src" % base, "BUILD_DIR=%s/b" % base, b]
                 if TREE:
                     cmd[1:1] = ["-f", os.path.join(TREE, "Makefile"),
