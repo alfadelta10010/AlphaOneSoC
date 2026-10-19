@@ -38,7 +38,8 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-qspi test-uart test-gpio test-soc-periph \
+        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-seeds \
+        test-qspi test-uart test-gpio test-soc-periph \
         test-wrapper asm \
         rivercore-build rivercore-test
 
@@ -154,6 +155,16 @@ test-clint: $(BUILD_DIR)
 	@echo "=== Testing CLINT ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_clint $(SRC_DIR)/clint.v $(SRC_DIR)/csr.v $(TB_DIR)/tb_clint.v
 	@$(call run_tb,tb_clint)
+
+# The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
+# Each bench prints its seed; rerun one failure with its +SEED=.
+SEEDS ?= 1 2 3 4 5 6 7 8
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_uart tb_gpio
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-uart test-gpio
+	@for s in $(SEEDS); do for t in $(SEEDED); do \
+		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
+		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
+	done; done
 
 # The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model:
 #   default           2 ns device delay, 1 ns hold
