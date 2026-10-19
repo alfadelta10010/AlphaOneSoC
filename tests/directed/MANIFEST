@@ -41,6 +41,9 @@ t_mul               spike  +IMEM_WAIT=2
 t_mul               spike  +IMEM_WAIT=5
 t_div               spike
 t_div               spike  +IMEM_WAIT=2
+m_corners           spike
+m_corners           spike  +IMEM_WAIT=2 +DMEM_WAIT=1
+m_corners           spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 mul_fetchfault      spike
 mul_fetchfault      spike  +IMEM_WAIT=2
 mul_pmpx            spike
