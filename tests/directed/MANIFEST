@@ -57,6 +57,8 @@ fetch_clint         expect x10=0x1 x11=0x02000000 -- +IMEM_WAIT=3
 # ---- traps, exception priority, mtval -----------------------------------------
 causes              spike
 causes              spike  +IMEM_WAIT=2 +DMEM_WAIT=2
+trap_nested         spike
+trap_nested         spike  +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1
 illegal_ld_misalign spike
 illegal_sd_misalign spike
 illegal_ld_aligned  spike
