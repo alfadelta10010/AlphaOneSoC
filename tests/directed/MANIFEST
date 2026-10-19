@@ -66,6 +66,8 @@ lw_misalign         spike
 mem_align           spike
 mem_align           spike  +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
 pma_edges           spike
+amo_pmp             spike
+amo_pmp             spike  +DMEM_WAIT=3 +DMEM_RANDOM=1
 c_misalign          spike
 enc_probe           spike
 
