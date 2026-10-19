@@ -60,6 +60,8 @@ causes              spike  +IMEM_WAIT=2 +DMEM_WAIT=2
 trap_nested         spike
 trap_nested         spike  +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1
 sys_enc             spike
+imm_reach           spike
+imm_reach           spike  +IMEM_WAIT=3 +IMEM_RANDOM=1
 illegal_ld_misalign spike
 illegal_sd_misalign spike
 illegal_ld_aligned  spike
