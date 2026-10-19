@@ -94,6 +94,8 @@ mret_irq            spike  +IMEM_WAIT=3 +IMEM_RANDOM=1
 # (x12 = 0, 4 or 8 bytes past `seq`), and the program carrying on (x13).
 irq_at_trap         expect x10=0x1 x11=0x1 x12=0x0|0x4|0x8 x13=0x55
 irq_at_trap         expect x10=0x1 x11=0x1 x12=0x0|0x4|0x8 x13=0x55 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+irq_umode           spike
+irq_umode           spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2
 mie_enable          spike
 # Spike takes this interrupt before the csrc (its msip store is visible at
 # once); the core takes it after the store lands, by which time mie is off --
