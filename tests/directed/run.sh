@@ -4,7 +4,8 @@
 #   ./run.sh build              rebuild the sim from ../../src and ../../tb
 #   ./run.sh                    every run listed in MANIFEST
 #   ./run.sh one <name> [+PLUSARG...]
-#   ./run.sh refs               regenerate the Spike reference of every test
+#   ./run.sh refs [<name>...]   regenerate the Spike reference of every test,
+#                               or only of the tests named
 #   ./run.sh soc                every test in MANIFEST through the whole SoC
 #   ./run.sh soc build | soc one <name> [+PLUSARG...]
 #                               the same two, for the SoC build
@@ -255,7 +256,9 @@ suite() {
 
 case "${1:-run}" in
   build) build ;;
-  refs)  for f in "$HERE"/*.S; do n=$(basename "$f" .S); asm "$n" && ref "$n" && echo "ref $n"; done ;;
+  refs)  shift; names=("$@")
+         [ ${#names[@]} = 0 ] && for f in "$HERE"/*.S; do names+=("$(basename "$f" .S)"); done
+         for n in "${names[@]}"; do asm "$n" && ref "$n" && echo "ref $n"; done ;;
   one)   shift; t=$1; shift; asm "$t" && sim "$t" "$@"; tail -3 "$OUT/$t.sim.log" ;;
   *)     build && suite ;;
 esac
