@@ -239,7 +239,10 @@ module memory_model #(
     wire [31:0] notready_word = (notready_data == 1) ? 32'h0000_0000 :
                                 (notready_data == 2) ? {lfsr[15:0], lfsr[31:16]} :
                                                        32'hxxxx_xxxx;
-    assign imem_rdata = imem_ready ? imem_word : notready_word;
+    // Nothing transfers while imem_req is low (CPU reference 5.1), so the
+    // data is only there on a requested ready cycle; a core that takes a word
+    // it did not ask for gets the not-ready value.
+    assign imem_rdata = (imem_req && imem_ready) ? imem_word : notready_word;
 
     // --- Data read (combinational) ---
     wire [23:0] da = dmem_addr[23:0];
@@ -284,7 +287,58 @@ module memory_model #(
     wire [31:0] notready_dword = (notready_data == 1) ? 32'h0000_0000 :
                                  (notready_data == 2) ? ~lfsr :
                                                         32'hxxxx_xxxx;
-    assign dmem_rdata = dmem_ready ? dmem_word : notready_dword;
+    assign dmem_rdata = (dmem_req && dmem_ready) ? dmem_word : notready_dword;
+
+    // ── Request checker ─────────────────────────────────────────────────────
+    // What a request may be, from the core's interface contract
+    // (docs/FyraCore_CPU_Reference.md 5.1, and the memory map in section 4):
+    //   * a fetch is requested only inside flash or PSRAM (no fetch from an IO
+    //     window or an unmapped address), at a halfword-aligned address;
+    //   * a data request is word-aligned and inside flash, PSRAM or the CLINT
+    //     aperture (the core's PMA check refuses everything else first), and
+    //     a write never goes to flash;
+    //   * dmem_be is the lanes of a byte (one lane), a halfword (lanes 1:0 or
+    //     3:2) or a word, for loads too;
+    //   * store data is replicated across the lanes: {4{byte}}, {2{half}}.
+    // A core that breaks one would corrupt or misdirect a transfer on the
+    // SoC's bus even where this model's array happens to absorb it (a store
+    // to flash is dropped here; mem_ctrl sends a store's first enabled byte
+    // from wdata[7:0]). Any violation stops the run.
+    wire i_win = (imem_addr >= 32'h2000_0000 && imem_addr <= 32'h20FF_FFFF) ||
+                 (imem_addr >= 32'h8000_0000 && imem_addr <= 32'h80FF_FFFF);
+    wire d_rom = (dmem_addr >= 32'h2000_0000 && dmem_addr <= 32'h20FF_FFFF);
+    wire d_win = d_rom || (dmem_addr >= 32'h8000_0000 && dmem_addr <= 32'h80FF_FFFF) ||
+                 (dmem_addr >= CLINT_BASE && dmem_addr <= CLINT_TOP);
+    wire be_ok = (dmem_be == 4'b0001) || (dmem_be == 4'b0010) || (dmem_be == 4'b0100) ||
+                 (dmem_be == 4'b1000) || (dmem_be == 4'b0011) || (dmem_be == 4'b1100) ||
+                 (dmem_be == 4'b1111);
+    wire rep_ok = (dmem_be == 4'b1111) ||
+                  ((dmem_be == 4'b0011 || dmem_be == 4'b1100) && dmem_wdata[31:16] == dmem_wdata[15:0]) ||
+                  (dmem_wdata == {4{dmem_wdata[7:0]}});
+    always @(posedge clk) begin
+        if (!rst && imem_req && (!i_win || imem_addr[0] !== 1'b0)) begin
+            $display("ERROR: fetch requested outside flash/PSRAM or misaligned (imem_addr %08h)", imem_addr);
+            $fatal(1);
+        end
+        if (!rst && dmem_req) begin
+            if (!d_win || dmem_addr[1:0] !== 2'b00) begin
+                $display("ERROR: data request outside a mapped window or not word-aligned (dmem_addr %08h)", dmem_addr);
+                $fatal(1);
+            end
+            if (dmem_we && d_rom) begin
+                $display("ERROR: write request to flash (dmem_addr %08h)", dmem_addr);
+                $fatal(1);
+            end
+            if (!be_ok) begin
+                $display("ERROR: byte enables %b are not a byte, halfword or word (dmem_addr %08h)", dmem_be, dmem_addr);
+                $fatal(1);
+            end
+            if (dmem_we && !rep_ok) begin
+                $display("ERROR: store data %08h not replicated across the lanes (be %b)", dmem_wdata, dmem_be);
+                $fatal(1);
+            end
+        end
+    end
 
     // ── Handshake checker ───────────────────────────────────────────────────
     // The core's side of the contract (see src/fyracore.v): once a request
