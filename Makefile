@@ -38,7 +38,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph \
+        test-regfile test-csr test-compressed test-muldiv test-pmp test-qspi test-uart test-gpio test-soc-periph \
         test-wrapper asm \
         rivercore-build rivercore-test
 
@@ -143,6 +143,11 @@ test-muldiv: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
 	@$(call run_tb,tb_muldiv)
 
+test-pmp: $(BUILD_DIR)
+	@echo "=== Testing PMP checker ==="
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_pmp $(SRC_DIR)/pmp.v $(TB_DIR)/tb_pmp.v
+	@$(call run_tb,tb_pmp)
+
 # The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model:
 #   default           2 ns device delay, 1 ns hold
 #   QSPI_DELAY=19     just under one SCK period, which rd_late = 0 must take
@@ -244,7 +249,7 @@ test-wrapper: $(BUILD_DIR)
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_pins.log || ! grep -q '^PASS' tt_pins.log; then exit 1; fi; \
 		done
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-qspi test-uart test-gpio test-soc-periph test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
