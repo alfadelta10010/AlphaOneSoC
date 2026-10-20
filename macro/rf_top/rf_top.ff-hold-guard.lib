@@ -1,6 +1,9 @@
-/* rf_top.ff-hold-guard.lib: rf_top.lib with every input hold_rising raised
-   from 0.2 ns to 0.4 ns, nothing else changed. A guard band for the fast
-   corners, not a characterisation: see README.md. */
+/* SPDX-License-Identifier: CERN-OHL-W-2.0
+   rf_top.ff-hold-guard.lib: Sylvain Munaut's rf_top.lib (CERN-OHL-W-2.0),
+   modified 2026-10-15 by the AlphaOneSoC project: every input hold_rising
+   raised from 0.2 ns to 0.4 ns, nothing else changed. A guard band for the
+   fast corners, not a characterisation: see README.md.
+   Source location: https://github.com/alfadelta10010/alphaOneSoC-sky26d */
 library (sky130_s47_lib) {
   delay_model : "table_lookup";
   library_features : "report_delay_calculation";

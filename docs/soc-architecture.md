@@ -161,7 +161,8 @@ enters continuous-read mode) and releases the bus for the other four.
   pad round trip up to about 2 clocks. At 1 it is sampled three clocks after,
   which covers about 1 to 3 clocks, and chip select stays low one clock
   longer for the last nibble. TinyQV measured the TinyTapeout pad round trip
-  at a little over 20 ns; at 50 MHz use 0, and near 66 MHz use 1. It is a
+  at a little over 20 ns; at 50 MHz use 0, and at 62.5 MHz (the clock the
+  3x4 harden closes at) and near 66 MHz use 1. It is a
   strap rather than a register because flash reads must work before any
   software runs, and it is sampled during reset and held, so a pin that
   changes later cannot move the sampling point mid-read. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
@@ -364,8 +365,10 @@ instructions of loads and stores), went from 77.0 to 55.8. flash_boot,
 which runs from flash, moved only 5%. Re-measured by the 2026-09-29 area
 review at `4b4ed8b`, the same suite gives 59.2 in aggregate (63.9 as a
 mean of per-test figures, wfi_slow alone at 136), and a compiled-C
-benchmark 56.1: about 0.89 MIPS at 50 MHz, a clock no timing analysis has
-confirmed yet (0.53 MIPS at 30 MHz). Per instruction: ALU 42 clocks; `lw`,
+benchmark 56.1: about 0.89 MIPS at 50 MHz (0.53 MIPS at 30 MHz). Since EX
+was split over three cycles the 3x4 harden closes at 62.5 MHz at every corner
+(`macro/rf_top/README.md`), for about 1.1 MIPS; the split costs 0.7 % more
+clocks through the pins. Per instruction: ALU 42 clocks; `lw`,
 a taken branch and every M op 84; `sw` 76; `sb` 64.
 
 Options not yet taken, roughly in order of payoff per gate:

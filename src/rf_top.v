@@ -1,3 +1,14 @@
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+//
+// Modified from Sylvain Munaut's model of rf_top (the copy in
+// MichaelBell/ttsky25b-femtorv-soc @ 50aa37f, src/rf_top.v), which is
+// licensed under the CERN-OHL-W-2.0. Modifications by the AlphaOneSoC project:
+//   2026-10-11  the storage starts at 0, or at X under +RF_X; an empty
+//               blackbox under SYNTHESIS; comments.
+//   2026-10-12  +RF_COLLIDE_X: a read of the word written on the same edge
+//               returns X.
+// Source location: https://github.com/alfadelta10010/alphaOneSoC-sky26d
+//
 // rf_top: Sylvain Munaut's 32 x 32 register-file hard macro (macro/rf_top/),
 // as a simulation model. The same model serves TinyTapeout's gate-level test,
 // which compiles it next to the netlist with GL_TEST (and so its power pins).
