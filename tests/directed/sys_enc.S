@@ -2,7 +2,8 @@
 # exception (cause 2, mtval the encoding), and the legal neighbours must
 # not: ECALL/EBREAK/MRET/WFI with a nonzero rd or rs1 field, an MRET-family
 # funct7 with another rs2, SRET with no S-mode, MISC-MEM funct3 010/011
-# (no Zicbom); CSR immediates with zimm[4] set; a read of a read-only CSR
+# (no Zicbom), JALR with funct3 != 0, OP with funct7 0100000 other than
+# SUB/SRA, branch funct3 010/011, RV64's LD and SD; CSR immediates with zimm[4] set; a read of a read-only CSR
 # (CSRRS/CSRRSI with x0 / uimm 0) versus a write to one; from U-mode, MRET
 # and an M-level CSR. The handler copies mcause and mtval into registers
 # and skips the instruction, so the trace shows each verdict and Spike
@@ -29,6 +30,14 @@ rvtest_entry_point:
   .word 0x10508073              # wfi, rs1 = x1
   .word 0x0000200f              # MISC-MEM funct3 010
   .word 0x0000300f              # MISC-MEM funct3 011
+  .word 0x000090e7              # jalr with funct3 001
+  .word 0x401090b3              # funct7 0100000 with funct3 001 (no such op)
+  .word 0x4010a0b3              # ... and with funct3 010
+  .word 0x0000a063              # branch funct3 010
+  .word 0x0000b063              # branch funct3 011
+  .word 0x0000b083              # load funct3 011 (LD, RV64)
+  .word 0x0000b023              # store funct3 011 (SD, RV64)
+  .word 0x020050b3              # funct7 0000001 is M: legal (divu x1, x0, x0)
   csrrwi a1, mscratch, 31       # zimm with bit 4 set
   csrrsi a2, mscratch, 16
   csrrci a3, mscratch, 17
