@@ -208,7 +208,7 @@ module tb_tt_um;
     reg [7:0] want;
 
     function automatic [31:0] ram_word(input integer a);
-        ram_word = {pmod.ram[a + 3], pmod.ram[a + 2], pmod.ram[a + 1], pmod.ram[a]};
+        ram_word = {pmod.ram_rd(a + 3), pmod.ram_rd(a + 2), pmod.ram_rd(a + 1), pmod.ram_rd(a)};
     endfunction
 
     task automatic on_byte(input [7:0] b);

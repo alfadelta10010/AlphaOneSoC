@@ -357,17 +357,16 @@ module tb_rivercore;
 
     // Program load, deliberately at #1 rather than time 0.
     //
-    // memory_model's own initial block zero-fills all MEM_SIZE bytes before
-    // applying its compile-time INIT_FILE. Verilog does not define the relative
-    // order of initial blocks in different modules, so loading the program at
-    // time 0 here could be undone by that fill. #1 is strictly after every
-    // time-0 initial block, and reset is held until #25, so the core has not
-    // fetched anything yet.
+    // memory_model's own initial block applies its compile-time INIT_FILE.
+    // Verilog does not define the relative order of initial blocks in
+    // different modules, so loading the program at time 0 here could be
+    // undone by it (and, in the SoC build, by the Pmod model's zero-fill of
+    // its PSRAM). #1 is strictly after every time-0 initial block, and reset
+    // is held until #25, so the core has not fetched anything yet.
     //
-    // This also drops a second 33.5M-iteration zero-fill that used to run here.
-    // Duplicating memory_model's fill cost roughly half of each simulation's
-    // startup, which across a 1000+ test regression was the single largest
-    // contributor to wall-clock time.
+    // There used to be a 33.5M-iteration zero-fill here, and memory_model
+    // had another: together nearly all of each run's start-up time. Neither
+    // is needed -- memory_model reads a byte nothing wrote as 0.
     initial begin
         #1;
         if (have_init_file) begin
@@ -377,7 +376,10 @@ module tb_rivercore;
             // failure the comparison stage reports as a DUT bug. Empty dumps
             // also compare equal to each other, so this must fail loudly.
             // boot_addr 0x80000000 is mem[0] (memory_model indexes PSRAM by [23:0]).
-            if ({`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 32'h0) begin
+            // memory_model's array is not zero-filled, so a byte nothing
+            // loaded is X there (it reads 0 through the model's ports).
+            if ({`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 32'h0 ||
+                ^{`MEMARR[3], `MEMARR[2], `MEMARR[1], `MEMARR[0]} === 1'bx) begin
                 $display("ERROR: no program loaded at reset PC from INIT_FILE=%0s",
                          init_file_str);
                 $fatal(1);
@@ -465,6 +467,10 @@ module tb_rivercore;
     end
 
     always @(posedge clk) begin
+        if (rst) begin                  // a reset starts a new boot: no streak carries over
+            spin_last_pc = 32'hFFFF_FFFF;
+            spin_count   = 0;
+        end
         if (!rst && dbg_retired && !terminate && spin_limit != 0) begin
             if (dbg_pc == spin_last_pc) begin
                 spin_count = spin_count + 1;
@@ -713,7 +719,7 @@ module tb_rivercore;
             rf_shadow[`CPU.wb_rd] = `CPU.wb_data;
         rf_ra_q = `CPU.rf.ra;
         rf_rb_q = `CPU.rf.rb;
-        rf_chk_armed = 1'b1;
+        rf_chk_armed = !rst;    // a reset cuts the pipeline: nothing to compare until it refills
     end
 
     // ================================================================
@@ -750,6 +756,128 @@ module tb_rivercore;
             emit_abort_marker;
             $fclose(dump_fd);
             $finish;
+        end
+    end
+
+    // ================================================================
+    //  Bus transaction check
+    //
+    //  The trace prints an access as the instruction sees it -- its
+    //  address (exwb_alu_result) and, for a store, the data at its width --
+    //  and the comparison with Spike checks those. Nothing in the trace
+    //  shows what went on the bus, so a store in the wrong byte lanes, with
+    //  unreplicated data, or to the wrong word, passed until a later load
+    //  happened to read it back. On every retire of a memory instruction
+    //  this checks the transaction completing with it against what the
+    //  trace says (CPU reference 5.1): the word address, the lanes the
+    //  size and offset give (loads too), the direction, and a store's data
+    //  in those lanes. And every completed transaction belongs to a
+    //  retiring load, store, LR, successful SC or AMO write, or is an AMO's
+    //  read; a failing SC makes none. A mismatch ends the run with an ERROR
+    //  line and a DUT-ABORT marker in the dump.
+    // ================================================================
+    integer   bus_chk_n = 0;
+    reg [3:0] bx_be;
+    reg       bx_want, bx_xfer;
+    integer   bx_k;
+    task bus_mismatch(input [8*64-1:0] what);
+        begin
+            $display("ERROR: bus transaction: %0s at pc 0x%08h cycle %0d (dmem_req %b ready %b we %b addr %08h be %b wdata %08h; access %08h size %0d)",
+                     what, dbg_pc, cycle_count, dmem_req, dmem_ready, dmem_we, dmem_addr, dmem_be,
+                     dmem_wdata, `CPU.exwb_alu_result, `CPU.exwb_memSize);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    endtask
+    always @(posedge clk) begin
+        if (!rst) begin
+            bx_xfer = dmem_req && dmem_ready;
+            bx_want = (`CPU.exwb_memRD || `CPU.exwb_memWR) && !(`CPU.exwb_isSC && !`CPU.sc_success);
+            case (`CPU.exwb_memSize)
+                2'b00:   bx_be = 4'b0001 << `CPU.exwb_alu_result[1:0];
+                2'b01:   bx_be = `CPU.exwb_alu_result[1] ? 4'b1100 : 4'b0011;
+                default: bx_be = 4'b1111;
+            endcase
+            if (dbg_retired) begin
+                if (bx_want) begin
+                    bus_chk_n = bus_chk_n + 1;
+                    if (!bx_xfer)
+                        bus_mismatch("memory instruction retired without a transaction");
+                    else if (dmem_addr !== {`CPU.exwb_alu_result[31:2], 2'b00})
+                        bus_mismatch("address is not the access's word");
+                    else if (dmem_be !== bx_be)
+                        bus_mismatch("byte lanes do not match the size and offset");
+                    else if (dmem_we !== `CPU.exwb_memWR)
+                        bus_mismatch("direction does not match the instruction");
+                    else if (dmem_we && !`CPU.exwb_isAmo)
+                        for (bx_k = 0; bx_k < 4; bx_k = bx_k + 1)
+                            if (bx_be[bx_k] && dmem_wdata[8*bx_k +: 8] !==
+                                `CPU.exwb_rs2_data[8*(bx_k - `CPU.exwb_alu_result[1:0]) +: 8])
+                                bus_mismatch("store data in its lanes is not the stored value");
+                end else if (bx_xfer)
+                    bus_mismatch("transaction where the retiring instruction makes none");
+            end else if (bx_xfer && !(`CPU.exwb_isAmo && !`CPU.amo_phase && !dmem_we))
+                bus_mismatch("transaction with no retiring access (not an AMO's read)");
+        end
+    end
+
+    // ================================================================
+    //  Mid-run resets
+    //
+    //  +RESETS=<k>        drop k resets into the running program (default 0:
+    //                     off; +RESET_AT alone means k = 1)
+    //  +RESET_AT=<n>      reset i is raised n + i*s clocks after the release of
+    //                     the previous one (the initial one for i = 0); 1000
+    //  +RESET_STRIDE=<s>  see above; 0
+    //  +RESET_LEN=<l>     clocks rst stays high, at least 1; 2
+    //
+    //  This models a system reset: the core and the CLINT reset (rst reaches
+    //  both), memory keeps its contents, and the pc restarts at boot_addr.
+    //  rst changes on the falling edge, away from the active one. The dump
+    //  format is untouched; each reset prints one NOTE line, with the pc of
+    //  the instruction in EX (ifex_pc) and the number of dump lines so far,
+    //  so a checker can cut the dump into boots.
+    //
+    //  What a reset does to the state in this file and in memory_model:
+    //   * every check above and the dump are gated by !rst, so a transaction
+    //     or retire on a clock where rst is high does not exist for them;
+    //   * the register-file check is disarmed and the spin streak cleared
+    //     while rst is high; the bus, muldiv_want and use_hazard checks hold
+    //     no state across clocks;
+    //   * the register-file shadow follows the write port, reset or not, as
+    //     the register file itself does (a reset does not clear it);
+    //   * not reset: terminate, saw_tohost, post_tohost_retires, the dump,
+    //     logging_active, instr_count, cycle_count (MAX_CYCLES and MAX_INSTR
+    //     bound the whole run).
+    // ================================================================
+    integer n_resets, reset_at, reset_stride, reset_len;
+    integer resets_done = 0;
+    integer reset_i;
+    initial begin
+        if (!$value$plusargs("RESETS=%d", n_resets))
+            n_resets = $test$plusargs("RESET_AT") ? 1 : 0;
+        if (!$value$plusargs("RESET_AT=%d", reset_at))
+            reset_at = 1000;
+        if (!$value$plusargs("RESET_STRIDE=%d", reset_stride))
+            reset_stride = 0;
+        if (!$value$plusargs("RESET_LEN=%d", reset_len))
+            reset_len = 2;
+        if (reset_len < 1)
+            reset_len = 1;
+        if (n_resets > 0) begin
+            @(negedge rst);             // the initial reset's release
+            for (reset_i = 0; reset_i < n_resets; reset_i = reset_i + 1) begin
+                repeat (reset_at + reset_i * reset_stride) @(negedge clk);
+                if (saw_tohost)
+                    $display("ERROR: mid-run reset %0d of %0d raised after the tohost store (RESET_AT is past the end of the program)", reset_i + 1, n_resets);
+                rst = 1;
+                resets_done = resets_done + 1;
+                $display("NOTE: mid-run reset %0d of %0d at cycle %0d, pc 0x%08h, %0d dump lines, ex valid %0d",
+                         reset_i + 1, n_resets, cycle_count, `CPU.ifex_pc, instr_count, `CPU.ifex_valid);
+                repeat (reset_len) @(negedge clk);
+                rst = 0;
+            end
         end
     end
 
@@ -828,10 +956,13 @@ module tb_rivercore;
     // ================================================================
     task print_summary;
         begin
+            if (resets_done < n_resets)
+                $display("ERROR: run ended after %0d of %0d mid-run resets", resets_done, n_resets);
             $display("  Cycles: %0d   Instructions logged: %0d", cycle_count, instr_count);
             if (instr_count > 0)
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
             $display("  Register-file reads checked: %0d", rf_chk_n);
+            $display("  Bus transactions checked: %0d", bus_chk_n);
             $display("  Dump: %0s", dump_file_str);
         end
     endtask

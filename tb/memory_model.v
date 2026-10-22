@@ -201,21 +201,37 @@ module memory_model #(
     assign ext_irq = extirq_reg;
 
     // ── SRAM array ──────────────────────────────────────────────────────────
+    // Not zero-filled. A loop over all MEM_SIZE bytes took 9.9 of the 10
+    // seconds of every directed run (and doubled the simulator's memory), for
+    // a program of a few kilobytes. Instead a byte nothing has written is X
+    // in the array, and z8 returns it as 0 -- what the fill gave it, and
+    // what Spike's zero-filled RAM returns. The one difference: a byte the
+    // core wrote with X data reads back 0, not X. The store that wrote it
+    // already put the X into the trace (its data is part of the store's
+    // line), which fails the run on its own. Past the end of the array z8
+    // gives X, as the array did (a 32-bit fetch at the last halfword of
+    // PSRAM, whose upper half the core must not use).
+    //
+    // The array word is z8's argument, not read inside it: a continuous
+    // assignment is re-evaluated when its operands change, and a function's
+    // operands are its arguments, so a function that read mem[] itself
+    // returned the value from before a store to the same address.
     reg [7:0] mem [0:MEM_SIZE-1];
-    integer i;
 
     initial begin
-        // Zero-fill first, then overlay the program hex
-        for (i = 0; i < MEM_SIZE; i = i + 1)
-            mem[i] = 8'h00;
         if (INIT_FILE != "")
             $readmemh(INIT_FILE, mem);
     end
 
+    function [7:0] z8(input [7:0] v, input [31:0] a);
+        z8 = (a >= MEM_SIZE)  ? 8'hxx :
+             (^v === 1'bx)    ? 8'h00 : v;
+    endfunction
+
     // --- Instruction read (combinational) ---
     // PSRAM by its 24-bit offset; a fetch from flash reads zeros.
     wire [23:0] ia = imem_addr[23:0];
-    wire [31:0] imem_word = imem_addr[31] ? {mem[ia+3], mem[ia+2], mem[ia+1], mem[ia]}
+    wire [31:0] imem_word = imem_addr[31] ? {z8(mem[ia+3], ia+3), z8(mem[ia+2], ia+2), z8(mem[ia+1], ia+1), z8(mem[ia], ia)}
                                           : 32'h0000_0000;
     // Not valid until the handshake completes: a core that captures the fetch
     // while imem_ready is low latches junk rather than the right instruction.
@@ -223,18 +239,24 @@ module memory_model #(
     wire [31:0] notready_word = (notready_data == 1) ? 32'h0000_0000 :
                                 (notready_data == 2) ? {lfsr[15:0], lfsr[31:16]} :
                                                        32'hxxxx_xxxx;
-    assign imem_rdata = imem_ready ? imem_word : notready_word;
+    // Nothing transfers while imem_req is low (CPU reference 5.1), so the
+    // data is only there on a requested ready cycle; a core that takes a word
+    // it did not ask for gets the not-ready value.
+    assign imem_rdata = (imem_req && imem_ready) ? imem_word : notready_word;
 
     // --- Data read (combinational) ---
     wire [23:0] da = dmem_addr[23:0];
-    wire [31:0] mem_rdata = dmem_addr[31] ? {mem[da+3], mem[da+2], mem[da+1], mem[da]}
+    wire [31:0] mem_rdata = dmem_addr[31] ? {z8(mem[da+3], da+3), z8(mem[da+2], da+2), z8(mem[da+1], da+1), z8(mem[da], da)}
                                           : 32'h0000_0000;   // flash
 
     // --- Data write (synchronous, byte-lane masked) ---
     // The write commits only on the cycle the handshake completes, so a store
     // whose request is withdrawn before dmem_ready never reaches the array.
+    // Not while rst is high: the core is in reset, so the request on its
+    // pins is a leftover that the model must not act on. The array itself is
+    // never cleared by a reset (PSRAM keeps its data).
     always @(posedge clk) begin
-        if (dmem_req && dmem_we && dmem_ready && in_mem) begin
+        if (!rst && dmem_req && dmem_we && dmem_ready && in_mem) begin
             if (dmem_be[0]) mem[da]   <= dmem_wdata[7:0];
             if (dmem_be[1]) mem[da+1] <= dmem_wdata[15:8];
             if (dmem_be[2]) mem[da+2] <= dmem_wdata[23:16];
@@ -243,6 +265,10 @@ module memory_model #(
     end
 
     // ── CLINT instance ──────────────────────────────────────────────────────
+    // Reset state of this model: rst clears the wait-state counters and LFSR,
+    // the MEIP register, the CLINT and the handshake checker; it blocks every
+    // write (array, CLINT registers, MEIP) and the request checker. The array
+    // keeps its contents.
     wire [31:0] clint_rdata;
     wire [15:0] clint_offset = dmem_addr[15:0];  // offset within CLINT space
 
@@ -252,7 +278,7 @@ module memory_model #(
         .addr     (clint_offset),
         .wdata    (dmem_wdata),
         .wmask    (dmem_be),
-        .we       (dmem_req && dmem_we && dmem_ready && in_clint_reg),
+        .we       (!rst && dmem_req && dmem_we && dmem_ready && in_clint_reg),
         .rdata    (clint_rdata),
         .timer_irq(timer_irq),
         .sw_irq   (sw_irq),
@@ -268,7 +294,58 @@ module memory_model #(
     wire [31:0] notready_dword = (notready_data == 1) ? 32'h0000_0000 :
                                  (notready_data == 2) ? ~lfsr :
                                                         32'hxxxx_xxxx;
-    assign dmem_rdata = dmem_ready ? dmem_word : notready_dword;
+    assign dmem_rdata = (dmem_req && dmem_ready) ? dmem_word : notready_dword;
+
+    // ── Request checker ─────────────────────────────────────────────────────
+    // What a request may be, from the core's interface contract
+    // (docs/FyraCore_CPU_Reference.md 5.1, and the memory map in section 4):
+    //   * a fetch is requested only inside flash or PSRAM (no fetch from an IO
+    //     window or an unmapped address), at a halfword-aligned address;
+    //   * a data request is word-aligned and inside flash, PSRAM or the CLINT
+    //     aperture (the core's PMA check refuses everything else first), and
+    //     a write never goes to flash;
+    //   * dmem_be is the lanes of a byte (one lane), a halfword (lanes 1:0 or
+    //     3:2) or a word, for loads too;
+    //   * store data is replicated across the lanes: {4{byte}}, {2{half}}.
+    // A core that breaks one would corrupt or misdirect a transfer on the
+    // SoC's bus even where this model's array happens to absorb it (a store
+    // to flash is dropped here; mem_ctrl sends a store's first enabled byte
+    // from wdata[7:0]). Any violation stops the run.
+    wire i_win = (imem_addr >= 32'h2000_0000 && imem_addr <= 32'h20FF_FFFF) ||
+                 (imem_addr >= 32'h8000_0000 && imem_addr <= 32'h80FF_FFFF);
+    wire d_rom = (dmem_addr >= 32'h2000_0000 && dmem_addr <= 32'h20FF_FFFF);
+    wire d_win = d_rom || (dmem_addr >= 32'h8000_0000 && dmem_addr <= 32'h80FF_FFFF) ||
+                 (dmem_addr >= CLINT_BASE && dmem_addr <= CLINT_TOP);
+    wire be_ok = (dmem_be == 4'b0001) || (dmem_be == 4'b0010) || (dmem_be == 4'b0100) ||
+                 (dmem_be == 4'b1000) || (dmem_be == 4'b0011) || (dmem_be == 4'b1100) ||
+                 (dmem_be == 4'b1111);
+    wire rep_ok = (dmem_be == 4'b1111) ||
+                  ((dmem_be == 4'b0011 || dmem_be == 4'b1100) && dmem_wdata[31:16] == dmem_wdata[15:0]) ||
+                  (dmem_wdata == {4{dmem_wdata[7:0]}});
+    always @(posedge clk) begin
+        if (!rst && imem_req && (!i_win || imem_addr[0] !== 1'b0)) begin
+            $display("ERROR: fetch requested outside flash/PSRAM or misaligned (imem_addr %08h)", imem_addr);
+            $fatal(1);
+        end
+        if (!rst && dmem_req) begin
+            if (!d_win || dmem_addr[1:0] !== 2'b00) begin
+                $display("ERROR: data request outside a mapped window or not word-aligned (dmem_addr %08h)", dmem_addr);
+                $fatal(1);
+            end
+            if (dmem_we && d_rom) begin
+                $display("ERROR: write request to flash (dmem_addr %08h)", dmem_addr);
+                $fatal(1);
+            end
+            if (!be_ok) begin
+                $display("ERROR: byte enables %b are not a byte, halfword or word (dmem_addr %08h)", dmem_be, dmem_addr);
+                $fatal(1);
+            end
+            if (dmem_we && !rep_ok) begin
+                $display("ERROR: store data %08h not replicated across the lanes (be %b)", dmem_wdata, dmem_be);
+                $fatal(1);
+            end
+        end
+    end
 
     // ── Handshake checker ───────────────────────────────────────────────────
     // The core's side of the contract (see src/fyracore.v): once a request

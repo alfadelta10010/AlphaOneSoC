@@ -724,6 +724,12 @@ module tb_uart;
         end
     endtask
 
+    // RX held for n clocks, every change on a negedge.
+    task automatic rx_clks(input integer n);
+        integer c;
+        for (c = 0; c < n; c = c + 1) @(negedge clk);
+    endtask
+
     // Wait for the model's windows to close and the line to go quiet.
     task automatic rx_settle;
         begin
@@ -791,6 +797,7 @@ module tb_uart;
     integer    i, j, k, n, d, a2i, bi, dl, p0, p1, t_rise;
     real       tb, t0r;
     integer    divs [0:6];
+    integer    fe_l, fe_lo, fe_hi, fe_n, fe_nb, fe_l0, fe_bad;
     integer    nrand;
 
     initial begin
@@ -1139,6 +1146,54 @@ module tb_uart;
         rx_settle;
         rd8(5, v8); chk("LSR after a framing error on 0x80", v8, 8'h60);
         if (rx_bad < 11) fail("framing: too few bad frames sent");
+
+        // ── The late-break boundary ─────────────────────────────────────────
+        // rx_frame keeps a framing error's extra low time out of the window
+        // where the outcome flips. Here the line rises at every clock across
+        // it: only nothing or a break is legal, never a data byte.
+        section("framing error: line rising across the late-break boundary");
+        rxm_on = 1'b0;
+        for (k = 1; k <= 3; k = k + 1) begin
+            set_div(k); d = k;
+            // 8.5 bits x 16 clocks: the counted frame's bit-9 sample is 18.5 bits after the start bit, and the stop bit ends at 10
+            fe_lo = 136 * k - 32 * k; fe_hi = 136 * k + 32 * k;
+            fe_n = 0; fe_nb = 0; fe_l0 = -1; fe_bad = 0;
+            for (fe_l = fe_lo; fe_l <= fe_hi; fe_l = fe_l + 1) begin
+                rd8(5, v8); if (v8[0]) rd8(0, v8);
+                rd8(5, v8);
+                while (rts_n !== 1'b0) @(negedge clk);
+                @(negedge clk); rx = 1'b0; rx_clks(16 * d);
+                for (i = 0; i < 8; i = i + 1) begin rx = 8'h55 >> i; rx_clks(16 * d); end
+                rx = 1'b0; rx_clks(16 * d);              // the bad stop bit
+                rx_clks(fe_l); rx = 1'b1;
+                idle(480 * d);
+                rd8(5, v8);
+                if (v8[0]) rd8(0, a8);
+                else       a8 = 8'h00;
+                if (!v8[0] && !v8[1] && !v8[4]) begin
+                    fe_n = fe_n + 1;
+                    if (fe_l0 >= 0) begin
+                        fe_bad = 1;
+                        fail($sformatf("framing error then RX high after %0d clocks (div %0d): nothing after a break at %0d", fe_l, d, fe_l0));
+                    end
+                end else if (v8[0] && v8[4] && !v8[1] && a8 == 8'h00) begin
+                    fe_nb = fe_nb + 1;
+                    if (fe_l0 < 0) fe_l0 = fe_l;
+                end else begin
+                    fe_bad = 1;
+                    fail($sformatf("framing error then RX high after %0d clocks (div %0d): LSR %02h RBR %02h -- neither nothing nor a break", fe_l, d, v8, a8));
+                end
+                rd8(5, v8); chk("late-break trial: DR, OE, BI after the LSR read", v8 & 8'h13, 8'h00);
+            end
+            $display("late-break div %0d: %0d trials, %0d nothing, %0d break, L0 %0d", d, fe_hi - fe_lo + 1, fe_n, fe_nb, fe_l0);
+            if (fe_n == 0 || fe_nb == 0) fail($sformatf("late-break div %0d: the sweep did not straddle the boundary (%0d nothing, %0d break)", d, fe_n, fe_nb));
+            else if (!fe_bad && (fe_l0 < 136 * d - (16 * d + 4) || fe_l0 > 136 * d + (16 * d + 4)))
+                fail($sformatf("late-break div %0d: the break begins at L %0d, want within %0d of %0d", d, fe_l0, 16 * d + 4, 136 * d));
+        end
+        idle(40);
+        rxm_reset;
+        rx_quiet_from = $realtime;
+        rxm_on = 1'b1;
 
         // ── Overrun ─────────────────────────────────────────────────────────
         section("overrun");

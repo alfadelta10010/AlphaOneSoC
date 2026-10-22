@@ -34,6 +34,9 @@ make test-decoder
 make test-signext
 make test-branchctrl
 make test-regfile
+make test-pmp           # PMP checker vs a Privileged 3.7.1 model
+make test-clint         # CLINT vs its register map and timer rules
+make test-seeds SEEDS="1 2 3"   # the ten seeded unit benches, once per seed
 make test-qspi          # memory controller + QSPI engine vs the QSPI Pmod model
 make test-uart          # UART unit testbench (scoreboard + reference TX/RX)
 make test-gpio          # GPIO + SPI transmitter unit testbench
@@ -44,17 +47,27 @@ make test-wrapper       # the TinyTapeout top level through its 24 pins only (tb
 make clean
 ```
 
-`make test-all` fails if any unit testbench prints a FAIL or TIMEOUT line.
+`make clean` is `rm -rf build/`: it also deletes mutation results and frozen trees kept under build/. When build/ holds anything else, use `make BUILD_DIR=build/tb clean` (and build with the same `BUILD_DIR`).
+
+`make test-all` fails a unit testbench unless it exits 0, prints a `PASS` line, and prints no FAIL, TIMEOUT, ERROR or FATAL line. Each prints its check count, and the seeded ones (`+SEED=`) the seed that reproduces the run.
 
 The directed regression against Spike lives in `tests/directed/` (full-trace comparison, every test listed in its `MANIFEST`):
 
 ```bash
 cd tests/directed && ./run.sh build && ./run.sh      # all runs
 ./run.sh one <name> +DMEM_WAIT=3                      # one test, any plusargs
-./run.sh refs                                         # regenerate Spike references
+./run.sh refs [<name>...]                             # regenerate Spike references (all, or the named tests)
 ./run.sh soc                                          # the suite through the whole SoC
 ./run.sh soc one <name> +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12   # one test through the SoC
 ```
+
+The runner also takes `FYRA_SRC=<dir>` (build from another copy of src/), `OUT_DIR=<dir>` (artifacts elsewhere) and `FAILFAST=1` (stop at the first failing run); none changes what a run checks. `tb/memory_model.v` and `tb/tb_rivercore.v` stop a run on any request outside the core's bus contract (CPU reference 5.1) and on any bus transaction that does not match the retiring access the trace shows (address, lanes, direction, store data).
+
+Formal checks (`tb/formal/`) run with `bash tb/formal/run.sh [csr|core_hold|core_req]`, on yosys's built-in SAT solver (no sby needed): `csr` proves the CSR file's WARL invariants and `core_hold` proves that every memory request is held until ready and x0 is never written, both by k-induction; `core_req` is bounded (10 cycles from reset) and checks that every request the core can make is legal. The verdict words are PROVED, BOUNDED, FAILED (a counterexample, or induction not closing) and ERROR (yosys gave no verdict: exit 2).
+
+Mutation testing measures whether the benches can fail (`tb/mutate/`): `python3 tb/mutate/run.py --check` (every fault applies and compiles), `python3 tb/mutate/run.py -j 2 [--only ID,...] [--file csr.v] [--benches unit,dir,soc,dir-soc,formal]` (each mutant is a throwaway copy of src/ under build/mut/, scored and deleted), `--results <file>` names the results file and `--report` prints the kill matrix (ERROR is counted apart from killed and survived). `--tree <dir>` runs the benches of another tree, such as a frozen copy, against the same faults. A campaign must run against a frozen tree: `git archive HEAD | tar -x -C build/<dir>`, then `--tree build/<dir>`. Editing tests while it runs gives false kills.
+
+The core bench can reset the core in the middle of a program (`tb/tb_rivercore.v`; memory keeps its contents, the pc restarts at `boot_addr`): `+RESETS=n` drops n resets (default 0; `+RESET_AT` alone means 1), reset i is raised `+RESET_AT=c` (default 1000) plus i times `+RESET_STRIDE=s` (default 0) clocks after the previous release, and rst stays high `+RESET_LEN=l` clocks (default 2, at least 1). Each reset prints a NOTE line with the pc and the dump-line count. `core_reset` uses them and is `#soc-skip`.
 
 Memory-timing plusargs: `+IMEM_WAIT=n +DMEM_WAIT=n +IMEM_RANDOM=1 +DMEM_RANDOM=1 +MEM_SEED=n +NOTREADY_DATA=0|1|2` (read data while not ready: X, zeros, garbage). Deterministic waits, random waits, zero waits and garbage data each expose different bugs; sweep them independently. A pipeline change is not verified until the directed suite and the relevant riscv-arch-test tests pass.
 

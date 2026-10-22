@@ -38,7 +38,8 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph \
+        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-seeds \
+        test-qspi test-uart test-gpio test-soc-periph \
         test-wrapper asm \
         rivercore-build rivercore-test
 
@@ -80,10 +81,14 @@ help:
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
-# Run a unit testbench and fail the target if it reported a failure. The
-# testbenches print FAIL/TIMEOUT lines and then $finish, which exits 0, so
-# without this check `make test-all` reported success over failing tests.
-run_tb = cd $(BUILD_DIR) && $(VVP) $(1) | tee $(1).log && ! grep -qE '^(FAIL|TIMEOUT)' $(1).log
+# Run a unit testbench: $(1) the simulator, $(2) its plusargs, $(3) a suffix
+# for the log. The target fails unless the run exits 0 (a $fatal exits 1,
+# which a pipe through tee used to hide), prints a PASS line, and prints no
+# FAIL, TIMEOUT, ERROR or FATAL line. The testbenches print FAIL/TIMEOUT
+# lines and then $finish, which exits 0, and one that ends early or checks
+# nothing prints no PASS, so the exit status alone is not enough either.
+run_tb = cd $(BUILD_DIR) && { $(VVP) -n $(1) $(2) > $(1)$(3).log 2>&1; rc=$$?; cat $(1)$(3).log; \
+         [ $$rc -eq 0 ] && grep -q '^PASS' $(1)$(3).log && ! grep -qE '^(FAIL|TIMEOUT|ERROR|FATAL)' $(1)$(3).log; }
 
 # ============================================================
 #  Component Testbenches
@@ -121,10 +126,8 @@ test-regfile: $(BUILD_DIR)
 	@echo "=== Testing Register File ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_regFile $(SRC_DIR)/regFile.v $(SRC_DIR)/rf_top.v $(TB_DIR)/tb_regFile.v
 	@$(call run_tb,tb_regFile)
-	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X | tee tb_regFile_x.log && \
-		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_x.log && grep -q '^ALL REGFILE TESTS PASSED' tb_regFile_x.log
-	@cd $(BUILD_DIR) && $(VVP) tb_regFile +RF_X +RF_COLLIDE_X | tee tb_regFile_cx.log && \
-		! grep -qE '^(FAIL|TIMEOUT)' tb_regFile_cx.log && grep -q '^ALL REGFILE TESTS PASSED' tb_regFile_cx.log
+	@$(call run_tb,tb_regFile,+RF_X,_x)
+	@$(call run_tb,tb_regFile,+RF_X +RF_COLLIDE_X,_cx)
 
 test-csr: $(BUILD_DIR)
 	@echo "=== Testing CSR ==="
@@ -142,6 +145,26 @@ test-muldiv: $(BUILD_DIR)
 	@echo "=== Testing MulDiv Unit ==="
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_muldiv $(SRC_DIR)/muldiv.v $(TB_DIR)/tb_muldiv.v
 	@$(call run_tb,tb_muldiv)
+
+test-pmp: $(BUILD_DIR)
+	@echo "=== Testing PMP checker ==="
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_pmp $(SRC_DIR)/pmp.v $(TB_DIR)/tb_pmp.v
+	@$(call run_tb,tb_pmp)
+
+test-clint: $(BUILD_DIR)
+	@echo "=== Testing CLINT ==="
+	@$(IVERILOG) -o $(BUILD_DIR)/tb_clint $(SRC_DIR)/clint.v $(SRC_DIR)/csr.v $(TB_DIR)/tb_clint.v
+	@$(call run_tb,tb_clint)
+
+# The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
+# Each bench prints its seed; rerun one failure with its +SEED=.
+SEEDS ?= 1 2 3 4 5 6 7 8
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_uart tb_gpio
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-uart test-gpio
+	@for s in $(SEEDS); do for t in $(SEEDED); do \
+		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
+		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
+	done; done
 
 # The memory path (mem_ctrl + qspi_ctrl) against the QSPI Pmod model:
 #   default           2 ns device delay, 1 ns hold
@@ -244,7 +267,7 @@ test-wrapper: $(BUILD_DIR)
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_pins.log || ! grep -q '^PASS' tt_pins.log; then exit 1; fi; \
 		done
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-qspi test-uart test-gpio test-soc-periph test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-qspi test-uart test-gpio test-soc-periph test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 

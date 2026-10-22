@@ -132,7 +132,8 @@ module tb_regFile;
         end
 
         $display("\n=== RegFile Results: %0d passed, %0d failed ===", pass_count, fail_count);
-        if (fail_count == 0) $display("ALL REGFILE TESTS PASSED");
+        if (fail_count == 0) $display("PASS tb_regFile (%0d checks)", pass_count);
+        else                 $display("FAIL tb_regFile: %0d failures", fail_count);
         $finish;
     end
 endmodule
