@@ -297,8 +297,9 @@ t_ctl_slow          soc expect x8=0x64 x25=0x64 x20=0x1
 # Reset in the middle of a program, 160 times (core_reset.S says what it
 # checks). DUT-only: Spike has no reset. 160 resets at STRIDE=1 on zero-wait
 # memory: the loop's period is under 160 cycles, so the resets land on every
-# cycle of one period and so on every phase of LR, DIV, store, AMO, WFI and
-# the timer handler. The second line shakes the phases with waits.
+# cycle of one period and so on every phase of LR, DIV, store, AMO, ECALL, the
+# M-mode WFI wait, the timer interrupt and both handlers. The
+# second line shakes the phases with waits.
 core_reset          expect x10=0x0 x11=0xa0 x12=0xa0 -- +RESETS=160 +RESET_AT=400 +RESET_STRIDE=1
 core_reset          expect x10=0x0 x11=0xa0 x12=0xa0 -- +RESETS=160 +RESET_AT=400 +RESET_STRIDE=7 +RESET_LEN=1 +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
 #soc-skip core_reset -- a SoC reset restarts qspi_ctrl's start-up sequence, which resets the PSRAMs (66h/99h); whether they keep their array across that is outside the datasheet subset in docs/, and the SoC boots from flash anyway. Covered at the SoC level only by tb_tt_um's resets and tb_qspi_stress +RESETS.
