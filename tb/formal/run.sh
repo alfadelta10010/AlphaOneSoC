@@ -6,8 +6,10 @@
 # induction step starts from any state.
 #   tb/formal/run.sh            every harness
 #   tb/formal/run.sh csr        one (csr_props.sv)
-# The core harness reads tb/formal/rf_top_stub.v instead of src/rf_top.v (free read data).
-# Prints PROVED or FAILED per harness; exits 1 if any failed.
+# Modes: induct (k-induction, PROVED) or bmc (bounded from reset, BOUNDED;
+# core_req is not inductive without internal invariants). The core harnesses
+# read tb/formal/rf_top_stub.v instead of src/rf_top.v (free read data).
+# Prints PROVED, BOUNDED or FAILED per harness; exits 1 if any failed.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -17,11 +19,11 @@ OUT="${OUT_DIR:-$ROOT/build}"
 mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
-declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" )
-declare -A EXTRA=( [core_hold]="rf_top_stub.v" )   # read from $HERE
-declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold)
+declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" )
+declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" )   # read from $HERE
+declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" )
+declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc )
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req)
 bad=0
 for n in "${names[@]}"; do
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
