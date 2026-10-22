@@ -105,7 +105,8 @@
 // and reads 0 (flash_rd, ram_rd), the same as Spike's zero-filled RAM model of
 // the flash window. ram_w[] marks the bytes a PSRAM write stored, so an X the
 // DUT drove on the data pins stays X on read-back instead of passing as 0; a
-// byte loaded by hierarchical reference or $readmemh reads as loaded.
+// byte loaded by hierarchical reference or $readmemh reads as loaded (a loaded
+// X reads 0).
 // Load flash by hierarchical reference or with +FLASH_FILE=, a path of up to
 // 1023 characters; a longer one, or a file that cannot be opened, stops the run.
 
