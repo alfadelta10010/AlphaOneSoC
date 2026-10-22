@@ -252,8 +252,11 @@ module memory_model #(
     // --- Data write (synchronous, byte-lane masked) ---
     // The write commits only on the cycle the handshake completes, so a store
     // whose request is withdrawn before dmem_ready never reaches the array.
+    // Not while rst is high: the core is in reset, so the request on its
+    // pins is a leftover that the model must not act on. The array itself is
+    // never cleared by a reset (PSRAM keeps its data).
     always @(posedge clk) begin
-        if (dmem_req && dmem_we && dmem_ready && in_mem) begin
+        if (!rst && dmem_req && dmem_we && dmem_ready && in_mem) begin
             if (dmem_be[0]) mem[da]   <= dmem_wdata[7:0];
             if (dmem_be[1]) mem[da+1] <= dmem_wdata[15:8];
             if (dmem_be[2]) mem[da+2] <= dmem_wdata[23:16];
@@ -262,6 +265,10 @@ module memory_model #(
     end
 
     // ── CLINT instance ──────────────────────────────────────────────────────
+    // Reset state of this model: rst clears the wait-state counters and LFSR,
+    // the MEIP register, the CLINT and the handshake checker; it blocks every
+    // write (array, CLINT registers, MEIP) and the request checker. The array
+    // keeps its contents.
     wire [31:0] clint_rdata;
     wire [15:0] clint_offset = dmem_addr[15:0];  // offset within CLINT space
 
@@ -271,7 +278,7 @@ module memory_model #(
         .addr     (clint_offset),
         .wdata    (dmem_wdata),
         .wmask    (dmem_be),
-        .we       (dmem_req && dmem_we && dmem_ready && in_clint_reg),
+        .we       (!rst && dmem_req && dmem_we && dmem_ready && in_clint_reg),
         .rdata    (clint_rdata),
         .timer_irq(timer_irq),
         .sw_irq   (sw_irq),
