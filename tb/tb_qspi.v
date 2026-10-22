@@ -86,7 +86,7 @@ module tb_qspi;
 
     // Byte at a system address, straight from the model's arrays.
     function [7:0] mem_byte(input [31:0] a);
-        if (a[31]) mem_byte = pmod.ram[a[23:0]];
+        if (a[31]) mem_byte = pmod.ram_rd(a[23:0]);
         else       mem_byte = pmod.flash_rd(a[23:0]);
     endfunction
 

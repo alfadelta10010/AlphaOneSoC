@@ -99,13 +99,15 @@
 // that whole round trip: contention happens at the pins, and the host's next
 // drive and the chip select both reach them through the same output pads.
 //
-// Memory: ram[] is the two PSRAMs back to back (A at 0, B at 8 MB), zero-filled.
-// flash[] is the whole 16 MB flash. It is not zero-filled -- that loop would
-// add about 6 s to every run -- so a byte never loaded is X in the array and
-// reads 0 (flash_rd), the same as Spike's zero-filled RAM model of the flash
-// window. Load it by hierarchical reference or with +FLASH_FILE=, a path of
-// up to 1023 characters; a longer one, or a file that cannot be opened,
-// stops the run.
+// Memory: ram[] is the two PSRAMs back to back (A at 0, B at 8 MB).
+// flash[] is the whole 16 MB flash. Neither array is zero-filled -- that loop
+// would add about 6 s to every run -- so a byte never loaded is X in the array
+// and reads 0 (flash_rd, ram_rd), the same as Spike's zero-filled RAM model of
+// the flash window. ram_w[] marks the bytes a PSRAM write stored, so an X the
+// DUT drove on the data pins stays X on read-back instead of passing as 0; a
+// byte loaded by hierarchical reference or $readmemh reads as loaded.
+// Load flash by hierarchical reference or with +FLASH_FILE=, a path of up to
+// 1023 characters; a longer one, or a file that cannot be opened, stops the run.
 
 `timescale 1ns / 1ps
 
@@ -134,6 +136,7 @@ module qspi_pmod_model #(
 
     reg [7:0] flash [0:FLASH_SIZE-1];
     reg [7:0] ram   [0:RAM_SIZE-1];
+    reg [31:0] ram_w [0:RAM_SIZE/32-1];   // bit set: a PSRAM write stored ram[] byte
 
     localparam [3:0] P_IDLE = 0, P_CMD = 1, P_ADDR = 2, P_DUMMY = 3, P_RDATA = 4,
                      P_WDATA = 5, P_IGNORE = 6, P_MODE = 7,
@@ -168,7 +171,6 @@ module qspi_pmod_model #(
         flash_crm  = $test$plusargs("FLASH_CRM");
         flash_qpi  = $test$plusargs("FLASH_QPI");
         flash_dcrm = $test$plusargs("FLASH_DCRM");
-        for (k = 0; k < RAM_SIZE; k = k + 1)   ram[k]   = 8'h00;
         if ($value$plusargs("FLASH_FILE=%s", flash_file)) begin
             // A path that fills the buffer may have been cut short.
             if (flash_file[8191:8184] != 8'h00) begin
@@ -245,9 +247,16 @@ module qspi_pmod_model #(
         flash_rd = (a >= FLASH_SIZE || ^flash[a] === 1'bx) ? 8'h00 : flash[a];
     endfunction
 
+    // A RAM byte as the chip returns it: as written by the DUT (X included),
+    // else 0 where nothing was loaded.
+    function [7:0] ram_rd(input [23:0] i);
+        ram_rd = ram_w[i >> 5][i[4:0]] === 1'b1 ? ram[i] :
+                 (^ram[i] === 1'bx) ? 8'h00 : ram[i];
+    endfunction
+
     function [7:0] rd(input [1:0] c, input [23:0] a);
         if (c == 2'd0) rd = flash_rd(a);
-        else           rd = ram[ram_index(c, a)];
+        else           rd = ram_rd(ram_index(c, a));
     endfunction
 
     // Next byte address: the PSRAMs wrap at a 1 KB page in wrap mode.
@@ -527,6 +536,7 @@ module qspi_pmod_model #(
                 else begin
                     wbyte[3:0] = host_io;
                     ram[ram_index(chip, addr)] = wbyte;
+                    ram_w[ram_index(chip, addr) >> 5][ram_index(chip, addr) & 31] = 1'b1;
                     addr = next_addr(chip, addr);
                 end
                 hi = !hi;
