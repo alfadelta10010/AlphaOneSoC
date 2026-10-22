@@ -98,3 +98,21 @@ Formal probe recipe for internal invariants: copy src to scratch, add
   handler because the RTL NOPs U-mode WFI (see SA-006); probe 2026-10-22
   (build/wo-01brev/cr_wfi.*) confirmed U-mode WFI falls through with MTIE=1
   and the timer not pending.
+- 2026-10-22 review of WO-04 (cc92ed9, tb_rf_fields spec model): APPROVED.
+  Per-instruction table (quadrant/funct3/fields), not rf_fields' sp/prime
+  formulas; legality agrees with compressed_decoder on all 49,152 parcels;
+  independence shown (shared rs1' fault: old PASS, new FAIL). Illegal words
+  are not checked (correct: they trap, a macro read is harmless). SYSTEM rs1
+  read only for funct3 001-011 is right. Non-blocking: MISC-MEM (line 118)
+  models FENCE/FENCE.I as reading rs1; per Unpriv the field is ignored --
+  my WO's over-spec, harmless (rf_fields always passes [19:15] for 32-bit).
+  Status: REQ-RFF-001 now has an independent checker.
+- 2026-10-22 review of WO-05 (399e93b Pmod RAM fill-free + bitmap) and small
+  edits 3ebdd44 e68d01b cc1a78f: APPROVED. Unit probe (build/wo-05rev/t.v) on
+  the committed model: DUT-written X -> X, never written -> 0, hier-loaded ->
+  as loaded, set bit via variable bit-select works, an X bitmap bit takes the
+  "not written" arm. Only semantic change vs zero-fill: a byte a bench pokes
+  to X hierarchically now reads 0 (no bench does). Raw pmod.ram readers left:
+  tb_qspi_stress (after its own full fill), tb_tt_um ram_word (written
+  addresses, all-nonzero expected words), tb_rivercore MEMARR (load + X-aware
+  check). Non-blocking: dead `integer k` (model:159), tb_tt_um could use ram_rd.
