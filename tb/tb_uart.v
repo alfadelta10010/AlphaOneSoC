@@ -1155,6 +1155,7 @@ module tb_uart;
         rxm_on = 1'b0;
         for (k = 1; k <= 3; k = k + 1) begin
             set_div(k); d = k;
+            // 8.5 bits x 16 clocks: the counted frame's bit-9 sample is 18.5 bits after the start bit, and the stop bit ends at 10
             fe_lo = 136 * k - 32 * k; fe_hi = 136 * k + 32 * k;
             fe_n = 0; fe_nb = 0; fe_l0 = -1; fe_bad = 0;
             for (fe_l = fe_lo; fe_l <= fe_hi; fe_l = fe_l + 1) begin
