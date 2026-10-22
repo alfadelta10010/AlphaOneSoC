@@ -869,6 +869,8 @@ module tb_rivercore;
             @(negedge rst);             // the initial reset's release
             for (reset_i = 0; reset_i < n_resets; reset_i = reset_i + 1) begin
                 repeat (reset_at + reset_i * reset_stride) @(negedge clk);
+                if (saw_tohost)
+                    $display("ERROR: mid-run reset %0d of %0d raised after the tohost store (RESET_AT is past the end of the program)", reset_i + 1, n_resets);
                 rst = 1;
                 resets_done = resets_done + 1;
                 $display("NOTE: mid-run reset %0d of %0d at cycle %0d, pc 0x%08h, %0d dump lines",
