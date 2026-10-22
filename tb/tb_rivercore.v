@@ -873,8 +873,8 @@ module tb_rivercore;
                     $display("ERROR: mid-run reset %0d of %0d raised after the tohost store (RESET_AT is past the end of the program)", reset_i + 1, n_resets);
                 rst = 1;
                 resets_done = resets_done + 1;
-                $display("NOTE: mid-run reset %0d of %0d at cycle %0d, pc 0x%08h, %0d dump lines",
-                         reset_i + 1, n_resets, cycle_count, `CPU.ifex_pc, instr_count);
+                $display("NOTE: mid-run reset %0d of %0d at cycle %0d, pc 0x%08h, %0d dump lines, ex valid %0d",
+                         reset_i + 1, n_resets, cycle_count, `CPU.ifex_pc, instr_count, `CPU.ifex_valid);
                 repeat (reset_len) @(negedge clk);
                 rst = 0;
             end
