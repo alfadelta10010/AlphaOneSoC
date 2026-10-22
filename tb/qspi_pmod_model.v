@@ -156,7 +156,6 @@ module qspi_pmod_model #(
     reg [1:0] psram_rst;    // reset since power-up: reads, writes and 35h allowed
     reg [1:0] psram_rsten;  // the last command was Reset Enable (66h)
     reg [1:0] rsten_q;      // psram_rsten as it was when this transaction began
-    integer k;
     initial begin
         delay_ns = 2;
         if ($value$plusargs("QSPI_DELAY=%d", delay_ns)) ;
