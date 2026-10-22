@@ -79,3 +79,22 @@ Formal probe recipe for internal invariants: copy src to scratch, add
   checker is acceptance-only (build/wo-03), not committed; core_reset (WO-01 B)
   self-checks via x11 = boots, so it does not need it. Non-blocking asks:
   ERROR if a reset is raised after saw_tohost; NOTE could add EX valid.
+- 2026-10-22 review of WO-02 (7467761, tb_uart late-break sweep): APPROVED.
+  Boundary 136*d = 8.5 bits x 16 (spec), L0 137/273/410 within +-(16d+4);
+  UA07 killed at 136 (d1), 272/273 (d2), 408 (d3). fail() alone makes the
+  bench FAIL (errors -> final FAIL line). Deterministic per seed, but rd8/idle
+  consume $random(seed), so later sections' stimulus per seed changed.
+  Non-blocking: comment the 136 derivation at tb_uart.v:1158.
+- 2026-10-22 review of WO-01 Part B + WO-03 follow-ups (af75f21 ERROR on a
+  reset after tohost, 7344de1 ", ex valid" on NOTE, 45690b5 core_reset):
+  APPROVED. Kills FC80 FC82 FC83 FC85. FC81 EQUIVALENT (timing only: stale
+  wfi_active clears on the first post-reset cycle because csr.v resets mie to
+  0 and wfi_wake has !wfi_has_enabled_irq; costs <=1 stall cycle and maybe one
+  repeated boot fetch, which CPU ref 5.1 allows; relies on mie's reset value,
+  which tb_csr pins). FC84 EQUIVALENT (strict: every use of exwb_memWR --
+  dmem_req, wb_mem_write, the tb bus check -- is gated by exwb_valid, which
+  resets; the stale bit is overwritten on the first post-reset cycle).
+  Loop changed to LR/DIV/SW/AMO/ECALL with an M-mode WFI in the ECALL
+  handler because the RTL NOPs U-mode WFI (see SA-006); probe 2026-10-22
+  (build/wo-01brev/cr_wfi.*) confirmed U-mode WFI falls through with MTIE=1
+  and the timer not pending.

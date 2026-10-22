@@ -31,7 +31,15 @@
   mtimecmp 0x4000, mtime 0xBFF8; DT reg size 0xC000 or 0x10000 both work.
   Fix belongs in the tb only (tb PMA_IO0_TOP -> 0x0200BFFF, MEIP hook moved
   below 0xC000) and in random-generator memory maps, or pin old Spike.
-- SA-005 (2026-10-21) Spike 5a760667 with --priv=mu does NOT trap a U-mode
+- SA-005 (2026-10-21; see SA-006 for the RTL side) Spike 5a760667 with --priv=mu does NOT trap a U-mode
   WFI with TW=0 (the earlier "Spike traps it" was wrong); it retires it and
   sleeps forever with mie=0, FyraCore NOPs it (CPU ref 8.5). Both legal
   (Priv 3.1.6.6, 3.3.3), so U-mode WFI tests must be expect mode.
+- SA-006 (2026-10-22) U-mode WFI with TW=0: CPU ref 8.5 says it "retires and
+  sets wfi_active, stalling ... until an individually enabled interrupt is
+  pending"; the RTL decodes it as a NOP (fyracore.v ex_is_wfi requires
+  priv_mode, comment at ~536-543 says so). Both are ISA-legal (Priv 3.1.6.6,
+  3.3.3). Harm: U-mode software that idles with WFI spins instead of
+  sleeping (power only; M-mode Linux unaffected). Doc fix or RTL fix is the
+  user's call. wfi_umode (dcd3476) accepts both, with uncorrelated per-register
+  alternatives (x20/x21/x24); tighten once decided.
