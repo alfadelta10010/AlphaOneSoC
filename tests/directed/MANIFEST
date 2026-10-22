@@ -190,6 +190,8 @@ mprv2               spike
 # SRA/MULH*/SLT* across the sign boundary, rs2_hold's snoop of a WB write
 # landing after the rs2 read, and the link address of c.jal/c.jalr.
 pmp_refetch         spike
+pmpaddr_refetch     spike
+pmpaddr_refetch     spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2
 mprv_lock           spike
 datapath            spike
 rs2_snoop           spike
