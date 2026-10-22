@@ -60,7 +60,7 @@ SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v
 
 TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
 # Formal harnesses (tb/formal/<name>_props.sv) per source file.
-FORMAL = {"csr.v": ["csr"]}
+FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req"], "regFile.v": ["core_hold"]}
 
 
 def make_has(target):
