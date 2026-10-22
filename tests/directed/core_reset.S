@@ -19,10 +19,12 @@
 # finishes and any other n runs the workload: M-mode setup (locked PMP entry
 # denying M-mode loads of P, misa.C cleared, msip = 1, the timer armed, mie =
 # MTIE), then a U-mode loop LR, DIV, SW, AMO, ECALL that runs until the next
-# reset. (WFI is a NOP in U-mode on this core, so the ECALL's handler does the
-# WFI in M-mode, where it waits for the timer.) The loop's period must stay
-# below 160 cycles: then 160 resets one cycle apart land on every cycle of one
-# period.
+# reset. (WFI is a NOP in U-mode on this core: ex_is_wfi in src/fyracore.v is
+# gated by priv_mode. docs/FyraCore_CPU_Reference.md section 8.5 says otherwise,
+# a U-mode WFI with TW=0 waits; tracked as spec ambiguity SA-006. So the
+# ECALL's handler does the WFI in M-mode, where it waits for the timer.) The
+# loop's period must stay below 160 cycles: then 160 resets one cycle apart land
+# on every cycle of one period.
 #
 # Results: x10 = BAD (0), x11 = n (160), x12 = CHK (160).
   .option norvc
