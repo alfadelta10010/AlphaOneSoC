@@ -115,7 +115,7 @@ module tb_rf_fields;
                 5'b00100: begin m_row = 30; m_n1 = 1; m_r1 = w[19:15]; end // OP-IMM
                 5'b00000: begin m_row = 31; m_n1 = 1; m_r1 = w[19:15]; end // LOAD
                 5'b11001: begin m_row = 32; m_n1 = 1; m_r1 = w[19:15]; end // JALR
-                5'b00011: begin m_row = 33; m_n1 = 1; m_r1 = w[19:15]; end // MISC-MEM
+                5'b00011: m_row = 33; // MISC-MEM: FENCE, FENCE.I; rs1 is reserved, no register read
                 5'b11100: begin m_row = 34; m_n1 = !w[14] && (w[14:12] != 3'b000); m_r1 = w[19:15]; end // SYSTEM: CSR reg forms
                 5'b01101: m_row = 35; // LUI
                 5'b00101: m_row = 36; // AUIPC
@@ -233,7 +233,7 @@ module tb_rf_fields;
         end
         $display("rows: checked non-x0 reads per instruction (model)");
         for (i = 0; i < 38; i = i + 1)
-            if (i <= 20 || (i >= 26 && i <= 34)) begin   // rows that read a register
+            if (i <= 20 || (i >= 26 && i <= 34 && i != 33)) begin   // rows that read a register (not MISC-MEM)
                 $display("  rows %-10s %0d", rname[i], rcnt[i]);
                 if (rcnt[i] == 0) begin
                     $display("FAIL(model): row %0s has no checked read", rname[i]);
