@@ -72,3 +72,10 @@ Correction to record in tb/VPLAN.md s4 when docs are next touched: commit
 - ALU07 BR06 SE04 SE05 MD07: unspecified/equivalent (unchanged).
 Formal probe recipe for internal invariants: copy src to scratch, add
 `ifdef FORMAL assert` in the copy, harness = core_props.sv with rf_top stub.
+- 2026-10-22 review of WO-03 (cf4af8c memory_model !rst writes, b5f0301
+  +RESETS in tb_rivercore, on ac2860e): APPROVED. No dump-path change; without
+  the plusargs only spin-streak reset and rf_chk_armed=!rst differ, both inert
+  outside a reset. NOTE "dump lines" = instr_count = lines written. Reset-trace
+  checker is acceptance-only (build/wo-03), not committed; core_reset (WO-01 B)
+  self-checks via x11 = boots, so it does not need it. Non-blocking asks:
+  ERROR if a reset is raised after saw_tohost; NOTE could add EX valid.
