@@ -116,3 +116,15 @@ Formal probe recipe for internal invariants: copy src to scratch, add
   tb_qspi_stress (after its own full fill), tb_tt_um ram_word (written
   addresses, all-nonzero expected words), tb_rivercore MEMARR (load + X-aware
   check). Non-blocking: dead `integer k` (model:159), tb_tt_um could use ram_rd.
+- 2026-10-22 review of WO-06 (3730072 stub, 813d77a core_hold, 49b8589
+  core_req, bb2e36a run.py FORMAL map): APPROVED. Re-ran core_hold:
+  PROVED length 1; init-attribute constraints imported once (base case only),
+  8 asserts imported in base and step, so the induction is over the core's
+  state, not pinned. No assume anywhere in tb/formal (so -set-assumes is a
+  no-op, csr unchanged); rst_in and boot_addr free; free RF data is a sound
+  over-approximation for these safety properties. run.py mapping checked:
+  fyracore.v -> core_hold+core_req, regFile.v -> core_hold. Power-up-only
+  mutants FC80/FC85 survive both harnesses (no X-semantics artefact kills).
+  Non-blocking: run.sh:40-43/49-53 count a yosys error/timeout as FAILED,
+  which run.py scores as KILLED; distinguish "no verdict".
+  Status: REQ-MEM-001 formally proven (both ports); REQ-MEM-002 bounded 10.
