@@ -251,6 +251,18 @@ t_irq_slow          expect x18=0x3 x20=0x0
 wfi_slow            expect x9=0x0 x10=0x0 x18=0x2 x20=0x80000007 x21=0x77 x22=0x80
 wfi_slow            expect x9=0x0 x10=0x0 x18=0x2 x20=0x80000007 x21=0x77 x22=0x80 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 
+# WFI in U-mode: with TW=0 it is a NOP (FyraCore: always), or may wait for an
+# enabled timer interrupt and then trap with mepc = the next instruction (the
+# timer phase accepts either, hence the x20/x21/x24 alternatives); with TW=1
+# it is an illegal instruction (CPU ref 8.5, Priv 3.1.6.6). Expect mode:
+# checked on 2026-10-21, Spike 5a760667 with --priv=mu does NOT trap a U-mode
+# WFI with TW=0; it retires it and then sleeps forever when mie=0, where
+# FyraCore treats it as a NOP. Both are legal (a WFI may be a NOP; with
+# nothing enabled nothing must wake it), so Spike's trace never reaches
+# tohost. The timer phase counts clocks (as wfi_slow). Registers: wfi_umode.S.
+wfi_umode           expect x9=0x3 x18=0x8 x19=0x0 x20=0x8|0x80000007 x21=0x4|0x0 x22=0x2 x23=0x0 x24=0x1|0x0
+wfi_umode           expect x9=0x3 x18=0x8 x19=0x0 x20=0x8|0x80000007 x21=0x4|0x0 x22=0x2 x23=0x0 x24=0x1|0x0 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+
 # Timer interrupts landing on M ops, loads and stores to both PSRAMs, an AMO
 # and page- and chip-straddling fetches: the checksum with interrupts on must
 # equal the one with them off (x21, Spike's value for that loop), and every
