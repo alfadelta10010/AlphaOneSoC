@@ -77,6 +77,10 @@ m("RF03", "decoder.v", "(q == 2'b10) ? instr[6:2]   : {2'b01, instr[4:2]};",
   "(q == 2'b10) ? instr[6:2]   : {2'b01, instr[5:3]};", "rf_fields: rs2' from the wrong bits")
 m("RF04", "decoder.v", "assign rs1 = (q == 2'b11) ? instr[19:15] :",
   "assign rs1 = (q == 2'b11) ? instr[20:16] :", "rf_fields: 32-bit rs1 off by one")
+m('RFF01', 'decoder.v', "wire sp    = (q == 2'b00) ? !f3[1] : (q == 2'b10) && f3[1];", "wire sp    = (q == 2'b00) ? !f3[1] : (q == 2'b10) && f3[1] && !f3[2];", "C.SWSP's base register is not sp")
+m('RFF02', 'decoder.v', "wire prime = (q == 2'b00) ?  f3[1] : (q == 2'b01) && f3[2];", "wire prime = (q == 2'b00) ?  f3[1] : (q == 2'b01) && f3[2] && !f3[1];", 'C.BEQZ/C.BNEZ read rs1 from the full rd field')
+m('RFF03', 'decoder.v', "prime        ? {2'b01, instr[9:7]} : instr[11:7];", "prime        ? {2'b00, instr[9:7]} : instr[11:7];", "rs1' maps to x0-x7, not x8-x15")
+m('RFF04', 'decoder.v', "(q == 2'b10) ? instr[6:2]   : {2'b01, instr[4:2]};", "(q == 2'b10) ? {instr[6:3], 1'b0} : {2'b01, instr[4:2]};", "quadrant 2's rs2 (C.MV, C.ADD, C.SWSP) loses bit 0")
 
 # ── controller.v ─────────────────────────────────────────────────────────
 m("CT01", "controller.v", "3'b100:  begin memSize = 2'b00; memUnsigned = 1'b1; end // LBU",
