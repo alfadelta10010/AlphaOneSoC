@@ -31,3 +31,17 @@
     [--results build/mut/before.tsv] [--benches unit,dir,soc]`, `--report`
 - Do not edit tests/directed/run.sh while a run.sh is executing (bash reads
   scripts incrementally). Freeze a tree with `git archive HEAD src tb tests`.
+- Whole-core formal with yosys sat (2026-10-21): rf_top.v cannot be read
+  ($test$plusargs; its SYNTHESIS form is an empty blackbox sat rejects), use a
+  stub with undriven read data; passes `prep; chformal -lower; flatten;
+  memory_map; setundef -undriven -expose; opt -fast` then
+  `sat -tempinduct -tempinduct-def -prove-asserts -set-init-zero
+  -set-def-inputs -seq 1 -maxsteps N`. Induction runs take 7-80 s.
+- GL assets (2026-10-21): newest hardened netlist = sandbox
+  /home/mempool/tt/projects/sub-port/runs/wokwi/final/pnl/*.pnl.v (2026-10-19,
+  62.5 MHz); its src/ equals this branch's src modulo comments. tb_tt_um
+  takes power pins as nets under USE_POWER_PINS (gl.sh's sed patch is
+  obsolete). Defines: GL_TEST FUNCTIONAL USE_POWER_PINS SIM UNIT_DELAY=#1;
+  files gls_model/{primitives,sky130_fd_sc_hd}.v + pnl + src/rf_top.v + the
+  two models + tb_tt_um.v; earlier GL runs: PASS, GL = RTL + 1 cycle.
+  netlists/ in the repo is 2024-era and unrelated.

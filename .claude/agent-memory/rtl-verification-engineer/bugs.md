@@ -19,3 +19,5 @@
   helper read mem[] inside a function (continuous assign not sensitive).
 - TB-005 tests/directed first drafts: .skip regions jumped into (label in
   front of the padding); .text.init over 4 KB moves tohost.
+
+2026-10-22: candidate review (FC02 FC49 FC27 MD07 RG01 RG04, CLINT window): no DUT bug; see vplan.md "Candidate verdicts".

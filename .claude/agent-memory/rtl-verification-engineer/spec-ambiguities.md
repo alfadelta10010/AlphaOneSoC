@@ -25,3 +25,13 @@
   0x0200C000-0x020BFFFF now diverge from Spike for a testbench reason.
   Needs a decision: shrink IO0_TOP to 0x0200BFFF (and move the MEIP hook)
   or pin the old Spike. Probe: build/probe/clint/c.S.
+  2026-10-22 verdict: the SoC RTL is legal as is (clint.v decodes addr[15:0];
+  0x0200C000-0x0200FFFF inside PMA_IO0 is RAZ/WI, a platform choice; the
+  SiFive/ACLINT layout ends at 0xBFFF). Linux NOMMU touches only msip 0x0,
+  mtimecmp 0x4000, mtime 0xBFF8; DT reg size 0xC000 or 0x10000 both work.
+  Fix belongs in the tb only (tb PMA_IO0_TOP -> 0x0200BFFF, MEIP hook moved
+  below 0xC000) and in random-generator memory maps, or pin old Spike.
+- SA-005 (2026-10-21) Spike 5a760667 with --priv=mu does NOT trap a U-mode
+  WFI with TW=0 (the earlier "Spike traps it" was wrong); it retires it and
+  sleeps forever with mie=0, FyraCore NOPs it (CPU ref 8.5). Both legal
+  (Priv 3.1.6.6, 3.3.3), so U-mode WFI tests must be expect mode.
