@@ -6,7 +6,8 @@ of src/ under build/mut/<ID>/src; src/ itself is never written. The benches
 that cover the mutated file are then run against the copy, each through the
 same command a developer runs (make SRC_DIR=... test-xxx, or
 tests/directed/run.sh with FYRA_SRC=...), and a bench KILLS the mutant when
-that command fails. A mutant whose copy does not compile is STILLBORN and is
+that command fails (a formal bench that exits 2 gave no verdict: ERROR, not a
+kill, and left out of the survivors too). A mutant whose copy does not compile is STILLBORN and is
 left out of every rate. A bench that has to be stopped by the timeout here
 counts as a kill (a hang is a failure), and is labelled TIMEOUT.
 
@@ -181,7 +182,10 @@ def score(entry, kinds, keep):
                     if rc2 != 0:
                         rc, log, b = rc2, log2, b + "+rfx"
                 shutil.rmtree(os.path.join(absbase, "dir"), ignore_errors=True)
-            verdict = "TIMEOUT" if rc == "TIMEOUT" else ("SURVIVED" if rc == 0 else "KILLED")
+            if kind == "formal" and rc == 2:
+                verdict = "ERROR"      # the checker gave no verdict: not a kill
+            else:
+                verdict = "TIMEOUT" if rc == "TIMEOUT" else ("SURVIVED" if rc == 0 else "KILLED")
             rows.append((mid, f, "%s:%s" % (kind, b), verdict, int(dt),
                          first_fail(log) if verdict != "SURVIVED" else ""))
     if not keep:
@@ -207,11 +211,17 @@ def report():
         ms = [m for m in benches[b] if m not in still]
         k = [m for m in ms if any(best.get((m, bb)) in ("KILLED", "TIMEOUT")
                                   for bb in [x for (mm, x) in best if mm == m and x.split("+")[0] == b])]
-        print("  %-28s %3d/%3d killed (%3.0f%%)  survivors: %s"
+        e = [m for m in ms if m not in k and any(
+            best.get((m, bb)) == "ERROR" for bb in [x for (mm, x) in best if mm == m and x.split("+")[0] == b])]
+        print("  %-28s %3d/%3d killed (%3.0f%%)  survivors: %s%s"
               % (b, len(k), len(ms), 100.0 * len(k) / max(1, len(ms)),
-                 " ".join(sorted(set(ms) - set(k)))))
-    surv = [m for m in live if m not in killed_any]
+                 " ".join(sorted(set(ms) - set(k) - set(e))),
+                 ("  ERROR: " + " ".join(sorted(e))) if e else ""))
+    errd = {m for m in live if any(v == "ERROR" for (mm, b), v in best.items() if mm == m)}
+    surv = [m for m in live if m not in killed_any and m not in errd]
     print("survived every bench: %s" % (" ".join(surv) or "none"))
+    print("ERROR (a bench gave no verdict; counted neither killed nor survived): %d  %s"
+          % (len(errd), " ".join(sorted(errd))))
 
 
 def main():

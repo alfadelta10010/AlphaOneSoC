@@ -9,7 +9,10 @@
 # Modes: induct (k-induction, PROVED) or bmc (bounded from reset, BOUNDED;
 # core_req is not inductive without internal invariants). The core harnesses
 # read tb/formal/rf_top_stub.v instead of src/rf_top.v (free read data).
-# Prints PROVED, BOUNDED or FAILED per harness; exits 1 if any failed.
+# Prints PROVED, BOUNDED or FAILED per harness; exits 1 if any failed. FAILED
+# means yosys finished with a counterexample (or, for induct, hit the depth
+# limit); a yosys error or timeout gives no verdict and prints ERROR instead:
+# exit 2, which tb/mutate/run.py scores as ERROR, never as a kill.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -25,6 +28,7 @@ declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_
 declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc )
 names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req)
 bad=0
+err=0
 for n in "${names[@]}"; do
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
   for f in ${EXTRA[$n]:-}; do srcs="$srcs $HERE/$f"; done
@@ -39,19 +43,26 @@ for n in "${names[@]}"; do
   if [ "${MODE[$n]}" = bmc ]; then
     if grep -q "SAT proof finished - no model found: SUCCESS" "$log"; then
       echo "BOUNDED $n (no counterexample within $BMC_DEPTH steps of reset)"
-    else
+    elif grep -q "SAT proof finished - model found: FAIL" "$log"; then
       echo "FAILED $n: counterexample within $BMC_DEPTH steps (log: $log)"
       grep -E "failed|ERROR" "$log" | tail -3; bad=1
+    else
+      echo "ERROR $n: no verdict (log: $log)"; err=1
     fi
     continue
   fi
   len=$(grep -oE "Trying induction with length [0-9]+" "$log" | tail -1 | grep -oE "[0-9]+$")
   if grep -q "Induction step proven: SUCCESS" "$log"; then
     echo "PROVED $n (k-induction, length ${len:-?})"
+  elif grep -q "model found for base case" "$log"; then
+    echo "FAILED $n: a counterexample from reset (log: $log)"
+    grep -E "failed|ERROR" "$log" | tail -3; bad=1
+  elif grep -q "Reached maximum" "$log"; then
+    echo "FAILED $n: induction did not close by length $DEPTH (log: $log)"
+    grep -E "failed|Reached maximum" "$log" | tail -3; bad=1
   else
-    if grep -q "model found for base case" "$log"; then why="a counterexample from reset"; else why="induction did not close by length $DEPTH"; fi
-    echo "FAILED $n: $why (log: $log)"
-    grep -E "failed|Reached maximum|ERROR" "$log" | tail -3; bad=1
+    echo "ERROR $n: no verdict (log: $log)"; err=1
   fi
 done
+[ $err = 1 ] && exit 2
 exit $bad
