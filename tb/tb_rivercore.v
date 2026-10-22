@@ -467,6 +467,10 @@ module tb_rivercore;
     end
 
     always @(posedge clk) begin
+        if (rst) begin                  // a reset starts a new boot: no streak carries over
+            spin_last_pc = 32'hFFFF_FFFF;
+            spin_count   = 0;
+        end
         if (!rst && dbg_retired && !terminate && spin_limit != 0) begin
             if (dbg_pc == spin_last_pc) begin
                 spin_count = spin_count + 1;
@@ -715,7 +719,7 @@ module tb_rivercore;
             rf_shadow[`CPU.wb_rd] = `CPU.wb_data;
         rf_ra_q = `CPU.rf.ra;
         rf_rb_q = `CPU.rf.rb;
-        rf_chk_armed = 1'b1;
+        rf_chk_armed = !rst;    // a reset cuts the pipeline: nothing to compare until it refills
     end
 
     // ================================================================
@@ -819,6 +823,63 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  Mid-run resets
+    //
+    //  +RESETS=<k>        drop k resets into the running program (default 0:
+    //                     off; +RESET_AT alone means k = 1)
+    //  +RESET_AT=<n>      reset i is raised n + i*s clocks after the release of
+    //                     the previous one (the initial one for i = 0); 1000
+    //  +RESET_STRIDE=<s>  see above; 0
+    //  +RESET_LEN=<l>     clocks rst stays high, at least 1; 2
+    //
+    //  This models a system reset: the core and the CLINT reset (rst reaches
+    //  both), memory keeps its contents, and the pc restarts at boot_addr.
+    //  rst changes on the falling edge, away from the active one. The dump
+    //  format is untouched; each reset prints one NOTE line, with the pc of
+    //  the instruction in EX (ifex_pc) and the number of dump lines so far,
+    //  so a checker can cut the dump into boots.
+    //
+    //  What a reset does to the state in this file and in memory_model:
+    //   * every check above and the dump are gated by !rst, so a transaction
+    //     or retire on a clock where rst is high does not exist for them;
+    //   * the register-file check is disarmed and the spin streak cleared
+    //     while rst is high; the bus, muldiv_want and use_hazard checks hold
+    //     no state across clocks;
+    //   * the register-file shadow follows the write port, reset or not, as
+    //     the register file itself does (a reset does not clear it);
+    //   * not reset: terminate, saw_tohost, post_tohost_retires, the dump,
+    //     logging_active, instr_count, cycle_count (MAX_CYCLES and MAX_INSTR
+    //     bound the whole run).
+    // ================================================================
+    integer n_resets, reset_at, reset_stride, reset_len;
+    integer resets_done = 0;
+    integer reset_i;
+    initial begin
+        if (!$value$plusargs("RESETS=%d", n_resets))
+            n_resets = $test$plusargs("RESET_AT") ? 1 : 0;
+        if (!$value$plusargs("RESET_AT=%d", reset_at))
+            reset_at = 1000;
+        if (!$value$plusargs("RESET_STRIDE=%d", reset_stride))
+            reset_stride = 0;
+        if (!$value$plusargs("RESET_LEN=%d", reset_len))
+            reset_len = 2;
+        if (reset_len < 1)
+            reset_len = 1;
+        if (n_resets > 0) begin
+            @(negedge rst);             // the initial reset's release
+            for (reset_i = 0; reset_i < n_resets; reset_i = reset_i + 1) begin
+                repeat (reset_at + reset_i * reset_stride) @(negedge clk);
+                rst = 1;
+                resets_done = resets_done + 1;
+                $display("NOTE: mid-run reset %0d of %0d at cycle %0d, pc 0x%08h, %0d dump lines",
+                         reset_i + 1, n_resets, cycle_count, `CPU.ifex_pc, instr_count);
+                repeat (reset_len) @(negedge clk);
+                rst = 0;
+            end
+        end
+    end
+
+    // ================================================================
     //  Main simulation loop
     // ================================================================
     initial begin
@@ -893,6 +954,8 @@ module tb_rivercore;
     // ================================================================
     task print_summary;
         begin
+            if (resets_done < n_resets)
+                $display("ERROR: run ended after %0d of %0d mid-run resets", resets_done, n_resets);
             $display("  Cycles: %0d   Instructions logged: %0d", cycle_count, instr_count);
             if (instr_count > 0)
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
