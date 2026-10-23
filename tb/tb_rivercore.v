@@ -52,27 +52,17 @@ module tb_rivercore;
     parameter MEM_SIZE = 16777216; // 16 MB of PSRAM
     parameter MEM_BASE = 32'h8000_0000;
 
-    // IO0 is the CLINT window, and its size is dictated by the reference
-    // model, not by the CLINT the hardware will have. Spike maps CLINT_SIZE =
-    // 0xC0000 from the CLINT base and ignores the size in its device tree, so
-    // every address in 0x02000000-0x020BFFFF answers loads and stores on
-    // spike: the register block at 0x0000/0x4000/0xBFF8 and plain zeros
-    // everywhere else. Sizing IO0 to the real CLINT's 48 KB instead made every
-    // access in between fault on the DUT and succeed on the reference.
-    //
-    // tb/memory_model.v mirrors the same shape: CLINT registers below offset
-    // 0x10000, zeros above, and the write side ignored above -- not the
-    // address aliasing a 16-bit offset decode would give.
-    //
-    // The testbench-only MEIP hook at 0x0200C000 lies inside this window and
-    // reads back 0 until a test writes it, which is what spike returns there
-    // too, so it stays invisible to lockstep comparison.
-    //
-    // IO0_BASE must match the clint@ node in
-    // plugins/helpers/spike-fyracore.dts; the base is the one thing that DTS
-    // can move.
+    // IO0 is the CLINT window, sized to what the reference model maps. Spike
+    // 5a760667 answers 0x0000-0xBFFF (hart 0's msip, mtimecmp, mtime; 0
+    // elsewhere, writes there dropped) and faults from 0xC000 up, whatever the
+    // device tree's reg size says (probe 2026-10-23,
+    // build/wo/probes/clint-offsets.S). The SoC's own window is 64 KB (fyracore
+    // PMA_IO0_TOP default) and reads 0 in 0xC000-0xFFFF; the testbench stops at
+    // 0xBFFF so both models fault there. The testbench-only MEIP hook is at
+    // 0x0200_8000 inside this window (memory_model). IO0_BASE must match the
+    // clint@ node in plugins/helpers/spike-fyracore.dts.
     parameter IO0_BASE = 32'h0200_0000;
-    parameter IO0_TOP  = 32'h020B_FFFF;
+    parameter IO0_TOP  = 32'h0200_BFFF;
     // No UART, GPIO or syscon is modelled, and spike has no device there
     // either (plugins/helpers/spike-fyracore.dts drops its UART), so IO1 is
     // switched off by making BASE > TOP -- a window that matches nothing.
@@ -99,9 +89,8 @@ module tb_rivercore;
     // program (MANIFEST mode `flash`): it is the flash image, boots from the
     // real boot_addr, and is traced from reset.
     //
-    // The CLINT gets dmem_addr[15:0], so the part of Spike's 0xC0000 CLINT
-    // aperture above 0x0200_FFFF aliases the registers here instead of
-    // reading 0 as memory_model does. No directed test touches it.
+    // IO0_TOP stops at 0x0200_BFFF here too, so the core faults every CLINT
+    // offset from 0xC000 before the SoC's decoder sees it.
     //
     // +RD_LATE sets the QSPI read-latency strap; +QSPI_DELAY (read by the
     // model) sets the device + pad delay it has to cover.
