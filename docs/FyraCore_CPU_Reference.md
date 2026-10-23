@@ -389,7 +389,8 @@ LR/SC to an IO window is an access fault (no reservation set there); an AMO to a
 
 ### 8.5 WFI
 
-- M-mode (or U-mode with TW = 0): WFI retires and sets `wfi_active`, stalling the next instruction until an individually enabled interrupt is pending (regardless of MIE). If no source is enabled in `mie`, WFI is a NOP. On wake, a taken interrupt's mepc is the instruction after the WFI.
+- M-mode: WFI retires and sets `wfi_active`, stalling the next instruction until an individually enabled interrupt is pending (regardless of MIE). If no source is enabled in `mie`, WFI is a NOP. On wake, a taken interrupt's mepc is the instruction after the WFI.
+- U-mode with TW = 0: WFI retires as a NOP and never waits (`ex_is_wfi` requires M-mode). Priv 3.3.3 allows WFI to be a NOP, and with no S-mode TW = 0 permits it in U-mode (3.1.6.6). U-mode software that idles in a WFI loop spins instead of sleeping; M-mode Linux is unaffected.
 - U-mode with TW = 1: illegal instruction.
 
 ---
