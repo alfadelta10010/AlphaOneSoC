@@ -139,12 +139,13 @@ wire [31:0] mret_target = csr_mepc;
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, the `*_legal` write values and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
-| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO. Boots from flash (0x2000_0000). |
+| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO, syscon. Boots from flash (0x2000_0000). |
 | `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
 | `mem_ctrl.v` | `mem_ctrl` | Joins the fetch and data ports onto the QSPI engine: data-first arbitration, chip select from the address, PSRAM fetch split at 1 KB pages. |
 | `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices and takes them out of any QPI or continuous-read mode another design left them in. |
 | `uart.v` | `uart` | 16550-compatible UART at 0x1000_0000: byte registers, fixed 8N1, no FIFOs (TX back-pressure, RTS# flow control), break send (LCR.SBC) and detect (LSR.BI), polled. |
 | `gpio.v` | `gpio` | GPIO OUT/IN at 0x1001_0000 and a mode-3 SPI transmitter for the OLED, with write back-pressure while a byte shifts. |
+| `syscon.v` | `syscon` | Register block at 0x1002_0000: reboot and power-off (FINISH, QEMU sifive_test codes), reset cause, boot mode, chip ID, `rd_late` strap. Generates `rst_soc`, the reset of every other SoC block. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -180,7 +181,7 @@ Address Range               Device      Size    Attributes
 0x0C00_0000                 PLIC        -       reserved, not implemented (faults)
 0x1000_0000 - 0x1000_FFFF   UART        64 KB   data only (src/uart.v)
 0x1001_0000 - 0x1001_FFFF   GPIO        64 KB   data only (src/gpio.v)
-0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only, reserved (reads 0)
+0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only (src/syscon.v)
 ```
 
 The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC ties it to 0x2000_0000, so it always boots from flash. SoC design, boot and QSPI details: `docs/soc-architecture.md`.

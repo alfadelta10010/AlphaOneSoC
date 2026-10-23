@@ -555,7 +555,7 @@ with 2 dummy clocks **50 MHz**, with 4 dummy 80 MHz.
 | Step | CS | Sent | Effect |
 |---|---|---|---|
 | 0 | CS1+CS2 | `F5h` QPI form (2 clk) | PSRAM leaves QPI; SPI-mode PSRAM sees 2 bits of nothing |
-| 1–2 | CS1+CS2 | `66h`, `99h` SPI | PSRAM reset (always: the SoC boots from flash only, so nothing is in PSRAM yet) |
+| 1–2 | CS1+CS2 | `66h`, `99h` SPI | PSRAM reset (always, at a reboot too; the datasheet does not say whether the array survives, see 4.2) |
 | 3 | CS0 | 8 clk of `1111` | flash leaves quad CRM (SPI or QPI) |
 | 4 | CS0 | 16 clk of `1111`, one CS | flash leaves dual-I/O CRM (since `d3cdb07`); a flash in SPI mode sees `FFh` and 8 idle clocks |
 | 5 | CS0 | `FFh` QPI form (2 clk) | flash leaves QPI; SPI-mode flash sees 2 bits of nothing |
