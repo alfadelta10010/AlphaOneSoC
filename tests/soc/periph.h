@@ -6,7 +6,10 @@
  *
  *   SYSCON + 0x000  FINISH  QEMU sifive_test codes: 0x5555 pass,
  *                           (code << 16) | 0x3333 fail with code 1..0xFFFF,
- *                           0x7777 reboot (never written here)
+ *                           0x7777 reboot (never written here). It is the
+ *                           syscon's FINISH register: 0x5555 and 0x3333 power
+ *                           the SoC off, so EPILOGUE drains the UART and the
+ *                           SPI shifter before writing it.
  *   SYSCON + 0x7F0  EVENT   a test-specific cue to the testbench
  *   SYSCON + 0x7F4  VALUE   a value for the testbench to check
  *   SYSCON + 0x7F8  VALUE2  a second one (on a failure: the value seen)
@@ -95,6 +98,16 @@
     li   t4, \bits
     bne  t5, t4, 89b
 .endm
+/* Wait until the UART has sent its last stop bit (LSR.TEMT) and the SPI
+ * shifter is idle: a GPIO write waits for it, and OUT is written back with
+ * its own value. Clobbers t4, t5, t6. */
+.macro DRAIN
+    li   t6, UART
+    WAIT_LSR t6, LSR_TEMT
+    li   t6, GPIO
+    lw   t5, G_OUT(t6)
+    sw   t5, G_OUT(t6)
+.endm
 /* test_pass / test_fail, once per program */
 .macro EPILOGUE
 test_fail:
@@ -106,6 +119,7 @@ test_fail:
 test_pass:
     li   a6, FINISH_PASS
 87:
+    DRAIN
     sw   a6, MB_FINISH(s11)
 1:  j    1b
 .endm

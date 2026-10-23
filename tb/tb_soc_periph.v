@@ -17,7 +17,10 @@
 // syscon window (tests/soc/periph.h): FINISH at +0x000 (QEMU's sifive_test
 // codes: 0x5555 pass, (code << 16) | 0x3333 fail, a word store), EVENT (a
 // cue), VALUE and VALUE2 at +0x7F0 / +0x7F4 / +0x7F8, decoded exactly;
-// every other syscon word is not the mailbox. +TEST=<name>
+// every other syscon word is not the mailbox. The verdict is taken at
+// FINISH: no UART or SSD1331 byte may arrive after it, and the core's ports
+// are not checked after it (a FINISH powers the SoC off once the syscon
+// exists). +TEST=<name>
 // picks the test's cues and final checks; +FLASH_FILE=<hex> (read by the
 // Pmod model) is its program; +MAX_CYCLES=<n> the time limit.
 //
@@ -72,11 +75,15 @@ module tb_soc_periph;
     assign gpio_in = {kp_fitted ? kp_row : tb_in[7:4], uart_rx, tb_in[2:1], 1'b0};
 
     // ── Checks on every clock ───────────────────────────────────────────────
+    reg done = 1'b0, passed = 1'b0, failed = 1'b0;
+    // After FINISH the core's ports are not this bench's business: once the
+    // syscon exists a FINISH powers the SoC off one clock later and cuts the
+    // fetch the core's spin loop has outstanding.
     req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
-        .clk(clk), .rst(rst), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
+        .clk(clk), .rst(rst || done), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
         .payload({soc.dmem_addr, soc.dmem_we, soc.dmem_be, soc.dmem_we ? soc.dmem_wdata : 32'h0}));
     req_hold_check #(.W(32), .NAME("imem request")) chk_imem (
-        .clk(clk), .rst(rst), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
+        .clk(clk), .rst(rst || done), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
         .payload(soc.imem_addr));
 
     integer errors = 0;
@@ -123,13 +130,14 @@ module tb_soc_periph;
 
     // ── Mailbox ─────────────────────────────────────────────────────────────
     string     test;
-    reg        done = 1'b0, passed = 1'b0, failed = 1'b0;
     reg [31:0] result = 0, value = 0, value2 = 0;
+    integer    rx_fin = 0, oled_fin = 0, res_fin = 0;
     wire       mb = soc.dmem_req && soc.dmem_we && soc.dmem_ready && soc.dmem_addr[31:16] == 16'h1002;
 
     task automatic finish(input [3:0] be, input [31:0] w);
         begin
             done = 1'b1;
+            rx_fin = rp.rx_n;  oled_fin = oled.nlog;  res_fin = oled.n_res_pulses;
             if (be !== 4'b1111)
                 fail($sformatf("%s: FINISH written with lanes %b (want a word store)", test, be));
             else if (^w === 1'bx)
@@ -323,14 +331,18 @@ module tb_soc_periph;
         end else if (passed) begin
             // Let the UART's last character reach the RP2350.
             repeat (16 * 3 * 12 * UART_DIV) @(posedge clk);
+            if (rp.rx_n != rx_fin)
+                fail($sformatf("%s: %0d UART byte(s) arrived after FINISH: the program did not drain TX", test, rp.rx_n - rx_fin));
+            if (oled.nlog != oled_fin)
+                fail($sformatf("%s: %0d SSD1331 byte(s) arrived after FINISH", test, oled.nlog - oled_fin));
             got_u = rp.rx_str();
             exp_u = want_uart();
             if (got_u != exp_u)
                 fail($sformatf("%s: the RP2350 received \"%s\" (%0d characters), want \"%s\" (%0d)",
                                test, got_u, got_u.len(), exp_u, exp_u.len()));
-            if (oled.nlog != n_want_oled)
-                fail($sformatf("%s: the SSD1331 got %0d bytes, want %0d", test, oled.nlog, n_want_oled));
-            for (k = 0; k < oled.nlog && k < n_want_oled; k = k + 1)
+            if (oled_fin != n_want_oled)
+                fail($sformatf("%s: the SSD1331 got %0d bytes, want %0d", test, oled_fin, n_want_oled));
+            for (k = 0; k < oled_fin && k < n_want_oled; k = k + 1)
                 if (oled.log[k] !== want_oled[k])
                     fail($sformatf("%s: SSD1331 byte %0d = {D/C %b, %h}, want {D/C %b, %h}", test, k,
                                    oled.log[k][8], oled.log[k][7:0], want_oled[k][8], want_oled[k][7:0]));
@@ -354,8 +366,8 @@ module tb_soc_periph;
             end
             if (test == "oled_spi") begin
                 $display("oled_spi: %0d SSD1331 bytes, %0d GPIO clocks waited, %0d RES# pulses, %0d timing violations flagged on the deliberate DIV 1 byte",
-                         oled.nlog, gpio_wait, oled.n_res_pulses, oled.n_expected);
-                if (oled.n_res_pulses != 1) fail("oled_spi: want one RES# pulse");
+                         oled_fin, gpio_wait, res_fin, oled.n_expected);
+                if (res_fin != 1) fail("oled_spi: want one RES# pulse");
             end
             if (test == "keypad") begin
                 $display("keypad: %0d patterns scanned; the IN read that follows an OUT write came %0d clocks after it at the soonest",
