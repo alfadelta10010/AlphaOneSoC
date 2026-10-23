@@ -305,6 +305,7 @@ m('FC82', 'fyracore.v', "            reservation_valid <= 1'b0;\n            res
 m('FC83', 'fyracore.v', "            amo_phase      <= 1'b0;\n            wb_busy        <= 1'b0;", "            amo_phase      <= (amo_phase === 1'bx) ? 1'b0 : amo_phase;\n            wb_busy        <= (wb_busy === 1'bx) ? 1'b0 : wb_busy;", 'an AMO cut by a reset resumes after it')
 m('FC84', 'fyracore.v', "            exwb_memWR      <= 1'b0;\n            exwb_memSize    <= 2'b0;", "            exwb_memWR      <= (exwb_memWR === 1'bx) ? 1'b0 : exwb_memWR;\n            exwb_memSize    <= 2'b0;", 'a store in WB is issued again after a reset')
 m('FC85', 'fyracore.v', "            ifex_valid     <= 1'b0;\n            ex_rf_ok       <= 1'b0;", "            ifex_valid     <= (ifex_valid === 1'bx) ? 1'b0 : ifex_valid;\n            ex_rf_ok       <= 1'b0;", 'the instruction in EX at a reset executes after it')
+m("FC86", "fyracore.v", "(ex_rd == 5'b0) && (ex_rs1 == 5'b0) && priv_mode;", "(ex_rd == 5'b0) && (ex_rs1 == 5'b0) && (priv_mode || !csr_mstatus_tw);", "U-mode WFI with TW=0 waits like an M-mode WFI (CPU ref 8.5: it is a NOP)")
 
 # ── mem_ctrl.v / soc_bus.v / qspi_ctrl.v ─────────────────────────────────
 m("MC01", "mem_ctrl.v", "wire        split     = i_addr[31] && (&i_addr[9:1]);", "wire        split     = i_addr[31] && (&i_addr[9:2]);", "split also at the page's second-last halfword")
