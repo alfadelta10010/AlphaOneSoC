@@ -79,11 +79,12 @@ E = eventual, A = architectural (no clock count).
 | REQ-TRAP-003 | a trap inside a trap handler | A | trap_nested (new) | Spike |
 | REQ-IRQ-001 | interrupt priority and enables (Priv 3.1.9) | A | mie_enable, mret_irq, t_irq* | Spike / expect |
 | REQ-IRQ-002 | interrupt at a trapping instruction, during an M op, during a stalled access, at MRET: each taken once, mepc an instruction boundary | A | irq_at_trap (new), mret_irq, t_mulirq, irq_stress, irq_stall (SoC) | expect / Spike / SoC bench |
+| REQ-WFI-001 | WFI: M-mode waits for an individually enabled pending interrupt (a NOP if none is enabled), mepc on wake = the next instruction; U-mode with TW=0 a NOP that never waits; U-mode with TW=1 illegal (CPU ref 8.5, 1a845f5; Priv 3.1.6.6, 3.3.3) | A | wfi_slow, wfi_umode, rf_wfi_hold, core_reset | expect |
 | REQ-LRSC-001 | reservation policy (CPU ref 9.3) | A | lrsc_*, sc_trap, lr_sb_sc | Spike / expect |
 | REQ-PMP-101 | PMP in the pipeline | A | pmp_*, mprv*, *_straddle | Spike |
 | REQ-CNT-001 | counters through the pipeline | A | cnt_* | Spike / expect |
 | REQ-MEM-001 | request held unchanged until ready (CPU ref 5.1) | C | every run; formal core_hold | memory_model handshake checker; k-induction proof on both ports (WO-06) |
-| REQ-MEM-002 | fetch only inside flash/PSRAM and halfword-aligned; data only inside a mapped window and word-aligned; never a write to flash; byte lanes a legal size/offset pattern, loads included; store data replicated; read data only for a requested access (CPU ref 5.1, 4) | C | every run; formal core_req | memory_model request checker (new); bounded proof, 10 cycles from reset (WO-06) |
+| REQ-MEM-002 | fetch only inside flash/PSRAM and halfword-aligned; data only inside a mapped window and word-aligned; never a write to flash; byte lanes a legal size/offset pattern, loads included; store data replicated; read data only for a requested access (CPU ref 5.1, 4) | C | every run; formal core_req | memory_model request checker (new); bounded proof, 10 cycles from reset (WO-06); the core-level window for the CLINT is Spike's 48 KB (0x0200_0000-0x0200_BFFF, WO-11); pma_edges checks both of its edges |
 | REQ-MEM-003 | every load/store/LR/SC/AMO retire is exactly its transaction: word address, lanes from size and offset, direction, the stored bytes in their lanes; no transaction without one; a failing SC makes none (CPU ref 5.1, 9.3) | C | every run | tb_rivercore bus check (new) |
 | REQ-RST-001 | a reset in the middle of a program, on every phase of LR, DIV, a store, an AMO, ECALL, the M-mode WFI wait and the timer interrupt, restarts a clean boot at boot_addr | B | core_reset (160 resets, tb_rivercore +RESETS) | self-check: x11 counts the boots |
 | REQ-RF-101 | the macro is read with the EX instruction's registers from its second EX cycle | C | every run | tb_rivercore rf check |
@@ -99,6 +100,7 @@ E = eventual, A = architectural (no clock count).
 | REQ-UART-* | 16550 subset (pins-and-peripherals 2) | C | tb_uart | spec models |
 | REQ-GPIO-* | GPIO + SPI mode 3 (pins-and-peripherals 3-4) | C | tb_gpio | spec models |
 | REQ-BUS-001 | an IO target drops ready only while selected; only a CLINT store writes the CLINT | C | tb_soc_periph | per-clock checks, clint_decode |
+| REQ-SOCTB-001 | SoC program/bench contract: FINISH at syscon +0x0 with QEMU sifive_test codes (0x5555 pass, (code << 16) | 0x3333 fail, 0x7777 reboot), word stores; EVENT/VALUE/VALUE2 at +0x7F0/+0x7F4/+0x7F8, +0x7FC spare; output drained before FINISH; requires the syscon to leave those words and 0x4004/0xBFF8 RAZ/WI (WO-12 R-MB-1..4) | - | tb_soc_periph (all eight programs) | four negative-control programs (WO-12 acceptance) |
 | REQ-TT-001 | wrapper reset and pins (pinout table) | C | tb_tt_um | pin checks |
 
 ## 2. Audit of the benches as found (at 484ec59)
@@ -123,7 +125,7 @@ broken design. "Mutants" refers to section 4.
 | tb_qspi | memory path | directed shapes, Pmod model protocol checks, shadow arrays | sound for what it covers |
 | tb_qspi_stress | core-shaped traffic | 400k random clocks, shadow memory, resets | no wait bound or traffic floor: a deadlock part-way still printed PASS |
 | tb_uart / tb_gpio | peripherals | spec models, seeds, coverage floors, check counts | sound |
-| tb_soc_periph | SoC + devices | programs, per-clock bus checks | sound for what it covers |
+| tb_soc_periph | SoC + devices | programs, per-clock bus checks | sound for what it covers; could pass broken because the mailbox decoded addr[3:2] only, aliasing the whole syscon window onto four words (closed by WO-12) |
 | tb_tt_um | pins | reset, pins, three resets | sound |
 | test-cpu | "compile and run CPU" (help text) | compiles tb_cpu only | runs nothing |
 | tests/directed run.sh | full-trace Spike compare | ERROR line, DUT-ABORT, empty dump, X, tohost, full trace | the trace prints accesses from WB-stage internals, not the bus: wrong lanes, unreplicated store data or a stray transaction passed unless read back; 99% of each run was memory_model's zero-fill |
@@ -148,7 +150,7 @@ broken design. "Mutants" refers to section 4.
 
 ## 4. Mutation results
 
-249 faults (tb/mutate/mutants.py), runner `python3 tb/mutate/run.py`.
+250 faults (tb/mutate/mutants.py), runner `python3 tb/mutate/run.py`.
 "before" = benches at 484ec59 frozen in build/before (plus only the
 memory_model speed-up and runner knobs); "after" = this branch. Directed
 "after" was rerun only on the 68 before-survivors (the suite only gained
@@ -172,15 +174,15 @@ WO-04 (FC80-85, RFF01-04) were scored on their own (build/mut/wo-*.tsv).
 | formal core_hold / core_req | - | 4/9 and 3/8 of the 11 core mutants tried (9/11 by either; FC22, FC25 survive both: directed covers them) |
 | test-uart (UA mutants of WO-02) | - | 7/7 |
 | test-regfile | 5/5 | 5/5 |
-| directed core | 138/206 | 193/206 |
+| directed core | 138/206 | 193/206 (FC86, added by WO-10, is killed by wfi_umode) |
 | core files, any bench | 155/206 (75%) | 206/216 (95%) |
 | SoC files, any bench | 30/33 (before only) | 31/33 (UA07 killed by WO-02) |
 
-### 4.1 Work orders WO-00 to WO-06 (all closed)
+### 4.1 Work orders WO-00 to WO-06 and WO-10 to WO-12 (all closed)
 
 | WO | What | Result |
 |---|---|---|
-| WO-00 | mutants for resets that work from power-on only (FC80-85) and for rf_fields (RFF01-04) | 10 faults added (249 in all); FC80-85 survived the suite as it was |
+| WO-00 | mutants for resets that work from power-on only (FC80-85) and for rf_fields (RFF01-04) | 10 faults added (249 in all, 250 with FC86 of WO-10); FC80-85 survived the suite as it was |
 | WO-01 A | directed `load_signs`, `wfi_umode`, `pmpaddr_refetch` | kill FC25, FC45, FC32 |
 | WO-01 B | directed `core_reset`: 160 mid-program resets (needs WO-03) | kills FC80, FC82, FC83, FC85 |
 | WO-02 | tb_uart late-break sweep across the 8.5-bit boundary (136 clocks per divisor unit) | UA07 killed (7/7 UA faults) |
@@ -188,13 +190,16 @@ WO-04 (FC80-85, RFF01-04) were scored on their own (build/mut/wo-*.tsv).
 | WO-04 | tb_rf_fields checked against a per-instruction model of the C chapter | RFF01-04 killed (test-decoder 7/7 with DE01-03) |
 | WO-05 | Pmod RAM no longer zero-filled (a 16 MB loop, about 6 s per run); never-written bytes read 0, DUT-written X stays X | wrapper and qspi benches unchanged |
 | WO-06 | formal core harnesses: `core_hold` (k-induction, length 1) and `core_req` (bounded, 10 cycles), register file stubbed with free read data | REQ-MEM-001 proven on both ports; REQ-MEM-002 bounded |
+| WO-10 | `wfi_umode` pinned to the NOP (U-mode WFI with TW=0 never waits); TB-006 handler fix; FC86 added | FC86 and FC45 killed by wfi_umode; core 167/167 (also +RF_X +RF_COLLIDE_X), SoC 101/101 (11f1bb2, d049196, 81934d7) |
+| WO-11 | CLINT window narrowed to 48 KB in the testbench (0x0200_0000-0x0200_BFFF), MEIP hook at 0x0200_8000, pma_edges edge check with a negative control on the old bench, dtb reg 0xc000 | old bench fails pma_edges; FC62 killed by mul_fetchfault, FC63 by pma_edges; Spike identical with and without the dtb; core 167/167, SoC 101/101 (dfdd90a, f2674bd, f6fc76d, 4ef3499) |
+| WO-12 | mailbox moved to syscon +0x7F0, FINISH on the sifive_test codes, UART and SPI drained before FINISH, verdict taken at FINISH | test-soc-periph 8/8, test-wrapper 3/3, four negative controls fail, the 13 SoC mutants still killed (d3cfd91, 28e95bf, 8e59169) |
 
 Correction: commit 0980c78's body says the CSR proof kills seven mutants; it
 lists six (CS01-04, CS07, CS11) and six is the measured number.
 
 ### 4.2 Survivors and verdicts
 
-Faults no current bench kills, 12 of 249: 10 in core files, 2 in SoC files.
+Faults no current bench kills, 12 of 250: 10 in core files, 2 in SoC files.
 None is waived; each is either equivalent (no observable difference) or
 touches behaviour nothing specifies (section 5).
 
@@ -214,6 +219,10 @@ touches behaviour nothing specifies (section 5).
 
 RG01 and RG04 (x0 masked in the core) are killed by test-regfile, so they are
 not survivors; they only cannot be seen from the core.
+
+Spec ambiguities closed on 2026-10-23: SA-004 (CLINT aperture) with the
+testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
+(1a845f5), with the behaviour pinned by wfi_umode (WO-10).
 
 ## 5. Not verified, and why
 
