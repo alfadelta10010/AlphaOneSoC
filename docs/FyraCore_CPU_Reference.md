@@ -153,7 +153,7 @@ wire [31:0] mret_target = csr_mepc;
 |---|---|
 | `tb_rivercore.v` | Lockstep testbench for the verification flow. Emits a Spike-format commit log; CSR values are printed from `cpu.csr_wval`. Watchdogs: `+MAX_INSTR`, `+MAX_CYCLES`, spin detection. |
 | `tb_cpu.v` | Older integration testbench used by `make asm` / `scripts/run_asm_test.sh`. |
-| `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
+| `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook (0x0200_8000). Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
 | `qspi_pmod_model.v` | Behavioural QSPI Pmod (16 MB flash on CS0, PSRAMs on CS1/CS2). Stops the run on any command `qspi_ctrl` should not send, a flash mode byte with M5-4 = 10, PSRAM traffic before its 66h/99h reset or within tRST of it, bus contention, a tCEM/tCPH violation, or an SCK period or high/low time too short for the command. Takes the raw pins with their output enable and models released ones (chip selects pulled up, SCK floating), so a chip select falling before SCK is driven low fails. `+QSPI_DELAY` device delay and `+QSPI_HOLD` output hold (the pins read X between them); hand-over states `+PSRAM_QPI`, `+PSRAM_A_QPI`/`+PSRAM_B_QPI`, `+FLASH_CRM`, `+FLASH_DCRM`, `+FLASH_QPI`; `+PSRAM_WRAP`. |
 | `req_hold_check.v` | Hold-until-done checker for a request handshake. The SoC build (`-DSOC_TB`) checks the core's two ports, the data port at `mem_ctrl` and `mem_ctrl`'s requests to `qspi_ctrl`; `tb_qspi*` check the last. |
 | `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model, including a store aimed at flash that must select no chip; `tb_qspi_stress.v` drives core-shaped request streams, with `+RESETS` dropping resets into them (`make test-qspi`). |
@@ -185,7 +185,7 @@ Address Range               Device      Size    Attributes
 
 The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC ties it to 0x2000_0000, so it always boots from flash. SoC design, boot and QSPI details: `docs/soc-architecture.md`.
 
-The verification testbench uses these windows for flash and PSRAM and boots from PSRAM. It still overrides the CLINT window to Spike's 0xC0000 aperture (0x0200_0000-0x020B_FFFF) and switches IO1 off, because Spike has no device there.
+The verification testbench uses these windows for flash and PSRAM and boots from PSRAM. It narrows the CLINT window to the 48 KB Spike maps (0x0200_0000-0x0200_BFFF; the SoC's is 64 KB and reads 0 above the registers) and switches IO1 off, because Spike has no device there.
 
 ### CLINT Register Map (offsets from 0x0200_0000)
 
