@@ -61,3 +61,9 @@ gpio caught by the SoC smoke; **mem_ctrl on rst (AS06) PASSES it** -- no fetch i
 AS06, WO-15/16 must reboot with a fetch outstanding to kill it. Nit: alphaone_soc.v header omits the hold/off flops
 from "rst resets only ...". WO-22 applied in scratch on 8b29cf8: all four acceptance benches pass exactly (76084).
 Verif WO-14..19 were amended for WO-22 (WO-14 depends on WO-22 code; WO-15 probes +0x200/+0x204; WO-18 WD01-14, AS07).
+
+**WO-22 code review (a133652, diff 7874df1..a133652): APPROVED, no blocking edits.** Equations verbatim (tprev <=
+w_torr | tap is the WO's mux); SA-008 (kick in the fire cycle does not stop the fire) holds since fire has no kick
+term; cause[2] set wins. Re-ran on a git archive: lint 2/6/18 (syscon.v 0), wdt unit 109 PASS, wdt SoC 76084 PASS,
+WO-20 smokes unchanged. Nits only: alphaone_soc.v:28 comment now 103 cols (reflow), syscon.v header "That includes
+the / SoC test mailbox" odd wrap. WO-22 docs commit still waits for WO-21.
