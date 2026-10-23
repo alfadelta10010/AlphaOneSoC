@@ -1,6 +1,6 @@
 ---
 name: finding-syscon-design-2026-10-23
-description: syscon (0x1002_0000) design planned as WO-20 (RTL) / WO-21 (docs) -- reset architecture (rst vs rst_soc), 2-edge reboot hold, strap mux, full decode, Linux/QEMU driver facts, mailbox 12-bit-immediate catch, area 0.087 t
+description: syscon (0x1002_0000) design planned as WO-20 (RTL) / WO-21 (docs) / WO-22 (DW watchdog) -- reset architecture (rst vs rst_soc), 2-edge reboot hold, strap mux, full decode, Linux/QEMU driver facts, mailbox 12-bit-immediate catch, area 0.087 t
 metadata:
   type: project
 ---
@@ -37,3 +37,18 @@ tests/directed/run.sh:96 lists SoC sources explicitly -> new src file needs a te
 reviewing the WO-20 diff, check every block's .rst, the 2-edge hold, writes gated in reset, lint 2/6/18, and run
 the WO-20-acc smoke benches plus mutants (strap-follow, clint-on-rst, one-edge) as I did in scratch.
 Related: [[finding-tt-wrapper-review-2026-10-10]], [[patterns-recurring]].
+
+**User decisions (2026-10-23):** CHIP_ID 0x4131_5301, FAIL halts, no B9h, CLK_GATE/POWER RAZ/WI, RESET_CAUSE
+PIN+SOFT all accepted. Mailbox moved to +0x7F0/+0x7F4/+0x7F8 (+0x7FC spare, periph_access reads it as 0).
+
+**WO-22 watchdog (planned same day, build/wo/WO-22-syscon-watchdog.md, benches in WO-22-acc/):**
+- Chose the Synopsys DW WDT layout at syscon +0x100 (upstream `dw_wdt`, `snps,dw-wdt`, needs only reg+clocks)
+  over a custom keyed reg (+0x068 t, needs ~100-line out-of-tree driver). Same area either way.
+- CR EN write-1-only (DW: driver's stop w/o reset ctrl = HW_RUNNING) = built-in lock; CRR kick 0x76 (8-bit key);
+  TORR TOP[3:0] reset 15, reads {TOP,TOP}; COMP_PARAMS_1 +0xF4 = 0x40 (USE_FIX_TOP); CCVR etc RAZ.
+- Tick = rising edge of mtime[14+TOP] (wdt_tap = mtime[29:14]); 2-bit count, fire on 3rd tick ->
+  reset in (1, 1.5] x 2^(16+TOP); TORR write = kick + tprev forced 1 (else one-tick-early, proven 15 < 16).
+- WDT flops on rst_soc (own reboot disables it; no fire in power-off); RESET_CAUSE[2] on rst, set wins vs W1C.
+- Area: syscon 1625.3 um^2 = 0.144 t, 23 flops; watchdog +0.057 t, +9 flops (1-bit count: +0.049 t).
+- Conflicts: WO-14 sweep writes +0x100 (arms it) and must drive wdt_tap (Z -> X on rst_soc); WO-15 alias list
+  has +0x100/+0x104. Recommended landing WO-22 code right after WO-20, before WO-14.
