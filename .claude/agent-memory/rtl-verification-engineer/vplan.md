@@ -150,3 +150,36 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   run.sh line-96 `syscon` token belongs in WO-20's wiring commit.
 - Order caveat: land WO-10/11 before WO-20 starts or after its A6 (it diffs
   run.sh soc dumps base vs head).
+
+## 2026-10-23 evening: reviews and amendments
+- WO-11 review (dfdd90a f2674bd f6fc76d 4ef3499 on 81934d7): APPROVED. Checked:
+  committed dtb == dtc(new dts); pma_edges.ref == my probe ref; no stale
+  window/hook address in tb/, tests/directed, plugins (left by design:
+  ROADMAP 1.5 -> WO-13; fyracore.v:45 comment -> designer; core_reset's
+  0x0200C000 is a base for -8 = mtime). Haiku: core 167/167 (+RF_X too),
+  SoC 101/101, old bench fails pma_edges at line 68, FC62/FC63 killed.
+  Non-blocking: pma_edges.S header line 11 too wide; memory_model checker
+  comment mis-wrapped; tb_rivercore comment cites untracked
+  build/wo/probes/clint-offsets.S (my WO's wording) -- describe in words.
+- WO-22 (designer, user-added watchdog) amendments made in place to
+  WO-14..19 (each says so at its top): SYS-014..018; A14-A17; unit bench
+  drives wdt_tap (scaled counter), all 16 TOPs, sweep skips the window then
+  sweeps it last + pin reset; WO-15 bench predicts fires from soc.mtime,
+  alias probes drop bit 8 (+0x100/+0x104 are CR/TORR; use +0x200.., +0x300..),
+  new syscon_wdt (TOP 0 real scale: reboot in (65536, 98305] clocks,
+  RESET_CAUSE 0x5 after); WO-16 power-off arms the watchdog, 200k-clock
+  watch, pin reset inside a watchdog hold (phases by GPIO IN[7:6]); WO-17
+  tt_reboot gains a watchdog boot ('w', next boot reports 0x07); WO-18 41
+  faults (SY01-20, WD01-14, AS01-07; --check total 291); WO-19 depth 24,
+  miter lets wdt_tap differ, third harness syscon_wdt (tap = counter,
+  never-early for TOP 0-1). Order: WO-20 -> WO-22 code -> WO-14..19.
+- WO-12 review (d3cfd91 28e95bf 8e59169 on 4ef3499): APPROVED. Matches the
+  WO: periph.h defines (0x000/0x7F0/0x7F4/0x7F8/0x7FC, FINISH_* codes),
+  DRAIN (TEMT + OUT rewrite), EPILOGUE (code<<16|0x3333, drain, sw), exact
+  decode with lane check, verdict at FINISH (rx_fin/oled_fin/res_fin),
+  checkers on rst || done (done declared above them), periph_access probe
+  at MB_SPARE, clint_decode comments. The `done` race at the FINISH edge is
+  harmless: power-off resets the core at E1 and the checkers see done by E1.
+  Non-blocking: periph_access.S header lines 3-4 mis-wrapped (113 chars).
+  Coder's checks: test-soc-periph 8 PASS, wrapper 3 PASS, 4 negative
+  controls FAIL as expected, 13 SoC mutants still killed (same kinds).

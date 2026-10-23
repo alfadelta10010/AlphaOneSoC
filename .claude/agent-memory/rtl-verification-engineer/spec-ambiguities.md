@@ -58,3 +58,18 @@
   alphaone_soc (ROADMAP sketched it in tt_um). FINISH acts on be[1:0]==11
   only, so a replicated `sb 0x77` (wdata 0x77777777, be 0001) does nothing:
   the hazard I raised is closed by that rule.
+  RESOLVED 2026-10-23 (evening), user: CHIP_ID 0x4131_5301; FAIL halts like
+  power-off; no B9h; CLK_GATE/POWER reserved RAZ/WI; RESET_CAUSE PIN + SOFT
+  + WDT; watchdog ADDED (WO-22: DesignWare dw_wdt layout at syscon
+  +0x100..+0x1FF, 2-bit tick counter, never early / at most 1.5x late,
+  CCVR reads 0, timebase mtime[29:14] via input wdt_tap, flops on rst_soc,
+  RESET_CAUSE[2] on rst). WO-14 table: A4-A9, A13 user-confirmed; A14-A17
+  added.
+- SA-008 (2026-10-23) Watchdog boundary: under WO-22's rule (fire = en &
+  tick & cnt==2, decided from the count before that cycle's clear) a kick
+  or TORR write in the very cycle of the third tick does not stop the fire.
+  "Never early" still holds when measured from the last clear BEFORE the
+  fire cycle. Linux pings at half the timeout, so it never meets the case.
+  Coordinator told the user "the fire wins" stays unless they want "a kick
+  always wins"; no change yet. WO-14's model and one directed case follow
+  WO-22; only those change if the user decides otherwise.
