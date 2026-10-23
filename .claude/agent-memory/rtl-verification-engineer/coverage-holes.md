@@ -9,3 +9,8 @@
   RX to rise exactly on the mid-bit-9 sample of the counted low line.
 - SoC-file "after" mutation campaign not run (only "before": test-qspi
   kills every MC/QS; soc-level benches are weak on the memory path).
+- (2026-10-23) AS06-class holes: a reset that cuts a transaction is only as
+  good as the state it lands on. mem_ctrl's `second` (split-fetch second
+  half pending) is reachable at a reset only via an asynchronous-to-program
+  source (watchdog, pin); WO-15 syscon_wdt_split covers it with floors on
+  "split second half in flight" and "data in flight" at E1.

@@ -183,3 +183,27 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   Non-blocking: periph_access.S header lines 3-4 mis-wrapped (113 chars).
   Coder's checks: test-soc-periph 8 PASS, wrapper 3 PASS, 4 negative
   controls FAIL as expected, 13 SoC mutants still killed (same kinds).
+
+## 2026-10-23 late: reconcile before WO-14 (syscon verification next, user's choice)
+- Committed: WO-20 8d54e14 + 8b29cf8, WO-22 a133652, docs 54a0cb5..23a0980,
+  e5868dc, c0cbd49 (HEAD). WO-10..13 also landed (11f1bb2 d049196 81934d7;
+  dfdd90a..4ef3499; d3cfd91 28e95bf 8e59169; 9dd59de 7834aee d42833a).
+- syscon.v as built: ports clk rst rst_soc sel we be[3:0] addr[15:2]
+  wdata rdata strap_rd_late rd_late wdt_tap[15:0]; flops rq rq2 off strap_q
+  cause[2:0] boot_mode[7:0] (on rst), en top[3:0] cnt[1:0] tprev (on
+  rst_soc); hit = addr[15:5]==0, whit = addr[15:8]==1; tprev <= w_torr|tap;
+  fire = en & tick & cnt==2 (kick/TORR in the fire cycle do not stop it:
+  SA-008). alphaone_soc: soc.rst_soc, soc.mtime[63:0], soc.syscon_inst,
+  instances cpu bus memc qspi clint_inst uart_inst gpio_inst.
+- Exact mutant catalogue: build/wo/probes/syscon_mutants_draft.py (42:
+  SY01-20, WD01-15, AS01-07), each find once at c0cbd49, all compile.
+  Designer smokes (WO-20-acc, WO-22-acc) miss SY03 SY12 WD11 AS06.
+- AS06 (mem_ctrl on rst) only shows when a reboot lands while mem_ctrl's
+  `second` flop is set (between the halves of a PSRAM fetch split at a 1 KB
+  page): the stale flop replays a bogus second half as the next boot's
+  first fetch. FINISH reboots never land there (store completes ~4 clocks
+  into the next fetch); a pin reset clears mem_ctrl, so power-off can't
+  show it. Probe (build/wo/probes/wdt_split_reboot.S, tb_wdt_split.v):
+  watchdog reboots while spinning on `j .` at 0x800003FE: RTL 12/12 recover
+  (8 with second=1); AS06 hangs after the first. -> WO-15 syscon_wdt_split.
+- WO-14 ready: all dependencies merged.
