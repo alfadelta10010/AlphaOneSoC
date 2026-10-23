@@ -16,7 +16,7 @@ apart, this document says which one won and why.
 | PLIC | `0x0C00_0000` | — | reserved, not implemented (accesses fault) | — |
 | UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550-compatible subset, byte registers, polled (`docs/pins-and-peripherals.md`) |
 | GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v`: GPIO and the OLED's SPI transmitter (`docs/pins-and-peripherals.md`) |
-| syscon | `0x1002_0000` | 64 KB | read, write, AMO | reserved (reads 0) |
+| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps (section "syscon") |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
 7) from the core's PMA check, before anything reaches the bus. The windows are
@@ -60,6 +60,13 @@ QSPI bus goes quiet, since 0 is outside every window. Erased flash
 (`0xFFFFFFFF`, an illegal instruction) at the reset vector ends this way.
 Kept at 0 by decision (2026-09-29); the first thing boot code does is set
 `mtvec`.
+
+**A reboot restarts the SoC from flash exactly as a pin reset does.** A write
+of `0x7777` to syscon's FINISH register holds the SoC in reset for two clock
+edges (the shortest pin reset), releases the QSPI pins for those two clocks
+and re-runs the start-up sequence. What it keeps is RESET_CAUSE (SOFT is
+added), BOOT_MODE and the `rd_late` strap, which the flash loader reads to
+decide what to boot (section "syscon").
 
 ## Bus fabric
 
@@ -165,7 +172,9 @@ enters continuous-read mode) and releases the bus for the other four.
   3x4 harden closes at) and near 66 MHz use 1. It is a
   strap rather than a register because flash reads must work before any
   software runs, and it is sampled during reset and held, so a pin that
-  changes later cannot move the sampling point mid-read. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
+  changes later cannot move the sampling point mid-read. syscon latches it at
+  the pin reset and holds it through reboots and power-off (a reboot does not
+  re-read `ui_in[0]`, which is GPIO by then); software reads it in STRAPS. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
   1 passes 12–29 ns.
 * **Writes never select the flash.** `0x38` is the PSRAM's quad write, but
   on the W25Q128JV-DTR it is Enter QPI. The PMA already faults stores to
@@ -207,7 +216,9 @@ Not undone, and so the job of whatever programs the flash: a flash burst
 wrap set with `77h`, deep power-down (`B9h`), and a cleared Quad Enable bit
 (the "IM" part ships with QE = 0).
 
-**Board prerequisites.** While reset is held the chip selects are released;
+**Board prerequisites.** While reset is held the chip selects are released
+(also for two clocks at every reboot, and for as long as the chip is powered
+off);
 the Pmod's 10 kΩ pull-ups (R1–R3) keep every chip deselected. The data lines
 have no pull-ups. The TinyTapeout wrapper
 (`src/tt_um_alfadelta10010_alphaone_soc.v`) makes this reset from `rst_n`: set
@@ -249,6 +260,222 @@ reset (`docs/pins-and-peripherals.md`).
   "eventually, but not necessarily immediately". Linux's CLINT driver sets
   MTIE before it writes `mtimecmp` (low word, then high), with MIE off, and
   the handler clears MTIE, so the extra cycle is invisible to it.
+
+## syscon (`src/syscon.v`)
+
+One small register block at `0x1002_0000`: reboot, power-off, the simulation
+exit code, the reset cause, a boot-mode note that survives a reboot, the chip
+ID and the read-sampling strap. It is what Linux's generic `syscon`,
+`syscon-poweroff`, `syscon-reboot` and `syscon-reboot-mode` drivers point
+into.
+
+| Offset | Name | Access | After a pin reset | At a reboot |
+|---|---|---|---|---|
+| +0x00 | FINISH | W; reads 0. A store with byte lanes 0 and 1 both written (`sh` or `sw`) acts on `wdata[15:0]`: `0x7777` reboot, `0x5555` power-off, `0x3333` fail (halts like power-off; `wdata[31:16]` is a code for the testbench). Any other value, or a narrower store, does nothing | - | - |
+| +0x04 | RESET_CAUSE | R / W1C, lane 0. [0] PIN, [1] SOFT | `0x1` | SOFT set, PIN kept |
+| +0x08 | BOOT_MODE | R/W, lane 0, [7:0] | `0x00` | kept |
+| +0x0C | CHIP_ID | R, the `CHIP_ID` parameter | `0x4131_5301` | - |
+| +0x10 | STRAPS | R, [0] = `qspi_rd_late` as latched at the last pin reset | the pin | kept |
+| +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
+| +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
+| +0x1C | - | reads 0, writes ignored | - | - |
+| +0x20..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
+
+CHIP_ID is ASCII "A1S" in [31:8] and the silicon revision `0x01` in [7:0].
+
+**The whole 64 KB window is decoded.** Only +0x00..+0x1C are registers; every
+other word reads 0 and ignores writes, with no alias of any register at any
+offset. That includes the SoC test mailbox words at +0x7F0 (EVENT), +0x7F4
+(VALUE), +0x7F8 (VALUE2) and +0x7FC (spare), which the testbench watches on
+the core's data port (`tests/soc/periph.h`) and the hardware ignores. They sit
+below +0x800 because a store offset is a 12-bit signed immediate, so
+`sw x, 0x7F0(s11)` assembles from the same base as the real registers and
++0xF00 would not. syscon never holds `ready` low, so `soc_bus` needs no ready
+port for it.
+
+### Two resets
+
+`alphaone_soc` has two resets. `rst` is the chip's reset (`rst_n` through the
+wrapper). `rst_soc = rst | rq | off`, an output of syscon, is the reset of
+every other block.
+
+| Reset | Blocks on it | Why |
+|---|---|---|
+| `rst` | syscon's RESET_CAUSE, BOOT_MODE, strap flop, and the reboot and power-off flops (`rq`, `rq2`, `off`) | These must survive a reboot, and syscon must not reset itself in the middle of the write that asked for it |
+| `rst_soc` | the core | A reboot restarts it at the reset vector |
+| | `mem_ctrl` | It holds the old core's outstanding fetch |
+| | `qspi_ctrl` | It must abort the transaction a reboot cuts and re-run its start-up sequence, so every device is back in a known mode |
+| | the CLINT | `mtimecmp` must come back all-ones and `msip` 0, so no interrupt is pending at boot |
+| | the UART | A break (`LCR.SBC`) must drop and the divisor return to its reset value for the boot loader |
+| | the GPIO block | The OLED must go back into reset with its panel supply off, and a half-sent SPI byte must stop |
+
+`rst_soc` is a function of `rst` and flops alone, nothing from the bus, and is
+used only as a synchronous reset (the only asynchronous resets in `src/` are
+the wrapper's own `rst_n` flops). syscon's bus writes are ignored while
+`rst_soc` is high. The reset tree gains one OR at its root.
+
+The generator is in the SoC, not in the wrapper: `alphaone_soc`'s ports do not
+change, the SoC benches can test a reboot without the wrapper, and the
+hardened wrapper is untouched.
+
+### Reboot
+
+A store of `0x7777` to FINISH sets `rq`, which holds `rst_soc` for exactly two
+clock edges, the same as the shortest pin reset (the wrapper releases `rst` on
+the second edge after `rst_n` rises). Every block therefore restarts from the
+state it was already verified to start from. `rq` is a single flop held high
+across both edges; its timer `rq2` does not feed the OR, so there is no
+two-flop hand-over on the reset.
+
+| Edge | `rst_soc` before it | At the edge |
+|---|---|---|
+| E0 | 0 | The store completes; `rq` <- 1, RESET_CAUSE.SOFT <- 1 |
+| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0x39`, pc <- the reset vector; `rq2` <- 1 |
+| E2 | 1 | Still in reset; `rq` <- 0, `rq2` <- 0 |
+| E3 | 0 | First running edge: `ctl_oe` <- 1 (SCK and the chip selects driven idle), the start-up sequence starts 8 clocks later, the core fetches `0x2000_0000` |
+
+That is the shape of a pin reset after `rst_n` rises. In the acceptance run
+(a flash-booted program that reboots once, `tb_soc_reboot`) both boots read
+`mtime` as 531 at the same instruction, so the reboot restarts cycle for cycle
+like a pin reset, and `ctl_oe` was low for 2 cycles. Two edges are the shortest
+reset the blocks were verified with; nothing needs more.
+
+### Power-off
+
+A store of `0x5555` (or the fail value `0x3333`) sets `off`, which holds
+`rst_soc` until `rst`:
+
+* The QSPI pins are released. The Pmod's 10 kΩ pull-ups hold every chip
+  select high, so the flash and both PSRAMs deselect and drop to standby.
+* `uo_out` = `0x39`: UART idle, RTS# not ready, the OLED in reset with its
+  panel supply off.
+* The clock keeps running. Nothing gates a clock yet, so only the clock tree
+  and the flops' clock pins toggle; `mtime` stops, because the CLINT is in
+  reset.
+* Only `rst_n` wakes it.
+
+**There is no flash deep power-down (`B9h`).** Waking the flash needs `ABh`
+and tRES1 (3 µs, about 190 clocks) in the start-up sequence, which is a new
+long counter in `qspi_ctrl`. A flash left in deep power-down is hidden state
+on a Pmod shared between designs, which the next design or the RP2040's
+programmer may not undo (`qspi_ctrl.v`'s header already lists `B9h` among the
+states we leave alone). And the gain is microamps, on a chip whose clock keeps
+running.
+
+### FINISH
+
+FINISH follows QEMU's `sifive_test` (`hw/misc/sifive_test.c`): only offset 0
+acts, `status = val & 0xffff`, `code = val >> 16`; `0x3333` is FAIL, `0x5555`
+PASS and `0x7777` RESET; reads return 0. The benches therefore use the same
+codes as software built for QEMU's `virt` machine. syscon acts on a store
+whose lanes 0 and 1 are both written (`sh` or `sw`), as `sifive_test` accepts
+2- and 4-byte accesses. FINISH reads 0 because Linux's `regmap_update_bits()`
+reads the register before it writes and skips the write if the value would not
+change: reading back `0x5555` or `0x7777` would make the driver do nothing.
+
+### RESET_CAUSE
+
+There are two bits, PIN and SOFT. **There is no power-on bit:** TinyTapeout
+has no power-on-reset cell, and a power-on is always followed by an `rst_n`
+pulse from the board, so the chip cannot tell it from a pin reset. Both bits
+are sticky and cleared only by writing 1 to them (lane 0) or by the pin reset
+that sets PIN again. A reboot sets SOFT and keeps what was there, so after a
+reboot the register reads `0x3` unless software cleared PIN first.
+
+### BOOT_MODE and reboot-mode
+
+BOOT_MODE is a byte software writes before it reboots; the flash loader reads
+it after to decide what to boot. A pin reset clears it. Linux's
+`syscon-reboot-mode` writes a mode's magic to it before calling the restart
+handler. `reboot-mode.c` never writes a magic of 0, so the device tree's modes
+are 1 and 2: BOOT_MODE 0 then means "pin reset, or no mode written", and a
+"normal" reboot after a "bootloader" one does overwrite it.
+
+### CLK_GATE and POWER
+
+Reserved: they read 0 and ignore writes, instead of the R/W registers
+`docs/ROADMAP.md` 1.2 proposed. No clock-gate cell is used anywhere yet (the
+one ICG attempt failed TinyTapeout's lint with a multiple-driver error and
+grew hold buffers), and ROADMAP 6.2 puts power measurement before any gating.
+A register with no function would be flops and an ABI nobody can define. The
+offsets are kept so the map does not move when they arrive.
+
+### Strap
+
+syscon owns the `qspi_rd_late` strap flop, loaded on every edge while `rst` is
+high (the same window as before syscon existed) and drives `qspi_ctrl`'s
+`rd_late` input: the live pin while `rst` is high, the latched value
+otherwise. `qspi_ctrl.v` is unchanged: its `late` flop still reloads whenever
+its reset is high, but during a reboot it sees the latched value, not
+`ui_in[0]`, which is GPIO by then. A scratch run flipped the pin at a reboot
+and the second boot still read flash; a version that follows the pin hangs in
+the second boot.
+
+### Area
+
+syscon alone is **0.087 tile, 14 flops** (`rq`, `rq2`, `off`, the strap flop,
+`cause[1:0]`, `boot_mode[7:0]`), from the audit's yosys recipe with the TT cell
+set (979.7 µm²; `docs/area-audit.md`), about 0.09 tile in context, within the
+0.5-tile budget `docs/ROADMAP.md` allows for new RTL. The reset tree's extra OR
+at its root is the one thing a harden should check, at the slowest corner.
+
+### Linux
+
+Device tree. `reg` is for a root with `#address-cells = <1>`; with `<2>` it is
+`<0x0 0x10020000 0x0 0x20>`.
+
+```dts
+syscon: syscon@10020000 {
+    compatible = "alfadelta10010,alphaone-syscon", "syscon", "simple-mfd";
+    reg = <0x10020000 0x20>;
+    reg-io-width = <4>;
+
+    poweroff {
+        compatible = "syscon-poweroff";
+        offset = <0x0>;
+        value = <0x5555>;
+    };
+
+    reboot {
+        compatible = "syscon-reboot";
+        offset = <0x0>;
+        value = <0x7777>;
+    };
+
+    reboot-mode {
+        compatible = "syscon-reboot-mode";
+        offset = <0x8>;
+        mask = <0xff>;
+        mode-normal = <0x1>;
+        mode-bootloader = <0x2>;
+    };
+};
+```
+
+* `syscon-reboot-mode` must be a child of a `"syscon", "simple-mfd"` node (its
+  binding, `syscon-reboot-mode.yaml`). `syscon-reboot` and `syscon-poweroff`
+  take the parent's regmap when they have no `regmap` phandle (current
+  `syscon-reboot.c` and `syscon-poweroff.c`); an older kernel may need
+  `regmap = <&syscon>;` in those two nodes, the form KianV's 6.8 device tree
+  uses. Check the target kernel.
+* `reg` covers the 8 implemented words only (`max_register = 0x1C`), so Linux
+  cannot reach the mailbox.
+* The modes are 1 and 2 because `reboot-mode.c` never writes 0 (see
+  BOOT_MODE above).
+* Kernel options: `CONFIG_MFD_SYSCON`, `CONFIG_POWER_RESET`,
+  `CONFIG_POWER_RESET_SYSCON`, `CONFIG_POWER_RESET_SYSCON_POWEROFF`,
+  `CONFIG_REBOOT_MODE`, `CONFIG_SYSCON_REBOOT_MODE`.
+* The `alfadelta10010` vendor prefix is not registered. That is fine for an
+  out-of-tree device tree; `checkpatch` only warns.
+
+### Verification
+
+syscon is unreachable in the lockstep benches: they switch the IO window off
+because Spike has no device at `0x1002_0000`, so a syscon access faults in the
+DUT and in Spike alike, `rst_soc` equals `rst`, and the `run.sh soc` traces
+are byte-identical with and without the block. Its tests are DUT-only, through
+the SoC benches. Spike's device tree for the golden Linux boot leaves the
+syscon node out (a Spike MMIO plugin, `--extlib`, could stand in later).
 
 ## Linux
 
@@ -343,9 +570,9 @@ tiles for a 4x2 slot. The yosys recipe the audit uses to rank cuts gives
 10.07 tiles: it lets yosys use cells LibreLane excludes, so its figures run
 about 20-24% low. The largest blocks, hierarchical with TT's cells: register
 file 3.68, CSR 2.65, core glue 2.67, muldiv 0.93 tiles. The SoC blocks added
-here cost about 0.7 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
-the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus
-mostly folds away). No harden of the SoC has completed yet (hold buffers on
+here cost about 0.8 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
+the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12, syscon
+0.09 with 14 flops; soc_bus mostly folds away). No harden of the SoC has completed yet (hold buffers on
 the register file's enable loops stop detailed placement; see "TinyTapeout
 flow check" in `docs/area-audit.md`); fit and timing are settled in the
 TinyTapeout submission repository.
