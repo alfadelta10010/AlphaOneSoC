@@ -100,7 +100,7 @@ E = eventual, A = architectural (no clock count).
 | REQ-UART-* | 16550 subset (pins-and-peripherals 2) | C | tb_uart | spec models |
 | REQ-GPIO-* | GPIO + SPI mode 3 (pins-and-peripherals 3-4) | C | tb_gpio | spec models |
 | REQ-BUS-001 | an IO target drops ready only while selected; only a CLINT store writes the CLINT | C | tb_soc_periph | per-clock checks, clint_decode |
-| REQ-SOCTB-001 | SoC program/bench contract: FINISH at syscon +0x0 with QEMU sifive_test codes (0x5555 pass, (code << 16) | 0x3333 fail, 0x7777 reboot), word stores; EVENT/VALUE/VALUE2 at +0x7F0/+0x7F4/+0x7F8, +0x7FC spare; output drained before FINISH; requires the syscon to leave those words and 0x4004/0xBFF8 RAZ/WI (WO-12 R-MB-1..4) | - | tb_soc_periph (all eight programs) | four negative-control programs (WO-12 acceptance) |
+| REQ-SOCTB-001 | SoC program/bench contract: FINISH at syscon +0x0 with QEMU sifive_test codes (0x5555 pass, (code << 16) \| 0x3333 fail, 0x7777 reboot), word stores; EVENT/VALUE/VALUE2 at +0x7F0/+0x7F4/+0x7F8, +0x7FC spare; output drained before FINISH; requires the syscon to leave those words and 0x4004/0xBFF8 RAZ/WI (WO-12 R-MB-1..4) | - | tb_soc_periph (all eight programs) | four negative-control programs (WO-12 acceptance) |
 | REQ-TT-001 | wrapper reset and pins (pinout table) | C | tb_tt_um | pin checks |
 
 ## 2. Audit of the benches as found (at 484ec59)
