@@ -38,7 +38,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-seeds \
+        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
         test-qspi test-uart test-gpio test-soc-periph \
         test-wrapper asm \
         rivercore-build rivercore-test
@@ -57,6 +57,7 @@ help:
 	@echo "  make test-controller   Run controller testbench"
 	@echo "  make test-regfile      Run register file testbench"
 	@echo "  make test-csr          Run CSR testbench"
+	@echo "  make test-syscon       Run syscon + watchdog testbench"
 	@echo "  make test-compressed   Run compressed decoder testbench"
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
@@ -156,11 +157,16 @@ test-clint: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_clint $(SRC_DIR)/clint.v $(SRC_DIR)/csr.v $(TB_DIR)/tb_clint.v
 	@$(call run_tb,tb_clint)
 
+test-syscon: $(BUILD_DIR)
+	@echo "=== Testing syscon + watchdog ==="
+	@$(IVERILOG) -I $(TB_DIR) -o $(BUILD_DIR)/tb_syscon $(SRC_DIR)/syscon.v $(TB_DIR)/tb_syscon.v
+	@$(call run_tb,tb_syscon)
+
 # The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
 # Each bench prints its seed; rerun one failure with its +SEED=.
 SEEDS ?= 1 2 3 4 5 6 7 8
-SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_uart tb_gpio
-test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-uart test-gpio
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio
 	@for s in $(SEEDS); do for t in $(SEEDED); do \
 		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
 		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
@@ -267,7 +273,7 @@ test-wrapper: $(BUILD_DIR)
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_pins.log || ! grep -q '^PASS' tt_pins.log; then exit 1; fi; \
 		done
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-qspi test-uart test-gpio test-soc-periph test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-soc-periph test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
