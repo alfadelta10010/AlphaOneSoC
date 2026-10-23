@@ -108,6 +108,22 @@ checked in torvalds/master 2026-10-23) runs it unchanged:
 
 ### 1.2 syscon (0x1002_0000)
 
+**Status (2026-10-23): built** as `src/syscon.v` (`8d54e14`) and wired into
+`alphaone_soc` (`8b29cf8`); the as-built map and reset architecture are in
+`docs/soc-architecture.md`, section "syscon". It departs from the proposal
+below in these ways:
+
+* CLK_GATE (+0x14) and POWER (+0x18) are reserved: they read 0 and ignore
+  writes (no clock gating exists yet; section 6).
+* RESET_CAUSE has PIN and SOFT only. TinyTapeout has no power-on-reset cell,
+  so power-on cannot be told from a pin reset.
+* FAIL (`0x3333`) halts the chip like power-off.
+* There is no flash deep power-down (`B9h`) at power-off.
+* The reset generator is in `alphaone_soc`, not in the wrapper, so the
+  wrapper and the SoC's ports are unchanged.
+* The test mailbox landed at +0x7F0, +0x7F4, +0x7F8 (+0x7FC spare), as below.
+* CHIP_ID is `0x4131_5301`.
+
 Linux needs nothing more than a generic register block with the `syscon`
 compatible; the functions come from small generic drivers that point into it.
 
