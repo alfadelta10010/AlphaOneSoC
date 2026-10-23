@@ -10,7 +10,7 @@
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPI DATA / SPI CTRL (src/gpio.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
-//                        straps (src/syscon.v)
+//                        straps, watchdog at +0x100 (src/syscon.v)
 //
 // Chip pins (docs/pins-and-peripherals.md): the UART's TX and RTS# are
 // uo_out[4] and [5], and RX is ui_in[3]; gpio_out drives the other six
@@ -25,7 +25,7 @@
 // it at the pin reset and hands qspi_ctrl the latched value during a reboot.
 //
 // Two resets: `rst` (the chip's reset) resets only syscon's sticky state
-// (RESET_CAUSE, BOOT_MODE, the strap); syscon's rst_soc = rst | reboot |
+// (RESET_CAUSE, BOOT_MODE, the strap, the reboot / power-off flops); syscon's rst_soc = rst | reboot |
 // power-off resets every other block. A reboot (FINISH 0x7777) holds rst_soc
 // for two clock edges, as the shortest pin reset does; power-off (0x5555, or
 // 0x3333 fail) holds it until rst.
@@ -155,7 +155,8 @@ module alphaone_soc #(
         .wdata        (dmem_wdata),
         .rdata        (syscon_rdata),
         .strap_rd_late(qspi_rd_late),
-        .rd_late      (qspi_late)
+        .rd_late      (qspi_late),
+        .wdt_tap      (mtime[29:14])
     );
 
     // ── Memory controller + QSPI engine ─────────────────────────────────────
