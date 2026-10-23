@@ -14,8 +14,10 @@
 // flash (about 57 clocks per instruction), so back-pressure really stalls.
 //
 // Programs (tests/soc/*.S) talk to the testbench through a mailbox in the
-// reserved syscon window (tests/soc/periph.h): FINISH (QEMU's sifive_test
-// codes: 0x5555 pass, (code << 16) | 0x3333 fail), EVENT (a cue), VALUE and VALUE2. +TEST=<name>
+// syscon window (tests/soc/periph.h): FINISH at +0x000 (QEMU's sifive_test
+// codes: 0x5555 pass, (code << 16) | 0x3333 fail, a word store), EVENT (a
+// cue), VALUE and VALUE2 at +0x7F0 / +0x7F4 / +0x7F8, decoded exactly;
+// every other syscon word is not the mailbox. +TEST=<name>
 // picks the test's cues and final checks; +FLASH_FILE=<hex> (read by the
 // Pmod model) is its program; +MAX_CYCLES=<n> the time limit.
 //
@@ -222,13 +224,21 @@ module tb_soc_periph;
     endtask
 
     always @(posedge clk)
-        if (!rst && mb)
-            case (soc.dmem_addr[3:2])
-                2'd0: if (!done) finish(soc.dmem_be, soc.dmem_wdata);
-                2'd1: on_event(soc.dmem_wdata);
-                2'd2: begin value = soc.dmem_wdata; on_value(soc.dmem_wdata); end
-                2'd3: value2 = soc.dmem_wdata;
-            endcase
+        if (!rst && mb && !done) begin
+            if (soc.dmem_addr[15:0] == 16'h0000) finish(soc.dmem_be, soc.dmem_wdata);
+            else if (soc.dmem_addr[15:0] == 16'h07F0 || soc.dmem_addr[15:0] == 16'h07F4 ||
+                     soc.dmem_addr[15:0] == 16'h07F8) begin
+                if (soc.dmem_be !== 4'b1111)
+                    fail($sformatf("%s: mailbox +%h written with lanes %b (want a word store)",
+                                   test, soc.dmem_addr[15:0], soc.dmem_be));
+                else case (soc.dmem_addr[3:2])
+                    2'd0: on_event(soc.dmem_wdata);
+                    2'd1: begin value = soc.dmem_wdata; on_value(soc.dmem_wdata); end
+                    default: value2 = soc.dmem_wdata;
+                endcase
+            end
+            // +0x7FC (spare) and every other word: not the mailbox
+        end
 
     // ── Expected outputs ────────────────────────────────────────────────────
     function automatic string want_uart;

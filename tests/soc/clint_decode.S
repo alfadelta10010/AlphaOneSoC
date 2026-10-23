@@ -20,8 +20,8 @@
 #                          as at reset)                mtime[63:32]
 #   UART   +0x4004, +0xBFFC  word stores to offsets 4-7: MCR, LSR, MSR, SCR,
 #                          all ignored                 mtimecmp[63:32], mtime[63:32]
-#   syscon +0x4004 EVENT <- 0 (no cue for this test)   mtimecmp[63:32]
-#          +0xBFF8 VALUE <- 0xF0000000 (no check)      mtime[31:0]
+#   syscon +0x4004 <- 0, +0xBFF8 <- 0xF0000000: words the syscon does not
+#          implement (RAZ/WI, WO-12 R-MB-2)            mtimecmp[63:32], mtime[31:0]
 #   PSRAM  +0x0000 <- 1, +0x4000 <- 0x5, +0xBFFC <- 0x200
 #
 # Failure codes: 0x1xx msip, 0x2xx mtimecmp, 0x3xx mtime, 0x4xx mip.
@@ -87,11 +87,11 @@ _start:
 
     li   t1, 0x4004
     add  t1, s11, t1
-    sw   zero, 0(t1)             # syscon EVENT 0
+    sw   zero, 0(t1)             # syscon +0x4004: RAZ/WI
     li   t1, 0xBFF8
     add  t1, s11, t1
     li   t0, 0xF0000000
-    sw   t0, 0(t1)               # syscon VALUE
+    sw   t0, 0(t1)               # syscon +0xBFF8: RAZ/WI
 
     li   s6, 0x80000000
     li   t0, 1

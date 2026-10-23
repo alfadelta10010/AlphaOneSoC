@@ -1,7 +1,7 @@
 # Every access shape the core can make, aimed at the peripherals: byte,
 # halfword and word loads and stores, AMOs, the 64 KB window aliases,
-# misaligned accesses (which trap before reaching the bus), and the syscon
-# window. The core drives dmem_be on loads too, so a load's width decides
+# misaligned accesses (which trap before reaching the bus), and a syscon word no
+# hardware implements (the mailbox's spare word). The core drives dmem_be on loads too, so a load's width decides
 # which registers it touches: only a load covering offset 0 pops RBR, only
 # one covering offset 5 clears OE.
 #
@@ -144,8 +144,10 @@ _start:
     lbu  t0, RBR(s0)
     CHECK t0, 'm', 0x132
 
-    # ---- syscon reads 0 ----
-    lw   t0, 0x10(s11)
+    # ---- a syscon word no hardware implements reads 0, ignores writes ----
+    li   t0, 0x5A5A5A5A
+    sw   t0, MB_SPARE(s11)
+    lw   t0, MB_SPARE(s11)
     CHECK t0, 0, 0x138
 
     # ---- GPIO ----

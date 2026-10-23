@@ -1,17 +1,20 @@
 /* Shared definitions for the SoC peripheral tests (tb/tb_soc_periph.v).
  *
  * The programs boot from flash (link.ld) and talk to the testbench through
- * a mailbox in the reserved syscon window, which the SoC ignores: the
- * testbench watches the core's data port for stores there.
+ * word stores to the syscon window, which the testbench watches on the
+ * core's data port. s11 holds SYSCON in every program.
  *
- *   SYSCON + 0x0  FINISH  QEMU sifive_test codes: 0x5555 pass,
- *                         (code << 16) | 0x3333 fail with code 1..0xFFFF,
- *                         0x7777 reboot (never written here)
- *   SYSCON + 0x4  EVENT   a test-specific cue to the testbench
- *   SYSCON + 0x8  VALUE   a value for the testbench to check
- *   SYSCON + 0xC  VALUE2  a second one (on a failure: the value seen)
+ *   SYSCON + 0x000  FINISH  QEMU sifive_test codes: 0x5555 pass,
+ *                           (code << 16) | 0x3333 fail with code 1..0xFFFF,
+ *                           0x7777 reboot (never written here)
+ *   SYSCON + 0x7F0  EVENT   a test-specific cue to the testbench
+ *   SYSCON + 0x7F4  VALUE   a value for the testbench to check
+ *   SYSCON + 0x7F8  VALUE2  a second one (on a failure: the value seen)
+ *   SYSCON + 0x7FC  spare   ignored by the testbench
  *
- * s11 holds SYSCON in every program.
+ * The syscon decodes its offsets in full: 0x7F0-0x7FC read 0, ignore writes
+ * and alias no register (WO-12 R-MB-1). The words sit below 0x800 so a
+ * 12-bit store offset reaches them from SYSCON.
  */
 #define UART      0x10000000
 #define GPIO      0x10010000
@@ -19,10 +22,11 @@
 #define MTIMECMP  0x02004000
 #define MTIME     0x0200BFF8
 
-#define MB_FINISH 0x0
-#define MB_EVENT  0x4
-#define MB_VALUE  0x8
-#define MB_VALUE2 0xC
+#define MB_FINISH 0x000
+#define MB_EVENT  0x7F0
+#define MB_VALUE  0x7F4
+#define MB_VALUE2 0x7F8
+#define MB_SPARE  0x7FC
 #define FINISH_PASS  0x5555
 #define FINISH_FAIL  0x3333       /* (code << 16) | FINISH_FAIL */
 #define FINISH_RESET 0x7777
