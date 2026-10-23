@@ -104,6 +104,8 @@ handler:
   csrr a7, mepc
   li   t0, 0x1800
   csrs mstatus, t0
+  li   t0, 0x80
+  csrc mstatus, t0             # MPIE = 0: the continuation runs with MIE = 0
   csrw mepc, s11
   mret
 
