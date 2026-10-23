@@ -36,8 +36,8 @@
 //
 // The whole 64 KB window is decoded: only +0x00..+0x1C and the watchdog
 // window +0x100..+0x1FF are registers, every other word reads 0 and ignores
-// writes, with no alias. That includes the
-// SoC test mailbox words at +0x7F0..+0x7FC. syscon never holds ready low.
+// writes, with no alias. That includes the SoC test mailbox words at
+// +0x7F0..+0x7FC. syscon never holds ready low.
 //
 // Reset architecture. Two resets exist inside the SoC. `rst` (the chip's
 // reset, rst_n through the wrapper) resets only syscon's sticky state:

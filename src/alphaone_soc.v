@@ -25,10 +25,10 @@
 // it at the pin reset and hands qspi_ctrl the latched value during a reboot.
 //
 // Two resets: `rst` (the chip's reset) resets only syscon's sticky state
-// (RESET_CAUSE, BOOT_MODE, the strap, the reboot / power-off flops); syscon's rst_soc = rst | reboot |
-// power-off resets every other block. A reboot (FINISH 0x7777) holds rst_soc
-// for two clock edges, as the shortest pin reset does; power-off (0x5555, or
-// 0x3333 fail) holds it until rst.
+// (RESET_CAUSE, BOOT_MODE, the strap, the reboot / power-off flops); syscon's
+// rst_soc = rst | reboot | power-off resets every other block. A reboot
+// (FINISH 0x7777) holds rst_soc for two clock edges, as the shortest pin reset
+// does; power-off (0x5555, or 0x3333 fail) holds it until rst.
 //
 // Boot: from flash, always -- the reset PC is 0x2000_0000, the first byte of
 // flash. There is no boot ROM: whatever was last programmed there is the
