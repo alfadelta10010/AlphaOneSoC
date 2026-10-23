@@ -1,24 +1,25 @@
 # WFI executed in U-mode (CPU ref 8.5; Priv 3.1.6.6, 3.3.3, 3.7.1).
 #   A. TW=0, mie=0: WFI is a NOP (nothing enabled to wake it), so the next
 #      instruction, an ECALL, traps with cause 8 and mepc = the ECALL.
-#   B. TW=0, MTIE set, timer armed 5000 clocks ahead: WFI is still legal. It
-#      is either a NOP (FyraCore: the ECALL after it traps, cause 8, mepc =
-#      after_b + 4, s8 = 1) or it waits for the timer (cause 0x80000007,
-#      mepc = after_b, s8 = 0; U-mode never masks M-mode interrupts). Both
-#      pass; what must not happen is an illegal-instruction trap.
+#   B. TW=0, MTIE set, timer armed 5000 clocks ahead. The WFI is a NOP (CPU
+#      ref 8.5, as of 1a845f5; SA-006 closed 2026-10-23 as a doc fix): the
+#      addi s8 after it runs (s8 = 1) and the ECALL after that traps with
+#      cause 8, mepc = after_b + 4. A core whose U-mode WFI waits takes the
+#      timer interrupt instead (cause 0x80000007, mepc = after_b, s8 = 0):
+#      that is mutant FC86. M-mode interrupts are always enabled in U-mode
+#      (Priv 3.1.9), so MIE does not matter there. The handler clears MPIE so
+#      every continuation runs with MIE = 0 (a still pending timer cannot
+#      re-enter the handler before cont_b disarms it).
 #   C. TW=1: WFI is an illegal instruction (cause 2), mepc = the WFI.
 # Not Spike-comparable: Spike 5a760667 with --priv=mu retires a U-mode WFI
-# with TW=0 and then sleeps forever when mie=0 (it does not trap it), where
-# FyraCore treats it as a NOP; both are legal. The timer counts clocks, so
-# phase B is DUT-only as well. The test grants U-mode a NAPOT PMP entry over
-# everything first (Priv 3.7.1: with no matching entry a U-mode fetch faults).
-# The task's first draft assumed Spike traps the U-mode WFI and that the core
-# waits; the core in fact treats it as a NOP (WFI waits in M-mode only), so
-# phase B accepts both legal outcomes. FC45 (U-mode WFI always illegal) fails
-# phases A and B.
+# with TW=0 and then sleeps forever when mie=0 (it does not trap it), so this
+# is an expect-mode test. The timer counts clocks, so phase B is DUT-only as
+# well. The test grants U-mode a NAPOT PMP entry over everything first (Priv
+# 3.7.1: with no matching entry a U-mode fetch faults). FC45 (U-mode WFI
+# always illegal) fails phases A and B (x18 = 0x2, x19 = 0xfffffffc).
 # Results: x9 = traps taken (3); x18/x19 = A's mcause and mepc - ECALL;
 # x20/x21 = B's mcause and mepc - after_b; x22/x23 = C's mcause and mepc - WFI;
-# x24 = number of times the instruction after B's WFI ran (1 as a NOP, 0 if it waited).
+# x24 = number of times the instruction after B's WFI ran (1).
   .option norvc
   .section .text.init
   .globl rvtest_entry_point
