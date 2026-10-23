@@ -14,8 +14,8 @@
 // flash (about 57 clocks per instruction), so back-pressure really stalls.
 //
 // Programs (tests/soc/*.S) talk to the testbench through a mailbox in the
-// reserved syscon window (tests/soc/periph.h): FINISH (1 = pass, else the
-// failing check's code), EVENT (a cue), VALUE and VALUE2. +TEST=<name>
+// reserved syscon window (tests/soc/periph.h): FINISH (QEMU's sifive_test
+// codes: 0x5555 pass, (code << 16) | 0x3333 fail), EVENT (a cue), VALUE and VALUE2. +TEST=<name>
 // picks the test's cues and final checks; +FLASH_FILE=<hex> (read by the
 // Pmod model) is its program; +MAX_CYCLES=<n> the time limit.
 //
@@ -121,9 +121,25 @@ module tb_soc_periph;
 
     // ── Mailbox ─────────────────────────────────────────────────────────────
     string     test;
-    reg        done = 1'b0;
+    reg        done = 1'b0, passed = 1'b0, failed = 1'b0;
     reg [31:0] result = 0, value = 0, value2 = 0;
     wire       mb = soc.dmem_req && soc.dmem_we && soc.dmem_ready && soc.dmem_addr[31:16] == 16'h1002;
+
+    task automatic finish(input [3:0] be, input [31:0] w);
+        begin
+            done = 1'b1;
+            if (be !== 4'b1111)
+                fail($sformatf("%s: FINISH written with lanes %b (want a word store)", test, be));
+            else if (^w === 1'bx)
+                fail($sformatf("%s: FINISH written with %h", test, w));
+            else if (w[15:0] == 16'h5555) passed = 1'b1;
+            else if (w[15:0] == 16'h3333) begin failed = 1'b1; result = {16'h0, w[31:16]}; end
+            else if (w[15:0] == 16'h7777)
+                fail($sformatf("%s: FINISH 0x7777 (reboot) in a test that expects none", test));
+            else
+                fail($sformatf("%s: FINISH written with %h: not 0x5555, (code << 16) | 0x3333 or 0x7777", test, w));
+        end
+    endtask
 
     // The line uart_echo's RP2350 types (tests/soc/uart_echo.S has its copy).
 `define ECHO_LINE "The quick brown fox jumps over the lazy dog, 0123456789!\015\n"
@@ -208,7 +224,7 @@ module tb_soc_periph;
     always @(posedge clk)
         if (!rst && mb)
             case (soc.dmem_addr[3:2])
-                2'd0: begin done = 1'b1; result = soc.dmem_wdata; end
+                2'd0: if (!done) finish(soc.dmem_be, soc.dmem_wdata);
                 2'd1: on_event(soc.dmem_wdata);
                 2'd2: begin value = soc.dmem_wdata; on_value(soc.dmem_wdata); end
                 2'd3: value2 = soc.dmem_wdata;
@@ -292,9 +308,9 @@ module tb_soc_periph;
         while (!done && cyc < max_cycles) @(posedge clk);
         if (!done) begin
             fail($sformatf("%s: no FINISH within %0d cycles (pc %h)", test, max_cycles, soc.cpu.pc));
-        end else if (result !== 32'h1) begin
+        end else if (failed) begin
             fail($sformatf("%s: program check %h failed (value seen %h)", test, result, value2));
-        end else begin
+        end else if (passed) begin
             // Let the UART's last character reach the RP2350.
             repeat (16 * 3 * 12 * UART_DIV) @(posedge clk);
             got_u = rp.rx_str();

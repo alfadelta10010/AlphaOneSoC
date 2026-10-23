@@ -4,7 +4,9 @@
  * a mailbox in the reserved syscon window, which the SoC ignores: the
  * testbench watches the core's data port for stores there.
  *
- *   SYSCON + 0x0  FINISH  1 = pass; anything else = the failing check's code
+ *   SYSCON + 0x0  FINISH  QEMU sifive_test codes: 0x5555 pass,
+ *                         (code << 16) | 0x3333 fail with code 1..0xFFFF,
+ *                         0x7777 reboot (never written here)
  *   SYSCON + 0x4  EVENT   a test-specific cue to the testbench
  *   SYSCON + 0x8  VALUE   a value for the testbench to check
  *   SYSCON + 0xC  VALUE2  a second one (on a failure: the value seen)
@@ -21,6 +23,9 @@
 #define MB_EVENT  0x4
 #define MB_VALUE  0x8
 #define MB_VALUE2 0xC
+#define FINISH_PASS  0x5555
+#define FINISH_FAIL  0x3333       /* (code << 16) | FINISH_FAIL */
+#define FINISH_RESET 0x7777
 
 /* UART offsets and bits (16550) */
 #define RBR 0
@@ -90,10 +95,13 @@
 .macro EPILOGUE
 test_fail:
     sw   a7, MB_VALUE2(s11)
-    sw   a6, MB_FINISH(s11)
-1:  j    1b
+    slli a6, a6, 16
+    li   t5, FINISH_FAIL
+    or   a6, a6, t5
+    j    87f
 test_pass:
-    li   t5, 1
-    sw   t5, MB_FINISH(s11)
+    li   a6, FINISH_PASS
+87:
+    sw   a6, MB_FINISH(s11)
 1:  j    1b
 .endm
