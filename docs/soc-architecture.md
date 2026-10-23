@@ -714,9 +714,10 @@ tiles for a 4x2 slot. The yosys recipe the audit uses to rank cuts gives
 10.07 tiles: it lets yosys use cells LibreLane excludes, so its figures run
 about 20-24% low. The largest blocks, hierarchical with TT's cells: register
 file 3.68, CSR 2.65, core glue 2.67, muldiv 0.93 tiles. The SoC blocks added
-here cost about 0.9 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
-the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12, syscon
-0.14 with 23 flops; soc_bus mostly folds away). No harden of the SoC has completed yet (hold buffers on
+here cost about 0.7 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
+the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus
+mostly folds away). syscon with its watchdog adds 0.144 tile, 23 flops
+(synthesised on its own with the TT cell set). No harden of the SoC has completed yet (hold buffers on
 the register file's enable loops stop detailed placement; see "TinyTapeout
 flow check" in `docs/area-audit.md`); fit and timing are settled in the
 TinyTapeout submission repository.
