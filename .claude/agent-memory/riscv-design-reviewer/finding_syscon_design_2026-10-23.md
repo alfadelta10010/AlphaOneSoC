@@ -52,3 +52,12 @@ PIN+SOFT all accepted. Mailbox moved to +0x7F0/+0x7F4/+0x7F8 (+0x7FC spare, peri
 - Area: syscon 1625.3 um^2 = 0.144 t, 23 flops; watchdog +0.057 t, +9 flops (1-bit count: +0.049 t).
 - Conflicts: WO-14 sweep writes +0x100 (arms it) and must drive wdt_tap (Z -> X on rst_soc); WO-15 alias list
   has +0x100/+0x104. Recommended landing WO-22 code right after WO-20, before WO-14.
+
+**WO-20 review (8d54e14 + 8b29cf8, diff d42833a..8b29cf8): APPROVED, no blocking edits.**
+syscon.v is the WO equations verbatim; all six blocks on rst_soc, syscon on rst, qspi rd_late from syscon, SB01-03
+lines untouched, run.sh one-token exception. Re-ran on a git archive: lint 2/6/18 (0 in syscon.v), iverilog -Wall
+clean, WO-20-acc unit 52 PASS + SoC smoke exact (2104/3801/531/531/2). Per-block reset mutants: core, qspi, uart,
+gpio caught by the SoC smoke; **mem_ctrl on rst (AS06) PASSES it** -- no fetch in flight at that reboot; WO-18 lists
+AS06, WO-15/16 must reboot with a fetch outstanding to kill it. Nit: alphaone_soc.v header omits the hold/off flops
+from "rst resets only ...". WO-22 applied in scratch on 8b29cf8: all four acceptance benches pass exactly (76084).
+Verif WO-14..19 were amended for WO-22 (WO-14 depends on WO-22 code; WO-15 probes +0x200/+0x204; WO-18 WD01-14, AS07).
