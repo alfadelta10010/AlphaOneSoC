@@ -123,6 +123,10 @@ below in these ways:
   wrapper and the SoC's ports are unchanged.
 * The test mailbox landed at +0x7F0, +0x7F4, +0x7F8 (+0x7FC spare), as below.
 * CHIP_ID is `0x4131_5301`.
+* The optional watchdog is built (`a133652`) in the Synopsys DesignWare layout
+  at +0x100, so Linux's `dw_wdt` runs it unchanged. RESET_CAUSE gained bit 2
+  (WDT). syscon is 0.144 tile, 23 flops with it. See "Watchdog" in
+  `docs/soc-architecture.md`.
 
 Linux needs nothing more than a generic register block with the `syscon`
 compatible; the functions come from small generic drivers that point into it.

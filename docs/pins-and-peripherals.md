@@ -164,7 +164,7 @@ columns).
 | 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
 | 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
 | 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
-| 6 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.087 tile, 14 flops | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode` |
+| 6 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.144 tile, 23 flops (0.087 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
 block synthesised on its own with the audit's recipe; 1 tile ≈ 11,300 µm² of
@@ -439,6 +439,10 @@ tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
   wakes the chip.
 * **The strap** is read once, at the pin reset, and kept (see the wrapper
   section). The pin is GPIO afterwards.
+* **The watchdog** (`0x1002_0100`, DesignWare layout) resets the SoC through
+  the reboot path when it expires, so the pins behave as for a reboot. It is
+  disabled again afterwards, since its flops are on `rst_soc`. It cannot fire
+  while the chip is powered off.
 * The RP2350 reads no syscon state from the pins; software reads
   RESET_CAUSE, BOOT_MODE and STRAPS over the bus.
 

@@ -145,7 +145,7 @@ wire [31:0] mret_target = csr_mepc;
 | `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices and takes them out of any QPI or continuous-read mode another design left them in. |
 | `uart.v` | `uart` | 16550-compatible UART at 0x1000_0000: byte registers, fixed 8N1, no FIFOs (TX back-pressure, RTS# flow control), break send (LCR.SBC) and detect (LSR.BI), polled. |
 | `gpio.v` | `gpio` | GPIO OUT/IN at 0x1001_0000 and a mode-3 SPI transmitter for the OLED, with write back-pressure while a byte shifts. |
-| `syscon.v` | `syscon` | Register block at 0x1002_0000: reboot and power-off (FINISH, QEMU sifive_test codes), reset cause, boot mode, chip ID, `rd_late` strap. Generates `rst_soc`, the reset of every other SoC block. |
+| `syscon.v` | `syscon` | Register block at 0x1002_0000: reboot and power-off (FINISH, QEMU sifive_test codes), reset cause, boot mode, chip ID, `rd_late` strap, and a DesignWare-layout (`snps,dw-wdt`) watchdog at +0x100 that reboots the SoC through the same path. Generates `rst_soc`, the reset of every other SoC block. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -181,7 +181,7 @@ Address Range               Device      Size    Attributes
 0x0C00_0000                 PLIC        -       reserved, not implemented (faults)
 0x1000_0000 - 0x1000_FFFF   UART        64 KB   data only (src/uart.v)
 0x1001_0000 - 0x1001_FFFF   GPIO        64 KB   data only (src/gpio.v)
-0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only (src/syscon.v)
+0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only (src/syscon.v; watchdog at +0x100)
 ```
 
 The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC ties it to 0x2000_0000, so it always boots from flash. SoC design, boot and QSPI details: `docs/soc-architecture.md`.

@@ -265,26 +265,28 @@ reset (`docs/pins-and-peripherals.md`).
 
 One small register block at `0x1002_0000`: reboot, power-off, the simulation
 exit code, the reset cause, a boot-mode note that survives a reboot, the chip
-ID and the read-sampling strap. It is what Linux's generic `syscon`,
+ID, the read-sampling strap and a watchdog. It is what Linux's generic `syscon`,
 `syscon-poweroff`, `syscon-reboot` and `syscon-reboot-mode` drivers point
 into.
 
 | Offset | Name | Access | After a pin reset | At a reboot |
 |---|---|---|---|---|
 | +0x00 | FINISH | W; reads 0. A store with byte lanes 0 and 1 both written (`sh` or `sw`) acts on `wdata[15:0]`: `0x7777` reboot, `0x5555` power-off, `0x3333` fail (halts like power-off; `wdata[31:16]` is a code for the testbench). Any other value, or a narrower store, does nothing | - | - |
-| +0x04 | RESET_CAUSE | R / W1C, lane 0. [0] PIN, [1] SOFT | `0x1` | SOFT set, PIN kept |
+| +0x04 | RESET_CAUSE | R / W1C, lane 0. [0] PIN, [1] SOFT, [2] WDT | `0x1` | SOFT set, PIN kept |
 | +0x08 | BOOT_MODE | R/W, lane 0, [7:0] | `0x00` | kept |
 | +0x0C | CHIP_ID | R, the `CHIP_ID` parameter | `0x4131_5301` | - |
 | +0x10 | STRAPS | R, [0] = `qspi_rd_late` as latched at the last pin reset | the pin | kept |
 | +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
 | +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
 | +0x1C | - | reads 0, writes ignored | - | - |
-| +0x20..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
+| +0x20..+0xFC | - | read 0, writes ignored | - | - |
+| +0x100..+0x1FF | WDT | the watchdog, below | 0 (TOP 15) | disabled |
+| +0x200..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
 
 CHIP_ID is ASCII "A1S" in [31:8] and the silicon revision `0x01` in [7:0].
 
-**The whole 64 KB window is decoded.** Only +0x00..+0x1C are registers; every
-other word reads 0 and ignores writes, with no alias of any register at any
+**The whole 64 KB window is decoded.** Only +0x00..+0x1C and the watchdog window
++0x100..+0x1FF are registers; every other word reads 0 and ignores writes, with no alias of any register at any
 offset. That includes the SoC test mailbox words at +0x7F0 (EVENT), +0x7F4
 (VALUE), +0x7F8 (VALUE2) and +0x7FC (spare), which the testbench watches on
 the core's data port (`tests/soc/periph.h`) and the hardware ignores. They sit
@@ -312,7 +314,8 @@ every other block.
 `rst_soc` is a function of `rst` and flops alone, nothing from the bus, and is
 used only as a synchronous reset (the only asynchronous resets in `src/` are
 the wrapper's own `rst_n` flops). syscon's bus writes are ignored while
-`rst_soc` is high. The reset tree gains one OR at its root.
+`rst_soc` is high. The watchdog's flops are on `rst_soc` as well (see "Watchdog"). The reset tree
+gains one OR at its root.
 
 The generator is in the SoC, not in the wrapper: `alphaone_soc`'s ports do not
 change, the SoC benches can test a reboot without the wrapper, and the
@@ -375,12 +378,13 @@ change: reading back `0x5555` or `0x7777` would make the driver do nothing.
 
 ### RESET_CAUSE
 
-There are two bits, PIN and SOFT. **There is no power-on bit:** TinyTapeout
-has no power-on-reset cell, and a power-on is always followed by an `rst_n`
-pulse from the board, so the chip cannot tell it from a pin reset. Both bits
-are sticky and cleared only by writing 1 to them (lane 0) or by the pin reset
-that sets PIN again. A reboot sets SOFT and keeps what was there, so after a
-reboot the register reads `0x3` unless software cleared PIN first.
+There are three bits: PIN, SOFT and WDT (set when the watchdog fires).
+**There is no power-on bit:** TinyTapeout has no power-on-reset cell, and a
+power-on is always followed by an `rst_n` pulse from the board, so the chip
+cannot tell it from a pin reset. All bits are sticky and cleared only by
+writing 1 to them (lane 0) or by the pin reset that sets PIN again. A reboot
+sets SOFT and keeps what was there, so after a reboot the register reads `0x3`
+unless software cleared PIN first; after a watchdog reset it reads `0x5`.
 
 ### BOOT_MODE and reboot-mode
 
@@ -413,11 +417,122 @@ the second boot.
 
 ### Area
 
-syscon alone is **0.087 tile, 14 flops** (`rq`, `rq2`, `off`, the strap flop,
+syscon without the watchdog is **0.087 tile, 14 flops** (`rq`, `rq2`, `off`, the strap flop,
 `cause[1:0]`, `boot_mode[7:0]`), from the audit's yosys recipe with the TT cell
 set (979.7 µm²; `docs/area-audit.md`), about 0.09 tile in context, within the
 0.5-tile budget `docs/ROADMAP.md` allows for new RTL. The reset tree's extra OR
 at its root is the one thing a harden should check, at the slowest corner.
+The watchdog adds 0.057 tile and 9 flops, 0.144 tile and 23 flops in all
+(see "Watchdog").
+
+### Watchdog (`src/syscon.v`, +0x100..+0x1FF)
+
+A minimal hardware watchdog in the Synopsys DesignWare WDT layout, so that
+Linux's upstream `dw_wdt` driver (`snps,dw-wdt`, `CONFIG_DW_WATCHDOG`, which
+depends only on `HAS_IOMEM`) runs it unchanged: there is no kernel code to
+write or carry. On expiry it raises the same reboot request as a FINISH write
+of `0x7777` and sets RESET_CAUSE.WDT. It is a 256-byte window inside syscon's
+64 KB, decoded on `addr[15:8] == 8'h01`; it overlaps none of the registers
+above, and the rest of the window stays read-0, write-ignored with no alias.
+It gets its own device-tree node, beside the `syscon` node, not inside its
+`reg`.
+
+| Offset | Name | Access | After any `rst_soc` reset |
+|---|---|---|---|
+| +0x100 | WDT CR | Lane 0. [0] EN: a write with bit 0 = 1 sets it; nothing clears it but a reset. [1] RESP_MODE reads 0 and ignores writes | 0 |
+| +0x104 | WDT TORR | [3:0] TOP, R/W, lane 0; reads `{TOP, TOP}` in [7:0]. A write also kicks | `0xFF` (TOP 15) |
+| +0x108 | WDT CCVR | Reads 0 | - |
+| +0x10C | WDT CRR | Lane 0: writing `0x76` kicks, any other value is ignored. Reads 0 | - |
+| +0x110, +0x114 | STAT, EOI | Read 0 | - |
+| +0x1F4 | COMP_PARAMS_1 | Reads `0x0000_0040` (USE_FIX_TOP: timeout TOP = 2^(16+TOP) clocks) | - |
+| other +0x100..+0x1FF | - | Read 0, writes ignored | - |
+
+Source: `drivers/watchdog/dw_wdt.c` and `snps,dw-wdt.yaml` (torvalds master,
+read 2026-10-23). The driver writes CR (EN, RESP_MODE), TORR (`top | top << 4`),
+reads CCVR for `get_timeleft`, writes `0x76` to CRR to kick, and reads
+COMP_PARAMS_1 bit 6 to learn that the timeouts are the fixed powers of two.
+
+**Timeout.** TOP *t* gives 2^(16+*t*) clocks, *t* = 0..15.
+
+| TOP | 2^(16+TOP) clocks | at 62.5 MHz | at 50 MHz | TOP | at 62.5 MHz | at 50 MHz |
+|---|---|---|---|---|---|---|
+| 0 | 65,536 | 1.05 ms | 1.31 ms | 8 | 268 ms | 336 ms |
+| 2 | 262,144 | 4.19 ms | 5.24 ms | 10 | 1.07 s | 1.34 s |
+| 4 | 1,048,576 | 16.8 ms | 21.0 ms | 12 | 4.29 s | 5.37 s |
+| 6 | 4,194,304 | 67.1 ms | 83.9 ms | 14 | 17.2 s | 21.5 s |
+| | | | | 15 | 34.4 s | 42.9 s |
+
+At 62.5 MHz `dw_wdt` has `min_timeout` 1 s (TOP 10), `max_hw_heartbeat_ms`
+34,359 (TOP 15) and a default of 30 s (TOP 15); for longer timeouts the
+watchdog core pings on the kernel's behalf.
+
+**Timebase: a tap of `mtime`.** syscon takes `wdt_tap = mtime[29:14]` from the
+CLINT. TOP *t* selects `mtime[14+t]`, whose rising edges come every
+Pt = 2^(15+*t*) clocks. There is no prescaler and no extra counter. While any
+reset is held the CLINT is reset too, so `mtime` sits at 0 and no tap moves.
+The cost is that software can write `mtime`: a write that moves it backwards
+delays the watchdog, and a loop that keeps rewriting it would keep it from
+firing. Linux's timer driver never writes `mtime` (it reads it and writes
+`mtimecmp`), so this is accepted; a private prescaler would cost about 24
+flops (+0.06 tile).
+
+**Accuracy: never early, at most 1.5x late.** A 2-bit tick count, cleared by a
+kick, by a TORR write and while disabled, counts the rising edges of the tap;
+the third one fires. The first edge comes within (0, Pt] of the clear, so the
+reset comes in (2Pt, 3Pt] after it, which is more than 1x and at most 1.5x the
+2^(16+TOP) timeout (plus one clock, see TORR below). A 1-bit count would save
+0.007 tile and allow up to 2x late. Linux pings at half the hardware timeout,
+so neither matters to it.
+
+**Kicks, TORR and the lock.**
+
+* A kick is a CRR write whose lane 0 holds `0x76`: eight bits, not sixteen. CR
+  and TORR writes take no key.
+* Once enabled it cannot be stopped except by a reset. That is DesignWare
+  behaviour, and `dw_wdt` expects it: with no reset controller its `stop` only
+  marks the watchdog as still running and keeps pinging it. This is the lock,
+  always on, with no extra bit.
+* A TORR write kicks and makes no tick of its own. Changing TOP switches the
+  tapped bit, which can look like a rising edge and make the next reset come
+  one tick early (15 clocks against a floor of 16 in a scratch run), so a TORR
+  write clears the count and forces the edge detector's previous value to 1
+  for that cycle. The cost is one clock of worst case: a real edge in that
+  cycle is swallowed, so the bound is 3Pt + 1.
+* TORR resets to TOP 15 (reads `0xFF`): a program that sets EN without writing
+  TORR gets 34 s, not 1 ms.
+* RESP_MODE reads 0 and ignores writes: there is no interrupt line, and with
+  no `interrupts` property the driver offers no pretimeout.
+
+**CCVR reads 0**, so `/sys/class/watchdog/watchdog0/timeleft` shows 0 s. A real
+readback needs a variable shifter, about +0.12 tile.
+
+**SA-008.** A kick or a TORR write in the very cycle of the third tick does not
+stop the fire. The reset still comes within the bound above; software that
+kicks at the last instant of the timeout can lose the race, as with any
+watchdog.
+
+**Reset domains: no loop, no fire while off.**
+
+* The watchdog's own flops (EN, TOP, count, tick edge) are on `rst_soc`. A
+  pin reset, a reboot, power-off and its own expiry all leave it disabled
+  with TOP back to 15.
+* Its expiry is a one-cycle pulse `fire` ORed into the reboot request `rq`. It
+  cannot repeat: the tick is an edge, gone the next cycle, and on the edge
+  after that `rst_soc` clears EN.
+* While powered off, `rst_soc` holds EN at 0 and `mtime` at 0: it cannot fire.
+* RESET_CAUSE bit 2 (WDT) is on `rst`, so it survives the reboot it caused.
+  A fire in the same cycle as a W1C of bit 2 leaves it set (set wins). If
+  `fire` and a FINISH reboot meet in one cycle, SOFT and WDT are both set and
+  there is one reboot; with a power-off, `off` wins.
+
+**Area.** syscon with the watchdog is **0.144 tile, 23 flops** (1,625.3 µm²,
+the audit's recipe with the TT cell set), against 0.087 tile and 14 flops
+without. The watchdog is +645.6 µm², +0.057 tile, +9 flops: EN, TOP[3:0],
+count[1:0], the tick edge and RESET_CAUSE[2]. The alternative considered and
+not taken, a custom keyed register with an out-of-tree driver, measured
++0.068 tile and needs a kernel patch carried for the life of the project.
+Linux's `softdog` costs no area but catches only a hung userspace, not a hung
+kernel or a CPU spinning with interrupts off.
 
 ### Linux
 
@@ -459,7 +574,7 @@ syscon: syscon@10020000 {
   `regmap = <&syscon>;` in those two nodes, the form KianV's 6.8 device tree
   uses. Check the target kernel.
 * `reg` covers the 8 implemented words only (`max_register = 0x1C`), so Linux
-  cannot reach the mailbox.
+  cannot reach the mailbox or the watchdog window, which has its own node.
 * The modes are 1 and 2 because `reboot-mode.c` never writes 0 (see
   BOOT_MODE above).
 * Kernel options: `CONFIG_MFD_SYSCON`, `CONFIG_POWER_RESET`,
@@ -467,6 +582,35 @@ syscon: syscon@10020000 {
   `CONFIG_REBOOT_MODE`, `CONFIG_SYSCON_REBOOT_MODE`.
 * The `alfadelta10010` vendor prefix is not registered. That is fine for an
   out-of-tree device tree; `checkpatch` only warns.
+
+The watchdog node, with a fixed clock for the core clock (`dw_wdt` needs
+`clocks`; the binding requires only `compatible`, `reg` and `clocks`):
+
+```dts
+sysclk: sysclk {                      /* the core clock = timebase-frequency */
+    compatible = "fixed-clock";
+    #clock-cells = <0>;
+    clock-frequency = <62500000>;
+};
+
+watchdog@10020100 {
+    compatible = "snps,dw-wdt";
+    reg = <0x10020100 0x100>;
+    clocks = <&sysclk>;
+};
+```
+
+* Kernel options: `CONFIG_WATCHDOG`, `CONFIG_DW_WATCHDOG`, `CONFIG_COMMON_CLK`
+  (=y in the RV32 6.12 config of `localFiles/rv32-linux-soc`; confirm in the
+  NOMMU config) and `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`, so the kernel
+  pings a watchdog the flash loader armed until userspace opens
+  `/dev/watchdog`. Userspace: busybox `watchdog`.
+* What the driver does here: probe clears RESP_MODE (already 0) and takes the
+  timeouts from the fixed TOPs; start writes TORR, kicks, sets EN; ping writes
+  CRR = `0x76`; stop cannot stop it and the core keeps pinging; timeleft is 0.
+  Its restart handler (priority 128, below `syscon-reboot`'s 192) writes
+  TORR = 0 and arms or kicks, for a reset in about 1 ms; `syscon-reboot` runs
+  first.
 
 ### Verification
 
@@ -570,9 +714,9 @@ tiles for a 4x2 slot. The yosys recipe the audit uses to rank cuts gives
 10.07 tiles: it lets yosys use cells LibreLane excludes, so its figures run
 about 20-24% low. The largest blocks, hierarchical with TT's cells: register
 file 3.68, CSR 2.65, core glue 2.67, muldiv 0.93 tiles. The SoC blocks added
-here cost about 0.8 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
+here cost about 0.9 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
 the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12, syscon
-0.09 with 14 flops; soc_bus mostly folds away). No harden of the SoC has completed yet (hold buffers on
+0.14 with 23 flops; soc_bus mostly folds away). No harden of the SoC has completed yet (hold buffers on
 the register file's enable loops stop detailed placement; see "TinyTapeout
 flow check" in `docs/area-audit.md`); fit and timing are settled in the
 TinyTapeout submission repository.
