@@ -225,7 +225,7 @@ test-soc-periph: $(BUILD_DIR)
 	@mkdir -p $(SOC_PERIPH_DIR)
 	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
@@ -246,7 +246,7 @@ test-soc-periph: $(BUILD_DIR)
 #   QSPI_DELAY=19      just under one SCK period, which rd_late = 0 must take
 #   RD_LATE, 25 ns     ui_in[0] = 1 through reset: only rd_late = 1 reads this
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
-                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v \
+                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper

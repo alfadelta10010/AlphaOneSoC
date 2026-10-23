@@ -9,7 +9,8 @@
 //   0x0200_0000  CLINT   64 KB
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPI DATA / SPI CTRL (src/gpio.v)
-//   0x1002_0000  syscon  reserved, reads 0
+//   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
+//                        straps (src/syscon.v)
 //
 // Chip pins (docs/pins-and-peripherals.md): the UART's TX and RTS# are
 // uo_out[4] and [5], and RX is ui_in[3]; gpio_out drives the other six
@@ -20,13 +21,22 @@
 //
 // qspi_rd_late is a strap for the QSPI read-sampling point: 0 samples two
 // clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick
-// it from the clock frequency and the measured pad round trip.
+// it from the clock frequency and the measured pad round trip. syscon latches
+// it at the pin reset and hands qspi_ctrl the latched value during a reboot.
+//
+// Two resets: `rst` (the chip's reset) resets only syscon's sticky state
+// (RESET_CAUSE, BOOT_MODE, the strap); syscon's rst_soc = rst | reboot |
+// power-off resets every other block. A reboot (FINISH 0x7777) holds rst_soc
+// for two clock edges, as the shortest pin reset does; power-off (0x5555, or
+// 0x3333 fail) holds it until rst.
 //
 // Boot: from flash, always -- the reset PC is 0x2000_0000, the first byte of
 // flash. There is no boot ROM: whatever was last programmed there is the
 // first thing the core runs, and anything that runs from PSRAM is put there by
-// code in flash. While rst is high every QSPI pin is released, so an external
-// master (the demo board's RP2040) can program the flash first.
+// code in flash. While rst or a reboot/power-off holds the SoC in reset every
+// QSPI pin is released, so an external master (the demo board's RP2040) can
+// program the flash first. A reboot restarts the SoC exactly like a pin reset,
+// except that RESET_CAUSE, BOOT_MODE and the rd_late strap survive it.
 //
 // The PMA_* parameters default to the map above. They are exposed only so
 // the verification testbench can size the CLINT window to Spike's and switch
@@ -61,6 +71,7 @@ module alphaone_soc #(
 );
 
     // ── Core ────────────────────────────────────────────────────────────────
+    wire        rst_soc;                // syscon: reset for every block but itself
     wire [31:0] imem_addr, imem_rdata;
     wire        imem_req, imem_ready;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
@@ -77,7 +88,7 @@ module alphaone_soc #(
         .PMA_IO1_TOP (PMA_IO1_TOP)
     ) cpu (
         .clk         (clk),
-        .rst         (rst),
+        .rst         (rst_soc),
         .boot_addr   (32'h2000_0000),     // flash
         .imem_addr   (imem_addr),
         .imem_req    (imem_req),
@@ -109,6 +120,8 @@ module alphaone_soc #(
     wire [31:0] clint_rdata;
     wire        uart_sel, uart_ready, gpio_sel, gpio_ready;
     wire [31:0] uart_rdata, gpio_rdata;
+    wire        syscon_sel, qspi_late;
+    wire [31:0] syscon_rdata;
 
     soc_bus bus (
         .d_req       (dmem_req),
@@ -126,8 +139,23 @@ module alphaone_soc #(
         .gpio_sel    (gpio_sel),
         .gpio_rdata  (gpio_rdata),
         .gpio_ready  (gpio_ready),
-        .syscon_sel  (),
-        .syscon_rdata(32'h0000_0000)
+        .syscon_sel  (syscon_sel),
+        .syscon_rdata(syscon_rdata)
+    );
+
+    // ── syscon ──────────────────────────────────────────────────────────────
+    syscon syscon_inst (
+        .clk          (clk),
+        .rst          (rst),
+        .rst_soc      (rst_soc),
+        .sel          (syscon_sel),
+        .we           (dmem_we),
+        .be           (dmem_be),
+        .addr         (dmem_addr[15:2]),
+        .wdata        (dmem_wdata),
+        .rdata        (syscon_rdata),
+        .strap_rd_late(qspi_rd_late),
+        .rd_late      (qspi_late)
     );
 
     // ── Memory controller + QSPI engine ─────────────────────────────────────
@@ -138,7 +166,7 @@ module alphaone_soc #(
 
     mem_ctrl memc (
         .clk        (clk),
-        .rst        (rst),
+        .rst        (rst_soc),
         .i_req      (imem_req),
         .i_addr     (imem_addr),
         .i_rdata    (imem_rdata),
@@ -163,8 +191,8 @@ module alphaone_soc #(
 
     qspi_ctrl qspi (
         .clk      (clk),
-        .rst      (rst),
-        .rd_late  (qspi_rd_late),
+        .rst      (rst_soc),
+        .rd_late  (qspi_late),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
@@ -185,7 +213,7 @@ module alphaone_soc #(
     // ── CLINT ───────────────────────────────────────────────────────────────
     clint clint_inst (
         .clk      (clk),
-        .rst      (rst),
+        .rst      (rst_soc),
         .addr     (dmem_addr[15:0]),
         .wdata    (dmem_wdata),
         .wmask    (dmem_be),
@@ -201,7 +229,7 @@ module alphaone_soc #(
         .DIV_RESET(UART_DIV_RESET)
     ) uart_inst (
         .clk  (clk),
-        .rst  (rst),
+        .rst  (rst_soc),
         .sel  (uart_sel),
         .we   (dmem_we),
         .be   (dmem_be),
@@ -217,7 +245,7 @@ module alphaone_soc #(
     // ── GPIO + SPI transmitter ──────────────────────────────────────────────
     gpio gpio_inst (
         .clk  (clk),
-        .rst  (rst),
+        .rst  (rst_soc),
         .sel  (gpio_sel),
         .we   (dmem_we),
         .be   (dmem_be),

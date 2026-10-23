@@ -30,7 +30,7 @@
 //   addr[28]          IO       0x1000_0000   -> addr[17:16]: 0 UART, 1 GPIO, 2 syscon
 //   none of those     CLINT    0x0200_0000
 //
-// A target with nothing behind it (syscon) reads 0 and ignores writes.
+// syscon (src/syscon.v) decodes its own offset bits and never holds ready low.
 
 module soc_bus (
     // Core data port
