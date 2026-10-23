@@ -26,3 +26,9 @@
   front of the padding); .text.init over 4 KB moves tohost.
 
 2026-10-22: candidate review (FC02 FC49 FC27 MD07 RG01 RG04, CLINT window): no DUT bug; see vplan.md "Candidate verdicts".
+
+## 2026-10-24 candidate (pending SA-009 decision)
+- BUG-001? [Low] syscon watchdog fires on E1 of a FINISH reboot / power-off
+  hold (en still 1 for one clock). Reproducer build/wo14rev/probe_e1.v:
+  `cd build/wo14rev && iverilog -o probe_e1 ../../src/syscon.v probe_e1.v
+  && vvp -n probe_e1` -> RESET_CAUSE 0x7 after reboot, 0x5 in power-off.

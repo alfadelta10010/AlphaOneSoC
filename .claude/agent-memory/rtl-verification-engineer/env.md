@@ -56,3 +56,7 @@
   any SoC-internal reset (syscon reboot/power-off) cuts an outstanding fetch
   and they $fatal. WO-12 resets them with `rst || done`; tb_syscon_soc
   (WO-15) with `rst || soc.rst_soc`.
+- Review lesson (2026-10-24): aim directed boundary cases at fire-1 and
+  fire+1, not only at the predicted cycle; a model rule never exercised at
+  its edge ("frozen while held") hid a DUT/spec split. Re-read my own WO's
+  exclusions (sweep data sets) as test targets.

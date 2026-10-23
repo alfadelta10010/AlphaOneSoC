@@ -14,3 +14,7 @@
   half pending) is reachable at a reset only via an asynchronous-to-program
   source (watchdog, pin); WO-15 syscon_wdt_split covers it with floors on
   "split second half in flight" and "data in flight" at E1.
+- (2026-10-24) tb_syscon (8eeba2e): fire-1 stores (SA-009) not aimed; sweep
+  W1C-alias check vacuous; FINISH codes not swept at +0x04..+0x1C; CHIP_ID
+  default not exercised (parameter overridden). Required edits in the
+  WO-14 review; close when the fix commit lands.

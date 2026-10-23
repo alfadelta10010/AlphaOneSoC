@@ -207,3 +207,20 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   watchdog reboots while spinning on `j .` at 0x800003FE: RTL 12/12 recover
   (8 with second=1); AS06 hangs after the first. -> WO-15 syscon_wdt_split.
 - WO-14 ready: all dependencies merged.
+
+## 2026-10-24: WO-14 review (8eeba2e, tb/tb_syscon.v + syscon_spec.vh) -> CHANGES REQUIRED
+- Model independent (hold as a 2->0 counter, ticks saturate at 2, tprev
+  reset 1, watchdog frozen on every held edge); shared terms fire =
+  en&tick&ticks==2 and tprev = torr|tap are WO-22 W3/W6 text.
+- Blocking: (1) no directed case for a FINISH/power-off store one clock
+  BEFORE the predicted fire -> SA-009 (DUT fires on E1); random reaches it
+  ~0.3x per seed (seed 1: 239 random fires x ~0.0016 acting FINISH/running
+  clock), so test-seeds 1-8 is a latent flake; (2) offset sweep vacuous for
+  W1C aliases (cause = 0 after the a=1 store) and never stores FINISH codes
+  at +0x04..+0x1C (my WO text excluded them; random gives codes only to
+  +0x00) -> a FINISH alias at +0x10 survives; (3) bench overrides CHIP_ID
+  with the spec value, the shipped default is never read.
+- Accepted: idle cut after fires (post-fire state TOP-independent, one
+  200k idle > 3*P15+1), reset rate 1/6 in holds (~69% complete), sweep
+  window top-down, reads during rst unchecked (rd_late still checked).
+- Seeds 1-3 PASS (build/wo-14 logs); bad-kick counter counts attempts (4813).

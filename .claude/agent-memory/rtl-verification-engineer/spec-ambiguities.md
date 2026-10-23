@@ -73,3 +73,15 @@
   Coordinator told the user "the fire wins" stays unless they want "a kick
   always wins"; no change yet. WO-14's model and one directed case follow
   WO-22; only those change if the user decides otherwise.
+- SA-009 (2026-10-24, WO-14 review) Watchdog fire on the FIRST edge of a
+  hold. EN/count are reset synchronously by rst_soc, so in the clock after
+  a FINISH 0x7777/0x5555/0x3333 store EN is still 1; if count==2 and the
+  tap rises then, `fire` pulses at E1. Observed (probe build/wo14rev/
+  probe_e1.v, one run): reboot -> RESET_CAUSE 0x7 not 0x3; power-off ->
+  cause 0x5 and rq set while off. Contradicts WO-22 W5 "while powered off
+  ... it cannot fire", SYS-008 "no WDT cause", WO-22 formal "off implies no
+  fire"; agrees with WO-22's per-cycle equations (fire not gated). Harm Low
+  (power-off case invisible at the SoC: only rst exits; reboot case: a
+  spurious-but-truthful WDT bit). Fix options: gate fire with ~rst_soc
+  (src/syscon.v:118) or let the model count on the first held edge. WO-19's
+  "off implies no fire" fails until decided. Escalated via dispatcher.
