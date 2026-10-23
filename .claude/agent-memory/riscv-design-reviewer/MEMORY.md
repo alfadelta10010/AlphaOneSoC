@@ -87,6 +87,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   select bugs visible only in zero-IMEM-wait core runs; core 10.84 -> 7.07 t + 0.84 t macro — finding_rf_macro_review_2026-10-11.md
 - 2026-10-11 rf-macro FINAL 88c18f3: MAJ load-use relies on the macro's same-edge write-through (model-only; read-first mutant
   fails SoC t_memstress); README macro at [450,45] not the precedent spot (routing wall, PDN stubs); 6x2 harden congested — same file
+- 2026-10-23 syscon PLAN (WO-20 RTL, WO-21 docs): rst_soc for all but syscon, 2-edge reboot, strap mux, 0.087 t;
+  mailbox +0xF04 unreachable from s11 (12-bit imm) -- finding_syscon_design_2026-10-23.md
 
 ## Notes index
 
@@ -123,3 +125,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-12 RF macro timing changes](finding_rf_macro_timing_review_2026-10-12.md) — 7 uncommitted timing edits all SOUND; bypass/wb_fwd/cdec-in-IF/inc64 reasoning, area
 - [2026-10-14 setup-timing note](finding_setup_timing_note_review_2026-10-14.md) — no-fwd + two-phase EX (alu_r/br_r/ex_ph): sound; claim true; cheaper verdict-flop cut
 - [2026-10-14 setup-timing post-RTL](finding_setup_timing_postrtl_review_2026-10-14.md) — steps 1-8 sound; rf_fields/csr_wb_hazard/hit-byp redundant; mtip_stale/cnt_xhalf brittleness
+- [2026-10-23 syscon design](finding_syscon_design_2026-10-23.md) — WO-20/21 decisions, driver/QEMU facts, acceptance benches, review checklist

@@ -17,6 +17,11 @@
   (counters ran ahead of the model); the muldiv model divided unsigned
   inside ?: with unsigned arms; memory_model's first fill-free read
   helper read mem[] inside a function (continuous assign not sensitive).
+- TB-006 (2026-10-23, found planning WO-10) tests/directed/wfi_umode: the
+  handler's mret back to M-mode kept MIE=1 (MPIE=1 from the previous mret),
+  so a core whose U-mode WFI waited re-took the still-pending timer at cont_b
+  forever (FC86 copy: 13617 traps, DUT-ABORT). The "waits" alternative the
+  MANIFEST accepted could never pass. Fix in WO-10 (clear MPIE).
 - TB-005 tests/directed first drafts: .skip regions jumped into (label in
   front of the padding); .text.init over 4 KB moves tohost.
 

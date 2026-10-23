@@ -45,3 +45,14 @@
   files gls_model/{primitives,sky130_fd_sc_hd}.v + pnl + src/rf_top.v + the
   two models + tb_tt_um.v; earlier GL runs: PASS, GL = RTL + 1 cycle.
   netlists/ in the repo is 2024-era and unrelated.
+- Spike 5a760667 CLINT (probe 2026-10-23, build/wo/probes/clint-offsets.S):
+  offsets 0x0000-0xBFFF answer (hart-0 msip/mtimecmp/mtime; every other
+  offset reads 0, sw/sh/sb dropped, mtime_hi writable); 0xC000 and up fault
+  (load 5, store 7, mtval = address). Same with or without
+  plugins/helpers/spike-fyracore.dtb: Spike ignores the clint reg size. The
+  committed dtb is byte-identical to `dtc` of the .dts. Spike has
+  `--wfi-as-nop` (all modes; not usable suite-wide: FyraCore's M-mode WFI waits).
+- tb_soc_periph's req_hold_check instances are reset by the bench's rst only:
+  any SoC-internal reset (syscon reboot/power-off) cuts an outstanding fetch
+  and they $fatal. WO-12 resets them with `rst || done`; tb_syscon_soc
+  (WO-15) with `rst || soc.rst_soc`.

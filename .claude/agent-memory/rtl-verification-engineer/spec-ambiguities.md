@@ -31,6 +31,9 @@
   mtimecmp 0x4000, mtime 0xBFF8; DT reg size 0xC000 or 0x10000 both work.
   Fix belongs in the tb only (tb PMA_IO0_TOP -> 0x0200BFFF, MEIP hook moved
   below 0xC000) and in random-generator memory maps, or pin old Spike.
+  CLOSED 2026-10-23 (user: testbench only): WO-11 narrows the tb window to
+  0x0200BFFF, MEIP hook -> 0x02008000 (probe: Spike RAZ/WI there; dtb reg
+  size ignored by Spike). Generators never touch the CLINT: no map change.
 - SA-005 (2026-10-21; see SA-006 for the RTL side) Spike 5a760667 with --priv=mu does NOT trap a U-mode
   WFI with TW=0 (the earlier "Spike traps it" was wrong); it retires it and
   sleeps forever with mie=0, FyraCore NOPs it (CPU ref 8.5). Both legal
@@ -43,3 +46,15 @@
   sleeping (power only; M-mode Linux unaffected). Doc fix or RTL fix is the
   user's call. wfi_umode (dcd3476) accepts both, with uncorrelated per-register
   alternatives (x20/x21/x24); tighten once decided.
+  CLOSED 2026-10-23 as a doc fix (1a845f5); WO-10 pins wfi_umode to the NOP
+  (x20=0x8 x21=0x4 x24=0x1), adds FC86 (U-mode WFI waits).
+- SA-007 (2026-10-23) syscon decisions still open with the user, taken by
+  the design WO (build/wo/WO-20-syscon-rtl.md) and assumed by WO-14..19
+  (assumption table in WO-14): CHIP_ID 0x41315301; FAIL (0x3333) halts like
+  power-off (ROADMAP silent); no flash B9h at power-off (ROADMAP says deep
+  power-down); CLK_GATE/POWER reserved RAZ/WI (ROADMAP: R/W, reset by any
+  reset); RESET_CAUSE only PIN/SOFT (ROADMAP: power-on/pin/software/watchdog;
+  TT has no POR cell); watchdog deferred; reset generator inside
+  alphaone_soc (ROADMAP sketched it in tt_um). FINISH acts on be[1:0]==11
+  only, so a replicated `sb 0x77` (wdata 0x77777777, be 0001) does nothing:
+  the hazard I raised is closed by that rule.

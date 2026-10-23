@@ -128,3 +128,25 @@ Formal probe recipe for internal invariants: copy src to scratch, add
   Non-blocking: run.sh:40-43/49-53 count a yosys error/timeout as FAILED,
   which run.py scores as KILLED; distinguish "no verdict".
   Status: REQ-MEM-001 formally proven (both ports); REQ-MEM-002 bounded 10.
+
+## 2026-10-23 session (planning; no code, no commits): WO-10..WO-19
+INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23/wo/).
+- WO-10 wfi_umode pinned to NOP + TB-006 handler fix + FC86 (probed: RTL x20=8
+  x21=4 x24=1 both timing variants; FC86 x20=0x80000007 x21=0 x24=0).
+- WO-11 tb CLINT window 0x0200BFFF, MEIP hook 0x02008000 (hart 2048's mtimecmp
+  slot), pma_edges edge test (fails on old bench at line 68, probed), dtb reg
+  0xc000 (inert), CPU ref 156/188. Only pma_edges.ref regenerates.
+- WO-12 mailbox: FINISH QEMU codes at +0x0; EVENT/VALUE/VALUE2 +0x7F0/4/8,
+  +0x7FC spare (coordinator correction: +0xF00 unreachable by 12-bit offset);
+  DRAIN before FINISH; verdict at FINISH; req_hold_check rst || done. Must land
+  before WO-20 (syscon RTL).
+- WO-13 docs for 10-12. WO-14 unit bench + REQ-SYS-001..013 + assumptions
+  A1-A13 (reconcile vs WO-20/WO-21). WO-15/16 tb_syscon_soc (alphaone_soc,
+  model-checks every syscon load; multi-boot programs). WO-17 tb_tt_um
+  tt_reboot (pins only). WO-18 mutants SY01-20, AS01-06. WO-19 formal
+  (shadow model BMC 16, two-copy miter for rst_soc comb dependence,
+  structural no-async-rst_soc), docs, final regression.
+- Design side (riscv-design-reviewer): WO-20 syscon RTL, WO-21 docs. The
+  run.sh line-96 `syscon` token belongs in WO-20's wiring commit.
+- Order caveat: land WO-10/11 before WO-20 starts or after its A6 (it diffs
+  run.sh soc dumps base vs head).

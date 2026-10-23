@@ -33,6 +33,10 @@ Bus / SoC
 - Device datasheets carry hidden state (PSRAM QPI/wrap, flash CRM/QPI/dual-CRM/BUSY) that survives a design
   reset; other TT designs set it. Always ask who establishes device state.
 - Back-pressure on one register orders only writes to THAT register: sideband GPIO writes race the shifter.
+- New register/mailbox offsets: check they fit a 12-bit signed store/load offset from the base register the
+  programs already hold (+0xF04 from s11 = SYSCON does not assemble, 2026-10-23). Assemble a use before fixing a map.
+- A new reset domain: list every block's .rst and say why it is on it; a sticky register on the wrong reset
+  is wiped silently, a block on the wrong one runs through the reboot. Lockstep benches cannot see either.
 
 Verification blind spots
 - Comments claiming "matches Spike" are often unverified -- probe Spike first.
