@@ -151,11 +151,10 @@ and peripheral clocks (section 6), put the flash in deep power-down (`B9h`),
 leave the PSRAM deselected (standby), keep only the reset logic alive. Only
 `rst_n` brings it back.
 
-**Clash with the test mailbox.** `tests/soc/periph.h` uses SYSCON +0x0..0xC as
-a testbench mailbox (FINISH 1 = pass, EVENT, VALUE, VALUE2) that the SoC
-ignores today. Before the real block lands, move FINISH onto the 0x5555 /
-0x3333 convention and move EVENT/VALUE to an offset the hardware leaves
-unimplemented (e.g. +0xF00), or the peripheral tests break.
+**Test mailbox: done.** FINISH uses the QEMU sifive_test codes (WO-12,
+d3cfd91, 28e95bf, 8e59169). EVENT, VALUE and VALUE2 are at +0x7F0, +0x7F4 and
++0x7F8 (+0x7FC spare), not +0xF00: a 12-bit store offset from SYSCON cannot
+reach +0xF00. The syscon must leave those words RAZ/WI.
 
 **Spike.** The window is outside Spike's memory, so a store there faults in
 Spike. Lockstep tests must stop before it, or Spike gets a plugin device
@@ -220,10 +219,10 @@ All small; together they could pay for most of 1.1-1.3.
 
 ### 1.5 Open decisions that touch the lock
 
-From PR #11: SA-006 (CPU reference 8.5 says U-mode WFI waits, the RTL makes it
-a NOP; M-mode Linux unaffected), the CLINT window (Spike 5a760667 faults at
-0x0200C000 and up, the testbench window reaches 0x020BFFFF), TT01 (reset
-release on the first or the second edge). Settle them before the lock.
+SA-006 is settled as a doc fix (1a845f5; wfi_umode pins the NOP, WO-10). The
+CLINT window is settled in the testbench (WO-11: 0x0200_0000-0x0200_BFFF, MEIP
+hook at 0x0200_8000); the RTL keeps its 64 KB window. TT01 (reset release on
+the first or the second edge) stays open; settle it before the lock.
 
 ### 1.6 The lock gate
 
