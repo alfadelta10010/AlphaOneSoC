@@ -178,6 +178,8 @@ module tb_syscon_soc;
                 fail($sformatf("%s: unexpected EVENT %h", test, e));
             else if (test == "syscon_reboot") begin
                 if (e !== 32'h51) fail($sformatf("%s: EVENT %h, want 51", test, e));
+            end else if (test == "syscon_wdt") begin
+                if (e !== 32'h56) fail($sformatf("%s: EVENT %h, want 56", test, e));
             end else if (test == "syscon_strap") begin
                 // the strap pin moves to the other value than the one latched,
                 // one nanosecond after this edge, and stays there through the reboot
@@ -192,7 +194,9 @@ module tb_syscon_soc;
             n_values = n_values + 1;
             if (n_values > exp_values)
                 fail($sformatf("%s: unexpected VALUE %h", test, v));
-            else if (test == "syscon_strap") begin
+            else if (test == "syscon_wdt") begin
+                if (v !== 32'h1) fail($sformatf("syscon_wdt: CR reported %h, want 1", v));
+            end else if (test == "syscon_strap") begin
                 // STRAPS as boot 1 read it is what the pin was at the pin reset
                 if (v !== {31'b0, rd_late_run})
                     fail($sformatf("syscon_strap: boot 1 read STRAPS %h, the pin was %b at the reset", v, rd_late_run));
@@ -417,6 +421,8 @@ module tb_syscon_soc;
             fin_noise_ok = 1'b1;
         end else if (test == "syscon_reboot") begin
             exp_fin_reboots = 4; exp_events = 1; exp_values = 5;
+        end else if (test == "syscon_wdt") begin
+            exp_wdt_reboots = 1; exp_events = 1; exp_values = 1;
         end else if (test == "syscon_fail") begin
             fail_expected = 1'b1; exp_fail_code = 16'h005A;
         end else if (test == "syscon_strap") begin
