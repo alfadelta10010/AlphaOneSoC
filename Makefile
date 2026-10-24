@@ -252,7 +252,7 @@ test-soc-periph: $(BUILD_DIR)
 # and the watchdog. Each run is "<program> [plusargs]"; +TEST= and +FLASH_FILE=
 # are added here. A run fails on a FAIL, ERROR or TIMEOUT line or a missing
 # PASS; all runs go first.
-SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)"
+SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_fail"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="

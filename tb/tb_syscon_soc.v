@@ -417,6 +417,8 @@ module tb_syscon_soc;
             fin_noise_ok = 1'b1;
         end else if (test == "syscon_reboot") begin
             exp_fin_reboots = 4; exp_events = 1; exp_values = 5;
+        end else if (test == "syscon_fail") begin
+            fail_expected = 1'b1; exp_fail_code = 16'h005A;
         end else if (test == "syscon_strap") begin
             exp_fin_reboots = 1; exp_events = 1; exp_values = 1;
         end else begin
@@ -436,6 +438,8 @@ module tb_syscon_soc;
                 fail($sformatf("%s: program check %h failed (value seen %h)", test, fail_code, value2));
             if (failed && fail_expected && fail_code !== exp_fail_code)
                 fail($sformatf("%s: FINISH fail code %h, want %h", test, fail_code, exp_fail_code));
+            if (failed && fail_expected && value2 !== 32'h1234)
+                fail($sformatf("%s: VALUE2 %h, want 1234", test, value2));
             if (passed && fail_expected)
                 fail($sformatf("%s: the program passed, want the fail code %h", test, exp_fail_code));
             if (n_fin != exp_fin_reboots)
