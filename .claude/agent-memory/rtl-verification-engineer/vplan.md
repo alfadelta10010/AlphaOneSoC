@@ -272,3 +272,12 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   rewrites RESET_CAUSE); SYS-008 no-fire = unit + formal only. New SY21
   (rq/rq2 not reset by rst), draft 44 faults, --check 37/294; WO-18 + INDEX
   updated.
+- 2026-10-24: WO-16 review (f512fd2 78e7772 a816d11): APPROVED with notes.
+  User trimmed the watch to 5,000 clocks (mtime held at 0 while off). SY21
+  as I drafted it was a bad mutant: deleting rq/rq2's rst assignments left
+  them X from power-up (no initial) -> rst_soc X, all runs fail trivially.
+  LESSON: a mutant that removes a reset must keep power-up defined; use
+  `x <= (x === 1'b1)` (hold through rst, X->0) or an equivalent. Corrected
+  SY21 in the draft + WO-18 (compiles, once). New user rules: target sky26d
+  unless told otherwise; one sandbox harden + one river_core run after ALL
+  remaining WOs, not per WO. WO-17 not reconciled (user: stop after WO-16).
