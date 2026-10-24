@@ -34,13 +34,18 @@
 `include "syscon_spec.vh"
 
 module tb_syscon_soc;
-    localparam real    TCLK     = 20.0;
     localparam integer UART_DIV = 4;
     localparam integer HOLD_CLOCKS = 200;     // power-off hold checked after the verdict
 
-    reg clk = 1'b0;
-    reg rst = 1'b1;
-    always #(TCLK / 2.0) clk = ~clk;
+    // The clock is 20 ns, as tb_soc_periph's. The +RD_LATE run is the exception:
+    // the Makefile's QSPI_LATE delays (+QSPI_DELAY=25 +QSPI_HOLD=12) are
+    // written for a 10 ns clock (tb_qspi, tb_tt_um), where only rd_late = 1
+    // can read the Pmod model; at 20 ns they leave no eye for either setting.
+    reg  clk = 1'b0;
+    reg  rst = 1'b1;
+    real TCLK = 20.0;
+    reg  clk_go = 1'b0;
+    always begin wait (clk_go); #(TCLK / 2.0) clk = ~clk; end
     integer cyc = 0;
     always @(posedge clk) cyc <= cyc + 1;
 
@@ -67,7 +72,7 @@ module tb_syscon_soc;
         .host_sck(qspi_sck), .host_cs_n(qspi_cs_n), .host_ctl_oe(qspi_ctl_oe),
         .host_io(qspi_io_out), .host_oe(qspi_io_oe), .dev_io(pmod_io), .dev_oe(pmod_oe));
 
-    rp2350_uart_model #(.BIT_NS(16.0 * UART_DIV * TCLK)) rp (
+    rp2350_uart_model #(.BIT_NS(16.0 * UART_DIV * 20.0)) rp (     // set_baud below follows TCLK
         .tx(uart_tx), .rx(uart_rx), .cts_n(uart_rts_n));
 
     // ── Handshake checkers (tb_rivercore.v's SOC_TB hookups) ────────────────
@@ -110,6 +115,7 @@ module tb_syscon_soc;
     reg     fail_expected   = 1'b0;  // the program ends in a FINISH fail store
     reg [15:0] exp_fail_code = 16'h0;
     integer max_cycles;
+    reg     rd_late_run;             // +RD_LATE: the strap is 1 through the pin reset
 
     // ── Syscon model ────────────────────────────────────────────────────────
     reg  [2:0]  m_cause = `RC_PIN;
@@ -172,6 +178,11 @@ module tb_syscon_soc;
                 fail($sformatf("%s: unexpected EVENT %h", test, e));
             else if (test == "syscon_reboot") begin
                 if (e !== 32'h51) fail($sformatf("%s: EVENT %h, want 51", test, e));
+            end else if (test == "syscon_strap") begin
+                // the strap pin moves to the other value than the one latched,
+                // one nanosecond after this edge, and stays there through the reboot
+                if (e !== 32'h52) fail($sformatf("%s: EVENT %h, want 52", test, e));
+                strap <= #1 ~m_strap;
             end
         end
     endtask
@@ -181,7 +192,11 @@ module tb_syscon_soc;
             n_values = n_values + 1;
             if (n_values > exp_values)
                 fail($sformatf("%s: unexpected VALUE %h", test, v));
-            else if (test == "syscon_reboot") begin
+            else if (test == "syscon_strap") begin
+                // STRAPS as boot 1 read it is what the pin was at the pin reset
+                if (v !== {31'b0, rd_late_run})
+                    fail($sformatf("syscon_strap: boot 1 read STRAPS %h, the pin was %b at the reset", v, rd_late_run));
+            end else if (test == "syscon_reboot") begin
                 // mtime at the program's first instructions of each boot: the
                 // CLINT restarted at every reboot, so it is the same every time
                 if (n_values == 1) mt_ref = v;
@@ -390,16 +405,20 @@ module tb_syscon_soc;
     end
 
     // ── Run ─────────────────────────────────────────────────────────────────
-    reg rd_late_run;
     initial begin
         if (!$value$plusargs("TEST=%s", test)) test = "";
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 3_000_000;
         rd_late_run = $test$plusargs("RD_LATE");
         strap = rd_late_run;
+        if (rd_late_run) TCLK = 10.0;
+        clk_go = 1'b1;
+        #1 rp.set_baud(16.0 * UART_DIV * TCLK);
         if (test == "syscon_regs") begin
             fin_noise_ok = 1'b1;
         end else if (test == "syscon_reboot") begin
             exp_fin_reboots = 4; exp_events = 1; exp_values = 5;
+        end else if (test == "syscon_strap") begin
+            exp_fin_reboots = 1; exp_events = 1; exp_values = 1;
         end else begin
             fail($sformatf("unknown +TEST=%0s", test));
         end
@@ -436,11 +455,11 @@ module tb_syscon_soc;
         end
         if (rp.errors != 0) fail($sformatf("%s: %0d RP2350 UART errors", test, rp.errors));
         if (errors == 0)
-            $display("PASS tb_syscon_soc %s (%0d cycles, %0d syscon loads and %0d stores checked, %0d reboots, %0d watchdog reboots, resets on fetch/split-2nd/data/idle = %0d/%0d/%0d/%0d, %0d flash reads cut)",
-                     test, cyc, n_loads, n_stores, n_fin, n_wdt,
+            $display("PASS tb_syscon_soc %s%0s (%0d cycles, %0d syscon loads and %0d stores checked, %0d reboots, %0d watchdog reboots, resets on fetch/split-2nd/data/idle = %0d/%0d/%0d/%0d, %0d flash reads cut)",
+                     test, rd_late_run ? " +RD_LATE" : "", cyc, n_loads, n_stores, n_fin, n_wdt,
                      cls_all[0], cls_all[1], cls_all[2], cls_all[3], n_cut);
         else
-            $display("FAIL tb_syscon_soc %s: %0d errors", test, errors);
+            $display("FAIL tb_syscon_soc %s%0s: %0d errors", test, rd_late_run ? " +RD_LATE" : "", errors);
         $finish;
     end
 endmodule
