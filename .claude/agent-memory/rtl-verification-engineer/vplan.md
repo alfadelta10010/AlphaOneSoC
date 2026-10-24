@@ -248,3 +248,27 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   codes stored at +0x0C..+0x1C; no CHIP_ID override. Ready for the coder.
   WO-16 (power-off with the watchdog armed) inherits the same model rule:
   check it at its reconcile.
+- 2026-10-24: WO-15 review (d53eeb4..4a28a5c): APPROVED with notes. Model
+  from syscon_spec.vh (no syscon_inst refs; observes dmem port, soc.mtime,
+  rst_soc), A18 explicit (held branch computes no fire). Lessons:
+  * "a FINISH store completes ~4 clocks into the next fetch" was LAYOUT-
+    dependent: after a sw whose next instruction is in the same fetched
+    word (RVC), the engine is idle at E1. REBOOT_ON_FETCH (.option norvc,
+    .balign 4, sw; nop) forces a fetch in flight. AS06 conclusion unchanged
+    (a FINISH reboot never lands mid-split; wdt_split is the only killer).
+  * QSPI_LATE (+QSPI_DELAY=25 +QSPI_HOLD=12) has no eye at a 20 ns clock;
+    benches using it run at 10 ns (tb_qspi, tb_tt_um, tb_syscon_soc +RD_LATE).
+  * wdt_split split-2nd hits 3/12 (my probe 8/12; different phase sweep).
+  Notes: lo = 1 << (16+TOP) overflows at TOP 15 (tb_syscon_soc.v:358);
+  no per-test syscon-load floor (a program that skips its body to
+  test_pass would still PASS).
+- 2026-10-24: WO-16 reconciled at 4a28a5c. Added B0 (64-bit lo :231/:358,
+  min_loads per test replacing n_loads==0 at :463, :40-43 comment, syscon_
+  reboot n_cut>=1), power-off watch as explicit bench edits (first poweroff
+  = watch, cls_off floor, sck stable), two-edge pin resets timed from the
+  MODEL (FINISH hold: rst over E2-E3; wdt hold: over E1-E2) -- the wrapper
+  never gives a 1-edge rst. Insight: a watchdog fire during power-off is
+  unobservable at SoC level (rst_soc already high, only rst exits and
+  rewrites RESET_CAUSE); SYS-008 no-fire = unit + formal only. New SY21
+  (rq/rq2 not reset by rst), draft 44 faults, --check 37/294; WO-18 + INDEX
+  updated.
