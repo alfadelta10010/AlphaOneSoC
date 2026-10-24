@@ -240,3 +240,11 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   reproducible. All 43 draft find strings occur once at f9c34a6. WO-14a
   acceptance amended: base f9c34a6, flake gate = tb_syscon seeds 1-8
   directly; make test-seeds informational (tb_uart +SEED=4 floor).
+- 2026-10-24: WO-14a accepted by Haiku (13/13 negs, old bench NB2a/b/3 PASS
+  = holes were real, seeds 1-8 PASS). WO-15 reconciled at bef364b: names
+  and the 43 mutant strings hold; model now states "no fire on held edges"
+  (A18); no SoC pre-fire case (unit + formal cover it); syscon_regs alias
+  sweep moved before the PIN W1C (same vacuity as WO-14's sweep) and FINISH
+  codes stored at +0x0C..+0x1C; no CHIP_ID override. Ready for the coder.
+  WO-16 (power-off with the watchdog armed) inherits the same model rule:
+  check it at its reconcile.
