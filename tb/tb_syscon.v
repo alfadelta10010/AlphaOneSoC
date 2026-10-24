@@ -747,19 +747,19 @@ module tb_syscon;
         integer a, n;
         begin
             sec("exhaustive offset sweep");
-            prs;
+            set_all_causes;
             for (a = 0; a < 16384; a = a + 1) begin
-                if (!(a >= 14'h40 && a < 14'h80)) begin
+                if (a != 1 && !(a >= 14'h40 && a < 14'h80)) begin
                     st(a * 4, 32'hFFFF_FFFF, 4'hF);
-                    if (a >= 8) begin
+                    if (a >= 3) begin
                         st(a * 4, 32'h0000_7777, 4'hF);
                         st(a * 4, 32'h0000_5555, 4'hF);
                     end
                     ld(a * 4); ld(`SYS_CAUSE); ld(`SYS_BOOTMODE); ld(`SYS_STRAPS); ld(`WDT_CR); ld(`WDT_TORR);
-                    if (rst_soc !== 1'b0 && cyc > 0) begin end
                 end
             end
-            prs;
+            st(`SYS_CAUSE, 32'hFFFF_FFFF, 4'hF); ld(`SYS_CAUSE); ld(`SYS_BOOTMODE);
+            set_all_causes;
             for (a = 127; a >= 64; a = a - 1) begin
                 st(a * 4, 32'hFFFF_FFFF, 4'hF);
                 st(a * 4, 32'h0000_7777, 4'hF);
