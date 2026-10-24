@@ -18,3 +18,4 @@
   W1C-alias check vacuous; FINISH codes not swept at +0x04..+0x1C; CHIP_ID
   default not exercised (parameter overridden). Required edits in the
   WO-14 review; close when the fix commit lands.
+  2026-10-24: all four go to WO-14a (after WO-23).

@@ -89,6 +89,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   fails SoC t_memstress); README macro at [450,45] not the precedent spot (routing wall, PDN stubs); 6x2 harden congested — same file
 - 2026-10-23 syscon PLAN (WO-20 RTL, WO-21 docs, WO-22 DW-compatible watchdog +0.057 t): rst_soc for all but syscon, 2-edge reboot, strap mux, 0.087 t;
   mailbox +0xF04 unreachable from s11 (12-bit imm) -- finding_syscon_design_2026-10-23.md
+- 2026-10-24 SA-009 (my WO-22 miss): wdt fires in the cycle after a FINISH store (rst_soc lags rq/off one edge);
+  WO-23 gates fire with ~rst_soc, +0.0009 t; breaks mutant WD03's string -- same file
 
 ## Notes index
 

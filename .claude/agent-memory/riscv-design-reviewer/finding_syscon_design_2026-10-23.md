@@ -67,3 +67,13 @@ w_torr | tap is the WO's mux); SA-008 (kick in the fire cycle does not stop the 
 term; cause[2] set wins. Re-ran on a git archive: lint 2/6/18 (syscon.v 0), wdt unit 109 PASS, wdt SoC 76084 PASS,
 WO-20 smokes unchanged. Nits only: alphaone_soc.v:28 comment now 103 cols (reflow), syscon.v header "That includes
 the / SoC test mailbox" odd wrap. WO-22 docs commit still waits for WO-21.
+
+**SA-009 / WO-23 (2026-10-24, build/wo/WO-23-syscon-fire-gate.md, acc files WO-23-acc/):** MY WO-22 miss -- the
+watchdog flops reset on rst_soc one edge AFTER rq/off rise, and fire was ungated, so a 3rd tick in the cycle after a
+FINISH store fired (reboot RESET_CAUSE 0x7, power-off WDT+rq). User chose `fire ... & ~rst_soc` (line 118). Verified in
+scratch: probe 0x3/0x1 (base 0x7/0x5), tb_syscon seed 1 identical (3945826 checks, 464 fires), WO-20/22 smokes exact,
+lint 2/6/18, yosys check clean, rst_soc cone {rst,rq,off}, +10 um^2 = +0.0009 t. Breaks draft mutant WD03's find string
+(new WD16 = remove the gate; no committed bench kills it). Same-cycle fire+FINISH still sets WDT (intended).
+**Lesson:** a sync-reset domain driven by flops (rst_soc) lags its cause by one edge -- gate any one-cycle event in that
+domain, or the "cannot X while held" claim is false for the first held cycle. Also: committed syscon now measures
+1,697.9 um^2 (0.150 t) standalone on synll.sh vs the docs' 1,625.3 (0.144 t, WO-22 scratch number); not chased.

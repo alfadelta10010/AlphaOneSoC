@@ -32,3 +32,5 @@
   hold (en still 1 for one clock). Reproducer build/wo14rev/probe_e1.v:
   `cd build/wo14rev && iverilog -o probe_e1 ../../src/syscon.v probe_e1.v
   && vvp -n probe_e1` -> RESET_CAUSE 0x7 after reboot, 0x5 in power-off.
+  -> 2026-10-24: user decision = RTL fix (WO-23, fire gated by rst_soc).
+     Close BUG-001 when WO-23 lands and WO-14a's k=16..18 pass (WD16 FAILs).

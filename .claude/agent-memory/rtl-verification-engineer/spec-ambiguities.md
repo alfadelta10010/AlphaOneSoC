@@ -85,3 +85,10 @@
   spurious-but-truthful WDT bit). Fix options: gate fire with ~rst_soc
   (src/syscon.v:118) or let the model count on the first held edge. WO-19's
   "off implies no fire" fails until decided. Escalated via dispatcher.
+  DECIDED 2026-10-24 by the user: gate the fire in the RTL,
+  `fire = en & tick & (cnt == 2'd2) & ~rst_soc` (src/syscon.v:118), designer's
+  WO-23. Model unchanged (frozen on held edges). WO-14 gains SYS-019 + A18;
+  WO-14a pins it (s_same k=16..20); WO-18 WD16 removes the gate; WO-19
+  syscon_gate proves it (induct). Verified on a gated throwaway copy
+  (build/wo14rev/probe_gate.v): k=16 cause 0x3, k=17/18 0x1 in off, a kick
+  at fire-1 -> fire +9, a TORR write at fire-1 -> fire +13 = 3P+1 (TOP 1).

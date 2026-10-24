@@ -224,3 +224,10 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   200k idle > 3*P15+1), reset rate 1/6 in holds (~69% complete), sweep
   window top-down, reads during rst unchecked (rd_late still checked).
 - Seeds 1-3 PASS (build/wo-14 logs); bad-kick counter counts attempts (4813).
+- 2026-10-24: Haiku accepted 8eeba2e (seeds 1-4, 9/9 negs, test-all 43 vs 42).
+  User decided SA-009 = RTL gate (WO-23). Wrote WO-14a (bench fix-ups B1-B3,
+  N1-N4, negs WD16/NB2a/NB2b/NB3, test-seeds 8 seeds as the flake check).
+  Amended WO-18 (WD16; WD03 find -> "tick & (cnt == 2'd2)", the old full line
+  breaks after WO-23; 43 faults, --check 36 syscon.v / 293 total), WO-19
+  (syscon_gate harness, induct, PROVED; WD16 must FAIL it), WO-14 (SYS-019,
+  A18), INDEX. Draft mutants file updated (build/wo/probes/...draft.py).

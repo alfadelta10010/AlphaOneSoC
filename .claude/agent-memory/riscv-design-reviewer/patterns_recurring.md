@@ -37,6 +37,9 @@ Bus / SoC
   programs already hold (+0xF04 from s11 = SYSCON does not assemble, 2026-10-23). Assemble a use before fixing a map.
 - A new reset domain: list every block's .rst and say why it is on it; a sticky register on the wrong reset
   is wiped silently, a block on the wrong one runs through the reboot. Lockstep benches cannot see either.
+- A sync reset made from flops (rst_soc = rst | rq | off) reaches the domain's flops one edge after its cause:
+  any one-cycle event in that domain (watchdog fire, SA-009, 2026-10-24) must be gated by the reset, or
+  "cannot X while held" is false for the first held cycle. Probe: aim the event at the cycle after the store.
 
 Verification blind spots
 - Comments claiming "matches Spike" are often unverified -- probe Spike first.
