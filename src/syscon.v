@@ -50,7 +50,9 @@
 // as it does after rst_n rises; power-off sets `off`, which holds rst_soc
 // until rst. rst_soc is a function of rst and flops alone (nothing from the
 // bus) and is used only as a synchronous reset. syscon's own bus writes are
-// ignored while rst_soc is high, so it never resets itself mid-write.
+// ignored while rst_soc is high, so it never resets itself mid-write, and
+// `fire` is gated by rst_soc: the watchdog's flops clear only on the edge
+// after rq or off rises, and it must not fire in the cycle between.
 //
 // The strap lives here because qspi_ctrl's `late` flop reloads whenever its
 // reset is high: during a reboot it must see the value latched at the pin
@@ -115,7 +117,7 @@ module syscon #(
     wire       kick    = wwr & (widx == 6'd3) & (wdata[7:0] == 8'h76);
     wire       tap     = wdt_tap[top];
     wire       tick    = tap & ~tprev;
-    wire       fire    = en & tick & (cnt == 2'd2);
+    wire       fire    = en & tick & (cnt == 2'd2) & ~rst_soc;
 
     always @(posedge clk) begin
         if (rst_soc) begin

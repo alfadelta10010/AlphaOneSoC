@@ -519,7 +519,12 @@ watchdog.
 * Its expiry is a one-cycle pulse `fire` ORed into the reboot request `rq`. It
   cannot repeat: the tick is an edge, gone the next cycle, and on the edge
   after that `rst_soc` clears EN.
-* While powered off, `rst_soc` holds EN at 0 and `mtime` at 0: it cannot fire.
+* It cannot fire while any reset is held: `fire` is gated by `rst_soc`. That
+  matters for one cycle. A FINISH store sets `rq` or `off` on its edge, but
+  EN and the count clear only on the next edge, so a third tick in the cycle
+  after the store would otherwise set WDT and raise `rq` (a reboot would read
+  RESET_CAUSE `0x7`, not `0x3`). From that next edge `rst_soc` holds EN at 0
+  and `mtime` at 0, through a reboot and for as long as the SoC is off.
 * RESET_CAUSE bit 2 (WDT) is on `rst`, so it survives the reboot it caused.
   A fire in the same cycle as a W1C of bit 2 leaves it set (set wins). If
   `fire` and a FINISH reboot meet in one cycle, SOFT and WDT are both set and
