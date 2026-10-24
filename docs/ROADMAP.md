@@ -241,8 +241,12 @@ All small; together they could pay for most of 1.1-1.3.
 
 SA-006 is settled as a doc fix (1a845f5; wfi_umode pins the NOP, WO-10). The
 CLINT window is settled in the testbench (WO-11: 0x0200_0000-0x0200_BFFF, MEIP
-hook at 0x0200_8000); the RTL keeps its 64 KB window. TT01 (reset release on
-the first or the second edge) stays open; settle it before the lock.
+hook at 0x0200_8000); the RTL keeps its 64 KB window. TT01 is settled
+(2026-10-24): the wrapper keeps releasing the pins on the second edge after
+`rst_n` rises, one edge after the SoC's flops first take their reset values.
+No RTL bench can tell that from the first edge, but the demo board resets
+with the clock stopped and TinyTapeout confirms that a glitch at that edge
+would reach the pins (`tb/VPLAN.md` 4.2, `docs/pins-and-peripherals.md` 1).
 
 ### 1.6 The lock gate
 

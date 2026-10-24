@@ -215,7 +215,8 @@ touches behaviour nothing specifies (section 5).
 | FC27 | equivalent | argument: garbage rd writes during a load wait are unobservable, EX is held by use_hazard until the final write, and after a reset x1-x31 are unspecified (Priv 3.4) |
 | FC81 | equivalent | timing only: a stale wfi_active clears on the first cycle after reset because mie resets to 0 (pinned by tb_csr); costs at most one stall cycle |
 | FC84 | equivalent | every use of exwb_memWR is gated by exwb_valid, which resets, and the stale bit is overwritten on the first cycle |
-| GP03, TT01 | equivalent | SoC files, as scored before |
+| GP03 | equivalent | SoC file, as scored before |
+| TT01 | equivalent in zero-delay RTL; kept by design (settled 2026-10-24) | `run` opening the pin gates on the first edge after `rst_n` rises instead of the second. It differs only on a reset with no clock edge while `rst_n` is low (the demo board firmware's first load of a project; the reset button with the clock stopped): there the SoC's flops first take their reset values on edge 1, so the mutant opens the gates on that same edge, a race of about a nanosecond on `uo_out` and `uio_oe`, and gives `run` D = 1 at the asynchronous release of `rst_n` (the design has D = 0 there, so `run` cannot go metastable). TinyTapeout (Discord, 2026-10-23): the clock is not guaranteed to toggle during reset, a few-ns glitch on a project output reaches the pin, and a few ns of `uio_oe` contention with the RP2350 is harmless. The second edge is therefore defence in depth for one flop. Only a gate-level run with SDF of tb_tt_um's stopped-clock reset can see it (section 5) |
 
 RG01 and RG04 (x0 masked in the core) are killed by test-regfile, so they are
 not survivors; they only cannot be seen from the core.
@@ -237,7 +238,9 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
   (`+RESETS`) and used by `core_reset`, which is DUT-only because Spike's
   trace would not apply; not run through the SoC (a SoC reset restarts the
   PSRAM start-up, outside the datasheet subset in `docs/`).
-- Gate level: no netlist runs in this pass.
+- Gate level: no netlist runs in this pass. TT01 (section 4.2) can only be
+  killed there: tb_tt_um's stopped-clock reset on the SDF-annotated netlist,
+  with a monitor for a glitch on `uo_out` / `uio_oe` at the first edge.
 - Behaviour nothing specifies is not checked: ALU output for codes never
   issued, branch result for reserved funct3, signExt's SYSTEM output,
   decoder funct3/funct7 for formats without them (spec-ambiguities in the
