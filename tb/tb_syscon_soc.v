@@ -188,6 +188,9 @@ module tb_syscon_soc;
                 fail($sformatf("%s: unexpected EVENT %h", test, e));
             else if (test == "syscon_poweroff") begin
                 if (e !== 32'h53) fail($sformatf("%s: EVENT %h, want 53", test, e));
+            end else if (test == "syscon_pinreset") begin
+                if (e !== (n_events == 1 ? 32'h54 : n_events == 2 ? 32'h55 : 32'h57))
+                    fail($sformatf("%s: EVENT %h, want %0s", test, e, n_events == 1 ? "54" : n_events == 2 ? "55" : "57"));
             end else if (test == "syscon_reboot") begin
                 if (e !== 32'h51) fail($sformatf("%s: EVENT %h, want 51", test, e));
             end else if (test == "syscon_wdt") begin
@@ -455,6 +458,26 @@ module tb_syscon_soc;
         @(posedge clk); @(posedge clk); #1 rst = 1'b0;
     end
 
+    // ── Pin resets inside holds (syscon_pinreset) ───────────────────────────
+    // Timed from the model's state, not from soc.rst_soc. Each reset is two
+    // edges long, the wrapper's minimum.
+    initial begin : pin_reset_in_holds
+        #2;
+        if (test == "syscon_pinreset") begin
+            // FINISH reboot hold: m_hold = 2 just after E0. rst covers E2, E3.
+            wait (m_hold == 2 && why == 1);
+            @(posedge clk);                          // E1
+            #1 rst = 1'b1; tb_in[7] = 1'b1; n_prst = n_prst + 1;
+            @(posedge clk); @(posedge clk);          // E2, E3
+            #1 rst = 1'b0;
+            // watchdog reboot hold: just after the fire edge E0. rst covers E1, E2.
+            wait (m_hold == 2 && why == 2);
+            #1 rst = 1'b1; tb_in[6] = 1'b1; n_prst = n_prst + 1;
+            @(posedge clk); @(posedge clk);          // E1, E2
+            #1 rst = 1'b0;
+        end
+    end
+
     // ── Run ─────────────────────────────────────────────────────────────────
     initial begin
         if (!$value$plusargs("TEST=%s", test)) test = "";
@@ -478,6 +501,8 @@ module tb_syscon_soc;
             exp_fin_reboots = 1; exp_events = 1; exp_values = 1; min_loads = 4;
         end else if (test == "syscon_poweroff") begin
             exp_events = 1; exp_prst = 1; min_loads = 7;
+        end else if (test == "syscon_pinreset") begin
+            exp_fin_reboots = 2; exp_wdt_reboots = 1; exp_events = 3; exp_prst = 2; min_loads = 9;
         end else begin
             fail($sformatf("unknown +TEST=%0s", test));
         end
