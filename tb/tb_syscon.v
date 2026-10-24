@@ -21,7 +21,7 @@ module tb_syscon;
     reg  [31:0] tc = 0;               // scaled mtime: wdt_tap = tc[15:0]
     wire        rst_soc, rd_late;
     wire [31:0] rdata;
-    syscon #(.CHIP_ID(`CHIP_ID_SPEC)) uut (
+    syscon uut (
         .clk(clk), .rst(rst), .rst_soc(rst_soc), .sel(sel), .we(we), .be(be),
         .addr(aw), .wdata(wdata), .rdata(rdata),
         .strap_rd_late(pin), .rd_late(rd_late), .wdt_tap(tc[15:0]));
