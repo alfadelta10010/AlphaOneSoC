@@ -421,6 +421,8 @@ module tb_syscon_soc;
             fin_noise_ok = 1'b1;
         end else if (test == "syscon_reboot") begin
             exp_fin_reboots = 4; exp_events = 1; exp_values = 5;
+        end else if (test == "syscon_wdt_split") begin
+            exp_wdt_reboots = 12;
         end else if (test == "syscon_wdt") begin
             exp_wdt_reboots = 1; exp_events = 1; exp_values = 1;
         end else if (test == "syscon_fail") begin
@@ -460,6 +462,10 @@ module tb_syscon_soc;
                 fail($sformatf("%s: the power-off hold was not observed", test));
             if (n_loads == 0) fail($sformatf("%s: no syscon load was checked", test));
             // coverage floors: the scenario each test is for really happened
+            if (test == "syscon_wdt_split") begin
+                if (cls_rb[1] < 1) fail("syscon_wdt_split: no watchdog reboot landed between the halves of a split fetch");
+                if (cls_rb[2] < 1) fail("syscon_wdt_split: no watchdog reboot landed on a data transaction");
+            end
             if (test == "syscon_reboot" && cls_rb[0] < 1)
                 fail("syscon_reboot: no reboot landed on a flash fetch in flight");
         end
