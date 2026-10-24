@@ -3,11 +3,12 @@
 // syscon + watchdog (src/syscon.v) against a cycle model written from the
 // specification (tb/syscon_spec.vh, build/wo/WO-14: requirements SYS-001..018,
 // assumptions A1-A17), not from the RTL. Checked on every clock: rst_soc,
-// rd_late and, for every read, rdata. The watchdog's timeout is additionally
-// checked against its stated bound, independently of the model: a fire comes
-// more than 2*Pt and at most 3*Pt+1 clocks after the last kick, enable or TORR
-// write (Pt = period of the tapped bit, 2^(t+1) clocks here: the bench drives
-// wdt_tap from a free-running counter, i.e. a scaled mtime).
+// rd_late and, for every read, rdata. Every fire the model predicts is also
+// checked against the watchdog's stated bound: more than 2*Pt and at most
+// 3*Pt+1 clocks after the last kick, enable or TORR write (Pt = period of the
+// tapped bit, 2^(t+1) clocks here: wdt_tap is a free-running counter, a scaled
+// mtime). The DUT's fires are held to that bound through the model: rst_soc
+// is compared with it on every clock.
 //
 // Stimulus: directed sections, an exhaustive sweep of every word offset, then
 // seeded constrained-random (+SEED=, +CYCLES=) with coverage floors. Inputs
@@ -44,6 +45,7 @@ module tb_syscon;
     reg        cv_on = 0;
     integer cv_reboot = 0, cv_off = 0, cv_fail = 0, cv_fires = 0, cv_ign = 0;
     integer cv_w1c0 = 0, cv_w1c1 = 0, cv_w1c2 = 0, cv_bm = 0, cv_good = 0, cv_bad = 0;
+    integer cv_hdone = 0;
     integer cv_torr = 0, cv_hw = 0, cv_rsth = 0, cv_rsto = 0, cv_hpin = 0;
 
     task chk(input [8*10-1:0] what, input [31:0] got, input [31:0] want);
@@ -118,6 +120,7 @@ module tb_syscon;
             if (m_hold > 0 || m_off) begin
                 if (cv_on && sel && we) cv_hw = cv_hw + 1;
                 if (cv_on && pin !== prev_pin) cv_hpin = cv_hpin + 1;
+                if (cv_on && m_hold == 1 && !m_off) cv_hdone = cv_hdone + 1;
                 if (m_hold > 0) m_hold = m_hold - 1;
                 m_en = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1;
             end else begin
@@ -157,8 +160,8 @@ module tb_syscon;
                     if (w1c[0] && m_cause[0]) cv_w1c0 = cv_w1c0 + 1;
                     if (w1c[1] && m_cause[1]) cv_w1c1 = cv_w1c1 + 1;
                     if (w1c[2] && m_cause[2]) cv_w1c2 = cv_w1c2 + 1;
-                    if (kick) cv_good = cv_good + 1;
-                    if (sel && we && !kick && !torr && (aw == 14'h43 || wdata[7:0] == `WDT_KEY)) cv_bad = cv_bad + 1;
+                    if (kick && m_en && m_ticks > 0) cv_good = cv_good + 1;
+                    if (sel && we && m_en && m_ticks > 0 && !kick && !torr && (aw == 14'h43 || wdata[7:0] == `WDT_KEY)) cv_bad = cv_bad + 1;
                     if (torr && m_en) cv_torr = cv_torr + 1;
                     if (fr) cv_fires = cv_fires + 1;
                 end
@@ -771,6 +774,7 @@ module tb_syscon;
     endtask
 
     // ---------------------------------------------------------- random
+    localparam KS = 20;  // 3 in KS accesses are steered into a kick while the watchdog counts
     task rnd_access;
         reg [13:0] a;
         reg [31:0] d;
@@ -816,6 +820,13 @@ module tb_syscon;
                 case (rnd(6)) 0: d[2:0] = 3'b001; 1, 4: d[2:0] = 3'b010; 2, 5: d[2:0] = 3'b100; default: d[2:0] = 3'b111; endcase
                 if (rnd(10) < 8) b[0] = 1;
             end
+            // steer: with the watchdog counting, kicks (good and bad) are what matter
+            if (m_en && m_ticks > 0 && !m_off && m_hold == 0 && rnd(KS) < 3) begin
+                a = 14'h43; w = 1; b = 4'h1;
+                d = $random(seed);
+                if (rnd(3) != 0) d[7:0] = 8'h76;
+                else if (d[7:0] == 8'h76) d[7:0] = 8'h77;
+            end
             nxt; drv(1, w, b, a * 4, d);
         end
     endtask
@@ -840,12 +851,12 @@ module tb_syscon;
             end
             nxt; rst = 0; drv_idle;
             cv_on = 0;
-            $display("coverage: reboots %0d power-offs %0d fails %0d fires %0d ignored-FINISH %0d W1C %0d/%0d/%0d BM-writes %0d good-kicks %0d bad-kicks %0d TORR-enabled %0d held-writes %0d rst-in-hold %0d rst-in-off %0d held-pin-changes %0d",
+            $display("coverage: reboots %0d power-offs %0d fails %0d fires %0d ignored-FINISH %0d W1C %0d/%0d/%0d BM-writes %0d good-kicks %0d bad-kicks %0d TORR-enabled %0d held-writes %0d rst-in-hold %0d rst-in-off %0d held-pin-changes %0d hold-done %0d",
                      cv_reboot, cv_off, cv_fail, cv_fires, cv_ign, cv_w1c0, cv_w1c1, cv_w1c2, cv_bm, cv_good, cv_bad,
-                     cv_torr, cv_hw, cv_rsth, cv_rsto, cv_hpin);
+                     cv_torr, cv_hw, cv_rsth, cv_rsto, cv_hpin, cv_hdone);
             if (cv_reboot < 50 || cv_off < 20 || cv_fail < 20 || cv_fires < 30 || cv_ign < 500 ||
                 cv_w1c0 < 50 || cv_w1c1 < 50 || cv_w1c2 < 50 || cv_bm < 500 || cv_good < 200 ||
-                cv_bad < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50) begin
+                cv_bad < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50 || cv_hdone < 100) begin
                 fails = fails + 1;
                 $display("FAIL coverage: a floor was missed (see the coverage line)");
             end
@@ -876,9 +887,10 @@ module tb_syscon;
         s_sweep;
         s_random;
         idle(4);
+        $display("end time %0d ns", $time);
         if (fails == 0) $display("PASS tb_syscon (%0d checks, %0d watchdog fires, seed %0d)", checks, fires, seed0);
         else            $display("FAIL tb_syscon: %0d failures, %0d checks, seed %0d", fails, checks, seed0);
         $finish;
     end
-    initial begin #(64'd20_000_000_000); $display("TIMEOUT tb_syscon"); $finish; end
+    initial begin #1; #(64'd100_000_000 + 64'd50 * ncyc); $display("TIMEOUT tb_syscon"); $finish; end
 endmodule
