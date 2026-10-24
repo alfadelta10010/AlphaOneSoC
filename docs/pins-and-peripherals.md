@@ -183,13 +183,27 @@ about 0.4 tiles of that.
   SoC's active-high reset, is set by `rst_n` itself, with or without a clock,
   and cleared by the second clock edge after `rst_n` rises.
   * It has to be set without a clock. The demo board's firmware, loading a
-    project that has no section in its `config.ini`, stops the clock, pulses
-    `rst_n` low for 2 ms and only then starts the clock
-    (`tt-micropython-firmware`, `demoboard.py`: `clock_project_stop()`,
-    `_first_encouter_reset()`, `clock_project_PWM()`). A reset that waited for
-    a clock edge would never see that pulse.
+    project for the first time since it booted and finding no section for it
+    in its `config.ini`, stops the clock, pulses `rst_n` low for 2 ms and
+    only then starts the clock (`tt-micropython-firmware`, `demoboard.py`:
+    `clock_project_stop()`, `_first_encouter_reset()`,
+    `clock_project_PWM()`). A reset that waited for a clock edge would never
+    see that pulse. The other ways the board resets a project, and the ways
+    it does not, are listed below.
   * Those two edges are what carries the reset into the SoC's flops, so any
     pulse on `rst_n` resets the chip, however short.
+  * The pins leave reset on the second edge as well, one edge after the SoC's
+    flops first take their reset values. They are gated by `run`, a flop of
+    their own that rises on the edge `rst` falls. After a reset with the clock
+    running this changes nothing: the flops took their reset values long
+    before. After one with the clock stopped, edge 1 is where they take them,
+    and pins opened on that edge would race them for about a nanosecond.
+    TinyTapeout confirmed (Discord, 2026-10-23) that the clock is not
+    guaranteed to run during reset and that such a glitch reaches the pin; a
+    few ns of contention on `uio` with the RP2350 is harmless. `run` also
+    loads 0 on the edge where `rst_n` is released, so that release cannot
+    make it metastable. No RTL bench can tell the second edge from the first
+    (mutant TT01, `tb/VPLAN.md` 4.2): keep it.
   * `ena` is unused.
 * **While `rst` is high the pins depend on neither a clock nor on what the
   SoC's flops powered up with:**
@@ -225,6 +239,30 @@ about 0.4 tiles of that.
 * The demo board starts the clock by itself only if the project's `clock_hz`
   in `info.yaml` is not 0. With 0 the clock has to be started by hand, or
   from a `config.ini` section for the project.
+
+**Selecting the project does not reset it. Reset it after every selection**
+(Reset in the TinyTapeout commander). An unselected project has `clk`,
+`rst_n`, `ui_in` and `uio_in` tied to 0 and its power switched off, both by
+the same enable (`tt-multiplexer`, `rtl/tt_mux.v`), so at selection it powers
+up with `rst_n` already high and starts from whatever its flops powered up
+with. Until the first reset the SoC may drive the QSPI pins and `uo_out` from
+that state; the RP2350's `uio` pins are inputs by then (below). What each
+board action does, from the sources as of 2026-10-24:
+
+| Action | Clock while `rst_n` is low | Reset? |
+|---|---|---|
+| Firmware loads the project for the first time since boot, no `config.ini` section | none: stopped, 2 ms pulse, then started if `clock_hz` is set | yes (the case the second edge is for) |
+| Firmware loads it with a `config.ini` section (also written by the commander's "Make default") | running: `clock_frequency` starts it before the pulse | yes, unless `start_in_reset` holds it |
+| Firmware selects it again in the same session | - | **no** (`_first_encouter_reset` runs once per project per boot) |
+| Commander selects it (`ttcontrol.py` `select_design`) | - | **no** (it turns the firmware's config handling off) |
+| Commander Reset (`ttcontrol.py` `reset_project`) | 10 clocks, released with the clock stopped, then restarted | yes |
+| `tt.reset_project(True)` / `(False)` from the REPL | whatever the clock is doing; only the pin moves | yes |
+| The demo board's reset button | whatever the clock is doing; the contacts bounce | yes |
+
+Every selection, by the firmware or the commander, first sets all the
+RP2350's `uio` pins to inputs (`project_mux.py`, `safe_bidir()`), so after
+programming the flash with the chip-ROM project selected the RP2350 has let
+go of the bus before this project is selected.
 
 `make test-wrapper` (`tb/tb_tt_um.v`, `tests/soc/tt_pins.S`) checks all of
 this through the pins alone, with the board wired from the pinout table
