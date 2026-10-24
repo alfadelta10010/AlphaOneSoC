@@ -231,3 +231,12 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   breaks after WO-23; 43 faults, --check 36 syscon.v / 293 total), WO-19
   (syscon_gate harness, induct, PROVED; WD16 must FAIL it), WO-14 (SYS-019,
   A18), INDEX. Draft mutants file updated (build/wo/probes/...draft.py).
+- 2026-10-24: WO-23 accepted (f9c34a6, fire line now src/syscon.v:120). WO-14a
+  review (a9d6115 f355714 7575c8b 369e90c c2ebe57, tb_syscon.v only):
+  APPROVED with notes. B1-B3, N1-N4 as specified. Accepted deviations: kick
+  steering from MODEL state (3/20 while m_en && ticks>0) and a SOFT-W1C
+  steer + 1/3 FINISH bias toward 0x7777: model state is a function of the
+  seed only (never of DUT outputs), so stimulus stays DUT-independent and
+  reproducible. All 43 draft find strings occur once at f9c34a6. WO-14a
+  acceptance amended: base f9c34a6, flake gate = tb_syscon seeds 1-8
+  directly; make test-seeds informational (tb_uart +SEED=4 floor).

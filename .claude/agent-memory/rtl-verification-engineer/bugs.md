@@ -34,3 +34,9 @@
   && vvp -n probe_e1` -> RESET_CAUSE 0x7 after reboot, 0x5 in power-off.
   -> 2026-10-24: user decision = RTL fix (WO-23, fire gated by rst_soc).
      Close BUG-001 when WO-23 lands and WO-14a's k=16..18 pass (WD16 FAILs).
+- TB-007? (2026-10-24, reported by the WO-14a coder) tb_uart +SEED=4 fails
+  its own coverage floor `rx_breaks < 10` (tb/tb_uart.v:1583: "too few
+  breaks: 8 sent"): a floor that the stimulus does not guarantee, so a seed
+  can miss it. Unrelated to syscon. Stops default `make test-seeds` at s=4.
+  Coordinator checking f9c34a6/main. Fix: steer breaks, or count/floor per
+  stimulus. Not mine to fix in WO-14a.
