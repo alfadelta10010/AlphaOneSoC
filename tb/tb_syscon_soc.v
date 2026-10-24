@@ -158,7 +158,7 @@ module tb_syscon_soc;
     integer n_cut = 0;                              // reboots that cut a flash read
     integer ev_cls = 0;                             // class sampled at E1 for the NOTE
     reg     await_fetch = 1'b0, await_word = 1'b0;
-    reg     boot_val_seen = 1'b0;                   // a VALUE since the last reset
+    reg [31:0] mt_ref = 0;                          // syscon_reboot: boot 1's mtime report
 
     initial begin : init_cls
         integer k;
@@ -170,6 +170,9 @@ module tb_syscon_soc;
             n_events = n_events + 1;
             if (n_events > exp_events)
                 fail($sformatf("%s: unexpected EVENT %h", test, e));
+            else if (test == "syscon_reboot") begin
+                if (e !== 32'h51) fail($sformatf("%s: EVENT %h, want 51", test, e));
+            end
         end
     endtask
 
@@ -178,6 +181,14 @@ module tb_syscon_soc;
             n_values = n_values + 1;
             if (n_values > exp_values)
                 fail($sformatf("%s: unexpected VALUE %h", test, v));
+            else if (test == "syscon_reboot") begin
+                // mtime at the program's first instructions of each boot: the
+                // CLINT restarted at every reboot, so it is the same every time
+                if (n_values == 1) mt_ref = v;
+                else if (v > mt_ref + 64 || v + 64 < mt_ref)
+                    fail($sformatf("syscon_reboot: boot %0d read mtime %0d at its start, boot 1 read %0d (CLINT not restarted?)",
+                                   n_values, v, mt_ref));
+            end
         end
     endtask
 
@@ -374,7 +385,6 @@ module tb_syscon_soc;
             end
         end
 
-        if (s_rsoc === 1'b1) boot_val_seen = 1'b0;
         if (done) post_done = post_done + 1;
         prev_rsoc = (s_rsoc === 1'b1);
     end
@@ -388,6 +398,8 @@ module tb_syscon_soc;
         strap = rd_late_run;
         if (test == "syscon_regs") begin
             fin_noise_ok = 1'b1;
+        end else if (test == "syscon_reboot") begin
+            exp_fin_reboots = 4; exp_events = 1; exp_values = 5;
         end else begin
             fail($sformatf("unknown +TEST=%0s", test));
         end
@@ -418,6 +430,9 @@ module tb_syscon_soc;
             if (post_done < HOLD_CLOCKS || !m_off)
                 fail($sformatf("%s: the power-off hold was not observed", test));
             if (n_loads == 0) fail($sformatf("%s: no syscon load was checked", test));
+            // coverage floors: the scenario each test is for really happened
+            if (test == "syscon_reboot" && cls_rb[0] < 1)
+                fail("syscon_reboot: no reboot landed on a flash fetch in flight");
         end
         if (rp.errors != 0) fail($sformatf("%s: %0d RP2350 UART errors", test, rp.errors));
         if (errors == 0)

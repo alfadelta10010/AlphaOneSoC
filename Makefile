@@ -252,7 +252,7 @@ test-soc-periph: $(BUILD_DIR)
 # and the watchdog. Each run is "<program> [plusargs]"; +TEST= and +FLASH_FILE=
 # are added here. A run fails on a FAIL, ERROR or TIMEOUT line or a missing
 # PASS; all runs go first.
-SYSCON_SOC_RUNS := "syscon_regs"
+SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
@@ -263,13 +263,11 @@ test-syscon-soc: $(BUILD_DIR)
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
 		set -- $$run; t=$$1; shift; n=$$((n+1)); \
-		if [ ! -f $$t.hex ]; then \
-			$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
-				-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
-				$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
-			$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
-				--change-addresses=-0x20000000 $$t.elf $$t.hex || { bad=1; continue; }; \
-		fi; \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 $$t.elf $$t.hex || { bad=1; continue; }; \
 		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SYSCON_SOC_DIR)/$$t.hex "$$@" > $$t.$$n.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' $$t.$$n.log | head -40; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.$$n.log || ! grep -q '^PASS' $$t.$$n.log; then bad=1; fi; \
