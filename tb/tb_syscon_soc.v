@@ -37,10 +37,13 @@ module tb_syscon_soc;
     localparam integer UART_DIV = 4;
     localparam integer HOLD_CLOCKS = 200;     // power-off hold checked after the verdict
 
-    // The clock is 20 ns, as tb_soc_periph's. The +RD_LATE run is the exception:
-    // the Makefile's QSPI_LATE delays (+QSPI_DELAY=25 +QSPI_HOLD=12) are
-    // written for a 10 ns clock (tb_qspi, tb_tt_um), where only rd_late = 1
-    // can read the Pmod model; at 20 ns they leave no eye for either setting.
+    // The clock is 20 ns, as tb_soc_periph's. The +RD_LATE run uses 10 ns: with
+    // the Makefile's QSPI_LATE delays (+QSPI_DELAY=25 +QSPI_HOLD=12, as tb_qspi
+    // and tb_tt_um use them) only rd_late = 1 reads the Pmod model at 10 ns, so
+    // the run tells a latched strap from a re-read one; at 20 ns neither setting
+    // reads. The clock is chosen for that, not as a timing model of 62.5 MHz:
+    // every check here counts clocks, and the QSPI eye at the real clock is the
+    // job of tb_qspi's delay sweeps and the SDF gate-level runs.
     reg  clk = 1'b0;
     reg  rst = 1'b1;
     real TCLK = 20.0;
@@ -115,6 +118,7 @@ module tb_syscon_soc;
     reg     fail_expected   = 1'b0;  // the program ends in a FINISH fail store
     reg [15:0] exp_fail_code = 16'h0;
     integer max_cycles;
+    integer min_loads = 1;           // floor on checked syscon loads
     reg     rd_late_run;             // +RD_LATE: the strap is 1 through the pin reset
 
     // ── Syscon model ────────────────────────────────────────────────────────
@@ -228,7 +232,8 @@ module tb_syscon_soc;
         reg [13:0] w_off;
         reg [3:0]  be;
         reg        fin_act, w_cr, w_torr, kick, tick, fire, tap_bit;
-        integer    n, lo, cls;
+        integer    n, cls;
+        reg [63:0] lo;
 
         s_rst    = rst;
         s_rsoc   = soc.rst_soc;
@@ -355,7 +360,7 @@ module tb_syscon_soc;
             fire    = m_en && tick && (m_ticks == 2);
             if (fire) begin
                 n  = cyc - last_clear;
-                lo = 1 << (16 + m_top);
+                lo = 64'd1 << (16 + m_top);
                 $display("NOTE watchdog reset %0d clocks after the last clear (TOP %0d)", n, m_top);
                 if (!(n > lo && n <= lo + lo / 2 + 1))
                     fail($sformatf("watchdog fired %0d clocks after the last clear, TOP %0d wants (%0d, %0d]",
@@ -418,17 +423,17 @@ module tb_syscon_soc;
         clk_go = 1'b1;
         #1 rp.set_baud(16.0 * UART_DIV * TCLK);
         if (test == "syscon_regs") begin
-            fin_noise_ok = 1'b1;
+            fin_noise_ok = 1'b1; min_loads = 250;
         end else if (test == "syscon_reboot") begin
-            exp_fin_reboots = 4; exp_events = 1; exp_values = 5;
+            exp_fin_reboots = 4; exp_events = 1; exp_values = 5; min_loads = 13;
         end else if (test == "syscon_wdt_split") begin
-            exp_wdt_reboots = 12;
+            exp_wdt_reboots = 12; min_loads = 23;
         end else if (test == "syscon_wdt") begin
-            exp_wdt_reboots = 1; exp_events = 1; exp_values = 1;
+            exp_wdt_reboots = 1; exp_events = 1; exp_values = 1; min_loads = 9;
         end else if (test == "syscon_fail") begin
-            fail_expected = 1'b1; exp_fail_code = 16'h005A;
+            fail_expected = 1'b1; exp_fail_code = 16'h005A; min_loads = 2;
         end else if (test == "syscon_strap") begin
-            exp_fin_reboots = 1; exp_events = 1; exp_values = 1;
+            exp_fin_reboots = 1; exp_events = 1; exp_values = 1; min_loads = 4;
         end else begin
             fail($sformatf("unknown +TEST=%0s", test));
         end
@@ -460,7 +465,8 @@ module tb_syscon_soc;
                 fail($sformatf("%s: %0d VALUE stores, want %0d", test, n_values, exp_values));
             if (post_done < HOLD_CLOCKS || !m_off)
                 fail($sformatf("%s: the power-off hold was not observed", test));
-            if (n_loads == 0) fail($sformatf("%s: no syscon load was checked", test));
+            if (n_loads < min_loads)
+                fail($sformatf("%s: %0d syscon loads checked, want at least %0d", test, n_loads, min_loads));
             // coverage floors: the scenario each test is for really happened
             if (test == "syscon_wdt_split") begin
                 if (cls_rb[1] < 1) fail("syscon_wdt_split: no watchdog reboot landed between the halves of a split fetch");
@@ -468,6 +474,8 @@ module tb_syscon_soc;
             end
             if (test == "syscon_reboot" && cls_rb[0] < 1)
                 fail("syscon_reboot: no reboot landed on a flash fetch in flight");
+            if (test == "syscon_reboot" && n_cut < 1)
+                fail("syscon_reboot: no reboot cut a flash read (flash cs_n low at E1)");
         end
         if (rp.errors != 0) fail($sformatf("%s: %0d RP2350 UART errors", test, rp.errors));
         if (errors == 0)
