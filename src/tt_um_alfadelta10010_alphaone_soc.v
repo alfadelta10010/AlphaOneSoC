@@ -60,6 +60,14 @@ module tt_um_alfadelta10010_alphaone_soc (
     // edge that released it. It is kept inverted (cleared by rst_n, loading
     // !rst_sync[0]) so that synthesis does not fold it back into rst_sync[1],
     // which has the same inputs.
+    //
+    // It rises on the second edge after rst_n rises, one edge after the SoC's
+    // flops first take their reset values. When the clock was stopped while
+    // rst_n was low (the demo board does that), edge 1 is where they take
+    // them, and pins opened on that edge would race them. It also loads 0 on
+    // the edge rst_n is released at, so that release cannot make it
+    // metastable. No RTL bench sees the difference: keep it (TT01 in
+    // tb/VPLAN.md).
     reg run;
     always @(posedge clk or negedge rst_n)
         if (!rst_n) run <= 1'b0;

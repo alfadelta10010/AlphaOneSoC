@@ -169,6 +169,7 @@ Verification runs the core on this map (boot from PSRAM). Spike gets `-m0x200000
 - **pmpcfg A=2'b10 (NA4) is LEGAL and is stored as written.** Bits [6:5] of each byte are reserved and read 0.
 - **mstatus:** resets to 0 (MPP=U, matching Spike); a write of MPP=01/10 is legalised to U.
 - **mip has no writable bits** on this M+U core; it reads the MSIP/MTIP/MEIP wires. MTIP is registered in the CLINT, so it lags an mtimecmp store by two clocks -- two instructions when the fetch is fast. MIE set by the instruction right after the store no longer catches the stale MTIP (the CSR-write stall outlasts it); a spurious timer interrupt stays legal. `mtip_stale` pins both.
+- **The wrapper's pins leave reset on the second clock edge after `rst_n` rises** (`run` loads `!rst_sync[0]`), one edge after the SoC's flops first take their reset values. No RTL bench can tell that from the first edge (mutant TT01 survives), but the demo board resets with the clock stopped and a glitch at that edge would reach the pins (`tb/VPLAN.md` 4.2). Do not "simplify" `run` to load 1. Selecting a project on the board does not reset it (`docs/pins-and-peripherals.md` 1).
 - **A new SoC block is reset from `rst_soc`, never from `rst`,** unless it must survive a reboot (only syscon's sticky state does). A block left on `rst` keeps running through a reboot.
 - **mtvec resets to 0** (as Spike), which is unmapped on the SoC: boot code must set it before anything can trap.
 
