@@ -269,6 +269,25 @@ module tb_syscon;
             if (!pred_fire(0)) xfail("could not aim at a fire");
         end
     endtask
+    // The clock before a fire: count 2, no tick at the coming edge, a tick at
+    // the edge after it (SA-009, SYS-019). Leaves the negedge open.
+    function pre_fire(input dummy);
+        reg [31:0] tn;
+        begin
+            tn = tc + 1;
+            pre_fire = mv && !rst && m_hold == 0 && !m_off && m_en && m_ticks == 2 &&
+                       !tc[m_top] && tn[m_top];
+        end
+    endfunction
+    task aim_pre_fire(input integer lim);
+        integer i;
+        begin
+            i = 0;
+            nxt; drv_idle;
+            while (!pre_fire(0) && i < lim) begin nxt; drv_idle; i = i + 1; end
+            if (!pre_fire(0)) xfail("could not aim at the clock before a fire");
+        end
+    endtask
     task wdt_arm(input [3:0] t);
         begin st(`WDT_TORR, t, 4'h1); st(`WDT_CR, 32'h1, 4'h1); end
     endtask
@@ -685,10 +704,10 @@ module tb_syscon;
     task s_same;
         begin
             sec("same-cycle watchdog cases");
-            for (k = 0; k < 16; k = k + 1) begin
+            for (k = 0; k < 21; k = k + 1) begin
                 if (k != 1) prs;
                 wdt_arm(4'h1);
-                aim_fire(100);
+                if (k >= 16) aim_pre_fire(100); else aim_fire(100);
                 case (k)
                     0, 1: drv(1, 1, 4'h1, `SYS_CAUSE, 32'h4);
                     2:    drv(1, 1, 4'hF, `SYS_CAUSE, 32'h7);
@@ -702,12 +721,19 @@ module tb_syscon;
                     10, 11, 12: drv_idle;
                     13:   drv(1, 0, 4'hF, `SYS_CAUSE, 32'h0);
                     14:   drv(1, 1, 4'h1, `WDT_TORR, 32'h5);
-                    default: drv(1, 1, 4'hF, `SYS_FINISH, 32'h7777);
+                    15:   drv(1, 1, 4'hF, `SYS_FINISH, 32'h7777);
+                    16:   drv(1, 1, 4'h3, `SYS_FINISH, 32'h0000_7777);
+                    17:   drv(1, 1, 4'hF, `SYS_FINISH, 32'h0000_5555);
+                    18:   drv(1, 1, 4'h3, `SYS_FINISH, 32'hDEAD_3333);
+                    19:   drv(1, 1, 4'h1, `WDT_CRR, 32'h76);
+                    20:   drv(1, 1, 4'h1, `WDT_TORR, 32'h1);
+                    default: drv_idle;
                 endcase
                 if (k >= 10 && k <= 12) begin
                     idle(k - 10);
                     prst(1, 1'b0, 1'b1);
                 end
+                if (k == 19 || k == 20) wait_fire(40);
                 ld(`SYS_CAUSE); ld(`SYS_BOOTMODE); ld(`WDT_CR); ld(`WDT_TORR);
                 idle(6);
                 ld(`SYS_CAUSE);
