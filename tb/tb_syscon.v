@@ -808,7 +808,7 @@ module tb_syscon;
                 default: d = $random(seed);
             endcase
             if (a == 14'd0 && w && rnd(10) < 7) begin
-                d[15:0] = fin_status(rnd(9));
+                d[15:0] = fin_status(rnd(4) == 0 ? 0 : rnd(9));
                 case (rnd(3)) 0: d[31:16] = 16'h0; 1: d[31:16] = 16'h7777; default: d[31:16] = $random(seed); endcase
                 if (rnd(10) < 6) begin case (rnd(4)) 0: b = 4'b0011; 1: b = 4'b1111; 2: b = 4'b0111; default: b = 4'b1011; endcase end
             end
@@ -826,6 +826,10 @@ module tb_syscon;
                 d = $random(seed);
                 if (rnd(3) != 0) d[7:0] = 8'h76;
                 else if (d[7:0] == 8'h76) d[7:0] = 8'h77;
+            end
+            // steer: SOFT is set only by a reboot, so clear it before the next one buries it
+            if (m_cause[1] && !m_off && m_hold == 0 && rnd(KS) < 5) begin
+                a = 14'd1; w = 1; b = 4'h1; d[2:0] = 3'b010;
             end
             nxt; drv(1, w, b, a * 4, d);
         end
