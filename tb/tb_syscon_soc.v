@@ -159,11 +159,17 @@ module tb_syscon_soc;
     // ── Bench state ─────────────────────────────────────────────────────────
     reg     done = 1'b0, passed = 1'b0, failed = 1'b0, abort = 1'b0;
     integer post_done = 0;
+    reg     watch = 1'b0;                           // syscon_poweroff: the power-off watch starts
+    reg     watch_on = 1'b0;                        // ... and is running
+    reg     sck_ref = 1'b0;
+    integer n_prst = 0;                             // pin resets the bench injected
+    integer exp_prst = 0;
     reg [15:0] fail_code = 16'h0;
     reg [31:0] value = 0, value2 = 0;
     integer n_fin = 0, n_wdt = 0, n_off = 0;        // reboots by FINISH / watchdog, power-offs
     integer n_loads = 0, n_stores = 0, n_events = 0, n_values = 0;
     integer cls_rb [0:3];                           // bus state at the reset of each reboot
+    integer cls_off [0:3];                          // ... at the E1 of a power-off or fail halt
     integer cls_all [0:3];                          // ... and of every reset (power-off too)
     integer n_cut = 0;                              // reboots that cut a flash read
     integer ev_cls = 0;                             // class sampled at E1 for the NOTE
@@ -172,7 +178,7 @@ module tb_syscon_soc;
 
     initial begin : init_cls
         integer k;
-        for (k = 0; k < 4; k = k + 1) begin cls_rb[k] = 0; cls_all[k] = 0; end
+        for (k = 0; k < 4; k = k + 1) begin cls_rb[k] = 0; cls_all[k] = 0; cls_off[k] = 0; end
     end
 
     task automatic on_event(input [31:0] e);
@@ -180,7 +186,9 @@ module tb_syscon_soc;
             n_events = n_events + 1;
             if (n_events > exp_events)
                 fail($sformatf("%s: unexpected EVENT %h", test, e));
-            else if (test == "syscon_reboot") begin
+            else if (test == "syscon_poweroff") begin
+                if (e !== 32'h53) fail($sformatf("%s: EVENT %h, want 53", test, e));
+            end else if (test == "syscon_reboot") begin
                 if (e !== 32'h51) fail($sformatf("%s: EVENT %h, want 51", test, e));
             end else if (test == "syscon_wdt") begin
                 if (e !== 32'h56) fail($sformatf("%s: EVENT %h, want 56", test, e));
@@ -257,6 +265,7 @@ module tb_syscon_soc;
             else                                                  cls = 3;
             cls_all[cls] = cls_all[cls] + 1;
             if (why == 1 || why == 2) cls_rb[cls] = cls_rb[cls] + 1;
+            if (why == 3 || why == 4) cls_off[cls] = cls_off[cls] + 1;
             if (qspi_cs_n[0] === 1'b0 && (why == 1 || why == 2)) n_cut = n_cut + 1;
             $display("NOTE %s #%0d at cycle %0d: bus %0s, flash cs_n %b%0s",
                      why == 1 ? "reboot" : why == 2 ? "watchdog reboot" : why == 3 ? "power-off" :
@@ -381,9 +390,14 @@ module tb_syscon_soc;
                     end
                 end else begin
                     m_off = 1'b1; n_off = n_off + 1;
-                    done = 1'b1;
-                    if (wdat[15:0] == `FIN_OFF) begin passed = 1'b1; why = 3; end
-                    else begin failed = 1'b1; fail_code = wdat[31:16]; why = 4; end
+                    if (test == "syscon_poweroff" && n_off == 1 && wdat[15:0] == `FIN_OFF) begin
+                        // the first power-off of syscon_poweroff starts the watch
+                        watch = 1'b1; why = 3;
+                    end else begin
+                        done = 1'b1;
+                        if (wdat[15:0] == `FIN_OFF) begin passed = 1'b1; why = 3; end
+                        else begin failed = 1'b1; fail_code = wdat[31:16]; why = 4; end
+                    end
                 end
             end
             if (fire) begin
@@ -413,6 +427,34 @@ module tb_syscon_soc;
         prev_rsoc = (s_rsoc === 1'b1);
     end
 
+    // ── The power-off watch (syscon_poweroff) ───────────────────────────────
+    // While the SoC is powered off nothing but rst may change it: for 5,000
+    // clocks the inputs move, the strap toggles and a UART byte arrives, and
+    // qspi_sck must stay where it was. (mtime sits at 0 while off, so a longer
+    // watch adds nothing.) The model's rst_soc compare, the held pin and bus
+    // check and the X check run every clock as usual. Then a two-edge pin reset.
+    integer seed = 1;
+    always @(posedge clk) if (watch_on && qspi_sck !== sck_ref)
+        fail($sformatf("power-off watch: qspi_sck moved to %b (was %b)", qspi_sck, sck_ref));
+    initial begin : power_off_watch
+        integer i;
+        if (!$value$plusargs("SEED=%d", seed)) seed = 1;
+        wait (watch);
+        $display("NOTE power-off watch: seed %0d", seed);
+        @(posedge clk); @(posedge clk);          // E2: the pins have reached their held values
+        sck_ref = qspi_sck; watch_on = 1'b1;
+        for (i = 1; i <= 5000; i = i + 1) begin
+            @(posedge clk); #1;
+            if (i % 50 == 0) tb_in = $random(seed) & 8'h3F;
+            if (i % 37 == 0) strap = ~strap;
+            if (i == 1000) begin rp.set_flow(1'b0); rp.send_byte(8'hA5); end
+        end
+        watch_on = 1'b0;
+        strap = 1'b0; rp.set_flow(1'b1); tb_in[7] = 1'b1;
+        rst = 1'b1; n_prst = n_prst + 1;
+        @(posedge clk); @(posedge clk); #1 rst = 1'b0;
+    end
+
     // ── Run ─────────────────────────────────────────────────────────────────
     initial begin
         if (!$value$plusargs("TEST=%s", test)) test = "";
@@ -434,6 +476,8 @@ module tb_syscon_soc;
             fail_expected = 1'b1; exp_fail_code = 16'h005A; min_loads = 2;
         end else if (test == "syscon_strap") begin
             exp_fin_reboots = 1; exp_events = 1; exp_values = 1; min_loads = 4;
+        end else if (test == "syscon_poweroff") begin
+            exp_events = 1; exp_prst = 1; min_loads = 7;
         end else begin
             fail($sformatf("unknown +TEST=%0s", test));
         end
@@ -465,6 +509,8 @@ module tb_syscon_soc;
                 fail($sformatf("%s: %0d VALUE stores, want %0d", test, n_values, exp_values));
             if (post_done < HOLD_CLOCKS || !m_off)
                 fail($sformatf("%s: the power-off hold was not observed", test));
+            if (n_prst != exp_prst)
+                fail($sformatf("%s: %0d pin resets injected, want %0d", test, n_prst, exp_prst));
             if (n_loads < min_loads)
                 fail($sformatf("%s: %0d syscon loads checked, want at least %0d", test, n_loads, min_loads));
             // coverage floors: the scenario each test is for really happened
@@ -472,6 +518,8 @@ module tb_syscon_soc;
                 if (cls_rb[1] < 1) fail("syscon_wdt_split: no watchdog reboot landed between the halves of a split fetch");
                 if (cls_rb[2] < 1) fail("syscon_wdt_split: no watchdog reboot landed on a data transaction");
             end
+            if (test == "syscon_poweroff" && cls_off[0] + cls_off[2] < 1)
+                fail("syscon_poweroff: no power-off landed on a fetch or data transaction in flight");
             if (test == "syscon_reboot" && cls_rb[0] < 1)
                 fail("syscon_reboot: no reboot landed on a flash fetch in flight");
             if (test == "syscon_reboot" && n_cut < 1)
