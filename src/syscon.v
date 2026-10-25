@@ -70,9 +70,10 @@
 // kick, by a TORR write and while disabled, counts those edges; the third one
 // fires. The reset therefore comes after more than 2Pt and at most 3Pt (+1)
 // clocks, i.e. more than 1x and at most 1.5x the 2^(16+TOP) timeout: never
-// early. A TORR write kicks and makes no tick of its own (switching the
-// tapped bit could look like an edge). Once enabled it cannot be stopped,
-// as in the DW part. CCVR reads 0.
+// early unless software writes mtime (each 0->1 of the tapped bit is a tick,
+// whatever moved it; Linux never writes mtime). A TORR write kicks and makes
+// no tick of its own (switching the tapped bit could look like an edge). Once
+// enabled it cannot be stopped, as in the DW part. CCVR reads 0.
 
 `default_nettype none
 

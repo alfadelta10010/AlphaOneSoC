@@ -472,14 +472,17 @@ Pt = 2^(15+*t*) clocks. There is no prescaler and no extra counter. While any
 reset is held the CLINT is reset too, so `mtime` sits at 0 and no tap moves.
 The cost is that software can write `mtime`: a write that moves it backwards
 delays the watchdog, and a loop that keeps rewriting it would keep it from
-firing. Linux's timer driver never writes `mtime` (it reads it and writes
+firing; and a write that toggles the tapped bit counts as a tick, so writes
+can also make it fire early (three toggling writes fire it 10 clocks after a
+kick). Linux's timer driver never writes `mtime` (it reads it and writes
 `mtimecmp`), so this is accepted; a private prescaler would cost about 24
 flops (+0.06 tile).
 
-**Accuracy: never early, at most 1.5x late.** A 2-bit tick count, cleared by a
-kick, by a TORR write and while disabled, counts the rising edges of the tap;
-the third one fires. The first edge comes within (0, Pt] of the clear, so the
-reset comes in (2Pt, 3Pt] after it, which is more than 1x and at most 1.5x the
+**Accuracy: never early unless software writes mtime, at most 1.5x late.** A
+2-bit tick count, cleared by a kick, by a TORR write and while disabled, counts
+the rising edges of the tap; the third one fires. The first edge comes within
+(0, Pt] of the clear, so the reset comes in (2Pt, 3Pt] after it, which, with no
+software write to `mtime`, is more than 1x and at most 1.5x the
 2^(16+TOP) timeout (plus one clock, see TORR below). A 1-bit count would save
 0.007 tile and allow up to 2x late. Linux pings at half the hardware timeout,
 so neither matters to it.
