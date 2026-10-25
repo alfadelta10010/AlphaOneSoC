@@ -22,19 +22,21 @@ OUT="${OUT_DIR:-$ROOT/build}"
 mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
-declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" )
+declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [syscon_comb]="syscon.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req)
+declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [syscon_comb]=bmc )
+declare -A BDEPTH=( [syscon_comb]=24 )     # per-harness bmc depth; default $BMC_DEPTH
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req syscon_comb)
 bad=0
 err=0
 for n in "${names[@]}"; do
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
   for f in ${EXTRA[$n]:-}; do srcs="$srcs $HERE/$f"; done
   log="$OUT/formal_${n}.log"
+  bd="${BDEPTH[$n]:-$BMC_DEPTH}"
   if [ "${MODE[$n]}" = bmc ]; then
-    sat="sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $BMC_DEPTH"
+    sat="sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd"
   else
     sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps $DEPTH"
   fi
@@ -42,9 +44,9 @@ for n in "${names[@]}"; do
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
   if [ "${MODE[$n]}" = bmc ]; then
     if grep -q "SAT proof finished - no model found: SUCCESS" "$log"; then
-      echo "BOUNDED $n (no counterexample within $BMC_DEPTH steps of reset)"
+      echo "BOUNDED $n (no counterexample within $bd steps of reset)"
     elif grep -q "SAT proof finished - model found: FAIL" "$log"; then
-      echo "FAILED $n: counterexample within $BMC_DEPTH steps (log: $log)"
+      echo "FAILED $n: counterexample within $bd steps (log: $log)"
       grep -E "failed|ERROR" "$log" | tail -3; bad=1
     else
       echo "ERROR $n: no verdict (log: $log)"; err=1
