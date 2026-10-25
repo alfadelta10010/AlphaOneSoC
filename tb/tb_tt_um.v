@@ -237,7 +237,7 @@ module tb_tt_um;
     // ── tests/soc/tt_reboot.S: the expected stream, from the spec ───────────
     // Nine bytes a boot: its letter, RESET_CAUSE, BOOT_MODE, STRAPS, CHIP_ID
     // (4), then the cue for the next reboot. RESET_CAUSE accumulates.
-    localparam integer RB_N = 36;     // bytes of the stream, the final 'Z' included
+    localparam integer RB_N = 37;     // bytes of the stream, the final 'Z' included
     reg [31:0] rb_letters = "bBCD";
     reg [31:0] rb_cues    = "rRwp";
     reg [31:0] rb_cause   = {8'h07, 8'h03, 8'h03, 8'h01};
@@ -270,6 +270,7 @@ module tb_tt_um;
     integer ci;
     initial for (ci = 0; ci < 16; ci = ci + 1) cnt[ci] = 0;
 
+    reg po_arm = 1'b0;                // the cue 'p' has arrived: power-off watch
     task automatic rb_cue(input [7:0] chr, input integer kind, input integer lo, input integer hi);
         integer n;
         begin
@@ -295,6 +296,7 @@ module tb_tt_um;
                     // + 1 (E1) from the kick, which is CUE_TO_KICK clocks at most
                     // after the cue.
                     "w": rb_cue(b, k, 65536, 98305 + 1 + 1000);
+                    "p": po_arm = 1'b1;
                     default: ;
                 endcase
             end
@@ -432,6 +434,46 @@ module tb_tt_um;
                                gp % 8, phase == 1 ? "going into" : "coming out of"));
         end
     end endgenerate
+
+    // Power-off: once the pins are at their reset values they stay there for
+    // 5,000 clocks whatever the board does -- GPIO IN, the strap pin and a byte
+    // from the RP2350 -- with no chip select fall and no SCK edge. Then the
+    // testbench's pin reset (IN[7] = 1, strap back at its run value) starts the
+    // program again, which sends 'Z'.
+    integer po_i, po_c0, po_c1, po_c2, po_s;
+    always begin : poweroff_watch
+        @(posedge po_arm);
+        po_i = 0;
+        while (uio_oe[3] !== 1'b0 && po_i < 3000) begin @(negedge clk); po_i = po_i + 1; end
+        if (uio_oe[3] !== 1'b0) fail("no power-off within 3000 clocks of the cue 'p'");
+        else begin
+            check_reset_pins("at the start of power-off");
+            po_c0 = cs0_falls; po_c1 = cs1_falls; po_c2 = cs2_falls; po_s = sck_rises;
+            rp.set_flow(1'b0);
+            rp.send_byte(8'hA5);
+            for (po_i = 1; po_i <= 5000; po_i = po_i + 1) begin
+                @(negedge clk);
+                check_reset_pins("in power-off");
+                if (po_i % 50 == 0) begin
+                    #1;
+                    tb_in[6:0] = tb_in[6:0] + 7'd37;
+                    strap = !strap;
+                end
+            end
+            if (cs0_falls != po_c0 || cs1_falls != po_c1 || cs2_falls != po_c2 || sck_rises != po_s)
+                fail($sformatf("chip select falls %0d/%0d/%0d, SCK rises %0d during power-off",
+                               cs0_falls - po_c0, cs1_falls - po_c1, cs2_falls - po_c2, sck_rises - po_s));
+            rp.set_flow(1'b1);
+            tb_in[7] = 1'b1;
+            strap = rd_late;
+            // As phase 2 of the default run: clock running, off the edge,
+            // held for four edges.
+            @(posedge clk);
+            #3 rst_n = 1'b0;
+            repeat (4) @(posedge clk);
+            #(`IN_DLY_NS) rst_n = 1'b1;
+        end
+    end
 
     // RTS# while a received byte waits: the program cannot have read RBR
     // within the half bit since the stop bit was sampled.

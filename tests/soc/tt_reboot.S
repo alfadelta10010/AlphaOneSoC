@@ -18,7 +18,9 @@
 #                                    watchdog (TORR 0, kick, CR.EN: a timeout
 #                                    is 2^16 clocks) and spin without kicking
 #   boot 4  'D'  cause 0x7, bm 0xA5  the watchdog rebooted the SoC (WDT set);
-#                                    sends 'Z' and spins
+#                                    cue 'p', then FINISH = 0x5555 (power-off):
+#                                    the SoC stays held until the testbench's
+#                                    pin reset
 #   'Z'          GPIO IN bit 7 is the testbench's "stop" pin: after its last pin
 #                reset the program sends 'Z' and spins
 #
@@ -111,6 +113,12 @@ boot3:
 
 boot4:
     HEADER 'D'
+    li   t1, 'p'
+    PUTC t1
+    li   t0, 0x5555
+    sw   t0, 0(s11)              # FINISH: power-off
+1:  j    1b
+
 stop:
     li   t1, 'Z'
     PUTC t1
