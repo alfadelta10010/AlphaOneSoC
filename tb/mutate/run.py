@@ -52,12 +52,13 @@ UNIT = {
     "mem_ctrl.v": ["test-qspi"], "qspi_ctrl.v": ["test-qspi"],
     "soc_bus.v": [], "alphaone_soc.v": [],
     "uart.v": ["test-uart"], "gpio.v": ["test-gpio"],
+    "syscon.v": ["test-syscon"],
     "tt_um_alfadelta10010_alphaone_soc.v": [],
 }
 # Optional unit benches added later; used when the Makefile has the target.
 UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
 SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
-             "gpio.v", "tt_um_alfadelta10010_alphaone_soc.v"}
+             "gpio.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
 
 TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
 # Formal harnesses (tb/formal/<name>_props.sv) per source file.
@@ -82,6 +83,8 @@ def benches_for(f, kinds):
     if f in SOC_FILES:
         if "soc" in kinds:
             out += [("soc", "test-soc-periph"), ("soc", "test-wrapper")]
+            if make_has("test-syscon-soc"):
+                out.append(("soc", "test-syscon-soc"))
         if "dir-soc" in kinds:
             out.append(("dir-soc", "soc"))
     else:
