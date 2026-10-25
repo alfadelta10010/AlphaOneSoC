@@ -237,7 +237,7 @@ module tb_tt_um;
     // ── tests/soc/tt_reboot.S: the expected stream, from the spec ───────────
     // Nine bytes a boot: its letter, RESET_CAUSE, BOOT_MODE, STRAPS, CHIP_ID
     // (4), then the cue for the next reboot. RESET_CAUSE accumulates.
-    localparam integer RB_N = 27;     // bytes of the stream, the final 'Z' included
+    localparam integer RB_N = 36;     // bytes of the stream, the final 'Z' included
     reg [31:0] rb_letters = "bBCD";
     reg [31:0] rb_cues    = "rRwp";
     reg [31:0] rb_cause   = {8'h07, 8'h03, 8'h03, 8'h01};
@@ -290,6 +290,11 @@ module tb_tt_um;
             else if (j == 8) begin
                 case (b)
                     "r", "R": rb_cue(b, k, 0, 4000);
+                    // The kick comes after the cue: the timeout (2^16 clocks) is
+                    // more than 65,536 clocks from the cue, and at most 1.5 timeouts
+                    // + 1 (E1) from the kick, which is CUE_TO_KICK clocks at most
+                    // after the cue.
+                    "w": rb_cue(b, k, 65536, 98305 + 1 + 1000);
                     default: ;
                 endcase
             end

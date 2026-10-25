@@ -14,7 +14,11 @@
 #   boot 2  'B'  cause 0x3, bm 0x5A  SPI EN set (MOSI and SCK come from the
 #                                    transmitter), BOOT_MODE = 0xA5; cue 'R',
 #                                    then a reboot again
-#   boot 3  'C'  cause 0x3, bm 0xA5  sends 'Z' and spins
+#   boot 3  'C'  cause 0x3, bm 0xA5  cue 'w' and TEMT first, then arm the
+#                                    watchdog (TORR 0, kick, CR.EN: a timeout
+#                                    is 2^16 clocks) and spin without kicking
+#   boot 4  'D'  cause 0x7, bm 0xA5  the watchdog rebooted the SoC (WDT set);
+#                                    sends 'Z' and spins
 #   'Z'          GPIO IN bit 7 is the testbench's "stop" pin: after its last pin
 #                reset the program sends 'Z' and spins
 #
@@ -62,6 +66,8 @@ _start:
     bnez t0, stop
     lw   s2, 4(s11)              # RESET_CAUSE
     lw   s3, 8(s11)              # BOOT_MODE
+    andi t0, s2, 4
+    bnez t0, boot4               # the watchdog rebooted
     andi t0, s2, 2
     beqz t0, boot1
     li   t0, 0x5A
@@ -94,6 +100,17 @@ boot2:
 
 boot3:
     HEADER 'C'
+    li   t1, 'w'                 # the cue comes before the kick: the testbench
+    PUTC t1                      # times the timeout from it
+    li   t0, 0x76
+    sw   zero, 0x104(s11)        # WDT TORR: TOP 0
+    sw   t0, 0x10C(s11)          # CRR: kick
+    li   t0, 1
+    sw   t0, 0x100(s11)          # CR.EN
+1:  j    1b                      # no more kicks
+
+boot4:
+    HEADER 'D'
 stop:
     li   t1, 'Z'
     PUTC t1
