@@ -61,8 +61,11 @@ SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v
              "gpio.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
 
 TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
-# Formal harnesses (tb/formal/<name>_props.sv) per source file.
-FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req"], "regFile.v": ["core_hold"]}
+# Formal harnesses (tb/formal/<name>_props.sv) per source file. soc_rst_sync is
+# structural and has no _props.sv.
+FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req"], "regFile.v": ["core_hold"],
+          "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"]}
+NO_PROPS = {"soc_rst_sync"}
 
 
 def make_has(target):
@@ -79,7 +82,7 @@ def benches_for(f, kinds):
         out += [("unit", t) for t in units]
     if "formal" in kinds:
         out += [("formal", h) for h in FORMAL.get(f, [])
-                if os.path.exists(os.path.join(ROOT, "tb/formal/%s_props.sv" % h))]
+                if h in NO_PROPS or os.path.exists(os.path.join(ROOT, "tb/formal/%s_props.sv" % h))]
     if f in SOC_FILES:
         if "soc" in kinds:
             out += [("soc", "test-soc-periph"), ("soc", "test-wrapper")]
