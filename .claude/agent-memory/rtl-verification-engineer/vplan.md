@@ -295,3 +295,12 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   F13, VPLAN rescore incl FC86, CLAUDE.md). New trailer session
   019AGtNpvpJiU7zQxfhZUJEn. Order: 17 -> 18 (sandbox) -> 19 -> one sandbox
   harden (sky26d) + river_core -> SPI design.
+- 2026-10-25: WO-17 review (c2d6698 04784ac cea9ee4): APPROVED with notes.
+  "One transition per pin into the window" read per entry cycle (the run-up
+  has SD-enable toggles from fetches); quiet pins (uo_out, ctl enables)
+  could be counted from the cue -- non-blocking. SY12 at the pins dies by
+  fetch failure (rd_late flips the sampling point), not by the STRAPS byte;
+  SY18 exercises the STRAPS byte. 'w' cue->window 74957/74843 (bound
+  65536 < d <= 99306). WO-18 unaffected (no src/run.py/syscon_soc change);
+  test-wrapper ~+12-15 s per mutant (2 x 110k-cycle runs), within the ~30 s
+  estimate.
