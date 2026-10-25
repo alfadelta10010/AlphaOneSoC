@@ -388,7 +388,7 @@ unless software cleared PIN first; after a watchdog reset it reads `0x5` if
 nothing else set a bit since the pin reset (`0x7` after an earlier reboot): the
 bits accumulate. Rule: software that wants the cause of the last reset alone
 reads RESET_CAUSE at boot and then writes `0x7` to clear it; our kernel and
-flash loader do so at every boot.
+flash loader are to do so at every boot.
 
 ### BOOT_MODE and reboot-mode
 
@@ -422,8 +422,8 @@ the second boot.
 ### Area
 
 syscon without the watchdog is **0.078 tile, 14 flops** (`rq`, `rq2`, `off`, the strap flop,
-`cause[1:0]`, `boot_mode[7:0]`), from the review's yosys recipe with the TT cell
-set (882.1 µm²; method in `docs/area-audit.md`), within the 0.5-tile budget
+`cause[1:0]`, `boot_mode[7:0]`), from the audit's recipe (`docs/area-audit.md`), re-run on the
+committed RTL 2026-10-24, with the TT cell set (882.1 µm²), within the 0.5-tile budget
 `docs/ROADMAP.md` allows for new RTL. The reset tree's extra OR at its root is
 the one thing a harden should check, at the slowest corner. The watchdog adds
 0.072 tile and 9 flops (815.8 µm²), and the `~rst_soc` gate on `fire` about
@@ -540,7 +540,8 @@ watchdog.
   there is one reboot; with a power-off, `off` wins.
 
 **Area.** syscon with the watchdog is **0.151 tile, 23 flops** (1,707.9 µm²,
-the review's recipe with the TT cell set), against 0.078 tile and 14 flops
+the audit's recipe (`docs/area-audit.md`), re-run on the committed RTL
+2026-10-24, with the TT cell set), against 0.078 tile and 14 flops
 without. The watchdog is +815.8 µm², about +0.072 tile, +9 flops: EN, TOP[3:0],
 count[1:0], the tick edge and RESET_CAUSE[2]. The alternative considered and
 not taken, a custom keyed register with an out-of-tree driver, measured

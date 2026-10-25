@@ -15,7 +15,7 @@ it cites a run.
 | **syscon** gets reboot, power-off and the rest of what a syscon block usually does. | Section 1.2. |
 | Order: **lock the RTL**, then the **Verilator port and Linux bring-up**, then **FPGA ports** as a stretch goal. | Sections 1-2, then 3-4, then 5. |
 | Explore **power domains and power optimisation**. | Section 6. |
-| This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). | Every area, timing and pin figure is for sky26d. |
+| This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
 
 The limits every item is judged against:
 
