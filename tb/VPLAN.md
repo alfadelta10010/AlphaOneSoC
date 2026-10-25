@@ -103,6 +103,33 @@ E = eventual, A = architectural (no clock count).
 | REQ-SOCTB-001 | SoC program/bench contract: FINISH at syscon +0x0 with QEMU sifive_test codes (0x5555 pass, (code << 16) \| 0x3333 fail, 0x7777 reboot), word stores; EVENT/VALUE/VALUE2 at +0x7F0/+0x7F4/+0x7F8, +0x7FC spare; output drained before FINISH; requires the syscon to leave those words and 0x4004/0xBFF8 RAZ/WI (WO-12 R-MB-1..4) | - | tb_soc_periph (all eight programs) | four negative-control programs (WO-12 acceptance) |
 | REQ-TT-001 | wrapper reset and pins (pinout table) | C | tb_tt_um | pin checks |
 
+#### syscon (REQ-SYS-*, from WO-14's list)
+
+Status per the legend above. "Killer" names a mutant of section 4 that the
+test kills (`build/mut/syscon-all.tsv`).
+
+| ID | Requirement (short; full text in WO-14) | timing | Test | Checker | Status |
+|---|---|---|---|---|---|
+| REQ-SYS-001 | register map: FINISH, RESET_CAUSE (W1C), BOOT_MODE, CHIP_ID, STRAPS, reserved words RAZ/WI | C | tb_syscon (WO-14), syscon_regs.S via tb_syscon_soc (WO-15) | spec model; per-load model in tb_syscon_soc | P (SY10, SY11, SY16-SY19) |
+| REQ-SYS-002 | every other word reads 0, ignores writes, no alias (mailbox, 0x4004, 0xBFF8, 0x200..0x2FF) | C | tb_syscon exhaustive offset sweep (WO-14, 14a), syscon_regs.S | spec model | P (SY15, SY16, WD07) |
+| REQ-SYS-003 | FINISH acts on 0x7777 / 0x5555 / 0x3333 only, and only with lanes 0 and 1 written | C | tb_syscon, syscon_regs.S, syscon_fail.S | spec model | P (SY01, SY02, SY03, SY07) |
+| REQ-SYS-004 | reboot holds everything but syscon's sticky state for exactly two edges; every block restarts in its reset state | C | tb_syscon (timing), syscon_reboot.S (five boots), tb_tt_um | spec model; per-boot state checks | P (SY04, SY05, AS01-AS08) |
+| REQ-SYS-005 | across a reboot RESET_CAUSE gains SOFT or WDT, BOOT_MODE and the strap latch are kept | C | tb_syscon, syscon_reboot.S, syscon_wdt.S | spec model | P (SY08, SY09, WD14) |
+| REQ-SYS-006 | a pin reset sets RESET_CAUSE = PIN, BOOT_MODE = 0, re-latches the strap, ends a reboot or power-off in progress, disables the watchdog | C | tb_syscon, syscon_pinreset.S (WO-16) | spec model | P (SY11, SY21, WD05) |
+| REQ-SYS-007 | the QSPI engine samples the strap only while the pin reset is high; STRAPS reads the latched value | C | tb_syscon, syscon_strap.S, tb_tt_um (WO-17) | spec model; flash and PSRAM read behaviour | P (SY12, SY13, SY18, AS05) |
+| REQ-SYS-008 | power-off / fail: held until rst, QSPI pins released, no bus transfer, nothing but rst_n changes anything, no WDT | C | tb_syscon (inputs thrashed while off), syscon_poweroff.S, syscon_fail.S, tb_tt_um | spec model; pin checks | P (SY06, WD16) |
+| REQ-SYS-009 | while the SoC is held no write reaches syscon or the watchdog | C | tb_syscon (WO-14) | spec model | P (SY14, killed by tb_syscon only) |
+| REQ-SYS-010 | syscon never holds `ready` low | C | tb_syscon_soc (per clock) | bus check | p (no mutant) |
+| REQ-SYS-011 | `rst_soc` is a function of rst and flops only, and a synchronous reset only | - | formal `syscon_comb` (bounded, 24 cycles), `soc_rst_sync` (structural) (WO-19) | miter; netlist walk | P (SY20 by syscon_comb; soc_rst_sync by a hand-made async CLINT copy, not a catalogue fault) |
+| REQ-SYS-012 | at the pins a reboot looks like a pin reset after rst_n rises: uio_oe = 0, uo_out = 0x39 while held, one transition per pin | C | tb_tt_um, tt_pins.S (WO-17) | pin checks | P (SY04, SY05, SY06, AS02-AS05) |
+| REQ-SYS-013 | Linux's syscon-poweroff / -reboot / -reboot-mode and dw_wdt sequences work unchanged | A | syscon_regs.S, syscon_wdt.S, tb_syscon | spec model | p (no mutant targets the driver sequences) |
+| REQ-SYS-014 | watchdog window, DW layout, lane 0 only; CR EN, TORR, CRR key 0x76, COMP_PARAMS_1 | C | tb_syscon, syscon_wdt.S | spec model | P (WD02, WD07, WD08, WD11, WD12, WD13) |
+| REQ-SYS-015 | timeout in mtime counts: after the last kick, more than 2^(16+TOP) and at most 1.5 x 2^(16+TOP) + 1 clocks (never early unless software writes mtime: time is counted in mtime counts) | C | tb_syscon (all 16 TOPs, scaled tap), syscon_wdt.S (TOP 0, real scale), syscon_wdt_split.S | spec model; reboot-time bounds | P (WD03, WD04, WD09, WD10, AS07) |
+| REQ-SYS-016 | expiry = a two-edge reboot that sets WDT (sticky); the watchdog comes back disabled with TOP 15 | C | tb_syscon, syscon_wdt.S, tb_tt_um | spec model | P (WD06, WD14, WD15) |
+| REQ-SYS-017 | once enabled, EN cannot be cleared by any write | C | tb_syscon | spec model | P (WD01) |
+| REQ-SYS-018 | same-cycle cases: fire with a W1C of WDT, fire with a FINISH reboot, fire with a power-off | C | tb_syscon (WO-14, 14a) | spec model | p (no mutant isolates them) |
+| REQ-SYS-019 | no fire while the SoC is held (SA-009) | C | tb_syscon k = 16..18 (WO-14a), formal `syscon_gate` (WO-19) | spec model; proof (P1, P2) | P (WD16, by both) |
+
 ## 2. Audit of the benches as found (at 484ec59)
 
 What each claimed, what it really checked, and how it could pass on a
@@ -147,10 +174,17 @@ broken design. "Mutants" refers to section 4.
 | x0 | tb_regFile, tb_decoder (absent fields), rf_* |
 | hazards at every distance | rf_raw_stall, rf_capture, rs2_snoop, m_corners |
 | byte lanes / store data on the bus | memory_model request checker, tb_rivercore bus check (new) |
+| a block left on the wrong reset (pin reset where `rst_soc` belongs) | tb_syscon_soc programs syscon_reboot, syscon_pinreset and syscon_wdt, tb_tt_um (AS01-AS08) |
+| the strap re-sampled after the pin reset | tb_syscon, syscon_strap.S, tb_tt_um (SY12, SY13, SY18, AS05) |
+| FINISH by a byte store, or a wrong lane | tb_syscon, syscon_regs.S (SY02, SY03) |
+| an alias of a register (decode too wide) | tb_syscon exhaustive offset sweep, syscon_regs.S (SY15, SY16, WD07) |
+| the pins during a reboot or power-off | tb_tt_um (SY04-SY06; the glitch check itself needs the SDF netlist, section 5) |
+| a watchdog fire in a held cycle (SA-009) | tb_syscon k = 16..18, formal `syscon_gate` (WD16) |
+| a combinational path from the bus to `rst_soc`; an asynchronous use of it | formal `syscon_comb` (SY20), `soc_rst_sync` (hand-made async CLINT copy) |
 
 ## 4. Mutation results
 
-250 faults (tb/mutate/mutants.py), runner `python3 tb/mutate/run.py`.
+295 faults (250 + 45 syscon faults of WO-18; tb/mutate/mutants.py), runner `python3 tb/mutate/run.py`.
 "before" = benches at 484ec59 frozen in build/before (plus only the
 memory_model speed-up and runner knobs); "after" = this branch. Directed
 "after" was rerun only on the 68 before-survivors (the suite only gained
@@ -158,12 +192,23 @@ tests and checks, so a before-kill stays a kill). SoC-file mutants were
 scored "before" only, except UA07 (WO-02). The 10 faults added by WO-00 and
 WO-04 (FC80-85, RFF01-04) were scored on their own (build/mut/wo-*.tsv).
 
+Every number below is `run.py --report` on the concatenation, in this order,
+of build/mut/before.tsv, after-unit.tsv, after-dir.tsv, after-formal.tsv,
+after-soc.tsv, after-dirsoc.tsv, wo-00.tsv, wo-01.tsv, wo-01b.tsv, wo-02.tsv,
+wo-04.tsv, wo-06.tsv, wo-10.tsv, wo-12.tsv, wo-18.tsv (172 rows, the sandbox
+campaign) and wo-19.tsv (82 rows, the formal harnesses on the syscon and AS
+faults); a later row replaces an earlier one for the same fault and bench.
+The result is build/mut/all-wo19.tsv and its report build/mut/report-all-wo19.txt.
+FC86 (WO-10) was scored for this table: build/mut/wo-10.tsv, KILLED by
+wfi_umode. The syscon rows use build/mut/syscon-all.tsv (wo-18.tsv plus
+wo-19.tsv), whose report is the 45 faults alone.
+
 | bench | before | after |
 |---|---|---|
 | test-alu | 10/14 | 9/14 (ALU07 now unchecked: unspecified) |
 | test-branchctrl | 4/7 | 6/7 |
 | test-signext | 4/8 | 6/8 |
-| test-decoder (+rf_fields) | 11/29 | 11/29 (CD mutants change its reference too) |
+| test-decoder (+rf_fields) | 11/29 | 15/33 (RFF01-04 killed by WO-04; the CD mutants change its reference too) |
 | test-controller | 8/18 | 18/18 |
 | test-compressed | 9/18 | 18/18 |
 | test-muldiv | 10/16 | 15/16 |
@@ -174,11 +219,18 @@ WO-04 (FC80-85, RFF01-04) were scored on their own (build/mut/wo-*.tsv).
 | formal core_hold / core_req | - | 4/9 and 3/8 of the 11 core mutants tried (9/11 by either; FC22, FC25 survive both: directed covers them) |
 | test-uart (UA mutants of WO-02) | - | 7/7 |
 | test-regfile | 5/5 | 5/5 |
-| directed core | 138/206 | 193/206 (FC86, added by WO-10, is killed by wfi_umode) |
-| core files, any bench | 155/206 (75%) | 206/216 (95%) |
-| SoC files, any bench | 30/33 (before only) | 31/33 (UA07 killed by WO-02) |
+| directed core | 138/206 | 181/213 (the 206 plus FC80-86; FC86 is killed by wfi_umode; the earlier "193/206" is not reproduced by the results files, this is the file count) |
+| core files, any bench | 155/206 (75%) | 207/217 (95%) (adds FC86, killed) |
+| SoC files, any bench | 30/33 (before only) | 76/78: 31/33 of the old faults (UA07 killed by WO-02) and 45/45 syscon faults |
+| unit test-syscon (the 37 faults in syscon.v) | - | 37/37 |
+| soc test-syscon-soc (45 syscon faults) | - | 38/45 (survivors SY14 WD02 WD08 WD09 WD10 WD11 WD16: the unit bench kills them) |
+| soc test-wrapper (45 syscon faults) | - | 23/45 |
+| soc test-soc-periph (45 syscon faults) | - | 3/45 (SY01, SY06, SY16 only: it was not built to see syscon) |
+| formal syscon_comb | - | 1/37 (SY20; bounded to 24 cycles) |
+| formal syscon_gate | - | 2/37 (WD05, WD16) |
+| formal soc_rst_sync | - | 0/8 on the AS faults (none makes a reset asynchronous); killed by a hand-made async CLINT copy (not in the catalogue) |
 
-### 4.1 Work orders WO-00 to WO-06 and WO-10 to WO-12 (all closed)
+### 4.1 Work orders WO-00 to WO-06, WO-10 to WO-12 and WO-14 to WO-23 (all closed)
 
 | WO | What | Result |
 |---|---|---|
@@ -193,13 +245,21 @@ WO-04 (FC80-85, RFF01-04) were scored on their own (build/mut/wo-*.tsv).
 | WO-10 | `wfi_umode` pinned to the NOP (U-mode WFI with TW=0 never waits); TB-006 handler fix; FC86 added | FC86 and FC45 killed by wfi_umode; core 167/167 (also +RF_X +RF_COLLIDE_X), SoC 101/101 (11f1bb2, d049196, 81934d7) |
 | WO-11 | CLINT window narrowed to 48 KB in the testbench (0x0200_0000-0x0200_BFFF), MEIP hook at 0x0200_8000, pma_edges edge check with a negative control on the old bench, dtb reg 0xc000 | old bench fails pma_edges; FC62 killed by mul_fetchfault, FC63 by pma_edges; Spike identical with and without the dtb; core 167/167, SoC 101/101 (dfdd90a, f2674bd, f6fc76d, 4ef3499) |
 | WO-12 | mailbox moved to syscon +0x7F0, FINISH on the sifive_test codes, UART and SPI drained before FINISH, verdict taken at FINISH | test-soc-periph 8/8, test-wrapper 3/3, four negative controls fail, the 13 SoC mutants still killed (d3cfd91, 28e95bf, 8e59169) |
+| WO-14 | tb_syscon: unit bench against a model of the register map and the watchdog; REQ-SYS-001..019 | test-syscon kills all 37 faults in syscon.v (8eeba2e, then WO-14a) |
+| WO-14a | bench fix-ups: stores, a kick and a TORR write aimed at the clock before a fire (k = 16..18), a sweep that sees aliases, the shipped CHIP_ID, floors (a9d6115..c2ebe57) | WD16 killed by the unit bench; SY14, WD02, WD08-WD11 are killed by it alone |
+| WO-15 | tb_syscon_soc: every syscon load checked against a model; five reboots, strap, fail, watchdog hang (d53eeb4..4a28a5c) | test-syscon-soc 38/45 of the syscon faults; AS01-AS08 killed here (AS01, AS06 by it alone) |
+| WO-16 | power-off holds until rst_n whatever the inputs do; a pin reset inside a reboot or watchdog hold (78e7772, a816d11) | SY21 and the power-off faults killed |
+| WO-17 | tb_tt_um: a reboot and a watchdog reboot look like a pin reset at the pins; power-off holds every pin until rst_n (c2d6698, 04784ac, cea9ee4, 6bf2d0f) | test-wrapper 23/45 of the syscon faults |
+| WO-18 | 45 syscon faults (SY01-21, WD01-16, AS01-08), run on the sandbox against a frozen tree (660bf74) | 45/45 killed by some bench, no survivor, no ERROR (`build/mut/wo-18.tsv`) |
+| WO-19 | formal syscon_comb (bounded, 24), syscon_gate (k-induction), soc_rst_sync (structural); the review's docs fixes; this section (4390e7c..0e723d7) | SY20 killed by syscon_comb, WD05 and WD16 by syscon_gate; the AS faults survive formal by design (build/mut/wo-19.tsv) |
+| WO-23 | the watchdog's `fire` gated by `~rst_soc` (SA-009, f9c34a6) | WD16 is the fault that removes the gate; killed by test-syscon and syscon_gate, survives test-syscon-soc |
 
 Correction: commit 0980c78's body says the CSR proof kills seven mutants; it
 lists six (CS01-04, CS07, CS11) and six is the measured number.
 
 ### 4.2 Survivors and verdicts
 
-Faults no current bench kills, 12 of 250: 10 in core files, 2 in SoC files.
+Faults no current bench kills, 12 of 295 (`build/mut/report-all-wo19.txt`): 10 in core files, 2 in SoC files. None of the 45 syscon faults survives every bench; the ones that survive some benches are in section 4.
 None is waived; each is either equivalent (no observable difference) or
 touches behaviour nothing specifies (section 5).
 
@@ -228,9 +288,12 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
 ## 5. Not verified, and why
 
 - Formal: no SMT solver for sby/smtbmc on this machine; yosys's own `sat`
-  runs three harnesses (`tb/formal/run.sh`): csr and core_hold by
-  k-induction, core_req bounded to 10 cycles from reset (it is not
-  inductive without internal invariants). The register file is a stub with
+  runs six harnesses (`tb/formal/run.sh`): csr, core_hold and syscon_gate
+  by k-induction, core_req bounded to 10 cycles from reset (it is not
+  inductive without internal invariants), syscon_comb bounded to 24 cycles
+  (the two-copy miter says nothing about states deeper than that), and
+  soc_rst_sync, a structural walk of the flattened netlist, not a proof about
+  behaviour. The register file is a stub with
   free read data, so nothing is proved about its contents; the core's
   other properties (data path, traps, interrupts) are covered by
   simulation only.
@@ -245,3 +308,13 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
   issued, branch result for reserved funct3, signExt's SYSTEM output,
   decoder funct3/funct7 for formats without them (spec-ambiguities in the
   agent memory).
+- syscon, SA-008: a kick in the fire cycle does not stop the fire. No test.
+- syscon, F1: writes to `mtime` can delay the watchdog or advance it (three
+  writes that toggle the tapped bit fire it 10 clocks after a kick). Accepted
+  2026-10-25; no test, and Linux never writes `mtime`.
+- The pins' glitch check needs the SDF netlist: the zero-delay RTL runs cannot
+  see a race of about a nanosecond on `uo_out` / `uio_oe` (after the harden).
+- F11: the CS# pull-up timing at the reboot release is a board or silicon
+  question; no simulation here can answer it.
+- TB-007: tb_uart's seed-4 floor is still open; `test-seeds` is run with seeds
+  1-3 until it is settled.
