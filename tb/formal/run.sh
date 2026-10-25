@@ -22,12 +22,12 @@ OUT="${OUT_DIR:-$ROOT/build}"
 mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
-declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [syscon_comb]="syscon.v" )
+declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [syscon_comb]=bmc )
+declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [syscon_comb]=bmc [syscon_gate]=induct )
 declare -A BDEPTH=( [syscon_comb]=24 )     # per-harness bmc depth; default $BMC_DEPTH
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req syscon_comb)
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req syscon_comb syscon_gate)
 bad=0
 err=0
 for n in "${names[@]}"; do
