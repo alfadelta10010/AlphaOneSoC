@@ -304,3 +304,13 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   65536 < d <= 99306). WO-18 unaffected (no src/run.py/syscon_soc change);
   test-wrapper ~+12-15 s per mutant (2 x 110k-cycle runs), within the ~30 s
   estimate.
+- 2026-10-25: WO-19 part A review (4390e7c..48666ae): CHANGES REQUIRED, two
+  one-line wording fixes (CLAUDE.md:68 overstates syscon_gate P2 -- EN can
+  still read 1 in the first held cycle -- and "showing" for the bounded
+  miter; soc-architecture RESET_CAUSE "our kernel and flash loader do so"
+  claims software that does not exist yet). Harnesses match the WO.
+  soc_rst_sync = python walk of write_json (yosys `select %co*` returned
+  nothing in 0.66): conservative (whole-cell output propagation), stops at
+  flops/$mem/latches; flattened SoC at HEAD has 143 $dff, 1 $mem_v2, no
+  latch, no async flop (yosys stat, build/wo19rev/stat.txt), so it is a
+  regression guard; non-vacuity = async CLINT copy FAILED.
