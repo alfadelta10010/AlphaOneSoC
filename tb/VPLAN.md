@@ -115,7 +115,7 @@ test kills (`build/mut/syscon-all.tsv`).
 | REQ-SYS-003 | FINISH acts on 0x7777 / 0x5555 / 0x3333 only, and only with lanes 0 and 1 written | C | tb_syscon, syscon_regs.S, syscon_fail.S | spec model | P (SY01, SY02, SY03, SY07) |
 | REQ-SYS-004 | reboot holds everything but syscon's sticky state for exactly two edges; every block restarts in its reset state | C | tb_syscon (timing), syscon_reboot.S (five boots), tb_tt_um | spec model; per-boot state checks | P (SY04, SY05, AS01-AS08) |
 | REQ-SYS-005 | across a reboot RESET_CAUSE gains SOFT or WDT, BOOT_MODE and the strap latch are kept | C | tb_syscon, syscon_reboot.S, syscon_wdt.S | spec model | P (SY08, SY09, WD14) |
-| REQ-SYS-006 | a pin reset sets RESET_CAUSE = PIN, BOOT_MODE = 0, re-latches the strap, ends a reboot or power-off in progress, disables the watchdog | C | tb_syscon, syscon_pinreset.S (WO-16) | spec model | P (SY11, SY21, WD05) |
+| REQ-SYS-006 | a pin reset sets RESET_CAUSE = PIN, BOOT_MODE = 0, re-latches the strap, ends a reboot or power-off in progress, disables the watchdog | C | tb_syscon, syscon_pinreset.S (WO-16) | spec model | P (SY11, SY21) |
 | REQ-SYS-007 | the QSPI engine samples the strap only while the pin reset is high; STRAPS reads the latched value | C | tb_syscon, syscon_strap.S, tb_tt_um (WO-17) | spec model; flash and PSRAM read behaviour | P (SY12, SY13, SY18, AS05) |
 | REQ-SYS-008 | power-off / fail: held until rst, QSPI pins released, no bus transfer, nothing but rst_n changes anything, no WDT | C | tb_syscon (inputs thrashed while off), syscon_poweroff.S, syscon_fail.S, tb_tt_um | spec model; pin checks | P (SY06, WD16) |
 | REQ-SYS-009 | while the SoC is held no write reaches syscon or the watchdog | C | tb_syscon (WO-14) | spec model | P (SY14, killed by tb_syscon only) |
@@ -125,7 +125,7 @@ test kills (`build/mut/syscon-all.tsv`).
 | REQ-SYS-013 | Linux's syscon-poweroff / -reboot / -reboot-mode and dw_wdt sequences work unchanged | A | syscon_regs.S, syscon_wdt.S, tb_syscon | spec model | p (no mutant targets the driver sequences) |
 | REQ-SYS-014 | watchdog window, DW layout, lane 0 only; CR EN, TORR, CRR key 0x76, COMP_PARAMS_1 | C | tb_syscon, syscon_wdt.S | spec model | P (WD02, WD07, WD08, WD11, WD12, WD13) |
 | REQ-SYS-015 | timeout in mtime counts: after the last kick, more than 2^(16+TOP) and at most 1.5 x 2^(16+TOP) + 1 clocks (never early unless software writes mtime: time is counted in mtime counts) | C | tb_syscon (all 16 TOPs, scaled tap), syscon_wdt.S (TOP 0, real scale), syscon_wdt_split.S | spec model; reboot-time bounds | P (WD03, WD04, WD09, WD10, AS07) |
-| REQ-SYS-016 | expiry = a two-edge reboot that sets WDT (sticky); the watchdog comes back disabled with TOP 15 | C | tb_syscon, syscon_wdt.S, tb_tt_um | spec model | P (WD06, WD14, WD15) |
+| REQ-SYS-016 | expiry = a two-edge reboot that sets WDT (sticky); the watchdog comes back disabled with TOP 15 | C | tb_syscon, syscon_wdt.S, tb_tt_um | spec model | P (WD05, WD06, WD14, WD15) |
 | REQ-SYS-017 | once enabled, EN cannot be cleared by any write | C | tb_syscon | spec model | P (WD01) |
 | REQ-SYS-018 | same-cycle cases: fire with a W1C of WDT, fire with a FINISH reboot, fire with a power-off | C | tb_syscon (WO-14, 14a) | spec model | p (no mutant isolates them) |
 | REQ-SYS-019 | no fire while the SoC is held (SA-009) | C | tb_syscon k = 16..18 (WO-14a), formal `syscon_gate` (WO-19) | spec model; proof (P1, P2) | P (WD16, by both) |
@@ -186,10 +186,9 @@ broken design. "Mutants" refers to section 4.
 
 295 faults (250 + 45 syscon faults of WO-18; tb/mutate/mutants.py), runner `python3 tb/mutate/run.py`.
 "before" = benches at 484ec59 frozen in build/before (plus only the
-memory_model speed-up and runner knobs); "after" = this branch. Directed
-"after" was rerun only on the 68 before-survivors (the suite only gained
-tests and checks, so a before-kill stays a kill). SoC-file mutants were
-scored "before" only, except UA07 (WO-02). The 10 faults added by WO-00 and
+memory_model speed-up and runner knobs); "after" = this branch. after-dir.tsv
+and after-soc.tsv were regenerated on 2026-10-22, after the 10-21 build/ wipe, and
+score all 206 directed faults and all 33 SoC faults again. The 10 faults added by WO-00 and
 WO-04 (FC80-85, RFF01-04) were scored on their own (build/mut/wo-*.tsv).
 
 Every number below is `run.py --report` on the concatenation, in this order,
@@ -219,7 +218,7 @@ wo-19.tsv), whose report is the 45 faults alone.
 | formal core_hold / core_req | - | 4/9 and 3/8 of the 11 core mutants tried (9/11 by either; FC22, FC25 survive both: directed covers them) |
 | test-uart (UA mutants of WO-02) | - | 7/7 |
 | test-regfile | 5/5 | 5/5 |
-| directed core | 138/206 | 181/213 (the 206 plus FC80-86; FC86 is killed by wfi_umode; the earlier "193/206" is not reproduced by the results files, this is the file count) |
+| directed core | 138/206 | 181/213 (the 206 plus FC80-86; FC86 is killed by wfi_umode; the 193/206 shown from e4de29c to this commit was the core-files any-bench count copied into this row; directed was 173/206 (after-dir.tsv), 176/206 with WO-01's tests; the 95% any-bench figure was right) |
 | core files, any bench | 155/206 (75%) | 207/217 (95%) (adds FC86, killed) |
 | SoC files, any bench | 30/33 (before only) | 76/78: 31/33 of the old faults (UA07 killed by WO-02) and 45/45 syscon faults |
 | unit test-syscon (the 37 faults in syscon.v) | - | 37/37 |
