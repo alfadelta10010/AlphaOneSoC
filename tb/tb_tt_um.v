@@ -43,6 +43,27 @@
 //     ui_in[0] flips 1 ns after the second clock edge, the earliest it is
 //     allowed to, and later it is GPIO IN 0: neither may move the sampling
 //     point.
+//
+// +TEST=reboot runs tests/soc/tt_reboot.S instead, from phase 1 above only
+// (the program does its own resets, through the syscon). Pins only again:
+//
+//   * a reboot (FINISH 0x7777) looks at the pins like a pin reset after rst_n
+//     rises: from the first falling clock edge with uio_oe[3] low, two samples
+//     with uio_oe 0 and uo_out 0x39, the third with SCK and the chip selects
+//     driven again. The window starts within a bound of the program's cue
+//     byte ('r', 'R'); each pin changes at most once into it and once out of
+//     it, never twice at one time stamp, and only just after a clock edge;
+//   * the program's bytes (RESET_CAUSE, BOOT_MODE, STRAPS, CHIP_ID) are the
+//     spec's, in tb/syscon_spec.vh and docs/ROADMAP.md 1.2, not read from src/;
+//   * the strap is latched once: every STRAPS byte is the value at the last
+//     pin reset, whatever ui_in[0] does since. With +RD_LATE the later boots
+//     can fetch only if the engine kept rd_late = 1.
+//
+// Limits: in zero-delay RTL every flop changes at the same time stamp, so a
+// hazard between two flops through a gate cannot show (the uo_out[1] / [3]
+// mux while the SPI transmitter is on). The per-pin check catches extra edges
+// between clock edges and windows with more than one edge; the real glitch
+// check is this bench on the SDF-annotated netlist.
 
 `timescale 1ns / 1ps
 
@@ -201,6 +222,8 @@ module tb_tt_um;
         in_pats[8] = 8'hF7;
     end
 
+    string    testname = "";
+    reg       reboot_test = 1'b0;     // +TEST=reboot
     integer   seen = 0;               // bytes of the stream handled
     integer   n_rx0 = 0;              // rp.rx_n when the stream began
     reg       done = 1'b0;
@@ -211,10 +234,74 @@ module tb_tt_um;
         ram_word = {pmod.ram_rd(a + 3), pmod.ram_rd(a + 2), pmod.ram_rd(a + 1), pmod.ram_rd(a)};
     endfunction
 
+    // ── tests/soc/tt_reboot.S: the expected stream, from the spec ───────────
+    // Nine bytes a boot: its letter, RESET_CAUSE, BOOT_MODE, STRAPS, CHIP_ID
+    // (4), then the cue for the next reboot. RESET_CAUSE accumulates.
+    localparam integer RB_N = 27;     // bytes of the stream, the final 'Z' included
+    reg [31:0] rb_letters = "bBCD";
+    reg [31:0] rb_cues    = "rRwp";
+    reg [31:0] rb_cause   = {8'h07, 8'h03, 8'h03, 8'h01};
+    reg [31:0] rb_bm      = {8'hA5, 8'hA5, 8'h5A, 8'h00};
+    reg [31:0] rb_chip    = 32'h4131_5301;   // CHIP_ID, user-confirmed
+    function automatic [7:0] rb_exp(input integer idx);
+        integer k, j;
+        begin
+            k = idx / 9; j = idx % 9;
+            if (idx == RB_N - 1) rb_exp = "Z";
+            else case (j)
+                0: rb_exp = rb_letters[8 * (3 - k) +: 8];
+                1: rb_exp = rb_cause[8 * k +: 8];
+                2: rb_exp = rb_bm[8 * k +: 8];
+                3: rb_exp = {7'b0, rd_late};          // latched at the last pin reset
+                8: rb_exp = rb_cues[8 * (3 - k) +: 8];
+                default: rb_exp = rb_chip[8 * (j - 4) +: 8];
+            endcase
+        end
+    endfunction
+
+    // The reboot window at the pins, timed from the cue byte. wstate: 0 idle,
+    // 1 waiting for the window, 2 second low sample, 3 the third sample,
+    // 4 the 10 clocks after it. phase: 1 from the cue to the window, 2 from
+    // the window on (the per-pin transition counts below).
+    reg [7:0] cue_chr = 8'h00;
+    integer wstate = 0, phase = 0, cue_cyc = 0, cue_kind = 0, w_lo = 0, w_hi = 0, w_post = 0;
+    integer win_dist = 0;
+    integer cnt [0:15];
+    integer ci;
+    initial for (ci = 0; ci < 16; ci = ci + 1) cnt[ci] = 0;
+
+    task automatic rb_cue(input [7:0] chr, input integer kind, input integer lo, input integer hi);
+        integer n;
+        begin
+            cue_cyc = cyc; cue_chr = chr; cue_kind = kind; w_lo = lo; w_hi = hi;
+            for (n = 0; n < 16; n = n + 1) cnt[n] = 0;
+            wstate = 1; phase = 1;
+        end
+    endtask
+
+    task automatic on_byte_reboot(input [7:0] b);
+        integer k, j;
+        begin
+            k = seen / 9; j = seen % 9;
+            if (seen >= RB_N) fail($sformatf("byte %h after the end of the stream", b));
+            else if (b !== rb_exp(seen))
+                fail($sformatf("byte %0d is %h, want %h", seen, b, rb_exp(seen)));
+            else if (seen == RB_N - 1) done = 1'b1;
+            else if (j == 8) begin
+                case (b)
+                    "r", "R": rb_cue(b, k, 0, 4000);
+                    default: ;
+                endcase
+            end
+        end
+    endtask
+
     task automatic on_byte(input [7:0] b);
         integer k;
         begin
-            if (seen < N_OUT) begin
+            if (reboot_test) begin
+                on_byte_reboot(b);
+            end else if (seen < N_OUT) begin
                 // 1. an 'o' per OUT value
                 k = seen;
                 if (b !== "o") fail($sformatf("byte %0d is %h, want 'o'", seen, b));
@@ -277,6 +364,70 @@ module tb_tt_um;
     always @(rp.rx_n)
         if (rp.rx_n > n_rx0) on_byte(rp.rx_buf[(rp.rx_n - 1) % 16384]);
 
+    always @(negedge clk) if (reboot_test) begin
+        case (wstate)
+            1: if (uio_oe[3] === 1'b0) begin
+                    win_dist = cyc - cue_cyc;
+                    if (win_dist <= w_lo || win_dist > w_hi)
+                        fail($sformatf("reboot window %0d clocks after cue '%c', want %0d < d <= %0d",
+                                       win_dist, cue_chr, w_lo, w_hi));
+                    else
+                        $display("NOTE reboot window %0d clocks after the cue '%c' (bound %0d < d <= %0d)",
+                                 win_dist, cue_chr, w_lo, w_hi);
+                    check_reset_pins("in the reboot window, first sample");
+                    for (ci = 0; ci < 16; ci = ci + 1) cnt[ci] = 0;
+                    phase = 2; wstate = 2;
+                end else if (cyc - cue_cyc > w_hi) begin
+                    fail($sformatf("no reboot window within %0d clocks of the cue '%c'", w_hi,
+                                   cue_chr));
+                    phase = 0; wstate = 0;
+                end
+            2: begin
+                    check_reset_pins("in the reboot window, second sample");
+                    wstate = 3;
+                end
+            3: begin
+                    if (uio_oe[3] !== 1'b1)
+                        fail("reboot window longer than two samples: SCK and the chip selects not driven on the third");
+                    wstate = 4; w_post = 10;
+                end
+            4: begin
+                    w_post = w_post - 1;
+                    if (w_post == 0) begin phase = 0; wstate = 0; end
+                end
+        endcase
+    end
+
+    // One transition per pin: each bit of uo_out and uio_oe changes at most
+    // once into the window (in the cycle that enters it) and once out of it, never twice at one time stamp,
+    // and only just after a rising clock edge.
+    realtime t_pos = -1.0e9;
+    integer cj;
+    // Before the window the program is running and its pins move as they
+    // like (flash fetches); what counts is the clock cycle that enters the
+    // window, so the count starts again at every edge until the window opens.
+    always @(posedge clk) begin
+        t_pos = $realtime;
+        if (phase == 1) for (cj = 0; cj < 16; cj = cj + 1) cnt[cj] = 0;
+    end
+    wire [15:0] pins16 = {uio_oe, uo_out};
+    genvar gp;
+    generate for (gp = 0; gp < 16; gp = gp + 1) begin : pin
+        realtime last_t = -1.0;
+        always @(pins16[gp]) if (phase != 0) begin
+            if ($realtime == last_t)
+                fail($sformatf("%s[%0d] changed twice at %0t", gp < 8 ? "uo_out" : "uio_oe", gp % 8, $realtime));
+            last_t = $realtime;
+            if ($realtime - t_pos > 1.0 * `RST_CHK_NS)
+                fail($sformatf("%s[%0d] changed %0g ns after the clock edge", gp < 8 ? "uo_out" : "uio_oe",
+                               gp % 8, $realtime - t_pos));
+            cnt[gp] = cnt[gp] + 1;
+            if (cnt[gp] > 1)
+                fail($sformatf("%s[%0d] changed twice %s the reboot window", gp < 8 ? "uo_out" : "uio_oe",
+                               gp % 8, phase == 1 ? "going into" : "coming out of"));
+        end
+    end endgenerate
+
     // RTS# while a received byte waits: the program cannot have read RBR
     // within the half bit since the stop bit was sampled.
     always @(rp.tx_sent)
@@ -314,6 +465,7 @@ module tb_tt_um;
     initial begin
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 400_000;
         rd_late = $test$plusargs("RD_LATE");
+        if ($value$plusargs("TEST=%s", testname)) reboot_test = (testname == "reboot");
         strap = rd_late;
 
         // 1. The demo board's firmware: the clock stopped, a pulse on rst_n,
@@ -324,16 +476,18 @@ module tb_tt_um;
         #30 check_reset_pins("after a reset pulse with the clock stopped");
         clk_on = 1'b1;
 
-        // 2. With the clock running, off the edge, the flash driving the bus.
-        aim_at_flash_read;
-        #3 rst_n = 1'b0;
-        repeat (6) @(posedge clk);
-        #(`IN_DLY_NS) rst_n = 1'b1;
+        if (!reboot_test) begin
+            // 2. With the clock running, off the edge, the flash driving the bus.
+            aim_at_flash_read;
+            #3 rst_n = 1'b0;
+            repeat (6) @(posedge clk);
+            #(`IN_DLY_NS) rst_n = 1'b1;
 
-        // 3. A pulse that fits between two clock edges.
-        aim_at_flash_read;
-        #2 rst_n = 1'b0;
-        #3 rst_n = 1'b1;
+            // 3. A pulse that fits between two clock edges.
+            aim_at_flash_read;
+            #2 rst_n = 1'b0;
+            #3 rst_n = 1'b1;
+        end
         if (rp.rx_n != 0) fail("UART traffic before the last reset");
         n_rx0 = rp.rx_n;
         cs0_falls = 0; sck_rises = 0;
@@ -344,14 +498,14 @@ module tb_tt_um;
         while (!done && cyc < max_cycles) @(posedge clk);
         if (!done)
             fail($sformatf("no 'Z' within %0d cycles: %0d of %0d bytes seen", max_cycles, seen,
-                           N_OUT + 3 * N_IN + 4));
+                           reboot_test ? RB_N : N_OUT + 3 * N_IN + 4));
         // Let a stray extra byte arrive.
         repeat (16 * 12) @(posedge clk);
         if (cs0_falls == 0 || sck_rises == 0) fail("no flash read on uio[0] and uio[3]");
         if (rp.errors != 0) fail($sformatf("%0d RP2350 UART errors", rp.errors));
         if (rp.tx_pending() != 0) fail("a byte for the program was never sent: RTS# stayed high");
-        if (errors == 0) $display("PASS tb_tt_um (QSPI_DELAY=%0d ns, rd_late=%0d, %0d cycles)",
-                                  pmod.delay_ns, rd_late, cyc);
+        if (errors == 0) $display("PASS tb_tt_um%s (QSPI_DELAY=%0d ns, rd_late=%0d, %0d cycles)",
+                                  reboot_test ? " reboot" : "", pmod.delay_ns, rd_late, cyc);
         else             $display("FAIL tb_tt_um: %0d errors", errors);
         $finish;
     end

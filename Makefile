@@ -279,6 +279,8 @@ test-syscon-soc: $(BUILD_DIR)
 #   default            2 ns device delay, ui_in[0] = 0 through reset
 #   QSPI_DELAY=19      just under one SCK period, which rd_late = 0 must take
 #   RD_LATE, 25 ns     ui_in[0] = 1 through reset: only rd_late = 1 reads this
+# then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
+# strap at 0 and at 1 (RD_LATE, 25 ns).
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
                 $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
@@ -295,10 +297,21 @@ test-wrapper: $(BUILD_DIR)
 			$(CURDIR)/$(TESTS_DIR)/soc/tt_pins.S -o tt_pins.elf && \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 tt_pins.elf tt_pins.hex && \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/tt_reboot.S -o tt_reboot.elf && \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 tt_reboot.elf tt_reboot.hex && \
 		for args in $(WRAPPER_RUNS); do \
 			$(VVP) -n sim +FLASH_FILE=$(CURDIR)/$(WRAPPER_DIR)/tt_pins.hex $$args > tt_pins.log 2>&1; \
 			grep -E '^(PASS|FAIL|ERROR|TIMEOUT)' tt_pins.log | head -6; \
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_pins.log || ! grep -q '^PASS' tt_pins.log; then exit 1; fi; \
+		done && \
+		n=0; for args in "" "$(QSPI_LATE)"; do \
+			n=$$((n + 1)); \
+			$(VVP) -n sim +FLASH_FILE=$(CURDIR)/$(WRAPPER_DIR)/tt_reboot.hex +TEST=reboot $$args > tt_reboot.$$n.log 2>&1; \
+			grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' tt_reboot.$$n.log | head -12; \
+			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_reboot.$$n.log || ! grep -q '^PASS' tt_reboot.$$n.log; then exit 1; fi; \
 		done
 
 test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-soc-periph test-syscon-soc test-wrapper
