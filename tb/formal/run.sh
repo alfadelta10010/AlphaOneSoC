@@ -11,8 +11,9 @@
 # read tb/formal/rf_top_stub.v instead of src/rf_top.v (free read data).
 # Mode struct (soc_rst_sync) is not a SAT proof: the SoC is flattened and the
 # fan-out cone of rst_soc is walked through buffers and logic but not through
-# flops; it is FAILED if the cone reaches the reset, set or load port of an
-# asynchronous flop ($adff, $adffe, $aldff, $aldffe, $dffsr, $dffsre), PROVED
+# flops, $mem* cells or latches, which end the walk; it is FAILED if the cone
+# reaches the reset, set or load port of an asynchronous flop or latch ($adff,
+# $adffe, $aldff, $aldffe, $dffsr, $dffsre, $adlatch, $dlatchsr, $sr), PROVED
 # (structural) otherwise. rst_soc is meant as a synchronous reset only.
 # Prints PROVED, BOUNDED or FAILED per harness; exits 1 if any failed. FAILED
 # means yosys finished with a counterexample (or, for induct, hit the depth
@@ -50,9 +51,9 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 top = d["modules"]["alphaone_soc"]
 seed = {b for b in top["netnames"]["rst_soc"]["bits"] if isinstance(b, int)}
-ASYNC = {"$adff", "$adffe", "$aldff", "$aldffe", "$dffsr", "$dffsre"}
+ASYNC = {"$adff", "$adffe", "$aldff", "$aldffe", "$dffsr", "$dffsre", "$adlatch", "$dlatchsr", "$sr"}
 RST_PORTS = {"ARST", "SET", "CLR", "ALOAD", "AD"}
-SEQ = ("$dff", "$sdff", "$adff", "$aldff", "$dffsr", "$mem", "$ff", "$dlatch", "$adlatch", "$dlatchsr")
+SEQ = ("$dff", "$sdff", "$adff", "$aldff", "$dffsr", "$mem", "$ff", "$dlatch", "$adlatch", "$dlatchsr", "$sr")
 seen, work, hits = set(seed), list(seed), []
 while work:
     b = work.pop()
