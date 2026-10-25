@@ -11,7 +11,9 @@
 //   +0x04  RESET_CAUSE  R / W1C (lane 0). [0] PIN, [1] SOFT, [2] WDT. 0x1
 //                       after a pin reset; a reboot sets SOFT and keeps PIN;
 //                       a watchdog expiry sets WDT. All are cleared only by
-//                       W1C or the pin reset.
+//                       W1C or the pin reset. Rule: software that wants the
+//                       last reset's cause alone reads it at boot, then
+//                       writes 0x7.
 //   +0x08  BOOT_MODE    R/W (lane 0), [7:0]. 0 after a pin reset, kept
 //                       across a reboot: software's note to the next boot.
 //   +0x0C  CHIP_ID      R, the CHIP_ID parameter.

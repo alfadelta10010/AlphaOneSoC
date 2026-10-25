@@ -42,7 +42,8 @@ module fyracore #(
     //
     // A window with BASE > TOP matches nothing. The testbench uses that to
     // switch off the IO window the reference model has no device behind, and
-    // widens the CLINT window to the aperture the reference model maps.
+    // narrows the CLINT window to the aperture the reference model maps
+    // (0x0200_0000-0x0200_BFFF, WO-11).
     parameter [31:0] PMA_ROM_BASE = 32'h2000_0000,  // flash
     parameter [31:0] PMA_ROM_TOP  = 32'h20FF_FFFF,
     parameter [31:0] PMA_RAM_BASE = 32'h8000_0000,  // PSRAM

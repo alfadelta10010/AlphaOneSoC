@@ -384,7 +384,11 @@ power-on is always followed by an `rst_n` pulse from the board, so the chip
 cannot tell it from a pin reset. All bits are sticky and cleared only by
 writing 1 to them (lane 0) or by the pin reset that sets PIN again. A reboot
 sets SOFT and keeps what was there, so after a reboot the register reads `0x3`
-unless software cleared PIN first; after a watchdog reset it reads `0x5`.
+unless software cleared PIN first; after a watchdog reset it reads `0x5` if
+nothing else set a bit since the pin reset (`0x7` after an earlier reboot): the
+bits accumulate. Rule: software that wants the cause of the last reset alone
+reads RESET_CAUSE at boot and then writes `0x7` to clear it; our kernel and
+flash loader do so at every boot.
 
 ### BOOT_MODE and reboot-mode
 
@@ -727,10 +731,11 @@ file 3.68, CSR 2.65, core glue 2.67, muldiv 0.93 tiles. The SoC blocks added
 here cost about 0.7 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
 the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus
 mostly folds away). syscon with its watchdog adds 0.151 tile, 23 flops
-(synthesised on its own with the TT cell set). No harden of the SoC has completed yet (hold buffers on
-the register file's enable loops stop detailed placement; see "TinyTapeout
-flow check" in `docs/area-audit.md`); fit and timing are settled in the
-TinyTapeout submission repository.
+(synthesised on its own with the TT cell set). The SoC hardens clean at 3x4
+tiles and closes 62.5 MHz at every corner (see "Performance" below and
+`macro/rf_top/README.md`). syscon and its reset rewiring came after that
+harden, so the next harden re-checks fit and the `rst_soc` root at the slow
+corner.
 
 ## Performance
 

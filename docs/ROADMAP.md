@@ -116,8 +116,10 @@ below in these ways:
 
 * CLK_GATE (+0x14) and POWER (+0x18) are reserved: they read 0 and ignore
   writes (no clock gating exists yet; section 6).
-* RESET_CAUSE has PIN and SOFT only. TinyTapeout has no power-on-reset cell,
-  so power-on cannot be told from a pin reset.
+* RESET_CAUSE has PIN and SOFT, plus WDT since the watchdog (below); there is
+  no power-on bit. TinyTapeout has no power-on-reset cell, so power-on cannot
+  be told from a pin reset. The bits accumulate: software that wants the last
+  reset's cause alone reads it at boot and writes `0x7` to clear it.
 * FAIL (`0x3333`) halts the chip like power-off.
 * There is no flash deep power-down (`B9h`) at power-off.
 * The reset generator is in `alphaone_soc`, not in the wrapper, so the
