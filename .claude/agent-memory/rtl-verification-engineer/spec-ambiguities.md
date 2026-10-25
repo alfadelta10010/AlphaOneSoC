@@ -92,3 +92,6 @@
   syscon_gate proves it (induct). Verified on a gated throwaway copy
   (build/wo14rev/probe_gate.v): k=16 cause 0x3, k=17/18 0x1 in off, a kick
   at fire-1 -> fire +9, a TORR write at fire-1 -> fire +13 = 3P+1 (TOP 1).
+- SA-010 (2026-10-25, closed by the user, review F13) RESET_CAUSE
+  accumulates (PIN survives reboots; 0x3/0x7 are normal). Kept; firmware
+  rule: read at boot, then W1C 0x7. Docs get the rule in WO-19.

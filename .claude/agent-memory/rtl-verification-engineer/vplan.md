@@ -281,3 +281,17 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   SY21 in the draft + WO-18 (compiles, once). New user rules: target sky26d
   unless told otherwise; one sandbox harden + one river_core run after ALL
   remaining WOs, not per WO. WO-17 not reconciled (user: stop after WO-16).
+- 2026-10-25: user decided the branch review (localFiles/review-2026-10-24/
+  syscon-branch-review.html). Amended WO-17 (F6: 'w' cue before the kick,
+  upper bound +CUE_TO_KICK 1000; every boot sets DLL=1 -- the wrapper's SoC
+  resets the UART divisor to 27 at each reboot; +TEST=reboot uses prologue
+  phase 1 only; AS08 neg control), WO-18 (45 faults, AS08 = cpu .rst(rst):
+  find "    ) cpu (\n        .clk         (clk),\n        .rst         (rst_soc),";
+  bench commit: held qspi_sck==0 + syscon_regs min_loads 302; sandbox
+  campaign in 3 stages, ~4 h at -j1 from measured bench times: test-syscon
+  40 s, soc-periph 30 s, syscon-soc 75 s, wrapper 6 s (+~25 s with WO-17);
+  run.py works from any tree root, relative --results resolves to ROOT),
+  WO-19 (trimmed to syscon_comb/syscon_gate/soc_rst_sync + docs F1/F2/F9/
+  F13, VPLAN rescore incl FC86, CLAUDE.md). New trailer session
+  019AGtNpvpJiU7zQxfhZUJEn. Order: 17 -> 18 (sandbox) -> 19 -> one sandbox
+  harden (sky26d) + river_core -> SPI design.
