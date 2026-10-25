@@ -314,3 +314,17 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   flops/$mem/latches; flattened SoC at HEAD has 143 $dff, 1 $mem_v2, no
   latch, no async flop (yosys stat, build/wo19rev/stat.txt), so it is a
   regression guard; non-vacuity = async CLINT copy FAILED.
+- 2026-10-25: WO-19 part B review (660bf74 0e723d7 a4ac1d0): CHANGES
+  REQUIRED, two VPLAN prose edits. Report on all-wo19.tsv reproduces
+  report-all-wo19.txt byte for byte (283/295, 12 survivors with verdicts).
+  MY ERROR, found here: the VPLAN's "directed core 193/206" (e4de29c,
+  2026-10-20) was the core-files ANY-BENCH count copied into the directed
+  row -- both rows read 193/206 in e4de29c. Files give directed 173/206
+  (after-dir), 176/206 with WO-01's tests, 181/213 with FC80-86. CL01-07
+  (clint.v, not in the core bench) and the unit-only CS faults can never be
+  directed kills, so directed could not equal any-bench. The 95% figure
+  (any bench: 206/216 then, 207/217 now) was right. Also stale prose:
+  after-dir.tsv and after-soc.tsv (2026-10-22, regenerated after the
+  10-21 build/ wipe) are full reruns, not "68 survivors only" / "before
+  only". LESSON: derive every table cell with --report and name the file;
+  never fill one row from another.

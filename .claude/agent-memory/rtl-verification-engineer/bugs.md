@@ -40,3 +40,7 @@
   can miss it. Unrelated to syscon. Stops default `make test-seeds` at s=4.
   Coordinator checking f9c34a6/main. Fix: steer breaks, or count/floor per
   stimulus. Not mine to fix in WO-14a.
+- TB-008 (2026-10-25, planner/doc error, mine) tb/VPLAN.md 4 "directed core
+  193/206" (e4de29c..a4ac1d0) was the any-bench count; correct directed
+  181/213 (176/206 of the original faults). Told to the user at PR #11 as
+  part of "193 (95% core)"; 95% (any bench) stands.
