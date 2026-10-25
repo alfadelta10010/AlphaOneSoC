@@ -286,6 +286,7 @@ module tb_syscon_soc;
             if (gpio_out !== 8'h09)    fail($sformatf("held: gpio_out = %h, want 09", gpio_out));
             if (uart_tx !== 1'b1)      fail("held: uart_tx is not 1");
             if (uart_rts_n !== 1'b1)   fail("held: uart_rts_n is not 1");
+            if (qspi_sck !== 1'b0)     fail($sformatf("held: qspi_sck = %b, want 0", qspi_sck));
             if ((soc.imem_req === 1'b1 && soc.imem_ready === 1'b1) ||
                 (soc.dmem_req === 1'b1 && soc.dmem_ready === 1'b1))
                 fail("held: a bus handshake while the SoC is in reset");
@@ -488,7 +489,7 @@ module tb_syscon_soc;
         clk_go = 1'b1;
         #1 rp.set_baud(16.0 * UART_DIV * TCLK);
         if (test == "syscon_regs") begin
-            fin_noise_ok = 1'b1; min_loads = 250;
+            fin_noise_ok = 1'b1; min_loads = 302;
         end else if (test == "syscon_reboot") begin
             exp_fin_reboots = 4; exp_events = 1; exp_values = 5; min_loads = 13;
         end else if (test == "syscon_wdt_split") begin
