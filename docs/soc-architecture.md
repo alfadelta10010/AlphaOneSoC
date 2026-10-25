@@ -417,13 +417,15 @@ the second boot.
 
 ### Area
 
-syscon without the watchdog is **0.087 tile, 14 flops** (`rq`, `rq2`, `off`, the strap flop,
-`cause[1:0]`, `boot_mode[7:0]`), from the audit's yosys recipe with the TT cell
-set (979.7 µm²; `docs/area-audit.md`), about 0.09 tile in context, within the
-0.5-tile budget `docs/ROADMAP.md` allows for new RTL. The reset tree's extra OR
-at its root is the one thing a harden should check, at the slowest corner.
-The watchdog adds 0.057 tile and 9 flops, 0.144 tile and 23 flops in all
-(see "Watchdog").
+syscon without the watchdog is **0.078 tile, 14 flops** (`rq`, `rq2`, `off`, the strap flop,
+`cause[1:0]`, `boot_mode[7:0]`), from the review's yosys recipe with the TT cell
+set (882.1 µm²; method in `docs/area-audit.md`), within the 0.5-tile budget
+`docs/ROADMAP.md` allows for new RTL. The reset tree's extra OR at its root is
+the one thing a harden should check, at the slowest corner. The watchdog adds
+0.072 tile and 9 flops (815.8 µm²), and the `~rst_soc` gate on `fire` about
+10 µm² and no flop: 0.151 tile and 23 flops in all, 1,707.9 µm² (see
+"Watchdog"). These are flat per-block figures; they are re-measured in context
+at the area pass.
 
 ### Watchdog (`src/syscon.v`, +0x100..+0x1FF)
 
@@ -533,9 +535,9 @@ watchdog.
   `fire` and a FINISH reboot meet in one cycle, SOFT and WDT are both set and
   there is one reboot; with a power-off, `off` wins.
 
-**Area.** syscon with the watchdog is **0.144 tile, 23 flops** (1,625.3 µm²,
-the audit's recipe with the TT cell set), against 0.087 tile and 14 flops
-without. The watchdog is +645.6 µm², +0.057 tile, +9 flops: EN, TOP[3:0],
+**Area.** syscon with the watchdog is **0.151 tile, 23 flops** (1,707.9 µm²,
+the review's recipe with the TT cell set), against 0.078 tile and 14 flops
+without. The watchdog is +815.8 µm², about +0.072 tile, +9 flops: EN, TOP[3:0],
 count[1:0], the tick edge and RESET_CAUSE[2]. The alternative considered and
 not taken, a custom keyed register with an out-of-tree driver, measured
 +0.068 tile and needs a kernel patch carried for the life of the project.
@@ -724,7 +726,7 @@ about 20-24% low. The largest blocks, hierarchical with TT's cells: register
 file 3.68, CSR 2.65, core glue 2.67, muldiv 0.93 tiles. The SoC blocks added
 here cost about 0.7 tiles flat in the recipe (qspi_ctrl 0.24, mem_ctrl 0.07,
 the UART 0.29 with 77 flops, GPIO with its SPI transmitter 0.12; soc_bus
-mostly folds away). syscon with its watchdog adds 0.144 tile, 23 flops
+mostly folds away). syscon with its watchdog adds 0.151 tile, 23 flops
 (synthesised on its own with the TT cell set). No harden of the SoC has completed yet (hold buffers on
 the register file's enable loops stop detailed placement; see "TinyTapeout
 flow check" in `docs/area-audit.md`); fit and timing are settled in the

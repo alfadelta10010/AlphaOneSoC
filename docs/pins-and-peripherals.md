@@ -164,7 +164,7 @@ columns).
 | 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
 | 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
 | 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
-| 6 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.144 tile, 23 flops (0.087 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
+| 6 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.151 tile, 23 flops (0.078 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
 block synthesised on its own with the audit's recipe; 1 tile ≈ 11,300 µm² of
