@@ -59,6 +59,27 @@
 //     pin reset, whatever ui_in[0] does since. With +RD_LATE the later boots
 //     can fetch only if the engine kept rd_late = 1.
 //
+// +TEST=isa and +TEST=sig run real programs (tests/isa, scripts/gl) through
+// the same pins. The program reports over the UART and powers off:
+//
+//   isa  'P' (pass), or 'F' and four bytes, gp/TESTNUM little-endian (fail);
+//   sig  'S' (and, with +SIG_UART, the signature words raw, little-endian).
+//
+// then, within 20,000 clocks of the report, the pins must show the power-off
+// (uio_oe 0, uo_out 0x39) and hold it for 200 clocks, so every program also
+// exercises syscon's `off` path. For sig the bench then reads the signature
+// from the board's PSRAM, the Pmod model outside the chip, from SIG_BEGIN up
+// to SIG_END (+SIG_BEGIN=<hex> +SIG_END=<hex>), writes it to +SIG_OUT=<file>
+// (8 hex digits a line, RISCOF's format) and compares it with +SIG_REF=<file>,
+// Spike's signature. With +SIG_UART the UART copy must equal the PSRAM copy.
+//
+// On a gate-level netlist run it with +RF_X (the register file macro model
+// starts at X, as the silicon does) and +RF_COLLIDE_X, like the TT test. Every
+// flop of the netlist starts at X too, with no initialisation: the strictest
+// X case. Random initial flop values are left out on purpose: in Icarus the
+// state sits inside the cell UDPs and cannot be set cheaply, and the X start
+// is the more pessimistic of the two.
+//
 // Limits: in zero-delay RTL every flop changes at the same time stamp, so a
 // hazard between two flops through a gate cannot show (the uo_out[1] / [3]
 // mux while the SPI transmitter is on). The per-pin check catches extra edges
@@ -224,6 +245,16 @@ module tb_tt_um;
 
     string    testname = "";
     reg       reboot_test = 1'b0;     // +TEST=reboot
+    reg       isa_test = 1'b0;        // +TEST=isa or +TEST=sig
+    reg       sig_test = 1'b0;        // +TEST=sig
+    reg       sig_uart = 1'b0;        // +SIG_UART
+    reg [31:0] sig_begin = 32'h0, sig_end = 32'h0, fail_num = 32'h0;
+    integer   rep_state = 0;          // 0 first byte, 1 failing TESTNUM, 2 UART signature, 3 reported
+    integer   rep_n = 0;
+    reg       rep_done = 1'b0;        // the program has reported
+    reg [7:0] usig [0:65535];
+    reg [31:0] sig_ref [0:16383];
+    string    sig_ref_file = "", sig_out_file = "";
     integer   seen = 0;               // bytes of the stream handled
     integer   n_rx0 = 0;              // rp.rx_n when the stream began
     reg       done = 1'b0;
@@ -303,10 +334,54 @@ module tb_tt_um;
         end
     endtask
 
+    task automatic on_byte_isa(input [7:0] b);
+        begin
+            case (rep_state)
+                0: case (b)
+                    "P": if (sig_test) fail("a 'P' from a signature test"); else begin rep_state = 3; rep_done = 1'b1; end
+                    "F": begin rep_state = 1; rep_n = 0; end
+                    "S": if (!sig_test) fail("an 'S' from a pass/fail test");
+                         else if (sig_uart && sig_end > sig_begin) begin rep_state = 2; rep_n = 0; end
+                         else begin rep_state = 3; rep_done = 1'b1; end
+                    default: fail($sformatf("first byte %h, want P, F or S", b));
+                endcase
+                1: begin
+                    fail_num[8 * rep_n +: 8] = b;
+                    rep_n = rep_n + 1;
+                    if (rep_n == 4) begin
+                        fail($sformatf("the program reports TESTNUM %0d (gp = %h)", fail_num, fail_num));
+                        rep_state = 3; rep_done = 1'b1;
+                    end
+                end
+                2: begin
+                    usig[rep_n] = b;
+                    rep_n = rep_n + 1;
+                    if (rep_n == sig_end - sig_begin) begin rep_state = 3; rep_done = 1'b1; end
+                end
+                default: fail($sformatf("byte %h after the report", b));
+            endcase
+        end
+    endtask
+
+    // After the report: the power-off at the pins, within 20,000 clocks, held 200.
+    integer pw_i;
+    always begin : isa_poweroff
+        @(posedge rep_done);
+        pw_i = 0;
+        while (!(uio_oe === 8'h00 && uo_out === 8'h39) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
+        if (pw_i >= 20000) fail("no power-off within 20000 clocks of the report");
+        else begin
+            repeat (200) begin @(negedge clk); check_reset_pins("in power-off after the report"); end
+        end
+        done = 1'b1;
+    end
+
     task automatic on_byte(input [7:0] b);
         integer k;
         begin
-            if (reboot_test) begin
+            if (isa_test) begin
+                on_byte_isa(b);
+            end else if (reboot_test) begin
                 on_byte_reboot(b);
             end else if (seen < N_OUT) begin
                 // 1. an 'o' per OUT value
@@ -483,6 +558,7 @@ module tb_tt_um;
 
     // ── Run ─────────────────────────────────────────────────────────────────
     integer max_cycles = 0;
+    string  tag = "";
 
     // The run below ends by itself soon after max_cycles. This ends it when
     // it is stuck waiting for a pin that never moves, or a clock that never
@@ -509,10 +585,50 @@ module tb_tt_um;
         end
     endtask
 
+    // The signature, from the PSRAM model (SIG_BEGIN is in PSRAM A, at 0x8000_0000).
+    task automatic read_signature;
+        integer n, w, mism, first, fo;
+        reg [31:0] got;
+        begin
+            n = (sig_end - sig_begin) / 4;
+            for (w = 0; w < 16384; w = w + 1) sig_ref[w] = 32'hx;
+            if (sig_ref_file != "") $readmemh(sig_ref_file, sig_ref);
+            fo = (sig_out_file != "") ? $fopen(sig_out_file, "w") : 0;
+            mism = 0; first = -1;
+            if (n <= 0 || n > 16384) fail($sformatf("signature of %0d words (%h..%h)", n, sig_begin, sig_end));
+            else for (w = 0; w < n; w = w + 1) begin
+                got = ram_word(sig_begin - 32'h8000_0000 + 4 * w);
+                if (fo != 0) $fdisplay(fo, "%08x", got);
+                if (got !== sig_ref[w]) begin
+                    if (first < 0) begin
+                        first = w;
+                        fail($sformatf("signature word %0d at %h is %h, want %h", w, sig_begin + 4 * w, got, sig_ref[w]));
+                    end
+                    mism = mism + 1;
+                end
+                if (sig_uart && {usig[4 * w + 3], usig[4 * w + 2], usig[4 * w + 1], usig[4 * w]} !== got)
+                    fail($sformatf("UART signature word %0d is %h, PSRAM holds %h", w,
+                                   {usig[4 * w + 3], usig[4 * w + 2], usig[4 * w + 1], usig[4 * w]}, got));
+            end
+            if (fo != 0) $fclose(fo);
+            if (mism != 0) fail($sformatf("%0d of %0d signature words differ", mism, n));
+            else $display("NOTE signature: %0d words match%s", n, sig_uart ? " (UART copy equal to the PSRAM copy)" : "");
+        end
+    endtask
+
     initial begin
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 400_000;
         rd_late = $test$plusargs("RD_LATE");
-        if ($value$plusargs("TEST=%s", testname)) reboot_test = (testname == "reboot");
+        if ($value$plusargs("TEST=%s", testname)) begin
+            reboot_test = (testname == "reboot");
+            isa_test = (testname == "isa" || testname == "sig");
+            sig_test = (testname == "sig");
+        end
+        sig_uart = $test$plusargs("SIG_UART");
+        if (!$value$plusargs("SIG_BEGIN=%h", sig_begin)) sig_begin = 32'h0;
+        if (!$value$plusargs("SIG_END=%h", sig_end)) sig_end = 32'h0;
+        if (!$value$plusargs("SIG_REF=%s", sig_ref_file)) sig_ref_file = "";
+        if (!$value$plusargs("SIG_OUT=%s", sig_out_file)) sig_out_file = "";
         strap = rd_late;
 
         // 1. The demo board's firmware: the clock stopped, a pulse on rst_n,
@@ -543,16 +659,22 @@ module tb_tt_um;
         #(`IN_DLY_NS) strap = !rd_late;
 
         while (!done && cyc < max_cycles) @(posedge clk);
-        if (!done)
+        if (!done && isa_test) begin
+            $display("TIMEOUT tb_tt_um %s: no report and power-off within %0d cycles (%0d bytes seen)", testname, max_cycles, seen);
+            fail("timeout");
+        end else if (!done)
             fail($sformatf("no 'Z' within %0d cycles: %0d of %0d bytes seen", max_cycles, seen,
                            reboot_test ? RB_N : N_OUT + 3 * N_IN + 4));
+        if (done && sig_test) read_signature;
         // Let a stray extra byte arrive.
         repeat (16 * 12) @(posedge clk);
         if (cs0_falls == 0 || sck_rises == 0) fail("no flash read on uio[0] and uio[3]");
         if (rp.errors != 0) fail($sformatf("%0d RP2350 UART errors", rp.errors));
         if (rp.tx_pending() != 0) fail("a byte for the program was never sent: RTS# stayed high");
+        tag = reboot_test ? " reboot" : "";
+        if (isa_test) tag = {" ", testname};
         if (errors == 0) $display("PASS tb_tt_um%s (QSPI_DELAY=%0d ns, rd_late=%0d, %0d cycles)",
-                                  reboot_test ? " reboot" : "", pmod.delay_ns, rd_late, cyc);
+                                  tag, pmod.delay_ns, rd_late, cyc);
         else             $display("FAIL tb_tt_um: %0d errors", errors);
         $finish;
     end

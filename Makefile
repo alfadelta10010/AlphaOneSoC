@@ -40,7 +40,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
         test-qspi test-uart test-gpio test-soc-periph test-syscon-soc \
-        test-wrapper asm \
+        test-wrapper test-gl asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -65,6 +65,7 @@ help:
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
 	@echo "  make test-syscon-soc   Run syscon (reboot, strap, fail, watchdog) through the whole SoC"
 	@echo "  make test-wrapper      Run the TinyTapeout top level, pins only"
+	@echo "  make test-gl NETLIST=.. PDK_ROOT=..  One tt_pins run on a gate-level netlist (smoke)"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -313,6 +314,22 @@ test-wrapper: $(BUILD_DIR)
 			grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' tt_reboot.$$n.log | head -12; \
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_reboot.$$n.log || ! grep -q '^PASS' tt_reboot.$$n.log; then exit 1; fi; \
 		done
+
+# One tt_pins run on a gate-level netlist (the pnl from the harden, or its nl),
+# the local smoke only: every set runs on a bigger machine through
+# scripts/gl/run_gl.sh. The cell models come from PDK_ROOT (ciel 8afc8346), or
+# from CELLS=<dir> holding primitives.v and sky130_fd_sc_hd.v.
+GL_DIR := $(BUILD_DIR)/gl
+test-gl:
+	@test -n "$(NETLIST)" || { echo "test-gl: NETLIST=<netlist.v> is required (PDK_ROOT=<dir> or CELLS=<dir> too)"; exit 2; }
+	@test -n "$(PDK_ROOT)$(CELLS)" || { echo "test-gl: PDK_ROOT=<dir> or CELLS=<dir> is required"; exit 2; }
+	@echo "=== tt_pins on $(NETLIST) ==="
+	@rm -rf $(GL_DIR)/smoke
+	@bash scripts/gl/build_isa.sh PARTS=A OUT=$(GL_DIR) TOOLCHAIN=$(TOOLCHAIN) > /dev/null
+	@bash scripts/gl/run_gl.sh NETLIST=$(abspath $(NETLIST)) PDK_ROOT=$(PDK_ROOT) CELLS=$(CELLS) \
+		IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$(GL_DIR)/list.A ONLY='^tt_pins\.0$$' JOBS=1 OUT=$(GL_DIR)/smoke
+	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
+	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
 test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
