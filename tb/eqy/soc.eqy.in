@@ -11,36 +11,23 @@ script @GOLD@
 script @GATE@
 
 # ---- matching -------------------------------------------------------------
-# By name, one name per net. The one-hot FSM registers are matched by
-# [recode] below, as buses.
+# By name, one name per net. The FSM registers are not matched (below).
 # One name per net (tb/eqy/matchrules.py): see its header.
 [match *]
+gold-nomatch soc.cpu.exwb_memSize*
+gate-nomatch soc.cpu.exwb_memSize*
+gold-nomatch soc.cpu.muldiv_inst.st*
+gate-nomatch soc.cpu.muldiv_inst.st*
+gold-nomatch soc.qspi.state*
+gate-nomatch soc.qspi.state*
 @MATCHRULES@
 
-# ---- FSM recodes (synthesis log, fsm_recode; gold value, gate one-hot) ----
-# The gate value is the full one-hot code with `-` read as 0, bit order as
-# the log prints it (most significant bit first).
-[recode tt_um_alfadelta10010_alphaone_soc soc.cpu.exwb_memSize]
-00 001
-10 010
-01 100
-
-[recode tt_um_alfadelta10010_alphaone_soc soc.cpu.muldiv_inst.st]
-000 000001
-100 000010
-010 000100
-001 001000
-101 010000
-011 100000
-
-[recode tt_um_alfadelta10010_alphaone_soc soc.qspi.state]
-000 0000001
-100 0000010
-010 0000100
-110 0001000
-001 0010000
-101 0100000
-011 1000000
+# ---- FSM registers ---------------------------------------------------------
+# EQY 0.62's [recode] does not cut the gate side (the one-hot flops stay in
+# the partitions with a free initial state), so the 24 FSM flops (8 gold, 16
+# gate) are not matched; run.sh gives them their reset value as `init`
+# (gold 0, gate the one-hot image of state 0) and the partitions that hold
+# them are proved from that state.
 
 # ---- strategies -----------------------------------------------------------
 # sat: EQY's built-in temporal induction. pdr: sby with abc pdr, only for the
@@ -53,6 +40,6 @@ depth 5
 use sby
 engine abc pdr
 depth 20
-timeout 1800
+timeout 600
 # no SMT solver: sby must not try to replay a trace with one
 option aigsmt none

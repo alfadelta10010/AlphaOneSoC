@@ -67,6 +67,12 @@ cat > "$B/bin/make" <<'EOF'
 exec /opt/hostmake/lib/ld-linux-x86-64.so.2 --library-path /opt/hostmake/lib /opt/hostmake/make "$@"
 EOF
 chmod +x "$B/bin/make"
+cat > "$B/bin/awk" <<'EOF'
+#!/usr/bin/env bash
+# awk shim for EQY's sby wrapper: only awk '{print $1}' FILE
+f="${@: -1}"; read -r a _ < "$f"; echo "$a"
+EOF
+chmod +x "$B/bin/awk"
 STATUS="$B/STATUS"
 say() { echo "$(date -Is) $*" | tee -a "$STATUS"; }
 die() { say "ERROR $*"; echo "EQY ERROR $*"; exit 2; }
@@ -255,6 +261,18 @@ write_gold_final() {       # $1 = dir, $2 = consts file
   } > "$D/gold_final.ys"
 }
 
+fsm_init() {               # the FSM flops start in the reset state (gold 0; gate: one-hot of state 0)
+  if [ "$1" = gold ]; then
+    echo "setattr -set init 2'b00 w:soc.cpu.exwb_memSize"
+    echo "setattr -set init 3'b000 w:soc.cpu.muldiv_inst.st"
+    echo "setattr -set init 3'b000 w:soc.qspi.state"
+  else
+    echo "setattr -set init 3'b001 w:soc.cpu.exwb_memSize"
+    echo "setattr -set init 6'b000001 w:soc.cpu.muldiv_inst.st"
+    echo "setattr -set init 7'b0000001 w:soc.qspi.state"
+  fi
+}
+
 write_eqy() {              # $1 = dir, $2 = gold script, $3 = gate script, $4 = match rules
   sed -e "s|@GOLD@|$2|" -e "s|@GATE@|$3|" -e "/@MATCHRULES@/{r $4" -e "d}" "$HERE/soc.eqy.in" > "$1/soc.eqy"
 }
@@ -292,8 +310,8 @@ stage_prove() {
   done
   python3 "$HERE/matchrules.py" "$P/gold_final.json" "$P/gate_final.json" "$P/match.rules" "$P/match.rules.report" || die "matchrules.py failed"
   # one public name per matched net (matchrules.py), then what EQY reads
-  { cat "$P/gold_final.ys"; cat "$P/match.rules.gold_hide"; echo "opt_clean"; } > "$P/gold_eqy.ys"
-  { cat "$P/gate_final.ys"; cat "$P/match.rules.gate_hide"; echo "opt_clean"; } > "$P/gate_eqy.ys"
+  { cat "$P/gold_final.ys"; cat "$P/match.rules.gold_hide"; echo "opt_clean"; fsm_init gold; } > "$P/gold_eqy.ys"
+  { cat "$P/gate_final.ys"; cat "$P/match.rules.gate_hide"; echo "opt_clean"; fsm_init gate; } > "$P/gate_eqy.ys"
   write_eqy "$P" "$P/gold_eqy.ys" "$P/gate_eqy.ys" "$P/match.rules"
   local t0=$SECONDS
   run_eqy "$P"
@@ -317,7 +335,7 @@ mutant_run() {
   local parts; parts=$(cat "$M/partitions.txt")
   [ -n "$parts" ] || { echo "no partition holds $flop" > "$M/result.txt"; return 2; }
   local p targets=""
-  for p in $parts; do targets="$targets strategies/$p/sat/status"; done
+  for p in $parts; do targets="$targets strategies/$p/pdr/status"; done
   ( cd "$M/eqy" && dk make -k -f strategies.mk $targets ) > "$M/run.log" 2>&1
   python3 "$HERE/verdict.py" --only "$parts" "$M/eqy" "$M/result.txt"
 }

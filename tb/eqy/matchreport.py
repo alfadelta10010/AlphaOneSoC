@@ -11,7 +11,7 @@ EQY's matches:
 
   direct    a gold name of the bit is the gate flop's name, the bit's own
   rename    the same flop under another name (an alias, or the explicit rule)
-  recode    a bit of a [recode] FSM register, matched as the register's bus
+  recode    a bit of an FSM register (nomatch on both sides, init = reset state)
   tied      one of the constant bits of CONSTS.txt (no gate flop, none expected)
   unused    out_r[4], out_r[5] of the gpio block (no fan-out, none expected)
   UNMATCHED a direct or rename flop that EQY did not match: reported, never patched
@@ -66,8 +66,7 @@ for cn, c in g["cells"].items():
         prim = ns[0]
         base = re.sub(r"\[\d+\]$", "", prim)
         if base in RECODE:
-            ok = base in matched
-            cls["recode" if ok else "UNMATCHED"].append(prim)
+            cls["recode"].append(prim)     # not matched by design: init + nomatch
         elif prim in tied or any(n in tied for n in ns):
             cls["tied"].append(prim)
         elif prim in UNUSED:

@@ -46,10 +46,15 @@ def verdict(eqydir, out, only=None):
             lines.append(f"{last} {p}: {sts}")
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(unproven)} unproven")
+    lines.append("assumption: partitions without the FSM flops are checked from any state; partitions "
+                 "holding soc.cpu.exwb_memSize, soc.cpu.muldiv_inst.st or soc.qspi.state are checked for "
+                 "every run that starts from the FSMs' reset state (gold 0, gate one-hot of state 0), "
+                 "all other state matched, cut and free each cycle. The chip reaches that state at its "
+                 "first reset edge. No other assumption or init.")
     if fail:
         lines.append("EQY FAIL " + " ".join(fail))
     elif unproven:
-        lines.append("EQY UNPROVEN " + " ".join(unproven))
+        lines.append(f"EQY UNPROVEN {ok} of {len(parts)} " + " ".join(unproven))
     else:
         lines.append("EQY PASS")
     open(out, "w").write("\n".join(lines) + "\n")

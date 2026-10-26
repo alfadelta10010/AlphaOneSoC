@@ -60,9 +60,6 @@ def main():
             if p in OUTPUTS:
                 drv[n] = name
 
-    def q_net(n):
-        return rf"\{n} "[0:-1] if False else "\\" + n
-
     flops = {}
     for name, (cell, pins, _) in insts.items():
         if re.search(r"__df\w+", cell) and "Q" in pins:
@@ -90,7 +87,6 @@ def main():
             mm = re.match(PFX + r"(nand2|nor2|inv|a21oi)_(\d+)$", cell)
             if mm:
                 new = pick(SWAP[mm.group(1)], mm.group(2), cells)
-                old_out = "Y"
                 body = txt[span[0]:span[1]]
                 body2 = body.replace(cell, new, 1)
                 body2 = re.sub(r"\.Y\(", ".X(", body2, count=1)
