@@ -377,6 +377,7 @@ stage_mutants() {
   mkdir -p "$B/mutants"; local X="$B/mutants"; local bad=""
   local k flop
   for k in core syscon; do
+    [ "${MUT_ONLY:-}" = untie ] && continue
     python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" $([ "$k" = core ] && [ -n "${MUT_CORE_FLOP:-}" ] && echo --flop "$MUT_CORE_FLOP") > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
     cat "$X/$k.mutation.txt"
     flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
@@ -387,7 +388,7 @@ stage_mutants() {
     grep -q "^EQY FAIL" "$X/$k/result.txt" || bad="$bad $k"
   done
   # untie one constant: the first bit of misa_reg that is 1 (the A extension)
-  local ut; ut=$(awk '$1 ~ /^soc.cpu.csr_unit.misa_reg\[/ && $2 == 1 { print $1; exit }' "$B/consts.txt")
+  local ut; ut="${UNTIE_BIT:-}"; [ -n "$ut" ] || ut=$(awk '$1 ~ /^soc.cpu.csr_unit.misa_reg\[/ && $2 == 1 { print $1; exit }' "$B/consts.txt")
   grep -v -F -x -e "$ut 1" "$B/consts.txt" > "$X/consts_untied.txt"
   echo "untied $ut (from $(wc -l < "$B/consts.txt") to $(wc -l < "$X/consts_untied.txt") ties)" | tee "$X/untie.txt"
   gate_final > "$X/untie.gate.ys"
