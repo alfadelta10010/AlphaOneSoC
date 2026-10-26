@@ -352,7 +352,16 @@ mutant_run() {
   write_eqy "$M" "$M/gold_final.ys" "$gate" "$B/prove/match.rules"
   ( cd "$M" && dk eqy -f -m -d eqy soc.eqy ) > "$M/setup.log" 2>&1
   python3 "$HERE/verdict.py" --partitions-of "$flop" "$M/eqy" > "$M/partitions.txt"
-  local parts; parts=$(cat "$M/partitions.txt")
+  # only partitions the prove stage PROVED can carry the check (an open one proves nothing);
+  # the flop's own partition when it is one of them, else the proved ones holding it
+  local parts p2 own pre="$TOP." keep=""
+  own="$pre$(echo "$flop" | sed 's/\[\([0-9]*\)\]$/.\1/')"
+  for p2 in $(cat "$M/partitions.txt"); do
+    grep -q -F -e "$p2:" "$B/prove/verdict.txt" 2>/dev/null && continue    # TIMEOUT/UNKNOWN/FAIL in the prove stage
+    keep="$keep $p2"
+  done
+  parts=$(echo "$keep" | tr ' ' '\n' | grep -x -F -e "$own" || echo "$keep" | tr ' ' '\n' | head -12)
+  echo $parts | tr ' ' '\n' > "$M/partitions.txt"
   [ -n "$parts" ] || { echo "no partition holds $flop" > "$M/result.txt"; return 2; }
   local p targets=""
   for p in $parts; do targets="$targets strategies/$p/pdr/status"; done
@@ -365,7 +374,7 @@ stage_mutants() {
   mkdir -p "$B/mutants"; local X="$B/mutants"; local bad=""
   local k flop
   for k in core syscon; do
-    python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
+    python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" $([ "$k" = core ] && [ -n "${MUT_CORE_FLOP:-}" ] && echo --flop "$MUT_CORE_FLOP") > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
     cat "$X/$k.mutation.txt"
     flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
     # gate script on the mutated netlist

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Change one gate in the D cone of a flop of the hardened netlist (WO-24).
 
-  mutate_netlist.py NETLIST OUT --kind {core,syscon} [--lib LIBERTY]
+  mutate_netlist.py NETLIST OUT --kind {core,syscon} [--lib LIBERTY] [--flop NAME]
 
 The equivalence check must FAIL on the result, so that a PASS on the real
 netlist means something. One cell of the combinational cone behind a flop's D
@@ -47,6 +47,7 @@ def main():
     ap.add_argument("netlist"); ap.add_argument("out")
     ap.add_argument("--kind", choices=["core", "syscon"], required=True)
     ap.add_argument("--lib")
+    ap.add_argument("--flop", help="core: the flop whose D cone is changed (default soc.cpu.ifex_pc[4])")
     a = ap.parse_args()
     txt = open(a.netlist).read()
     cells = lib_cells(a.lib)
@@ -65,7 +66,7 @@ def main():
         if re.search(r"__df\w+", cell) and "Q" in pins:
             flops[pins["Q"]] = name
     if a.kind == "core":
-        want = ["\\soc.cpu.ifex_pc[4]"]
+        want = ["\\" + (a.flop or "soc.cpu.ifex_pc[4]")]
     else:
         want = sorted(n for n in flops if n.startswith("\\soc.syscon_inst.cause[")) + ["\\soc.syscon_inst.rq"]
     for q in want:
