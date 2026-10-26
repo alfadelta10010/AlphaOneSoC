@@ -354,7 +354,11 @@ mutant_run() {
   { cat "$gate"; cat "$B/prove/match.rules.gate_hide"; echo "opt_clean"; fsm_init gate; } > "$M/gate_eqy.ys"
   write_eqy "$M" "$M/gold_eqy.ys" "$M/gate_eqy.ys" "$B/prove/match.rules"
   ( cd "$M" && dk eqy -f -m -d eqy soc.eqy ) > "$M/setup.log" 2>&1
-  python3 "$HERE/verdict.py" --partitions-of "$flop" "$M/eqy" > "$M/partitions.txt"
+  : > "$M/partitions.all"                  # $flop may list several flops: the partitions holding any
+  local fl; for fl in $flop; do python3 "$HERE/verdict.py" --partitions-of "$fl" "$M/eqy" >> "$M/partitions.all"; done
+  tr ' ' '\n' < "$M/partitions.all" | grep . | sort -u > "$M/partitions.txt"
+  # a flipped tie leaves no net of that name (the bit is a constant), so the partitions are named
+  if [ -n "${PARTS_OVERRIDE:-}" ]; then for fl in $PARTS_OVERRIDE; do echo "$TOP.$fl"; done > "$M/partitions.txt"; fi
   # only partitions the prove stage PROVED can carry the check (an open one proves nothing);
   # the flop's own partition when it is one of them, else the proved ones holding it
   local parts p2 own pre="$TOP." keep=""
@@ -376,6 +380,20 @@ stage_mutants() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
   mkdir -p "$B/mutants"; local X="$B/mutants"; local bad=""
   local k flop
+  if [ "${MUT_ONLY:-}" = fliptie ]; then
+    # the 5 tie1 bits tied to 1'0 on the gold side (the q1 bug): a wrong tie value must FAIL
+    local fb; fb=$(awk '$2 == 1 { printf "%s ", $1 }' "$B/consts.txt")
+    awk '$2 == 1 { print $1, 0; next } { print }' "$B/consts.txt" > "$X/consts_flip.txt"
+    echo "flipped to 1'0: $fb(consts_flip.txt: $(awk '$2 == 1' "$X/consts_flip.txt" | wc -l) tie1 left)" | tee "$X/fliptie.txt"
+    gate_final > "$X/fliptie.gate.ys"
+    PARTS_OVERRIDE="soc.bus.d_addr.2 soc.cpu.csr_unit.csr_new.2 soc.cpu.csr_misa_c" mutant_run fliptie "$X/fliptie.gate.ys" "$X/consts_flip.txt" "$fb"
+    say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
+    if grep -q "^EQY FAIL" "$X/fliptie/result.txt"; then
+      echo "mutants: core FAIL, syscon FAIL (run q2m2), fliptie FAIL; untie was vacuous on misa_reg[0] and [12] (an untied flop that holds its reset value is legitimately equivalent)" > "$X/summary.txt"
+      return 0
+    fi
+    echo "EQY VACUOUS fliptie" > "$X/summary.txt"; return 3
+  fi
   for k in core syscon; do
     [ "${MUT_ONLY:-}" = untie ] && continue
     python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" $([ "$k" = core ] && [ -n "${MUT_CORE_FLOP:-}" ] && echo --flop "$MUT_CORE_FLOP") > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
