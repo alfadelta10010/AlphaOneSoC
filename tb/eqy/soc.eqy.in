@@ -14,6 +14,18 @@ script @GATE@
 # By name, one name per net. The FSM registers are not matched (below).
 # One name per net (tb/eqy/matchrules.py): see its header.
 [match *]
+gold-nomatch soc.clint_inst.mtime_d*
+gate-nomatch soc.clint_inst.mtime_d*
+gold-nomatch soc.cpu.csr_unit.mcycle_d*
+gate-nomatch soc.cpu.csr_unit.mcycle_d*
+gold-nomatch soc.cpu.csr_unit.minstret_d*
+gate-nomatch soc.cpu.csr_unit.minstret_d*
+gold-nomatch soc.cpu.rf.dIn*
+gate-nomatch soc.cpu.rf.dIn*
+gold-nomatch soc.cpu.rf.w_ena*
+gate-nomatch soc.cpu.rf.w_ena*
+gold-nomatch soc.qspi.rd_late*
+gate-nomatch soc.qspi.rd_late*
 gold-nomatch soc.cpu.exwb_memSize*
 gate-nomatch soc.cpu.exwb_memSize*
 gold-nomatch soc.cpu.muldiv_inst.st*

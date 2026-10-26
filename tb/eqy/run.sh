@@ -253,10 +253,10 @@ write_gold_final() {       # $1 = dir, $2 = consts file
     echo "splitnets -ports -format [] @notfsm"
     # The constant bits are cut from their flops (the flop keeps no fan-out)
     # and driven by the proved constant; bit-level wires exist after splitnets.
-    awk '{ b=$1; gsub(/\[/,"\\[",b); gsub(/\]/,"\\]",b); if ($2=="0") z=z " w:" b; else o=o " w:" b; all=all " w:" b }
-         END { print "cutpoint -undef -noscopeinfo" all;
-               if (z != "") { print "select -set tie0" z; print "setundef -zero @tie0" }
-               if (o != "") { print "select -set tie1" o; print "setundef -one @tie1" } }' "$C"
+    # tie1 first: one cutpoint over all bits let the first setundef zero them all (q1).
+    awk '{ b=$1; gsub(/\[/,"\\[",b); gsub(/\]/,"\\]",b); if ($2=="0") z=z " w:" b; else o=o " w:" b }
+         END { if (o != "") { print "select -set tie1" o; print "cutpoint -undef -noscopeinfo @tie1"; print "setundef -one" }
+               if (z != "") { print "select -set tie0" z; print "cutpoint -undef -noscopeinfo @tie0"; print "setundef -zero" } }' "$C"
     echo "opt_clean"
   } > "$D/gold_final.ys"
 }
@@ -287,10 +287,29 @@ run_eqy() {                # $1 = dir: setup, match report, then all partitions
     ( cd "$D" && dk eqy -f -m -d eqy soc.eqy ) > "$D/setup.log" 2>&1
     echo $? > "$D/setup.rc"
   fi
+  [ "$D" = "$B/prove" ] && check_ties "$D/eqy"
   python3 "$HERE/matchreport.py" "$B/read/gold.json" "$B/read/gate.json" "$D/eqy" "$B/consts.txt" "$D/match.txt" > /dev/null
   say "prove: $(tail -1 "$D/match.txt") ($(grep -c . "$D/eqy/partition.list" 2>/dev/null) partitions)"
   ( cd "$D" && dk eqy -k -c -j "$JOBS" -d eqy soc.eqy ) > "$D/eqy.log" 2>&1
   echo $? > "$D/eqy.rc"
+}
+
+no_x_consts() {            # the unscoped setundefs of the ties are safe only if gold_pre has no x constant
+  local n; n=$(grep -v '^ *#' "$B/read/gold_pre.il" | grep -cE "[0-9]+'[01xzm-]*x")
+  say "prove: x constants in read/gold_pre.il: $n"
+  [ "$n" = 0 ] || die "read/gold_pre.il holds $n x constants; the unscoped setundef ties are unsafe"
+}
+
+check_ties() {             # $1 = eqy dir: gold.il ties the 179 tie0 bits to 1'0 and the 5 tie1 bits to 1'1
+  local G="$1/gold.il" bad=0 n0=0 n1=0 name v
+  [ -f "$G" ] || die "no $G to check the ties"
+  while read -r name v; do
+    if grep -qxF "  connect \\$name 1'$v" "$G"; then
+      if [ "$v" = 0 ]; then n0=$((n0 + 1)); else n1=$((n1 + 1)); fi
+    else bad=$((bad + 1)); echo "tie check: $name not tied to 1'$v" >> "$STATUS"; fi
+  done < "$B/consts.txt"
+  say "prove: tie check: $n0 tie0 bits at 1'0, $n1 tie1 bits at 1'1, $bad wrong"
+  [ "$bad" = 0 ] && [ "$n0" = 179 ] && [ "$n1" = 5 ] || die "tie check failed ($n0/179 tie0, $n1/5 tie1, $bad wrong)"
 }
 
 eqy_verdict() {            # $1 = dir: prints the last line from the strategies' status files
@@ -301,6 +320,7 @@ eqy_verdict() {            # $1 = dir: prints the last line from the strategies'
 stage_prove() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
   mkdir -p "$B/prove"; local P="$B/prove"
+  no_x_consts
   write_gold_final "$P" "$B/consts.txt"
   gate_final > "$P/gate_final.ys"
   local side
