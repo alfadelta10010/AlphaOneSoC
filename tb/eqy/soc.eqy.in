@@ -1,0 +1,58 @@
+# EQY configuration template; tb/eqy/run.sh fills in @GOLD@, @GATE@.
+# gold = the branch RTL, gate = the hardened netlist. See run.sh and WO-24.
+
+[options]
+# (no `splitnets on`: it would split the FSM buses; the scripts split the nets)
+
+[gold]
+script @GOLD@
+
+[gate]
+script @GATE@
+
+# ---- matching -------------------------------------------------------------
+# By name, one name per net. The one-hot FSM registers are matched by
+# [recode] below, as buses.
+# One name per net (tb/eqy/matchrules.py): see its header.
+[match *]
+@MATCHRULES@
+
+# ---- FSM recodes (synthesis log, fsm_recode; gold value, gate one-hot) ----
+# The gate value is the full one-hot code with `-` read as 0, bit order as
+# the log prints it (most significant bit first).
+[recode tt_um_alfadelta10010_alphaone_soc soc.cpu.exwb_memSize]
+00 001
+10 010
+01 100
+
+[recode tt_um_alfadelta10010_alphaone_soc soc.cpu.muldiv_inst.st]
+000 000001
+100 000010
+010 000100
+001 001000
+101 010000
+011 100000
+
+[recode tt_um_alfadelta10010_alphaone_soc soc.qspi.state]
+000 0000001
+100 0000010
+010 0000100
+110 0001000
+001 0010000
+101 0100000
+011 1000000
+
+# ---- strategies -----------------------------------------------------------
+# sat: EQY's built-in temporal induction. pdr: sby with abc pdr, only for the
+# partitions sat leaves open. No SMT solver exists on the sandbox.
+[strategy sat]
+use sat
+depth 5
+
+[strategy pdr]
+use sby
+engine abc pdr
+depth 20
+timeout 1800
+# no SMT solver: sby must not try to replay a trace with one
+option aigsmt none
