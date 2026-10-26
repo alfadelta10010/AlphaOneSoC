@@ -349,7 +349,10 @@ mutant_run() {
   local name="$1" gate="$2" consts="$3" flop="$4"
   local M="$B/mutants/$name"; rm -rf "$M"; mkdir -p "$M"
   write_gold_final "$M" "$consts"
-  write_eqy "$M" "$M/gold_final.ys" "$gate" "$B/prove/match.rules"
+  # the same scripts as the prove stage (names made private, FSM init), on the mutated gate
+  { cat "$M/gold_final.ys"; cat "$B/prove/match.rules.gold_hide"; echo "opt_clean"; fsm_init gold; } > "$M/gold_eqy.ys"
+  { cat "$gate"; cat "$B/prove/match.rules.gate_hide"; echo "opt_clean"; fsm_init gate; } > "$M/gate_eqy.ys"
+  write_eqy "$M" "$M/gold_eqy.ys" "$M/gate_eqy.ys" "$B/prove/match.rules"
   ( cd "$M" && dk eqy -f -m -d eqy soc.eqy ) > "$M/setup.log" 2>&1
   python3 "$HERE/verdict.py" --partitions-of "$flop" "$M/eqy" > "$M/partitions.txt"
   # only partitions the prove stage PROVED can carry the check (an open one proves nothing);
@@ -360,12 +363,12 @@ mutant_run() {
     grep -q -F -e "$p2:" "$B/prove/verdict.txt" 2>/dev/null && continue    # TIMEOUT/UNKNOWN/FAIL in the prove stage
     keep="$keep $p2"
   done
-  parts=$(echo "$keep" | tr ' ' '\n' | grep -x -F -e "$own" || echo "$keep" | tr ' ' '\n' | head -12)
+  parts=$(echo "$keep" | tr ' ' '\n' | grep -x -F -e "$own" || echo "$keep" | tr ' ' '\n' | head -40)
   echo $parts | tr ' ' '\n' > "$M/partitions.txt"
   [ -n "$parts" ] || { echo "no partition holds $flop" > "$M/result.txt"; return 2; }
   local p targets=""
   for p in $parts; do targets="$targets strategies/$p/pdr/status"; done
-  ( cd "$M/eqy" && dk make -k -f strategies.mk $targets ) > "$M/run.log" 2>&1
+  ( cd "$M/eqy" && dk make -j2 -k -f strategies.mk $targets ) > "$M/run.log" 2>&1
   python3 "$HERE/verdict.py" --only "$parts" "$M/eqy" "$M/result.txt"
 }
 
