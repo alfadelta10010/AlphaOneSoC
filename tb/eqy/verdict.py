@@ -19,7 +19,8 @@ def statuses(eqydir, only=None):
         if only is not None and part not in only:
             continue
         word = open(st).read().split()
-        res.setdefault(part, []).append((strat, word[0] if word else "EMPTY"))
+        cached = len(word) > 1 and word[1] == "(cached)"   # copied from the earlier strategy
+        res.setdefault(part, []).append((strat, word[0] if word else "EMPTY", cached))
     return res
 
 
@@ -34,16 +35,25 @@ def verdict(eqydir, out, only=None):
     lines = []
     for p in parts:
         sts = res.get(p, [])
-        last = sts[-1][1] if sts else "NOT RUN"
+        # a partition is proved if any strategy proved it (sat first, then pdr); a FAIL is
+        # a FAIL; otherwise it is open and the reason is the pdr result (TIMEOUT / UNKNOWN)
+        passed = [x for x in sts if x[1] == "PASS" and not x[2]]   # the strategy that really proved it
+        if passed:
+            last = "PASS"
+            by[passed[0][0]] = by.get(passed[0][0], 0) + 1
+        elif any(x[1] == "FAIL" for x in sts):
+            last = "FAIL"
+        else:
+            d = {x[0]: x[1] for x in sts}
+            last = d.get("pdr", d.get("sat", "NOT RUN"))
         if last == "PASS":
             ok += 1
-            by[sts[-1][0]] = by.get(sts[-1][0], 0) + 1
         elif last == "FAIL":
             fail.append(p)
-            lines.append(f"FAIL {p}: {sts}")
+            lines.append(f"FAIL {p}: {[(x[0], x[1]) for x in sts]}")
         else:
             unproven.append(p)
-            lines.append(f"{last} {p}: {sts}")
+            lines.append(f"{last} {p}: {[(x[0], x[1]) for x in sts]}")
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(unproven)} unproven")
     lines.append("assumption: partitions without the FSM flops are checked from any state; partitions "
