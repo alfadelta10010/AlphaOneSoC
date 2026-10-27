@@ -364,14 +364,16 @@ module tb_tt_um;
     endtask
 
     // After the report: the power-off at the pins, within 20,000 clocks, held 200.
-    integer pw_i;
+    integer pw_i, pw_cyc;
     always begin : isa_poweroff
         @(posedge rep_done);
         pw_i = 0;
         while (!(uio_oe === 8'h00 && uo_out === 8'h39) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
         if (pw_i >= 20000) fail("no power-off within 20000 clocks of the report");
         else begin
+            pw_cyc = cyc;
             repeat (200) begin @(negedge clk); check_reset_pins("in power-off after the report"); end
+            if (errors == 0) $display("POWEROFF seen at cycle %0d, held 200 clocks", pw_cyc);
         end
         done = 1'b1;
     end

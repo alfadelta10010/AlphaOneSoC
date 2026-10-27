@@ -70,6 +70,16 @@ done < "$LIST"
 wait
 { echo "run $OUT  list $LIST  wall $((SECONDS - t0)) s"
   for v in PASS FAIL TIMEOUT; do echo "$v $(cat "$OUT"/*.verdict | grep -c "^$v")"; done
+  # isa/sig PASS must show the power-off seen at the pins (tb prints POWEROFF); a PASS without it counts as FAIL
+  pm=0; pn=0
+  for f in "$OUT"/*.verdict; do n=$(basename "$f" .verdict)
+    if grep -q '^PASS' "$f" && grep -qE '^PASS tb_tt_um (isa|sig) ' "$OUT/$n.log"; then
+      pn=$((pn + 1)); if grep -q '^POWEROFF seen at cycle' "$OUT/$n.log"; then pm=$((pm + 1)); else echo "FAIL (no POWEROFF line): $n" >> "$OUT/summary.nopo"; fi
+    fi
+  done
+  echo "poweroff-logged: $pm of $pn"
+  [ "$pm" -eq "$pn" ] || { echo "FAIL: $((pn - pm)) isa/sig PASS without a POWEROFF line:"; sed 's/^/  /' "$OUT/summary.nopo"; }
+  rm -f "$OUT/summary.nopo"
   echo "known-labelled: $(grep -l ' known:' "$OUT"/*.verdict 2>/dev/null | wc -l)"
   echo "slowest: $(for f in "$OUT"/*.verdict; do echo "$(awk '{print $4}' "$f") $(basename "$f" .verdict)"; done | sort -rn | head -1)"
   echo "not PASS:"; grep -L '^PASS' "$OUT"/*.verdict 2>/dev/null | xargs -r -n1 basename | sed 's/.verdict//' | while read -r n; do echo "  $n: $(cat "$OUT/$n.verdict")"; done
