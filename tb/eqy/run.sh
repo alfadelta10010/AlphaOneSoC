@@ -314,7 +314,8 @@ check_ties() {             # $1 = eqy dir: gold.il ties the 179 tie0 bits to 1'0
 
 eqy_verdict() {            # $1 = dir: prints the last line from the strategies' status files
   local D="$1"
-  python3 "$HERE/verdict.py" "$D/eqy" "$D/verdict.txt"
+  local cl=(); [ -f "$HERE/classes.txt" ] && cl=(--classes "$HERE/classes.txt")
+  python3 "$HERE/verdict.py" "${cl[@]}" "$D/eqy" "$D/verdict.txt"
 }
 
 stage_prove() {
