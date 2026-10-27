@@ -65,13 +65,17 @@ def verdict(eqydir, out, only=None, classes=None):
             lines.append(f"{last} {p}: {[(x[0], x[1]) for x in sts]}")
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(opened)} open (classed fail), {len(unproven)} unproven")
-    lines.append("assumption: partitions without FSM bits are checked from any state. Partitions holding "
-                 "the FSM bits (soc.cpu.exwb_memSize, soc.cpu.muldiv_inst.st, soc.qspi.state) are checked "
-                 "from the FSM reset state (gold 0, gate one-hot of state 0), with every other state "
-                 "matched, cut and free each cycle, rst/rst_soc included. The chip reaches that state at "
-                 "its first reset edge, since the wrapper holds rst for at least two edges, the same "
-                 "premise as the 184-bit lemma. No other assumption or init. nomatched nets are cut "
-                 "nowhere; `rd_late` starts free on both sides.")
+    if only is None and len(parts) != 157:
+        lines.append(f"WARNING partition count {len(parts)}, expected 157")
+    lines.append("assumption: gold == gold' (clamp, the identity on valid FSM codes: lemma L2, PROVED once armed) "
+                 "== gate' (enc/clamp/dec, the identity while each FSM holds one set bit: I_gate, PROVED by "
+                 "temporal induction on the netlist, fsminv stage) == gate; the FSM cut partitions compare "
+                 "gold's binary flop with enc of the gate's one-hot flops (the table is checked there). No FSM "
+                 "init in EQY: every partition is checked from any state, with every other state matched, cut "
+                 "and free each cycle, rst/rst_soc included. The one premise left: the chip reaches the FSM "
+                 "reset codes at its first reset edge (the wrapper holds rst for at least two edges), the "
+                 "premise of L1/L2/I_gate. The rf_top w_ena pin has its own net (soc.cpu.rf.w_ena_pin), "
+                 "compared as a partition. Nomatched nets are cut nowhere; `rd_late` starts free on both sides.")
     if fail:
         lines.append("EQY FAIL " + " ".join(fail))
     elif unproven or opened:

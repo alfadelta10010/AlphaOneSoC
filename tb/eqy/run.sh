@@ -3,7 +3,7 @@
 # (gate): every flop's next-state function and every output, by EQY (WO-24).
 # Runs on the sandbox, inside the librelane container (eqy/sby/yosys 0.62).
 #
-#   tb/eqy/run.sh NETLIST=<nl.v> [PDK_ROOT=<dir>] [JOBS=4] [STAGE=read|lemma|prove|mutants]
+#   tb/eqy/run.sh NETLIST=<nl.v> [PDK_ROOT=<dir>] [JOBS=4] [STAGE="read lemma fsminv prove mutants"]
 #
 # Stages, in order; STAGE= runs one, otherwise all. Each writes
 # build/eqy/<stage>/ and, once it has succeeded, the stamp build/eqy/<stage>.done
@@ -16,11 +16,13 @@
 #   lemma    on the RTL: the 184 removed CSR bits are constant after reset and
 #            the recoded FSMs never hold an unlisted code (lemma_props.sv,
 #            yosys sat -tempinduct); writes consts.txt, the ties of the gold
+#   fsminv   on the netlist: the three one-hot FSMs always hold exactly one set bit
+#            (fsm_inv_props.sv, sat -tempinduct), with a negative control (NEG must FAIL)
 #   prove    EQY on gold (ties applied) against gate: strategy sat for every
 #            partition, then sby abc pdr for those sat leaves open
-#   mutants  three runs that must FAIL: two mutated netlists (mutate_netlist.py,
-#            a gate changed in the D cone of one flop; core and syscon) and the
-#            gold with one constant left untied. Setup is redone for each, but
+#   mutants  four runs that must FAIL: two mutated netlists (mutate_netlist.py,
+#            a gate changed in the D cone of one flop; core and syscon), the five
+#            tie1 bits tied to 1'0 (fliptie), and a wrong FSM table (fsmtable). Setup is redone for each, but
 #            only the partitions that hold the changed flop are run.
 #
 # The last line is `EQY PASS`, `EQY FAIL <partitions>` or `EQY UNPROVEN
@@ -119,7 +121,7 @@ splitnets -format []
 write_json $R/gold.json
 EOF
   yos read/gold_json.log read/gold_json.ys || die "gold json failed"
-  gate_script > "$R/gate_pre.ys"
+  gate_script buses > "$R/gate_pre.ys"
   cat >> "$R/gate_pre.ys" <<EOF
 write_json $R/gate.json
 EOF
@@ -133,7 +135,7 @@ EOF
   return 0
 }
 
-gate_script() {            # netlist to flat gate; FSM registers as buses for [recode]
+gate_script() {            # netlist to flat gate; $1 = buses: FSM registers as buses (read and fsminv stages only)
   cat <<EOF
 read_liberty -ignore_miss_func $LIB
 read_verilog $HERE/stubs.v
@@ -150,7 +152,8 @@ hierarchy -top $TOP
 opt_clean
 splitnets -ports -format []
 EOF
-  gate_fsm_buses
+  [ "${1:-}" = buses ] && gate_fsm_buses
+  return 0
 }
 
 gate_fsm_buses() {         # \name[0..n-1] scalar flop nets joined into a bus \name
@@ -261,16 +264,41 @@ write_gold_final() {       # $1 = dir, $2 = consts file
   } > "$D/gold_final.ys"
 }
 
-fsm_init() {               # the FSM flops start in the reset state (gold 0; gate: one-hot of state 0)
-  if [ "$1" = gold ]; then
-    echo "setattr -set init 2'b00 w:soc.cpu.exwb_memSize"
-    echo "setattr -set init 3'b000 w:soc.cpu.muldiv_inst.st"
-    echo "setattr -set init 3'b000 w:soc.qspi.state"
-  else
-    echo "setattr -set init 3'b001 w:soc.cpu.exwb_memSize"
-    echo "setattr -set init 6'b000001 w:soc.cpu.muldiv_inst.st"
-    echo "setattr -set init 7'b0000001 w:soc.qspi.state"
-  fi
+fsm_init_gate() {          # the netlist's FSM buses start at the one-hot image of state 0 (fsminv base case)
+  echo "setattr -set init 3'b001 w:soc.cpu.exwb_memSize"
+  echo "setattr -set init 6'b000001 w:soc.cpu.muldiv_inst.st"
+  echo "setattr -set init 7'b0000001 w:soc.qspi.state"
+}
+
+# ---- FSM cut point (fsmcut.py, fsmcut.v): see WO-24's 2026-10-28 amendment ----
+# cut_design SIDE IN.ys DIR VFILE: run IN.ys, write_rtlil, patch the RTLIL (fsmcut.py; dies if an
+# assert fails), and write DIR/SIDE_cut.ys, the script that reads the patched design.
+cut_design() {
+  local side="$1" in="$2" D="$3" vf="$4" nq npin wq
+  { cat "$in"; echo "write_rtlil $D/${side}_pre.il"; } > "$D/${side}_pre.ys"
+  yos "$D/${side}_pre.log" "$D/${side}_pre.ys" || die "cut: $side read failed (see $D/${side}_pre.log)"
+  python3 "$HERE/fsmcut.py" "$side" "$D/${side}_pre.il" "$D/${side}_cut.il" > "$D/$side.patch.txt" 2>&1 \
+    || die "fsmcut.py $side asserted: $(tail -3 "$D/$side.patch.txt" | tr '\n' ' ')"
+  nq=$(grep -c "^$side: connect .Q " "$D/$side.patch.txt"); npin=$(grep -c "^$side: rf_macro w_ena" "$D/$side.patch.txt")
+  wq=3; [ "$side" = gate ] && wq=16
+  [ "$nq" = "$wq" ] && [ "$npin" = 1 ] || die "cut: $side patch has $nq Q edits (want $wq) and $npin pin edits (want 1)"
+  cat > "$D/${side}_cut.ys" <<EOF
+read_rtlil $D/${side}_cut.il
+read_verilog -sv $vf
+hierarchy -top $TOP
+flatten
+hierarchy -top $TOP
+rename -hide w:fsmcutI_* c:fsmcutI_*
+opt_clean
+EOF
+}
+
+cut_scripts() {            # $1 = dir, $2 = match rules prefix: SIDE_eqy.ys = cut + hides + asserts
+  local D="$1" R="$2"
+  { cat "$D/gold_cut.ys"; cat "$R.gold_hide"; echo "opt_clean"
+    echo "select -assert-count 3 w:soc.cpu.fsmcut_exwb_memSize w:soc.cpu.muldiv_inst.fsmcut_st w:soc.qspi.fsmcut_state %u %u"; } > "$D/gold_eqy.ys"
+  { cat "$D/gate_cut.ys"; cat "$R.gate_hide"; echo "opt_clean"
+    echo "select -assert-count 6 w:soc.cpu.exwb_memSize__oh w:soc.cpu.muldiv_inst.st__oh w:soc.qspi.state__oh w:soc.cpu.fsmcut_exwb_memSize w:soc.cpu.muldiv_inst.fsmcut_st w:soc.qspi.fsmcut_state %u %u %u %u %u"; } > "$D/gate_eqy.ys"
 }
 
 write_eqy() {              # $1 = dir, $2 = gold script, $3 = gate script, $4 = match rules
@@ -290,7 +318,8 @@ run_eqy() {                # $1 = dir: setup, match report, then all partitions
   [ "$D" = "$B/prove" ] && check_ties "$D/eqy"
   python3 "$HERE/matchreport.py" "$B/read/gold.json" "$B/read/gate.json" "$D/eqy" "$B/consts.txt" "$D/match.txt" > /dev/null
   say "prove: $(tail -1 "$D/match.txt") ($(grep -c . "$D/eqy/partition.list" 2>/dev/null) partitions)"
-  ( cd "$D" && dk eqy -k -c -j "$JOBS" -d eqy soc.eqy ) > "$D/eqy.log" 2>&1
+  # no sat timeout exists in EQY 0.62: a hard partition would hang; after 3 h the rest is UNKNOWN
+  ( cd "$D" && dk timeout -k 120 3h eqy -k -c -j "$JOBS" -d eqy soc.eqy ) > "$D/eqy.log" 2>&1
   echo $? > "$D/eqy.rc"
 }
 
@@ -318,21 +347,55 @@ eqy_verdict() {            # $1 = dir: prints the last line from the strategies'
   python3 "$HERE/verdict.py" "${cl[@]}" "$D/eqy" "$D/verdict.txt"
 }
 
+stage_fsminv() {
+  mkdir -p "$B/fsminv"; local F="$B/fsminv"
+  { gate_script buses; fsm_init_gate; echo "delete t:rf_top"
+    echo "expose w:soc.cpu.exwb_memSize w:soc.cpu.muldiv_inst.st w:soc.qspi.state"
+    echo "write_rtlil $F/gate_exposed.il"; } > "$F/expose.ys"
+  yos fsminv/expose.log fsminv/expose.ys || die "fsminv: expose failed (see $F/expose.log)"
+  cat > "$F/inv.ys" <<EOF
+read_rtlil $F/gate_exposed.il
+read_verilog -sv -formal $HERE/fsm_inv_props.sv
+hierarchy -top fsm_inv_props
+proc
+async2sync
+flatten
+opt -fast
+chformal -lower
+opt -fast
+sat -tempinduct -prove-asserts -set-assumes -maxsteps 4
+EOF
+  sed -e "s|read_verilog -sv -formal|read_verilog -sv -formal -DNEG|" -e "s|^sat .*|sat -seq 8 -prove-asserts -set-assumes -show-ports|" "$F/inv.ys" > "$F/neg.ys"
+  local t0=$SECONDS
+  ( cd "$B" && dk timeout 900 yosys -ql fsminv/inv.log fsminv/inv.ys ) > /dev/null 2>&1
+  ( cd "$B" && dk timeout 600 yosys -ql fsminv/neg.log fsminv/neg.ys ) > /dev/null 2>&1
+  local len; len=$(grep -oE "Trying induction with length [0-9]+" "$F/inv.log" | tail -1 | grep -oE "[0-9]+$")
+  if grep -q "Induction step proven: SUCCESS" "$F/inv.log" && grep -q "model found: FAIL" "$F/neg.log"; then
+    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of soc.cpu.exwb_memSize (3), muldiv_inst.st (6), qspi.state (7) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
+    say "fsminv: PROVED (k=${len:-?}), NEG FAIL"; return 0
+  fi
+  echo "FAILED: see $F/inv.log and $F/neg.log" > "$F/fsminv.txt"
+  say "fsminv: FAILED (inv: $(grep -cE 'Induction step proven: SUCCESS' "$F/inv.log"), neg: $(grep -cE 'model found: FAIL' "$F/neg.log"))"
+  echo "EQY FSMINV FAILED"; return 1
+}
+
 stage_prove() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
+  { [ -f "$B/fsminv/fsminv.txt" ] && grep -q '^PROVED' "$B/fsminv/fsminv.txt"; } || die "no fsminv/fsminv.txt: the fsminv stage has not PROVED"
   mkdir -p "$B/prove"; local P="$B/prove"
   no_x_consts
   write_gold_final "$P" "$B/consts.txt"
   gate_final > "$P/gate_final.ys"
   local side
+  cut_design gold "$P/gold_final.ys" "$P" "$HERE/fsmcut.v"
+  cut_design gate "$P/gate_final.ys" "$P" "$HERE/fsmcut.v"
   for side in gold gate; do
-    { cat "$P/${side}_final.ys"; echo "write_json $P/${side}_final.json"; } > "$P/${side}_json.ys"
+    { cat "$P/${side}_cut.ys"; echo "write_json $P/${side}_final.json"; } > "$P/${side}_json.ys"
     yos prove/${side}_json.log prove/${side}_json.ys || die "prove: ${side} json failed"
   done
   python3 "$HERE/matchrules.py" "$P/gold_final.json" "$P/gate_final.json" "$P/match.rules" "$P/match.rules.report" || die "matchrules.py failed"
   # one public name per matched net (matchrules.py), then what EQY reads
-  { cat "$P/gold_final.ys"; cat "$P/match.rules.gold_hide"; echo "opt_clean"; fsm_init gold; } > "$P/gold_eqy.ys"
-  { cat "$P/gate_final.ys"; cat "$P/match.rules.gate_hide"; echo "opt_clean"; fsm_init gate; } > "$P/gate_eqy.ys"
+  cut_scripts "$P" "$P/match.rules"
   write_eqy "$P" "$P/gold_eqy.ys" "$P/gate_eqy.ys" "$P/match.rules"
   local t0=$SECONDS
   run_eqy "$P"
@@ -350,9 +413,11 @@ mutant_run() {
   local name="$1" gate="$2" consts="$3" flop="$4"
   local M="$B/mutants/$name"; rm -rf "$M"; mkdir -p "$M"
   write_gold_final "$M" "$consts"
-  # the same scripts as the prove stage (names made private, FSM init), on the mutated gate
-  { cat "$M/gold_final.ys"; cat "$B/prove/match.rules.gold_hide"; echo "opt_clean"; fsm_init gold; } > "$M/gold_eqy.ys"
-  { cat "$gate"; cat "$B/prove/match.rules.gate_hide"; echo "opt_clean"; fsm_init gate; } > "$M/gate_eqy.ys"
+  # the same scripts as the prove stage (cut point, names made private), on the mutated gate
+  local vf="${MUT_VFILE:-$HERE/fsmcut.v}"
+  cut_design gold "$M/gold_final.ys" "$M" "$vf"
+  cut_design gate "$gate" "$M" "$vf"
+  cut_scripts "$M" "$B/prove/match.rules"
   write_eqy "$M" "$M/gold_eqy.ys" "$M/gate_eqy.ys" "$B/prove/match.rules"
   ( cd "$M" && dk eqy -f -m -d eqy soc.eqy ) > "$M/setup.log" 2>&1
   : > "$M/partitions.all"                  # $flop may list several flops: the partitions holding any
@@ -380,8 +445,18 @@ mutant_run() {
 stage_mutants() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
   mkdir -p "$B/mutants"; local X="$B/mutants"; local bad=""
-  local k flop
-  if [ "${MUT_ONLY:-}" = fliptie ]; then
+  local k flop only="${MUT_ONLY:-}"
+  for k in core syscon; do
+    [ -z "$only" ] || [ "$only" = "$k" ] || continue
+    python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" $([ "$k" = core ] && [ -n "${MUT_CORE_FLOP:-}" ] && echo --flop "$MUT_CORE_FLOP") > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
+    cat "$X/$k.mutation.txt"
+    flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
+    NETLIST="$X/$k.nl.v" gate_final > "$X/$k.gate.ys"
+    mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop"
+    say "mutants: $k mutant: $(tail -1 "$X/$k/result.txt")"
+    grep -q "^EQY FAIL" "$X/$k/result.txt" || bad="$bad $k"
+  done
+  if [ -z "$only" ] || [ "$only" = fliptie ]; then
     # the 5 tie1 bits tied to 1'0 on the gold side (the q1 bug): a wrong tie value must FAIL
     local fb; fb=$(awk '$2 == 1 { printf "%s ", $1 }' "$B/consts.txt")
     awk '$2 == 1 { print $1, 0; next } { print }' "$B/consts.txt" > "$X/consts_flip.txt"
@@ -389,33 +464,21 @@ stage_mutants() {
     gate_final > "$X/fliptie.gate.ys"
     PARTS_OVERRIDE="soc.bus.d_addr.2 soc.cpu.csr_unit.csr_new.2 soc.cpu.csr_misa_c" mutant_run fliptie "$X/fliptie.gate.ys" "$X/consts_flip.txt" "$fb"
     say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
-    if grep -q "^EQY FAIL" "$X/fliptie/result.txt"; then
-      echo "mutants: core FAIL, syscon FAIL (run q2m2), fliptie FAIL; untie was vacuous on misa_reg[0] and [12] (an untied flop that holds its reset value is legitimately equivalent)" > "$X/summary.txt"
-      return 0
-    fi
-    echo "EQY VACUOUS fliptie" > "$X/summary.txt"; return 3
+    grep -q "^EQY FAIL" "$X/fliptie/result.txt" || bad="$bad fliptie"
   fi
-  for k in core syscon; do
-    [ "${MUT_ONLY:-}" = untie ] && continue
-    python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" $([ "$k" = core ] && [ -n "${MUT_CORE_FLOP:-}" ] && echo --flop "$MUT_CORE_FLOP") > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
-    cat "$X/$k.mutation.txt"
-    flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
-    # gate script on the mutated netlist
-    NETLIST="$X/$k.nl.v" gate_final > "$X/$k.gate.ys"
-    mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop"
-    say "mutants: $k mutant: $(tail -1 "$X/$k/result.txt")"
-    grep -q "^EQY FAIL" "$X/$k/result.txt" || bad="$bad $k"
-  done
-  # untie one constant: the first bit of misa_reg that is 1 (the A extension)
-  local ut; ut="${UNTIE_BIT:-}"; [ -n "$ut" ] || ut=$(awk '$1 ~ /^soc.cpu.csr_unit.misa_reg\[/ && $2 == 1 { print $1; exit }' "$B/consts.txt")
-  grep -v -F -x -e "$ut 1" "$B/consts.txt" > "$X/consts_untied.txt"
-  echo "untied $ut (from $(wc -l < "$B/consts.txt") to $(wc -l < "$X/consts_untied.txt") ties)" | tee "$X/untie.txt"
-  gate_final > "$X/untie.gate.ys"
-  mutant_run untie "$X/untie.gate.ys" "$X/consts_untied.txt" "$ut"
-  say "mutants: untied-constant mutant: $(tail -1 "$X/untie/result.txt")"
-  grep -q "^EQY FAIL" "$X/untie/result.txt" || bad="$bad untie"
+  if [ -z "$only" ] || [ "$only" = fsmtable ]; then
+    # a wrong enc/dec table in fsmcut_gate_qspi (bits 1 and 2 swapped): the cut partition must FAIL
+    python3 "$HERE/mk_wrong_table.py" "$HERE/fsmcut.v" "$X/fsmcut_wrong.v" || die "fsmtable: could not build the wrong table"
+    [ "$(diff "$HERE/fsmcut.v" "$X/fsmcut_wrong.v" | grep -c '^[<>]')" = 4 ] || die "fsmtable: the wrong table differs in other than 2 lines"
+    cmp -s "$X/fsmcut_wrong.v" "$HERE/fsmcut_neg.v" || die "fsmtable: the wrong table is not fsmcut_neg.v"
+    echo "wrong table: qspi bits 1 and 2 swapped (enc and dec), exactly 2 lines changed, = fsmcut_neg.v" | tee "$X/fsmtable.txt"
+    gate_final > "$X/fsmtable.gate.ys"
+    MUT_VFILE="$X/fsmcut_wrong.v" PARTS_OVERRIDE="soc.qspi.fsmcut_state" mutant_run fsmtable "$X/fsmtable.gate.ys" "$B/consts.txt" "soc.qspi.fsmcut_state"
+    say "mutants: wrong-table mutant: $(tail -1 "$X/fsmtable/result.txt")"
+    grep -q "^EQY FAIL" "$X/fsmtable/result.txt" || bad="$bad fsmtable"
+  fi
   if [ -n "$bad" ]; then echo "EQY VACUOUS$bad" > "$X/summary.txt"; return 3; fi
-  echo "mutants: all three FAIL as required" > "$X/summary.txt"
+  echo "mutants: core, syscon, fliptie and fsmtable all FAIL as required" > "$X/summary.txt"
   return 0
 }
 
@@ -434,10 +497,10 @@ run_stage() {              # name; skips if stamped; stops the run on failure
   return $rc
 }
 
-stages="read lemma prove mutants"; [ -n "$STAGE" ] && stages="$STAGE"
+stages="read lemma fsminv prove mutants"; [ -n "$STAGE" ] && stages="$STAGE"
 final=""
 for s in $stages; do
-  case "$s" in read|lemma|prove|mutants) ;; *) die "unknown stage $s";; esac
+  case "$s" in read|lemma|fsminv|prove|mutants) ;; *) die "unknown stage $s";; esac
   run_stage "$s"; rc=$?
   if [ "$s" = prove ]; then
     final=$(tail -1 "$B/prove/verdict.txt" 2>/dev/null)

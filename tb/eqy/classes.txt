@@ -1,2 +1,0 @@
-tt_um_alfadelta10010_alphaone_soc.soc.cpu.rf.hit1	unreachable cut: matched rf.w_ena cut inconsistent with its own proved partition	~/regr/eqy/triage-q2/hit1/trace.vcd
-tt_um_alfadelta10010_alphaone_soc.soc.cpu.rf.hit2	unreachable cut: matched rf.w_ena cut inconsistent with its own proved partition	~/regr/eqy/triage-q2/hit2/trace.vcd
