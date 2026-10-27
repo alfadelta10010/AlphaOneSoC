@@ -60,3 +60,21 @@
   fire+1, not only at the predicted cycle; a model rule never exercised at
   its edge ("frozen while held") hid a DUT/spec split. Re-read my own WO's
   exclusions (sweep data sets) as test targets.
+- GL facts (2026-10-25): TT's GL test Makefile (sc-3x4/test) defines
+  GL_TEST FUNCTIONAL USE_POWER_PINS SIM UNIT_DELAY=#1 and reads the pnl
+  netlist as test/gate_level_netlist.v; rf_top.v's power ports are under
+  GL_TEST. GL sim ~8 us simulated per wall second (~500 clocks/s). Sandbox
+  read-only ssh works: `timeout 20 ssh -o BatchMode=yes sandbox '...'`.
+- EQY 0.62 in librelane:3.0.14 (2026-10-26, tested in sandbox
+  ~/regr/eqy/plan-exp): [recode] does NOT cut the gate-side recoded
+  register (gate one-hot $dff stays inside every downstream partition) ->
+  unusable for FSM recodes; use nomatch + reset `init` attrs on both sides
+  + sby abc pdr (honours init; sat cannot find the onehot=E(bin)
+  invariant). The container lacks make (coder mounts host make via a
+  shim) AND awk (EQY's sby run.sh uses awk '{print $1}' -> every sby
+  verdict reads ERROR); strategies.mk caches a sat FAIL as pdr FAIL. Run
+  docker as ~/regr/eqy/plan-exp/dkp.sh (shims in plan-exp/bin).
+- Yosys setundef with a wire selection does NOT scope the x's that `cutpoint -undef`
+  leaves on module connects: `cutpoint -undef A B; setundef -zero @A; setundef -one @B`
+  zeroes both. Tie per value instead (cutpoint one set, unscoped setundef, then the next set).
+  Guard it: gold_pre.il must hold no other x constant (WO-24 q1 tied misa 1-bits to 0).

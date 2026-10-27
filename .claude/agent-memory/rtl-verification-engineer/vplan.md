@@ -328,3 +328,37 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   10-21 build/ wipe) are full reruns, not "68 survivors only" / "before
   only". LESSON: derive every table cell with --report and name the file;
   never fill one row from another.
+- 2026-10-25: wrote WO-24 (EQY RTL vs post-PnR nl netlist) and WO-25 (pnl
+  netlist in tb_tt_um: A tt_pins/tt_reboot, B 75 riscv-tests, C 101 arch
+  tests with PSRAM-read signatures vs Spike, RTL baseline, mutants; D the
+  16 mailbox SoC programs only if the user approves). Netlist facts:
+  1,307 flops (1,304 dfxtp, dfrtp run, dfstp rst_sync[0]/rst), instance
+  names auto (_25567_) but 1,299 Q NETS carry RTL names (\soc.cpu...), 8
+  named after output nets; 1,377 dlygate4sd3; harden src md5 == branch
+  src (21 files, regs.v not in the list); TT GL defines GL_TEST FUNCTIONAL
+  USE_POWER_PINS SIM UNIT_DELAY=#1 (UNIT_DELAY only on flops); pnl for GL,
+  nl for EQY. GL speed ~10 instr/s: arch tests ~157k instr (river_core
+  dump lines), riscv-tests ~27k. Sandbox suites: build/mywork-conf/riscof/
+  riscv-arch-test, build/mywork-conf/riscv_tests.
+- 2026-10-25: WO-24 amended with the pd-expert's facts: nl md5 fbf13f22...;
+  liberty from PDK versions/8afc8346 (sky130A symlink -> 0536d02d, tt lib
+  identical); fill_1/fill_2/tapvpwrvgnd_1 need stubs; NO SMT solvers
+  (EQY sat + sby abc pdr only). Flop accounting: gold 1,485 = 1,286 name
+  + 5 renames + 8 FSM bits (one-hot recode: exwb_memSize 2->3, muldiv st
+  3->6, qspi state 3->7; 8 FALSE name pairs on the low bits) + 186 removed
+  (184 constant CSR WARL bits via opt_dff X-init folding, 2 unused gpio);
+  gate 1,307 = 1,286 + 5 + 16. MY DECISION: prove an RTL lemma (each of
+  the 184 bits == its constant once armed, FSMs never hold unlisted codes;
+  yosys sat -tempinduct), then tie the constants on gold from a generated
+  list; untied-constant mutant must FAIL. WO-25: D skipped by the user;
+  PSRAM signature readout approved; use 8afc8346 cell Verilog models; the
+  RF macro is behavioural in GL and a black box in EQY (not covered).
+- 2026-10-26: WO-24 prove-stage decision: drop [recode]; nomatch the 24
+  FSM bits; init = RTL reset value (gold 0, gate one-hot bit0) on those
+  24 only; sat then abc pdr 600 s; awk shim. Evidence plan-exp/real: the
+  5 previously FAIL/UNKNOWN partitions PASS by pdr in 4-20 s; realneg
+  (wrong one-hot init) FAILs. Soundness = equivalence from the FSM reset
+  state (same premise as the 184-bit lemma). Stop rule in the WO.
+- 2026-10-27: WO-24 amended (lean finish). Adopted the tie-order fix and 6 nomatch globs
+  (reg2); q1 is void. FAIL classes: setup artefact / unreachable cut (both open, never
+  proved) / finding (stop). Open partitions are referred to WO-25 and river_core.
