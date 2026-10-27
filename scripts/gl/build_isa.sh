@@ -50,7 +50,7 @@ SIZES=$OUT/sigsizes.txt; : > $SIZES
 while IFS=$'\t' read -r name gen asm inc macros; do
   case "$gen" in riscv_tests) part=B;; riscof) part=C;; *) continue;; esac
   case " $PARTS " in *" $part "*) ;; *) continue;; esac
-  ram=0; case "$name" in rv32ui-fence_i-p|Fencei) ram=1;; esac
+  ram=0; case "$name" in rv32ui-fence_i-p|rv32uc-rvc-p|Fencei) ram=1;; esac
   if [ $ram = 1 ]; then ld=$ISA/link_soc_ram.ld; boot=$ISA/boot_flash_ram.S; else ld=$HLP/link_soc.ld; boot=$HLP/boot_flash.S; fi
   incs="-I$OUT/inc -I$ISA"
   IFS=: read -ra dirs <<< "$inc"

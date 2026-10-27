@@ -53,7 +53,7 @@ run_one() { # name hex args
   ( cd "$OUT" && timeout -k 10 $WALL $VVP -n sim +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
   if grep -q '^PASS tb_tt_um' "$OUT/$name.log" && ! grep -qE '^(FAIL|ERROR)' "$OUT/$name.log"; then v=PASS
   elif grep -q '^TIMEOUT' "$OUT/$name.log"; then v=TIMEOUT; else v=FAIL; fi
-  c=$(grep -oE '[0-9]+ cycles\)$|stuck at cycle [0-9]+' "$OUT/$name.log" | grep -oE '[0-9]+' | tail -1)
+  c=$(grep -oE '[0-9]+ cycles\)$|stuck at cycle [0-9]+|\(cycle [0-9]+\)' "$OUT/$name.log" | grep -oE '[0-9]+' | tail -1)
   [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" '$1==n{$1="";print}' "$KNOWN")
   echo "$v ${c:-0} cycles $((SECONDS - s)) s${lab:+ known:$lab}" > "$OUT/$name.verdict"
   log "$name $(cat "$OUT/$name.verdict")"
