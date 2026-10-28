@@ -536,7 +536,7 @@ module tb_uart;
                 end
                 if (a2) begin
                     if (all_o1) oe_seen = oe_seen + 1;
-                    if (all_b1) bi_seen = bi_seen + 1;
+                    if (all_b1 && b[1]) bi_seen = bi_seen + 1;  // only a read that clears BI observes it
                     if (oe_pend && all_o1 && !oe_val) begin oe_pend = 1'b0; oe_val = 1'b1; end
                     if (bi_pend && all_b1 && !bi_val) begin bi_pend = 1'b0; bi_val = 1'b1; end
                 end
@@ -1580,7 +1580,11 @@ module tb_uart;
                  tx_frames_by_div[3], tx_stalls);
         $display("tb_uart: RX %0d kept, %0d dropped (overrun), %0d popped, %0d bad-stop/break (%0d breaks), %0d glitches, OE seen %0d times, BI %0d",
                  rx_kept, rx_dropped, rx_popped, rx_bad, rx_breaks, rx_glitches, oe_seen, bi_seen);
-        if (rx_breaks < 10 || bi_seen < 5) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
+        // Breaks sent per seed run 8-15, so the floor is 5. BI is sticky until an
+        // LSR read clears it, so one observation can cover two breaks but never
+        // the other way round; bi_seen counts clearing reads only.
+        if (bi_seen > rx_breaks) fail($sformatf("BI seen %0d times for %0d breaks sent", bi_seen, rx_breaks));
+        if (rx_breaks < 5 || bi_seen < 5) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
         if (tx_frames != tx_writes) fail($sformatf("%0d THR writes but %0d frames", tx_writes, tx_frames));
         if (errors == 0) $display("PASS tb_uart (%0d checks)", checks);
         else             $display("FAIL tb_uart: %0d errors, %0d checks", errors, checks);
