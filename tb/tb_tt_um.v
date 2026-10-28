@@ -80,6 +80,13 @@
 // state sits inside the cell UDPs and cannot be set cheaply, and the X start
 // is the more pessimistic of the two.
 //
+// Gate level: scripts/gl/run_gl.sh compiles this bench against a LibreLane
+// netlist (the pnl with power pins, -DUSE_POWER_PINS, plus TT's usual defines
+// -DGL_TEST -DFUNCTIONAL -DSIM -DUNIT_DELAY=#0 for the cell models). That is a
+// zero-delay functional run: this is not an SDF-timed bench, and the TCLK_NS /
+// IN_DLY_NS defines below only exist for a one-off SDF run. Timing sign-off is
+// STA in the harden, not a simulation.
+//
 // Limits: in zero-delay RTL every flop changes at the same time stamp, so a
 // hazard between two flops through a gate cannot show (the uo_out[1] / [3]
 // mux while the SPI transmitter is on). The per-pin check catches extra edges
@@ -511,6 +518,20 @@ module tb_tt_um;
                                gp % 8, phase == 1 ? "going into" : "coming out of"));
         end
     end endgenerate
+
+    // Quiet pins: from the cue to the window nothing but the reboot moves
+    // uo_out or the SCK / chip select enables (uio_oe 0, 3, 6, 7); the one
+    // allowed transition is the cycle that enters the window. The cycle's
+    // count is folded into q_early at the next edge, so at the first sample
+    // q_early holds every transition before the entering cycle.
+    wire [11:0] quiet = {uio_oe[7], uio_oe[6], uio_oe[3], uio_oe[0], uo_out};
+    integer q_early = 0, q_cur = 0;
+    always @(quiet) if (phase == 1) q_cur = q_cur + 1;
+    always @(posedge clk) if (phase == 1) begin q_early = q_early + q_cur; q_cur = 0; end
+    always @(posedge clk) if (phase == 0) begin q_early = 0; q_cur = 0; end
+    always @(negedge clk) if (reboot_test && wstate == 1 && uio_oe[3] === 1'b0 && q_early != 0)
+        fail($sformatf("%0d transitions on uo_out / SCK and chip select enables between the cue '%c' and the window",
+                       q_early, cue_chr));
 
     // Power-off: once the pins are at their reset values they stay there for
     // 5,000 clocks whatever the board does -- GPIO IN, the strap pin and a byte
