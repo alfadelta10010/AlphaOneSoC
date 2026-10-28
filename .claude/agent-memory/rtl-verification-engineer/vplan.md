@@ -362,3 +362,17 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
 - 2026-10-27: WO-24 amended (lean finish). Adopted the tie-order fix and 6 nomatch globs
   (reg2); q1 is void. FAIL classes: setup artefact / unreachable cut (both open, never
   proved) / finding (stop). Open partitions are referred to WO-25 and river_core.
+- 2026-10-28: WO-24 closure plan (amendment 2026-10-28). FSM cut point: gold
+  Q -> <cut>, readers clamp(<cut>); gate one-hot Q -> __oh, <cut> = enc(oh),
+  readers onehot(clamp(<cut>)); plus an own net for the rf_top w_ena pin on
+  both sides (hit1/hit2 read the computed w_ena). Soundness = L2 (gold, have)
+  + new gate one-hot invariant (sat -tempinduct, k=1, PROVED) + EQY. A wrong
+  table (qspi bits 1/2 swapped) FAILs soc.qspi.fsmcut_state. plan-exp3: 157
+  partitions; hit1, hit2 and the former TIMEOUTs prove by sat in seconds to
+  minutes (see WO amendment for the exact list).
+  Result: 23 of 24 closed by sat (hit1, hit2, 21 TIMEOUTs; ifex_pc.1 is now
+  ifex_pc.0). Residue: amo_old_val.0 (11.5k cells, combinational D cone of a
+  32-bit reg): sat 19 min no answer, pdr TIMEOUT 600 s; `[collect] solo` does
+  not split it. Next: per-bit combinational miter + yosys-abc &cec (WO-26).
+  EQY sat has NO timeout (a hard partition hangs the run); strategy
+  apply/noapply rules take only `*` or an exact partition name.

@@ -78,3 +78,15 @@
   leaves on module connects: `cutpoint -undef A B; setundef -zero @A; setundef -one @B`
   zeroes both. Tie per value instead (cutpoint one set, unscoped setundef, then the next set).
   Guard it: gold_pre.il must hold no other x constant (WO-24 q1 tied misa 1-bits to 0).
+- EQY FSM cut point (2026-10-28, sandbox ~/regr/eqy/plan-exp3): yosys has no
+  "add cell" command, so the cut is an RTLIL text patch (fsmcut.py) +
+  instance of a Verilog module + flatten; `rename -hide w:fsmcutI_*` after
+  flatten or the instance port names become public aliases of the cut. In the
+  gate RTLIL most FSM bit names are ALIASES (`connect \soc.qspi.state[0]
+  \net2205`): the flop's Q is on the netNNN name, so follow module-level
+  connects. RTLIL needs wires declared before use (insert after `module`).
+  EQY sat strategy runs `formalff -ff2anyinit` on the gate and
+  `sat -set-init-undef`: init attrs do not reach sat, only sby/pdr.
+  `partition.list` lines are "module partition : nets" (take field 2).
+  gate sat invariant: `sat -tempinduct` honours init attrs ("Import
+  set-constraint from init attribute"). EQY setup for this design: 30 s.
