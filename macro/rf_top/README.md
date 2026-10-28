@@ -329,9 +329,12 @@ the liberty hold plus the 0.25 ns clock uncertainty.
   against 0.4 ns. On the calibrated 16 ns run that pin is the worst hold
   path in the design; on the 20 ns run a flop-to-flop path is lower
   (+0.110 ns).
-- The calibrated run inserts a seventh of the hold buffers (92 against 703):
-  its estimate gives the short paths more wire delay, more than routing then
-  gives them (hence the 0.2 ns margin), so the repair pads fewer of them.
+- The "Hold buffers" column is LibreLane's `design__instance__count__hold_buffer`
+  metric. It counts only the resizer's last hold-repair pass, not the hold
+  cells in the netlist, so 92 against 703 does not compare the two repairs.
+  Counting the `hold*` delay cells in the netlists directly: the calibrated
+  16 ns run with the hold guard (st-hgc16, the submission's netlist) holds
+  1,287, and the syscon branch's 3x4 harden of 2026-10-25 holds 1,404.
 
 Gate level on the two b5077cd netlists without the guard (16 ns with C, and
 20 ns), as above (TT's gl_test defines, `+RF_X +RF_COLLIDE_X`): the default
