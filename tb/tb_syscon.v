@@ -44,8 +44,8 @@ module tb_syscon;
     // coverage (random phase only)
     reg        cv_on = 0;
     integer cv_reboot = 0, cv_off = 0, cv_fail = 0, cv_fires = 0, cv_ign = 0;
-    integer cv_w1c0 = 0, cv_w1c1 = 0, cv_w1c2 = 0, cv_bm = 0, cv_good = 0, cv_bad = 0;
-    integer cv_hdone = 0;
+    integer cv_w1c0 = 0, cv_w1c1 = 0, cv_w1c2 = 0, cv_bm = 0, cv_good = 0, cv_wdt_other = 0;
+    integer cv_hdone = 0, cv_rb_soft = 0;
     integer cv_torr = 0, cv_hw = 0, cv_rsth = 0, cv_rsto = 0, cv_hpin = 0;
 
     task chk(input [8*10-1:0] what, input [31:0] got, input [31:0] want);
@@ -154,6 +154,7 @@ module tb_syscon;
                 end
                 if (cv_on) begin
                     if (soft) cv_reboot = cv_reboot + 1;
+                    if (soft && m_cause[1]) cv_rb_soft = cv_rb_soft + 1;
                     if (offs && wdata[15:0] == `FIN_OFF)  cv_off = cv_off + 1;
                     if (offs && wdata[15:0] == `FIN_FAIL) cv_fail = cv_fail + 1;
                     if (ign && aw == 14'd0) cv_ign = cv_ign + 1;
@@ -161,7 +162,7 @@ module tb_syscon;
                     if (w1c[1] && m_cause[1]) cv_w1c1 = cv_w1c1 + 1;
                     if (w1c[2] && m_cause[2]) cv_w1c2 = cv_w1c2 + 1;
                     if (kick && m_en && m_ticks > 0) cv_good = cv_good + 1;
-                    if (sel && we && m_en && m_ticks > 0 && !kick && !torr && (aw == 14'h43 || wdata[7:0] == `WDT_KEY)) cv_bad = cv_bad + 1;
+                    if (sel && we && m_en && m_ticks > 0 && !kick && !torr && (aw == 14'h43 || wdata[7:0] == `WDT_KEY)) cv_wdt_other = cv_wdt_other + 1;
                     if (torr && m_en) cv_torr = cv_torr + 1;
                     if (fr) cv_fires = cv_fires + 1;
                 end
@@ -827,8 +828,8 @@ module tb_syscon;
                 if (rnd(3) != 0) d[7:0] = 8'h76;
                 else if (d[7:0] == 8'h76) d[7:0] = 8'h77;
             end
-            // steer: SOFT is set only by a reboot, so clear it before the next one buries it
-            if (m_cause[1] && !m_off && m_hold == 0 && rnd(KS) < 5) begin
+            // steer: SOFT is set only by a reboot, so clear it only rarely, so a reboot often finds it already set
+            if (m_cause[1] && !m_off && m_hold == 0 && rnd(KS) < 1) begin
                 a = 14'd1; w = 1; b = 4'h1; d[2:0] = 3'b010;
             end
             nxt; drv(1, w, b, a * 4, d);
@@ -855,12 +856,12 @@ module tb_syscon;
             end
             nxt; rst = 0; drv_idle;
             cv_on = 0;
-            $display("coverage: reboots %0d power-offs %0d fails %0d fires %0d ignored-FINISH %0d W1C %0d/%0d/%0d BM-writes %0d good-kicks %0d bad-kicks %0d TORR-enabled %0d held-writes %0d rst-in-hold %0d rst-in-off %0d held-pin-changes %0d hold-done %0d",
-                     cv_reboot, cv_off, cv_fail, cv_fires, cv_ign, cv_w1c0, cv_w1c1, cv_w1c2, cv_bm, cv_good, cv_bad,
-                     cv_torr, cv_hw, cv_rsth, cv_rsto, cv_hpin, cv_hdone);
+            $display("coverage: reboots %0d power-offs %0d fails %0d fires %0d ignored-FINISH %0d W1C %0d/%0d/%0d BM-writes %0d good-kicks %0d other-WDT-writes %0d TORR-enabled %0d held-writes %0d rst-in-hold %0d rst-in-off %0d held-pin-changes %0d hold-done %0d reboots-with-SOFT-set %0d",
+                     cv_reboot, cv_off, cv_fail, cv_fires, cv_ign, cv_w1c0, cv_w1c1, cv_w1c2, cv_bm, cv_good, cv_wdt_other,
+                     cv_torr, cv_hw, cv_rsth, cv_rsto, cv_hpin, cv_hdone, cv_rb_soft);
             if (cv_reboot < 50 || cv_off < 20 || cv_fail < 20 || cv_fires < 30 || cv_ign < 500 ||
                 cv_w1c0 < 50 || cv_w1c1 < 50 || cv_w1c2 < 50 || cv_bm < 500 || cv_good < 200 ||
-                cv_bad < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50 || cv_hdone < 100) begin
+                cv_wdt_other < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50 || cv_hdone < 100 || cv_rb_soft < 1) begin
                 fails = fails + 1;
                 $display("FAIL coverage: a floor was missed (see the coverage line)");
             end
