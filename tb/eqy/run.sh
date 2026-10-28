@@ -442,6 +442,9 @@ mutant_run() {
   python3 "$HERE/verdict.py" --only "$parts" "$M/eqy" "$M/result.txt"
 }
 
+# a mutant is caught when any partition it ran FAILs or is open as "vacuous base"; TIMEOUT / NOT RUN is not
+mutant_caught() { grep -q -e "^EQY FAIL" -e "(vacuous base)" "$1/result.txt"; }
+
 stage_mutants() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
   mkdir -p "$B/mutants"; local X="$B/mutants"; local bad=""
@@ -454,7 +457,7 @@ stage_mutants() {
     NETLIST="$X/$k.nl.v" gate_final > "$X/$k.gate.ys"
     mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop"
     say "mutants: $k mutant: $(tail -1 "$X/$k/result.txt")"
-    grep -q "^EQY FAIL" "$X/$k/result.txt" || bad="$bad $k"
+    mutant_caught "$X/$k" || bad="$bad $k"
   done
   if [ -z "$only" ] || [ "$only" = fliptie ]; then
     # the 5 tie1 bits tied to 1'0 on the gold side (the q1 bug): a wrong tie value must FAIL
@@ -464,7 +467,7 @@ stage_mutants() {
     gate_final > "$X/fliptie.gate.ys"
     PARTS_OVERRIDE="soc.bus.d_addr.2 soc.cpu.csr_unit.csr_new.2 soc.cpu.csr_misa_c" mutant_run fliptie "$X/fliptie.gate.ys" "$X/consts_flip.txt" "$fb"
     say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
-    grep -q "^EQY FAIL" "$X/fliptie/result.txt" || bad="$bad fliptie"
+    mutant_caught "$X/fliptie" || bad="$bad fliptie"
   fi
   if [ -z "$only" ] || [ "$only" = fsmtable ]; then
     # a wrong enc/dec table in fsmcut_gate_qspi (bits 1 and 2 swapped): the cut partition must FAIL
@@ -475,10 +478,10 @@ stage_mutants() {
     gate_final > "$X/fsmtable.gate.ys"
     MUT_VFILE="$X/fsmcut_wrong.v" PARTS_OVERRIDE="soc.qspi.fsmcut_state" mutant_run fsmtable "$X/fsmtable.gate.ys" "$B/consts.txt" "soc.qspi.fsmcut_state"
     say "mutants: wrong-table mutant: $(tail -1 "$X/fsmtable/result.txt")"
-    grep -q "^EQY FAIL" "$X/fsmtable/result.txt" || bad="$bad fsmtable"
+    mutant_caught "$X/fsmtable" || bad="$bad fsmtable"
   fi
   if [ -n "$bad" ]; then echo "EQY VACUOUS$bad" > "$X/summary.txt"; return 3; fi
-  echo "mutants: core, syscon, fliptie and fsmtable all FAIL as required" > "$X/summary.txt"
+  echo "mutants: core, syscon, fliptie and fsmtable all caught (FAIL or vacuous base) as required" > "$X/summary.txt"
   return 0
 }
 

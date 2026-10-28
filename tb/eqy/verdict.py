@@ -28,6 +28,18 @@ def statuses(eqydir, only=None):
     return res
 
 
+def sat_length(eqydir, part):
+    """Induction length a sat proof closed at, or None when the log does not show a proof."""
+    try:
+        log = open(f"{eqydir}/strategies/{part}/sat/run.log", errors="replace").read()
+    except OSError:
+        return None
+    n = re.findall(r"Trying induction with length (\d+)", log)
+    if "Induction step proven" not in log or not n:
+        return None
+    return int(n[-1])
+
+
 def verdict(eqydir, out, only=None, classes=None):
     classes = classes or {}
     res = statuses(eqydir, only)
@@ -37,13 +49,24 @@ def verdict(eqydir, out, only=None, classes=None):
         open(out, "w").write("EQY ERROR no partitions (eqy did not get past setup)\n")
         return 2
     fail, unproven, opened, ok, by = [], [], [], 0, {"sat": 0, "pdr": 0}
+    lens, vac = {}, set()
     lines = []
     for p in parts:
         sts = res.get(p, [])
         # a partition is proved if any strategy proved it (sat first, then pdr); a FAIL is
         # a FAIL; otherwise it is open and the reason is the pdr result (TIMEOUT / UNKNOWN)
         passed = [x for x in sts if x[1] == "PASS" and not x[2]]   # the strategy that really proved it
-        if passed:
+        if passed and passed[0][0] == "sat":
+            n = sat_length(eqydir, p)
+            lens[n] = lens.get(n, 0) + 1
+            if n == 1:
+                last = "PASS"
+                by["sat"] += 1
+            else:
+                last = "VACUOUS"
+                vac.add(p)
+                lines.append(f"OPEN {p}: sat induction length {n} > 1 with undefined init (vacuous base)")
+        elif passed:
             last = "PASS"
             by[passed[0][0]] = by.get(passed[0][0], 0) + 1
         elif any(x[1] == "FAIL" for x in sts):
@@ -53,6 +76,8 @@ def verdict(eqydir, out, only=None, classes=None):
             last = d.get("pdr", d.get("sat", "NOT RUN"))
         if last == "PASS":
             ok += 1
+        elif last == "VACUOUS":
+            unproven.append(p)
         elif last == "FAIL" and p in classes:
             opened.append(p)
             lines.append(f"OPEN {p}: raw result FAIL {[(x[0], x[1]) for x in sts]}; "
@@ -65,6 +90,7 @@ def verdict(eqydir, out, only=None, classes=None):
             lines.append(f"{last} {p}: {[(x[0], x[1]) for x in sts]}")
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(opened)} open (classed fail), {len(unproven)} unproven")
+    lines.insert(1, "sat induction lengths: " + str(dict(sorted(lens.items(), key=lambda kv: (kv[0] is None, kv[0])))))
     if only is None and len(parts) != 157:
         lines.append(f"WARNING partition count {len(parts)}, expected 157")
     lines.append("assumption: gold == gold' (clamp, the identity on valid FSM codes: lemma L2, PROVED once armed) "
@@ -75,7 +101,9 @@ def verdict(eqydir, out, only=None, classes=None):
                  "and free each cycle, rst/rst_soc included. The one premise left: the chip reaches the FSM "
                  "reset codes at its first reset edge (the wrapper holds rst for at least two edges), the "
                  "premise of L1/L2/I_gate. The rf_top w_ena pin has its own net (soc.cpu.rf.w_ena_pin), "
-                 "compared as a partition. Nomatched nets are cut nowhere; `rd_late` starts free on both sides.")
+                 "compared as a partition. Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
+                 "Every sat proof closed at induction length 1 (step from any state); longer sat proofs are not "
+                 "accepted because the base case is vacuous under undefined init.")
     if fail:
         lines.append("EQY FAIL " + " ".join(fail))
     elif unproven or opened:
