@@ -15,6 +15,8 @@ rvtest_entry_point:
   la   t0, handler
   csrw mtvec, t0
   li   s4, 0
+  li   a3, 0                 # c.addi reads these
+  li   a4, 0
   ALIGN4
   csrci misa, 4              # next instruction is word aligned: C can go
   .option rvc
