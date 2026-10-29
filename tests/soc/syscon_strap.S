@@ -18,6 +18,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     lw   s0, 4(s11)                  # RESET_CAUSE
     andi t0, s0, 2
     bnez t0, boot2
@@ -28,7 +29,7 @@ _start:
     VALUE t0
     addi t1, t0, 0x40
     sw   t1, 8(s11)                  # BOOT_MODE = 0x40 | strap
-    EVENT 0x52
+    EVENT_P 0x52
     li   t1, 0x7777
     sw   t1, 0(s11)                  # reboot
 1:  j    1b

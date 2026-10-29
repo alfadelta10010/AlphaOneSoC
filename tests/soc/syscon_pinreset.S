@@ -36,6 +36,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   t0, GPIO
     lw   t1, G_IN(t0)
     andi t2, t1, 0x80
@@ -50,7 +51,7 @@ boot2:
     CHECK s0, 0x1, 0x201             # PIN only: the pin reset ended the reboot
     lw   t0, 8(s11)
     CHECK t0, 0, 0x202               # BOOT_MODE
-    EVENT 0x55
+    EVENT_P 0x55
     li   t1, 0x7777
     sw   t1, 0(s11)                  # a clean reboot
 1:  j    1b
@@ -66,7 +67,7 @@ boot1:
     sw   t0, 4(s11)                  # W1C PIN
     lw   t0, 4(s11)
     CHECK t0, 0, 0x103
-    EVENT 0x54
+    EVENT_P 0x54
     li   t1, 0x7777
     REBOOT_ON_FETCH t1               # reboot, cut by the bench's pin reset
 1:  j    1b
@@ -79,7 +80,7 @@ boot3:
     sw   t0, 4(s11)                  # W1C both
     lw   t0, 4(s11)
     CHECK t0, 0, 0x303
-    EVENT 0x57
+    EVENT_P 0x57
     sw   zero, W_TORR(s11)           # TOP 0
     li   t0, 0x76
     sw   t0, W_CRR(s11)

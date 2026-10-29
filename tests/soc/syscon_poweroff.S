@@ -36,6 +36,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   t0, GPIO
     lw   t1, G_IN(t0)
     andi t1, t1, 0x80
@@ -46,7 +47,7 @@ _start:
     CHECK t0, 0, 0x102               # BOOT_MODE
     li   t0, 0x77
     sw   t0, 8(s11)
-    EVENT 0x53
+    EVENT_P 0x53
     # arm the watchdog last: TORR, kick, CR.EN
     sw   zero, W_TORR(s11)
     li   t0, 0x76

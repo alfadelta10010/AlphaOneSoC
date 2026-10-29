@@ -25,6 +25,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     lw   s0, 8(s11)                  # BOOT_MODE: boots so far
     lw   t1, 4(s11)                  # RESET_CAUSE
     bnez s0, later

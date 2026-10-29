@@ -22,6 +22,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     lw   s0, 4(s11)                  # RESET_CAUSE
     andi t0, s0, 4
     bnez t0, boot2
@@ -55,7 +56,13 @@ _start:
     lw   t0, W_CR(s11)
     CHECK t0, 1, 0x106
     VALUE t0
+#ifdef MB_UART
+    EVENT_NW 0x56                    # the cue frame, then one good kick: the pins bench times
+    li   t0, 0x76                    # the reboot from the frame, and the kick is what the
+    sw   t0, W_CRR(s11)              # timeout counts from
+#else
     EVENT 0x56
+#endif
 3:  j    3b                          # no more kicks
 
 boot2:

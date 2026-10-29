@@ -62,6 +62,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
 
     # ---- 1. reset values (the strap pin is 0 in this run) ----
     RD   0x00, 0, 0x101              # FINISH reads 0

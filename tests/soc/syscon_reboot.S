@@ -37,6 +37,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   t6, MTIME
     lw   t0, 0(t6)
     VALUE t0                         # mtime at the start of the boot

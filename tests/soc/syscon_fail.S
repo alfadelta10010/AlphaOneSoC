@@ -10,6 +10,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     lw   t0, 4(s11)
     CHECK t0, 0x1, 0x101             # RESET_CAUSE: PIN
     lw   t0, 0x0C(s11)
