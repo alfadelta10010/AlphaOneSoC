@@ -91,6 +91,12 @@ update after each review with confirmed decisions, findings, and recurring patte
   mailbox +0xF04 unreachable from s11 (12-bit imm) -- finding_syscon_design_2026-10-23.md
 - 2026-10-24 SA-009 (my WO-22 miss): wdt fires in the cycle after a FINISH store (rst_soc lags rq/off one edge);
   WO-23 gates fire with ~rst_soc, +0.0009 t; breaks mutant WD03's string -- same file
+- 2026-10-29 WO-27 fetch word reuse DESIGN (worktree fetch-reuse): 24.6-26.1% fetches saved on C, CPI ~-19%, 17 flops,
+  no tag; directed suite 0.57% hits; D1-D6 pending -- finding_fetch_reuse_wo27_2026-10-29.md
+- 2026-10-29 WO-28 SPI controller DESIGN (worktree AlphaOneSoC-spi): tiny_spi map @0x1001_0020, F12 pin flops, OUT rst 0x89;
+  15.6 MHz MISO margin 2-12 ns -> cap BAUD 2; +1,150 um2, 3x4 ~69.9% w/ fetch reuse -- finding_spi_wo28_2026-10-29.md
+- 2026-10-30 WO-27 impl review f7f956b: RTL OK; BLOCK verif: fr_misa not RF_X-clean -> false FR12/FR14 kills, +rfx leg masks all
+  survivors; core_fetch F1 32-bit clause vacuous (FR03 proves) -- finding_fetch_reuse_wo27_2026-10-29.md
 
 ## Notes index
 
@@ -128,3 +134,5 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-14 setup-timing note](finding_setup_timing_note_review_2026-10-14.md) — no-fwd + two-phase EX (alu_r/br_r/ex_ph): sound; claim true; cheaper verdict-flop cut
 - [2026-10-14 setup-timing post-RTL](finding_setup_timing_postrtl_review_2026-10-14.md) — steps 1-8 sound; rf_fields/csr_wb_hazard/hit-byp redundant; mtip_stale/cnt_xhalf brittleness
 - [2026-10-23 syscon design](finding_syscon_design_2026-10-23.md) — WO-20/21 decisions, driver/QEMU facts, acceptance benches, review checklist
+- [2026-10-29 WO-28 SPI controller](finding_spi_wo28_2026-10-29.md) — tiny_spi semantics, sample-point table, area, D1-D9
+- [2026-10-29 WO-27 fetch reuse](finding_fetch_reuse_wo27_2026-10-29.md) — kv/kbuf rule, capture enable, measured saving, gaps, PicoRV32 precedent

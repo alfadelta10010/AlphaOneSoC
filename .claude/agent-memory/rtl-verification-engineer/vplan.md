@@ -376,3 +376,10 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   not split it. Next: per-bit combinational miter + yosys-abc &cec (WO-26).
   EQY sat has NO timeout (a hard partition hangs the run); strategy
   apply/noapply rules take only `*` or an exact partition name.
+
+## WO-26 (planned 2026-10-29): WO-25 part D, 16 mailbox programs at the pins
+- build/wo/WO-26-gl-soc-programs.md. Status: planned (no code). MB_UART frames 0x10-0x13
+  (EVENT_P/VALUE/VALUE2/FINISH), +TEST=soc +PROG= in tb_tt_um, T20 image for oled_spi,
+  irq_stall, periph_access; per-program MB_DIV; irq_stall logs to PSRAM 0x80FF_F000.
+- Coverage at the pins: 7 fully, 9 partly, 0 none. Open user decision: C8 (floors re-measured
+  on the MB_UART builds through tb_soc_periph/tb_syscon_soc).

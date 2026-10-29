@@ -90,6 +90,8 @@ Verification blind spots
 - Hard-macro behaviour the design relies on but the precedents never exercise (rf_top same-edge
   write-through, 2026-10-11): the behavioural model is the only evidence, and the GL compare reuses it.
   Mutate the MODEL (e.g. read-first) to find what depends on it, then check how the precedents sequence it.
+- The directed .ref suite is mostly `.option norvc`: a model of a C-path feature (fetch reuse, 2026-10-29) hit 0.57%
+  of its instructions, 72/91 tests never. Count the feature's events per test before trusting a green suite.
 - Macro placement "from the precedent" with a different location: re-derive the PDN alignment
   (isolated power-pin stubs vs strap offset/pitch) and the routing wall (OBS layers) for the new spot.
 
@@ -103,3 +105,5 @@ PPA / area claims
 - Unbuffered pre-layout STA is noise (a dead-code commit moved it 4.8 ns); only post-CTS/signoff
   numbers from the real flow can rank timing.
 
+- New test not RF_X-clean -> mutation runner's +rfx second pass reports EVERY plain-suite survivor as killed by
+  that test (WO-27 fr_misa, 2026-10-30). Check: run each new test on the UNMUTATED RTL with +RF_X +RF_COLLIDE_X.
