@@ -3,7 +3,8 @@
 //
 // The code memory is a constant but arbitrary table of 16 halfwords,
 // h(a) = tab[a[4:1]], and the instruction port answers every request from it:
-// imem_rdata = {h(imem_addr + 2), h(imem_addr)}. Everything else is free
+// imem_rdata = {h(imem_addr + 2), h(imem_addr)} when a request is accepted
+// (imem_req && imem_ready), and a free value otherwise. Everything else is free
 // (imem_ready, dmem_ready, dmem_rdata, the interrupts, boot_addr, the
 // register file). Stores never change the table: this is the no-self-modifying
 // code case, which is the only one in which the kept halfword must equal the
@@ -17,8 +18,8 @@
 //       whether it came from the fetch or from the kept halfword
 //   F2  lemma: if_kv implies if_kbuf == h(pc) (the kept halfword is the one at
 //       pc; this is what makes F1 inductive)
-//   F3  lemma: if_kv implies imem_req is low (no fetch with the instruction
-//       in hand)
+//   F3  lemma: if_kv implies the kept halfword is compressed (its low bits
+//       are not 11), so a hit never holds the lower half of a 32-bit one
 module core_fetch_props (
     input  wire        clk, rst_in,
     input  wire [31:0] boot_addr,
@@ -26,7 +27,8 @@ module core_fetch_props (
     input  wire        imem_ready, dmem_ready,
     input  wire [31:0] dmem_rdata,
     input  wire        timer_irq, external_irq, sw_irq,
-    input  wire [63:0] mtime_in
+    input  wire [63:0] mtime_in,
+    input  wire [31:0] junk          // what the port shows when nothing is answered
 );
     wire rst = rst_in;
     wire [31:0] imem_addr, dmem_addr, dmem_wdata, dbg_pc, dbg_instr;
@@ -39,7 +41,7 @@ module core_fetch_props (
     function [15:0] h(input [31:0] a);
         h = tab[16*a[4:1] +: 16];
     endfunction
-    wire [31:0] imem_rdata = {h(imem_addr + 32'd2), h(imem_addr)};
+    wire [31:0] imem_rdata = (imem_req && imem_ready) ? {h(imem_addr + 32'd2), h(imem_addr)} : junk;
 
     fyracore dut (.clk(clk), .rst(rst), .boot_addr(boot_addr),
         .imem_addr(imem_addr), .imem_req(imem_req), .imem_rdata(imem_rdata), .imem_ready(imem_ready),
@@ -64,7 +66,7 @@ module core_fetch_props (
         assume (!tab_ok || tab == tab_q);
         if (chk) begin
             assert (!f_kv || f_kbuf == h(f_pc));                                  // F2
-            assert (!f_kv || !imem_req);                                          // F3
+            assert (!f_kv || f_kbuf[1:0] != 2'b11);                               // F3
             if (f_load && f_exec) begin
                 assert (f_fetched[15:0] == h(f_pc));                              // F1
                 assert (f_fetched[1:0] != 2'b11 || f_fetched[31:16] == h(f_pc + 32'd2));
