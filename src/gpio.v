@@ -18,7 +18,8 @@
 //
 // Registers are words; writes take lane 0 (be[0]) and ignore the rest, so a
 // byte, halfword or word store to the register's address writes it. The
-// window is decoded on addr[3:2] only and aliases through its 64 KB.
+// window is decoded on addr[5:2] only and aliases every 64 bytes through its
+// 64 KB; the slots above 0x0C are reserved: they read 0 and ignore writes.
 //
 // Back-pressure: every register write waits (ready low) while a byte is
 // shifting -- the same mechanism as the UART's THR. For DATA that makes a
@@ -53,7 +54,7 @@ module gpio (
     input  wire        sel,        // request for this target
     input  wire        we,
     input  wire [3:0]  be,
-    input  wire [3:2]  addr,
+    input  wire [5:2]  addr,
     input  wire [31:0] wdata,
     output wire [31:0] rdata,
     output wire        ready,      // low only while a write waits for a shifting byte
@@ -81,9 +82,10 @@ module gpio (
     assign ready = !(sel && we && be[0] && spi_busy);
     wire   wr    = sel && we && be[0] && ready;
 
-    assign rdata = (addr == 2'd0) ? {24'b0, out_r[7:6], 2'b00, p_sck, out_r[2], p_mosi, out_r[0]} :
-                   (addr == 2'd1) ? {24'b0, in_s} :
-                   (addr == 2'd3) ? {23'b0, spi_busy, 5'b0, spi_div, spi_en} :
+    // 16 word slots; 0x10-0x3C are reserved and read 0
+    assign rdata = (addr == 4'd0) ? {24'b0, out_r[7:6], 2'b00, p_sck, out_r[2], p_mosi, out_r[0]} :
+                   (addr == 4'd1) ? {24'b0, in_s} :
+                   (addr == 4'd3) ? {23'b0, spi_busy, 5'b0, spi_div, spi_en} :
                                     32'h0000_0000;
 
     // MOSI and SCK come straight from flops: no mux, so a change of EN and of
@@ -106,20 +108,20 @@ module gpio (
             p_sck    <= 1'b1;
             p_mosi   <= 1'b0;
         end else begin
-            if (wr && addr == 2'd0) begin
+            if (wr && addr == 4'd0) begin
                 out_r <= {wdata[7:6], 3'b000, wdata[2], 1'b0, wdata[0]};
                 if (!spi_en) begin          // while EN, the shifter owns bits 3 and 1
                     p_sck  <= wdata[3];
                     p_mosi <= wdata[1];
                 end
             end
-            if (wr && addr == 2'd3) begin
+            if (wr && addr == 4'd3) begin
                 spi_en  <= wdata[0];
                 spi_div <= wdata[2:1];
                 if (wdata[0]) p_sck <= 1'b1;  // the shifter is idle: SCK at the mode-3 idle level
             end
 
-            if (wr && addr == 2'd2) begin
+            if (wr && addr == 4'd2) begin
                 spi_sh  <= {wdata[7:0], 1'b1};
                 spi_pre <= 3'd0;
             end else if (spi_busy) begin

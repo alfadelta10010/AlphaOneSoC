@@ -250,7 +250,7 @@ module alphaone_soc #(
         .sel  (gpio_sel),
         .we   (dmem_we),
         .be   (dmem_be),
-        .addr (dmem_addr[3:2]),
+        .addr (dmem_addr[5:2]),
         .wdata(dmem_wdata),
         .rdata(gpio_rdata),
         .ready(gpio_ready),

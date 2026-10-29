@@ -189,7 +189,7 @@ _start:
     CHECK t0, 0xAC, 0x147
     lhu  t0, G_IN+2(s1)
     CHECK t0, 0, 0x148
-    li   t2, 0x1001FFF4          # IN, aliased
+    li   t2, 0x1001FFC4          # IN, aliased
     lbu  t0, 0(t2)
     CHECK t0, 0xAC, 0x149
     lw   t0, G_DATA(s1)
