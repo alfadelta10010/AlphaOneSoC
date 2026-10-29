@@ -20,7 +20,7 @@ _start:
     MB_INIT
     li   s1, GPIO
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x09, 0x201        # reset: CS# high, SCK idle high, RES# low
+    CHECK t0, 0x89, 0x201        # reset: SD CS# and OLED CS# high, SCK idle high, RES# low
     lw   t0, G_CTRL(s1)
     CHECK t0, 0x00, 0x202
     DELAY 200                    # RES# low >= 3 us (4 us at 50 MHz)
@@ -100,7 +100,7 @@ _start:
     li   t0, 0x04
     sw   t0, G_CTRL(s1)          # EN off: out[3] is OUT bit 3 (high) again
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x49, 0x204
+    CHECK t0, 0x4B, 0x204
     j    test_pass
     EPILOGUE
 

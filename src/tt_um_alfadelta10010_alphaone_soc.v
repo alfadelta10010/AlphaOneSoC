@@ -102,7 +102,7 @@ module tt_um_alfadelta10010_alphaone_soc (
     // UART's and the GPIO block's reset values), so nothing moves when rst
     // falls. Each bit comes down to one two-input gate of run and the SoC's
     // bit, which cannot glitch when only run changes.
-    localparam [7:0] UO_RESET = 8'h39;
+    localparam [7:0] UO_RESET = 8'hB9;
     assign uo_out  = run ? {gpio_out[7:6], uart_rts_n, uart_tx, gpio_out[3:0]}
                          : UO_RESET;
 

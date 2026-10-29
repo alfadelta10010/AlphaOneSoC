@@ -158,8 +158,8 @@ _start:
 
     # ---- GPIO ----
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x09, 0x140
-    PINS 0x09
+    CHECK t0, 0x89, 0x140
+    PINS 0x89
     li   t0, 0xFF
     sw   t0, G_OUT(s1)
     lw   t1, G_OUT(s1)

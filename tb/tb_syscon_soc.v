@@ -284,7 +284,7 @@ module tb_syscon_soc;
             if (qspi_cs_n !== 3'b111)  fail($sformatf("held: qspi_cs_n = %b, want 111", qspi_cs_n));
             if (qspi_ctl_oe !== 1'b0)  fail("held: qspi_ctl_oe is not 0");
             if (qspi_io_oe !== 1'b0)   fail("held: qspi_io_oe is not 0");
-            if (gpio_out !== 8'h09)    fail($sformatf("held: gpio_out = %h, want 09", gpio_out));
+            if (gpio_out !== 8'h89)    fail($sformatf("held: gpio_out = %h, want 89", gpio_out));
             if (uart_tx !== 1'b1)      fail("held: uart_tx is not 1");
             if (uart_rts_n !== 1'b1)   fail("held: uart_rts_n is not 1");
             if (qspi_sck !== 1'b0)     fail($sformatf("held: qspi_sck = %b, want 0", qspi_sck));

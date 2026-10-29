@@ -97,7 +97,7 @@ module gpio (
 
     always @(posedge clk) begin
         if (rst) begin
-            out_r    <= 8'h09;
+            out_r    <= 8'h81;                 // OUT 0x89: SD CS#, OLED CS# high; p_sck is bit 3
             spi_en   <= 1'b0;
             spi_div  <= 2'd0;
             spi_sh   <= 9'd0;

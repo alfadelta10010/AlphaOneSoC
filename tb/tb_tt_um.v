@@ -26,8 +26,8 @@
 // Checked:
 //
 //   * in reset -- from 2 ns after rst_n falls until the second clock edge
-//     after it rises, clock or no clock -- uio_oe is 0 and uo_out is 0x39 (TX
-//     and RTS# high, GPIO OUT 0x09). The SoC then drives SCK and the chip
+//     after it rises, clock or no clock -- uio_oe is 0 and uo_out is 0xB9 (TX
+//     and RTS# high, GPIO OUT 0x89). The SoC then drives SCK and the chip
 //     selects on the third edge, no sooner and no later, which fixes the
 //     length of the reset's release at the pins;
 //   * the four SCK / chip select output enables are one signal, and the four
@@ -49,7 +49,7 @@
 //
 //   * a reboot (FINISH 0x7777) looks at the pins like a pin reset after rst_n
 //     rises: from the first falling clock edge with uio_oe[3] low, two samples
-//     with uio_oe 0 and uo_out 0x39, the third with SCK and the chip selects
+//     with uio_oe 0 and uo_out 0xB9, the third with SCK and the chip selects
 //     driven again. The window starts within a bound of the program's cue
 //     byte ('r', 'R'); each pin changes at most once into it and once out of
 //     it, never twice at one time stamp, and only just after a clock edge;
@@ -66,7 +66,7 @@
 //   sig  'S' (and, with +SIG_UART, the signature words raw, little-endian).
 //
 // then, within 20,000 clocks of the report, the pins must show the power-off
-// (uio_oe 0, uo_out 0x39) and hold it for 200 clocks, so every program also
+// (uio_oe 0, uo_out 0xB9) and hold it for 200 clocks, so every program also
 // exercises syscon's `off` path. For sig the bench then reads the signature
 // from the board's PSRAM, the Pmod model outside the chip, from SIG_BEGIN up
 // to SIG_END (+SIG_BEGIN=<hex> +SIG_END=<hex>), writes it to +SIG_OUT=<file>
@@ -206,7 +206,7 @@ module tb_tt_um;
     task automatic check_reset_pins(input string when);
         begin
             if (uio_oe !== 8'h00) fail($sformatf("uio_oe = %b %s", uio_oe, when));
-            if (uo_out !== 8'h39) fail($sformatf("uo_out = %h %s, want 39", uo_out, when));
+            if (uo_out !== 8'hB9) fail($sformatf("uo_out = %h %s, want B9", uo_out, when));
         end
     endtask
 
@@ -524,7 +524,7 @@ module tb_tt_um;
                     s_ev[5] = 'h21; s_ev[6] = 'h20; s_ev[7] = 'h20; s_ev[8] = 'h20; s_ev[9] = 'h20;
                     s_ev[10] = 'h30; s_ev[11] = 'h20;
                     s_n_val = 10; s_val_known = 1'b1;
-                    s_val[0] = "q"; s_val[1] = "m"; s_val[2] = 8'h09; s_val[3] = 8'hCF; s_val[4] = 8'h81;
+                    s_val[0] = "q"; s_val[1] = "m"; s_val[2] = 8'h89; s_val[3] = 8'hCF; s_val[4] = 8'h81;
                     s_val[5] = 8'hC1; s_val[6] = 8'h41; s_val[7] = 8'h4E; s_val[8] = 8'h49; s_val[9] = 8'h49;
                     push_oled(1'b0, 8'h81); push_oled(1'b0, 8'h7E); push_oled(1'b0, 8'h5A); push_oled(1'b0, 8'hC3);
                 end
@@ -838,7 +838,7 @@ module tb_tt_um;
     always begin : isa_poweroff
         @(posedge rep_done);
         pw_i = 0;
-        while (!(uio_oe === 8'h00 && uo_out === 8'h39) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
+        while (!(uio_oe === 8'h00 && uo_out === 8'hB9) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
         if (pw_i >= 20000) fail("no power-off within 20000 clocks of the report");
         else begin
             pw_cyc = cyc;
