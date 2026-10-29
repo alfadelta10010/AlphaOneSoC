@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Stuck-at-0 on one flop's D, tied to the netlist's conb LO net.
 
-  mutate_netlist.py PNL OUT --kind {csr,alu}
+  mutate_netlist.py PNL OUT --kind {csr,alu,spi}
 
 csr: bit 3 of \\soc.cpu.csr_unit.mscratch (a CSR the riscv-tests write and read).
 alu: bit 0 of the writeback result flop, \\soc.cpu.exwb_alu_result[0].
+spi: the SPI transmitter's MOSI flop, \\soc.gpio_inst.spi_mosi (its Q reaches uo_out[1] through
+     an inverter and the o211a that muxes it with GPIO OUT bit 1): only a program that
+     sends SPI bytes sees it, tt_pins.S does not.
 Prints the flop instance, its type, the old D net and the LO net it now reads.
 """
 import re, sys
 
-KINDS = {"csr": r"\soc.cpu.csr_unit.mscratch[3]", "alu": r"\soc.cpu.exwb_alu_result[0]"}
+KINDS = {"csr": r"\soc.cpu.csr_unit.mscratch[3]", "alu": r"\soc.cpu.exwb_alu_result[0]",
+         "spi": r"\soc.gpio_inst.spi_mosi"}
 
 def main():
     if len(sys.argv) != 5 or sys.argv[3] != "--kind" or sys.argv[4] not in KINDS:
