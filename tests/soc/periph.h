@@ -63,8 +63,13 @@
 /* GPIO registers */
 #define G_OUT  0x0
 #define G_IN   0x4
-#define G_DATA 0x8
-#define G_CTRL 0xC
+#define G_CTRL 0xC               /* SPICTL: bit 0 EN, bit 8 BUSY (= !TXE) */
+/* the SPI controller (tiny_spi registers), 0x20 up */
+#define S_RXDATA  0x20
+#define S_TXDATA  0x24
+#define S_STATUS  0x28           /* bit 0 TXE, bit 1 TXR */
+#define S_CONTROL 0x2C           /* bit 0 CPHA, bit 1 CPOL; resets to 3 */
+#define S_BAUD    0x30           /* SCK = clk / (2 x (BAUD + 1)); resets to 0xFF */
 
 /* r == v, or fail with `code` (clobbers t5, a6, a7) */
 .macro CHECK r, v, code

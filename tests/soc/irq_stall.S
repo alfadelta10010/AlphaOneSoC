@@ -68,9 +68,11 @@ a_after:
     WAIT_LSR s0, LSR_TEMT
 
     # ---- B: SPI DATA ----
-    li   t0, 0x07
-    sw   t0, G_CTRL(s1)          # EN, DIV 3: 136 clocks a byte
-    li   t0, 0x48
+    li   t0, 15
+    sw   t0, S_BAUD(s1)          # BAUD 15: 256 clocks a byte
+    li   t0, 1
+    sw   t0, G_CTRL(s1)          # EN
+    li   t0, 0xC8
     sw   t0, G_OUT(s1)           # RES# high, CS# low: the OLED model listens
     la   t0, b_after
     sw   t0, MB_VALUE2(s11)
@@ -92,18 +94,20 @@ b_loop:
     sw   t0, 0(s3)
     li   t1, 0x55
     li   t2, 0xAA
-    sw   t1, G_DATA(s1)
-    sw   t2, G_DATA(s1)          # held while 0x55 shifts
+    li   t3, 0xC8
+    sw   t1, S_TXDATA(s1)
+    sw   t3, G_OUT(s1)           # held while 0x55 shifts
 b_after:
     nop
 1:  blt  s5, s8, 1b
-    addi s6, s6, 25
+    sw   t2, S_TXDATA(s1)
+    addi s6, s6, 50
     addi s7, s7, -1
     bnez s7, b_loop
 1:  lw   t0, G_CTRL(s1)
     andi t0, t0, 0x100
     bnez t0, 1b
-    li   t0, 0x49
+    li   t0, 0xC9
     sw   t0, G_OUT(s1)           # CS# high
 
     # ---- C: amoswap.w to THR ----
