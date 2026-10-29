@@ -55,12 +55,15 @@ run_one() { # name hex args
   if grep -q '^PASS tb_tt_um' "$OUT/$name.log" && ! grep -qE '^(FAIL|ERROR)' "$OUT/$name.log"; then v=PASS
   elif grep -q '^TIMEOUT' "$OUT/$name.log"; then v=TIMEOUT; else v=FAIL; fi
   c=$(grep -oE '[0-9]+ cycles\)$|stuck at cycle [0-9]+|\(cycle [0-9]+\)' "$OUT/$name.log" | grep -oE '[0-9]+' | tail -1)
-  # soc programs: the gate-level run must take exactly the RTL run's cycles (a progress floor at the pins)
-  if [ "$v" = PASS ] && [[ $args == *"+TEST=soc"* ]] && [ -n "${BASE:-}" ] && [ -s "$BASE/$name.verdict" ]; then
-    rc=$(awk '{print $2}' "$BASE/$name.verdict")
-    if [[ $rc =~ ^[0-9]+$ ]] && [ "$rc" -gt 0 ] && [ "${c:-0}" != "$rc" ]; then
-      v=FAIL; echo "FAIL cycle count: gate level ${c:-0}, RTL $rc" >> "$OUT/$name.log"; log "$name cycle mismatch: GL ${c:-0} vs RTL $rc"
-    fi
+  # soc programs with a BASE: the gate-level run must take exactly the RTL run's cycles (a progress floor at the pins);
+  # one CYCLES line per run either way, and a missing baseline is a FAIL
+  if [ "$v" = PASS ] && [[ $args == *"+TEST=soc"* ]] && [ -n "${BASE:-}" ]; then
+    rc=""; [ -s "$BASE/$name.verdict" ] && rc=$(awk '{print $2}' "$BASE/$name.verdict")
+    if ! [[ $rc =~ ^[0-9]+$ ]] || [ "$rc" -eq 0 ]; then
+      v=FAIL; echo "FAIL cycle count: no baseline verdict for $name in $BASE" >> "$OUT/$name.log"; log "CYCLES $name no baseline"
+    elif [ "${c:-0}" != "$rc" ]; then
+      v=FAIL; echo "FAIL cycle count: gate level ${c:-0}, RTL $rc" >> "$OUT/$name.log"; log "CYCLES $name rtl $rc gl ${c:-0} MISMATCH"
+    else log "CYCLES $name rtl $rc gl ${c:-0} match"; fi
   fi
   [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" '$1==n{$1="";print}' "$KNOWN")
   echo "$v ${c:-0} cycles $((SECONDS - s)) s${lab:+ known:$lab}" > "$OUT/$name.verdict"
