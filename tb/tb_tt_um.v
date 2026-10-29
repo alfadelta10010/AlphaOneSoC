@@ -681,7 +681,7 @@ module tb_tt_um;
                    if (pr_arm) begin pr_arm = 1'b0; -> pr_go; end
                end else sw_prev = {uio_pin[7], uio_pin[6], uio_pin[0]};
             1: begin
-                   if (!rst_n) begin sw_cut = sw_cut + 1; sw_st = 4; end
+                   if (!rst_n) begin sw_cut = sw_cut + 1; sw_st = 4; fl_arm = 1'b1; end
                    else if (uio_oe[3] === 1'b0) begin
                        sw_low = sw_low + 1;
                        check_reset_pins("in a reboot / power-off window");
@@ -746,7 +746,7 @@ module tb_tt_um;
                 fail($sformatf("windows: %0d reboots, %0d power-offs, %0d cut by a pin reset; want %0d, %0d, %0d",
                                sw_re, sw_po, sw_cut, s_exp_re, s_exp_po, s_exp_cut));
             if (sw_n != sw_re + sw_po + sw_cut) fail("a window that is none of reboot, power-off or cut");
-            if (sw_fl_ok != sw_re) fail($sformatf("%0d reboots, but the first flash read at address 0 came after %0d of them", sw_re, sw_fl_ok));
+            if (sw_fl_ok != sw_re + sw_cut) fail($sformatf("%0d reboots and %0d pin-reset cuts, but the first flash read at address 0 came after %0d of them", sw_re, sw_cut, sw_fl_ok));
             if (n_want_oled != 0 || oled_fit) begin
                 if (oled.nlog != n_want_oled) fail($sformatf("the SSD1331 got %0d bytes, want %0d", oled.nlog, n_want_oled));
                 for (k = 0; k < oled.nlog && k < n_want_oled; k = k + 1)
