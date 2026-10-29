@@ -432,4 +432,4 @@ m("FR13", "fyracore.v", "            if (stall) begin\n                // Hold I
   "            if (stall) begin\n                if_kv <= if_kv && !flush;\n                // Hold IF/EX on stall.",
   "if_kv cleared by a flush on a stalled cycle too (perf only: pc holds, the hit is lost; the if_kv shadow kills it)")
 m("FR14", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= if_kv && !(flush && !ex_is_fencei && !ex_pmp_csr_wr);",
-  "FENCE.I and a PMP write do not clear if_kv (not equivalent after all: neither has a compressed form, but with misa.C=0 a trapping compressed instruction can expand to a word whose decode terms raise them, and fr_misa kills it)")
+  "FENCE.I and a PMP write do not clear if_kv (equivalent: if_kv is set only behind a compressed instruction, and the compressed decoder turns every illegal encoding into a NOP, so no compressed form decodes as FENCE.I or a CSR write, with misa.C set or clear)")
