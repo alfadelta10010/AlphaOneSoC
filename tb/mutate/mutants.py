@@ -396,7 +396,9 @@ m("AS08", "alphaone_soc.v", "    ) cpu (\n        .clk         (clk),\n        .
 # ── fetch word reuse (WO-27): if_kbuf / if_kv in fyracore.v ──────────────
 # FR07, FR08 and FR13 change nothing a Spike-compared trace can show (the
 # bench's if_kv checks kill them); FR09 is killed by fr_window_end under
-# NOTREADY_DATA=2. Campaign 2026-10-30: 14/14 killed.
+# NOTREADY_DATA=2, FR12 by fr_reset (and the core_fetch proof). FR14 is
+# equivalent. Campaign 2026-10-30 (sandbox, unit+dir+soc, plus formal here):
+# 13/14 killed, none by fr_misa under +RF_X.
 KV_LOAD = "                if_kv          <= !if_hit && if_exec && if_compressed &&\n                                  (if_fetched[17:16] != 2'b11);"
 m("FR01", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= if_kv;",
   "if_kv survives a flush: a taken branch / trap / MRET issues the stale kept halfword")
