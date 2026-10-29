@@ -40,7 +40,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
         test-qspi test-uart test-gpio test-soc-periph test-syscon-soc \
-        test-wrapper test-gl asm \
+        test-wrapper test-wrapper-soc test-gl asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -291,7 +291,8 @@ test-wrapper: $(BUILD_DIR)
 	@echo "=== Testing the TinyTapeout top level ==="
 	@mkdir -p $(WRAPPER_DIR)
 	@$(IVERILOG) -g2012 -o $(WRAPPER_DIR)/sim -s tb_tt_um $(WRAPPER_SRC) \
-		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_tt_um.v
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_tt_um.v
 	@cd $(WRAPPER_DIR) && \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
@@ -314,6 +315,20 @@ test-wrapper: $(BUILD_DIR)
 			grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' tt_reboot.$$n.log | head -12; \
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_reboot.$$n.log || ! grep -q '^PASS' tt_reboot.$$n.log; then exit 1; fi; \
 		done
+
+# The 16 mailbox programs of tests/soc through the pins (tb_tt_um.v
+# +TEST=soc +PROG=<name>), on the RTL: scripts/gl/build_isa.sh PARTS=D builds
+# them with -DMB_UART and each one's divisor, run_gl.sh runs the two lists. The
+# same lists run on the hardened netlist on the sandbox; this is the baseline,
+# one job at a time. Not part of test-components.
+test-wrapper-soc:
+	@echo "=== The mailbox programs through the TinyTapeout pins (RTL) ==="
+	@bash scripts/gl/build_isa.sh PARTS=D OUT=$(BUILD_DIR)/wrapper_soc TOOLCHAIN=$(TOOLCHAIN)
+	@for l in D10:10.0 D20:20.0; do \
+		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$(BUILD_DIR)/wrapper_soc/list.$${l%%:*} \
+			TCLK=$${l##*:} OUT=$(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*} JOBS=1 > /dev/null; \
+		cat $(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*}/summary; \
+	done; ! grep -qE '^(FAIL|TIMEOUT) [1-9]' $(BUILD_DIR)/wrapper_soc/rtl-D10/summary $(BUILD_DIR)/wrapper_soc/rtl-D20/summary
 
 # One tt_pins run on a gate-level netlist (the pnl from the harden, or its nl),
 # the local smoke only: every set runs on a bigger machine through
