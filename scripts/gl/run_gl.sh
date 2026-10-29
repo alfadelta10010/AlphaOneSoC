@@ -2,7 +2,7 @@
 # Runs a list of programs through tb/tb_tt_um.v on a gate-level netlist (or the RTL).
 #
 #   run_gl.sh NETLIST=<pnl.v> | RTL=1   LIST=<list file> OUT=<run dir>
-#             [JOBS=<n>|auto] [BASE=<RTL run dir>] [ONLY=<regex>] [PDK_ROOT=<dir>] [CELLS=<dir>]
+#             [JOBS=<n>|auto] [TCLK=<ns>] [BASE=<RTL run dir>] [ONLY=<regex>] [PDK_ROOT=<dir>] [CELLS=<dir>]
 #
 # LIST lines are `name|hex|plusargs` (build_isa.sh). The hex is looked up in HEXDIR
 # (default: the list's own directory/hex); @RUN@ in the plusargs is OUT.
@@ -23,6 +23,7 @@ JOBS=${JOBS:-auto}; DEFMAX=${DEFMAX:-5000000}; WALL=${WALL:-14400}
 Q3DONE=${Q3DONE:-$HOME/regr/eqy/runs/q3/RUN_DONE}
 HEXDIR=${HEXDIR:-$(dirname "$LIST")/hex}
 LIST=$(realpath "$LIST"); HEXDIR=$(realpath "$HEXDIR"); [ -n "${BASE:-}" ] && BASE=$(realpath "$BASE")
+TCLKDEF=""; [ -n "${TCLK:-}" ] && TCLKDEF="-DTCLK_NS=$TCLK"   # the bench's clock period (part D20: 20.0)
 PDKV=${PDKV:-8afc8346a57fe1ab7934ba5a6056ea8b43078e71}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 t0=$SECONDS
@@ -40,7 +41,7 @@ else
 fi
 if [ ! -e "$OUT/done.compile" ]; then
   log "compile ($DEFS)"
-  $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
+  $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
     || { log "COMPILE FAILED"; exit 1; }
   touch "$OUT/done.compile"; log "compiled"
 fi
@@ -70,15 +71,15 @@ done < "$LIST"
 wait
 { echo "run $OUT  list $LIST  wall $((SECONDS - t0)) s"
   for v in PASS FAIL TIMEOUT; do echo "$v $(cat "$OUT"/*.verdict | grep -c "^$v")"; done
-  # isa/sig PASS must show the power-off seen at the pins (tb prints POWEROFF); a PASS without it counts as FAIL
+  # isa/sig/soc PASS must show the power-off seen at the pins (tb prints POWEROFF); a PASS without it counts as FAIL
   pm=0; pn=0
   for f in "$OUT"/*.verdict; do n=$(basename "$f" .verdict)
-    if grep -q '^PASS' "$f" && grep -qE '^PASS tb_tt_um (isa|sig) ' "$OUT/$n.log"; then
+    if grep -q '^PASS' "$f" && grep -qE '^PASS tb_tt_um (isa|sig|soc) ' "$OUT/$n.log"; then
       pn=$((pn + 1)); if grep -q '^POWEROFF seen at cycle' "$OUT/$n.log"; then pm=$((pm + 1)); else echo "FAIL (no POWEROFF line): $n" >> "$OUT/summary.nopo"; fi
     fi
   done
   echo "poweroff-logged: $pm of $pn"
-  [ "$pm" -eq "$pn" ] || { echo "FAIL: $((pn - pm)) isa/sig PASS without a POWEROFF line:"; sed 's/^/  /' "$OUT/summary.nopo"; }
+  [ "$pm" -eq "$pn" ] || { echo "FAIL: $((pn - pm)) isa/sig/soc PASS without a POWEROFF line:"; sed 's/^/  /' "$OUT/summary.nopo"; }
   rm -f "$OUT/summary.nopo"
   echo "known-labelled: $(grep -l ' known:' "$OUT"/*.verdict 2>/dev/null | wc -l)"
   echo "slowest: $(for f in "$OUT"/*.verdict; do echo "$(awk '{print $4}' "$f") $(basename "$f" .verdict)"; done | sort -rn | head -1)"
