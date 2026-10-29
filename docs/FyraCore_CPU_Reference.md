@@ -139,12 +139,13 @@ wire [31:0] mret_target = csr_mepc;
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, the `*_legal` write values and the post-write value `wval` (section 2.3). |
 | `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
-| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO. Boots from flash (0x2000_0000). |
+| `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO, syscon. Boots from flash (0x2000_0000). |
 | `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
 | `mem_ctrl.v` | `mem_ctrl` | Joins the fetch and data ports onto the QSPI engine: data-first arbitration, chip select from the address, PSRAM fetch split at 1 KB pages. |
 | `qspi_ctrl.v` | `qspi_ctrl` | QSPI engine for the TinyTapeout QSPI Pmod: PSRAMs in QPI mode (0x0B read, 0x38 write), flash unchanged (0xEB quad I/O read, command on IO0; never written), SCK = clk/2, late read sampling with an `rd_late` strap, a start-up sequence that resets the Pmod's devices and takes them out of any QPI or continuous-read mode another design left them in. |
 | `uart.v` | `uart` | 16550-compatible UART at 0x1000_0000: byte registers, fixed 8N1, no FIFOs (TX back-pressure, RTS# flow control), break send (LCR.SBC) and detect (LSR.BI), polled. |
 | `gpio.v` | `gpio` | GPIO OUT/IN at 0x1001_0000 and a mode-3 SPI transmitter for the OLED, with write back-pressure while a byte shifts. |
+| `syscon.v` | `syscon` | Register block at 0x1002_0000: reboot and power-off (FINISH, QEMU sifive_test codes), reset cause, boot mode, chip ID, `rd_late` strap, and a DesignWare-layout (`snps,dw-wdt`) watchdog at +0x100 that reboots the SoC through the same path. Generates `rst_soc`, the reset of every other SoC block. |
 | `regs.v` | `regs` | Generic register module. Not instantiated. |
 
 ### 3.2 Testbench Files (`tb/`)
@@ -153,7 +154,7 @@ wire [31:0] mret_target = csr_mepc;
 |---|---|
 | `tb_rivercore.v` | Lockstep testbench for the verification flow. Emits a Spike-format commit log; CSR values are printed from `cpu.csr_wval`. Watchdogs: `+MAX_INSTR`, `+MAX_CYCLES`, spin detection. |
 | `tb_cpu.v` | Older integration testbench used by `make asm` / `scripts/run_asm_test.sh`. |
-| `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook. Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
+| `memory_model.v` | 16 MB of PSRAM at 0x8000_0000, the flash window reading zeros, CLINT and a testbench-only MEIP hook (0x0200_8000). Wait states (`+IMEM_WAIT`, `+DMEM_WAIT`, `*_RANDOM`, `+MEM_SEED`), what read data carries while not ready (`+NOTREADY_DATA` = X / zeros / garbage), and a handshake checker that stops the run if the core withdraws or changes an outstanding request. |
 | `qspi_pmod_model.v` | Behavioural QSPI Pmod (16 MB flash on CS0, PSRAMs on CS1/CS2). Stops the run on any command `qspi_ctrl` should not send, a flash mode byte with M5-4 = 10, PSRAM traffic before its 66h/99h reset or within tRST of it, bus contention, a tCEM/tCPH violation, or an SCK period or high/low time too short for the command. Takes the raw pins with their output enable and models released ones (chip selects pulled up, SCK floating), so a chip select falling before SCK is driven low fails. `+QSPI_DELAY` device delay and `+QSPI_HOLD` output hold (the pins read X between them); hand-over states `+PSRAM_QPI`, `+PSRAM_A_QPI`/`+PSRAM_B_QPI`, `+FLASH_CRM`, `+FLASH_DCRM`, `+FLASH_QPI`; `+PSRAM_WRAP`. |
 | `req_hold_check.v` | Hold-until-done checker for a request handshake. The SoC build (`-DSOC_TB`) checks the core's two ports, the data port at `mem_ctrl` and `mem_ctrl`'s requests to `qspi_ctrl`; `tb_qspi*` check the last. |
 | `tb_qspi.v` | `mem_ctrl` + `qspi_ctrl` against the Pmod model, including a store aimed at flash that must select no chip; `tb_qspi_stress.v` drives core-shaped request streams, with `+RESETS` dropping resets into them (`make test-qspi`). |
@@ -180,12 +181,12 @@ Address Range               Device      Size    Attributes
 0x0C00_0000                 PLIC        -       reserved, not implemented (faults)
 0x1000_0000 - 0x1000_FFFF   UART        64 KB   data only (src/uart.v)
 0x1001_0000 - 0x1001_FFFF   GPIO        64 KB   data only (src/gpio.v)
-0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only, reserved (reads 0)
+0x1002_0000 - 0x1002_FFFF   syscon      64 KB   data only (src/syscon.v; watchdog at +0x100)
 ```
 
 The core only knows the map through the PMA parameters: `PMA_ROM_*` (fetch and plain loads; a store, AMO or SC is a store access fault and an LR a load access fault), `PMA_RAM_*` (everything; the only window LR/SC may use), `PMA_IO0_*` and `PMA_IO1_*` (data only). Any other address raises an access fault (cause 1/5/7). PSRAM A and B are two 8 MB chips used contiguously; `addr[23]` picks the chip. The reset PC is the `boot_addr` input (section 10); the SoC ties it to 0x2000_0000, so it always boots from flash. SoC design, boot and QSPI details: `docs/soc-architecture.md`.
 
-The verification testbench uses these windows for flash and PSRAM and boots from PSRAM. It still overrides the CLINT window to Spike's 0xC0000 aperture (0x0200_0000-0x020B_FFFF) and switches IO1 off, because Spike has no device there.
+The verification testbench uses these windows for flash and PSRAM and boots from PSRAM. It narrows the CLINT window to the 48 KB Spike maps (0x0200_0000-0x0200_BFFF; the SoC's is 64 KB and reads 0 above the registers) and switches IO1 off, because Spike has no device there.
 
 ### CLINT Register Map (offsets from 0x0200_0000)
 
@@ -389,7 +390,8 @@ LR/SC to an IO window is an access fault (no reservation set there); an AMO to a
 
 ### 8.5 WFI
 
-- M-mode (or U-mode with TW = 0): WFI retires and sets `wfi_active`, stalling the next instruction until an individually enabled interrupt is pending (regardless of MIE). If no source is enabled in `mie`, WFI is a NOP. On wake, a taken interrupt's mepc is the instruction after the WFI.
+- M-mode: WFI retires and sets `wfi_active`, stalling the next instruction until an individually enabled interrupt is pending (regardless of MIE). If no source is enabled in `mie`, WFI is a NOP. On wake, a taken interrupt's mepc is the instruction after the WFI.
+- U-mode with TW = 0: WFI retires as a NOP and never waits (`ex_is_wfi` requires M-mode). Priv 3.3.3 allows WFI to be a NOP, and with no S-mode TW = 0 permits it in U-mode (3.1.6.6). U-mode software that idles in a WFI loop spins instead of sleeping; M-mode Linux is unaffected.
 - U-mode with TW = 1: illegal instruction.
 
 ---

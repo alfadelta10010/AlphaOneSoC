@@ -9,6 +9,12 @@
 # Modes: induct (k-induction, PROVED) or bmc (bounded from reset, BOUNDED;
 # core_req is not inductive without internal invariants). The core harnesses
 # read tb/formal/rf_top_stub.v instead of src/rf_top.v (free read data).
+# Mode struct (soc_rst_sync) is not a SAT proof: the SoC is flattened and the
+# fan-out cone of rst_soc is walked through buffers and logic but not through
+# flops, $mem* cells or latches, which end the walk; it is FAILED if the cone
+# reaches the reset, set or load port of an asynchronous flop or latch ($adff,
+# $adffe, $aldff, $aldffe, $dffsr, $dffsre, $adlatch, $dlatchsr, $sr), PROVED
+# (structural) otherwise. rst_soc is meant as a synchronous reset only.
 # Prints PROVED, BOUNDED or FAILED per harness; exits 1 if any failed. FAILED
 # means yosys finished with a counterexample (or, for induct, hit the depth
 # limit); a yosys error or timeout gives no verdict and prints ERROR instead:
@@ -21,20 +27,65 @@ DEPTH="${DEPTH:-12}"
 OUT="${OUT_DIR:-$ROOT/build}"
 mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
+SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
-declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" )
-declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" )   # read from $HERE
+declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC" )
+declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req)
+declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct )
+declare -A BDEPTH=( [syscon_comb]=24 )     # per-harness bmc depth; default $BMC_DEPTH
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req syscon_comb syscon_gate soc_rst_sync)
 bad=0
 err=0
 for n in "${names[@]}"; do
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
   for f in ${EXTRA[$n]:-}; do srcs="$srcs $HERE/$f"; done
   log="$OUT/formal_${n}.log"
+  if [ "${MODE[$n]}" = struct ]; then
+    json="$OUT/formal_${n}.json"
+    rm -f "$json"
+    timeout 1800 yosys -p "read_verilog -sv $srcs; prep -top alphaone_soc; flatten; opt_clean; write_json $json" > "$log" 2>&1
+    if [ ! -s "$json" ]; then echo "ERROR $n: yosys gave no netlist (log: $log)"; err=1; continue; fi
+    out=$(python3 - "$json" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+top = d["modules"]["alphaone_soc"]
+seed = {b for b in top["netnames"]["rst_soc"]["bits"] if isinstance(b, int)}
+ASYNC = {"$adff", "$adffe", "$aldff", "$aldffe", "$dffsr", "$dffsre", "$adlatch", "$dlatchsr", "$sr"}
+RST_PORTS = {"ARST", "SET", "CLR", "ALOAD", "AD"}
+SEQ = ("$dff", "$sdff", "$adff", "$aldff", "$dffsr", "$mem", "$ff", "$dlatch", "$adlatch", "$dlatchsr", "$sr")
+seen, work, hits = set(seed), list(seed), []
+while work:
+    b = work.pop()
+    for name, c in top["cells"].items():
+        for port, bits in c["connections"].items():
+            if b not in bits or c["port_directions"].get(port) != "input":
+                continue
+            if c["type"] in ASYNC and port in RST_PORTS:
+                hits.append("%s (%s) port %s" % (name, c["type"], port))
+            if c["type"].startswith(SEQ):
+                continue                      # the cone stops at a flop
+            for oport, obits in c["connections"].items():
+                if c["port_directions"].get(oport) == "output":
+                    for ob in obits:
+                        if isinstance(ob, int) and ob not in seen:
+                            seen.add(ob); work.append(ob)
+if hits:
+    print("HIT " + "; ".join(sorted(set(hits))))
+else:
+    print("CLEAN %d nets" % len(seen))
+PYEOF
+)
+    case "$out" in
+      CLEAN*) echo "PROVED $n (structural)";;
+      HIT*)   echo "FAILED $n: ${out#HIT } (log: $log)"; bad=1;;
+      *)      echo "ERROR $n: no verdict (log: $log)"; err=1;;
+    esac
+    continue
+  fi
+  bd="${BDEPTH[$n]:-$BMC_DEPTH}"
   if [ "${MODE[$n]}" = bmc ]; then
-    sat="sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $BMC_DEPTH"
+    sat="sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd"
   else
     sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps $DEPTH"
   fi
@@ -42,9 +93,9 @@ for n in "${names[@]}"; do
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
   if [ "${MODE[$n]}" = bmc ]; then
     if grep -q "SAT proof finished - no model found: SUCCESS" "$log"; then
-      echo "BOUNDED $n (no counterexample within $BMC_DEPTH steps of reset)"
+      echo "BOUNDED $n (no counterexample within $bd steps of reset)"
     elif grep -q "SAT proof finished - model found: FAIL" "$log"; then
-      echo "FAILED $n: counterexample within $BMC_DEPTH steps (log: $log)"
+      echo "FAILED $n: counterexample within $bd steps (log: $log)"
       grep -E "failed|ERROR" "$log" | tail -3; bad=1
     else
       echo "ERROR $n: no verdict (log: $log)"; err=1

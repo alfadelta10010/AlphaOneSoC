@@ -1,7 +1,7 @@
 # Every access shape the core can make, aimed at the peripherals: byte,
 # halfword and word loads and stores, AMOs, the 64 KB window aliases,
-# misaligned accesses (which trap before reaching the bus), and the syscon
-# window. The core drives dmem_be on loads too, so a load's width decides
+# misaligned accesses (which trap before reaching the bus), and a syscon word no
+# hardware implements (the mailbox's spare word). The core drives dmem_be on loads too, so a load's width decides
 # which registers it touches: only a load covering offset 0 pops RBR, only
 # one covering offset 5 clears OE.
 #
@@ -14,19 +14,20 @@
 .macro RP_SEND byte
     li   t0, \byte
     VALUE t0
-    EVENT 0x10
+    EVENT_P 0x10
     WAIT_LSR s0, LSR_DR
 .endm
 .macro PINS v
     li   t0, \v
     VALUE t0
-    EVENT 0x20
+    EVENT_P 0x20
 .endm
 
     .section .text.init
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, UART
     li   s1, GPIO
     la   t0, trap
@@ -78,10 +79,15 @@ _start:
     lbu  t0, LCR(s0)
     CHECK t0, 0x80, 0x113
     lhu  t0, 0(s0)
-    CHECK t0, 0x0004, 0x114      # DLM DLL = UART_DIV_RESET
+    CHECK t0, UART_DIV_RESET, 0x114   # DLM DLL = UART_DIV_RESET
+#ifdef MB_UART
+    # a DLL write reloads the baud counter: let 'B' finish first, or its bit
+    # edges move and the RP2350 model flags them
+    WAIT_LSR s0, LSR_TEMT
+#endif
     lbu  t0, IIR(s0)
     CHECK t0, 0x01, 0x115        # IER was cleared by the word store
-    li   t0, 0x0004
+    li   t0, UART_DIV_RESET
     sh   t0, 0(s0)               # DLL/DLM rewritten, no THR write (DLAB)
     sb   zero, LCR(s0)
     lbu  t0, IER(s0)
@@ -144,8 +150,10 @@ _start:
     lbu  t0, RBR(s0)
     CHECK t0, 'm', 0x132
 
-    # ---- syscon reads 0 ----
-    lw   t0, 0x10(s11)
+    # ---- a syscon word no hardware implements reads 0, ignores writes ----
+    li   t0, 0x5A5A5A5A
+    sw   t0, MB_SPARE(s11)
+    lw   t0, MB_SPARE(s11)
     CHECK t0, 0, 0x138
 
     # ---- GPIO ----
@@ -170,7 +178,7 @@ _start:
     lw   t1, G_OUT(s1)
     CHECK t1, 0x81, 0x143
     PINS 0x81
-    EVENT 0x21                   # IN = 0xA4 on bits 7-4, 2-1
+    EVENT_P 0x21                   # IN = 0xA4 on bits 7-4, 2-1
     lw   t0, G_IN(s1)
     CHECK t0, 0xAC, 0x144        # + RX idle (bit 3), strap 0 (bit 0)
     lb   t0, G_IN(s1)
@@ -215,7 +223,7 @@ _start:
     CHECK t1, 0x4, 0x162
     li   t0, 0x48
     sw   t0, G_OUT(s1)           # CS# low: the OLED model captures from here
-    EVENT 0x30
+    EVENT_P 0x30
     li   t0, 0x81
     sw   t0, G_DATA(s1)
     addi t2, s1, G_DATA

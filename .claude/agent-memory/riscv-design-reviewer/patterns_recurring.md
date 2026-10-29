@@ -33,6 +33,13 @@ Bus / SoC
 - Device datasheets carry hidden state (PSRAM QPI/wrap, flash CRM/QPI/dual-CRM/BUSY) that survives a design
   reset; other TT designs set it. Always ask who establishes device state.
 - Back-pressure on one register orders only writes to THAT register: sideband GPIO writes race the shifter.
+- New register/mailbox offsets: check they fit a 12-bit signed store/load offset from the base register the
+  programs already hold (+0xF04 from s11 = SYSCON does not assemble, 2026-10-23). Assemble a use before fixing a map.
+- A new reset domain: list every block's .rst and say why it is on it; a sticky register on the wrong reset
+  is wiped silently, a block on the wrong one runs through the reboot. Lockstep benches cannot see either.
+- A sync reset made from flops (rst_soc = rst | rq | off) reaches the domain's flops one edge after its cause:
+  any one-cycle event in that domain (watchdog fire, SA-009, 2026-10-24) must be gated by the reset, or
+  "cannot X while held" is false for the first held cycle. Probe: aim the event at the cycle after the store.
 
 Verification blind spots
 - Comments claiming "matches Spike" are often unverified -- probe Spike first.
@@ -83,6 +90,8 @@ Verification blind spots
 - Hard-macro behaviour the design relies on but the precedents never exercise (rf_top same-edge
   write-through, 2026-10-11): the behavioural model is the only evidence, and the GL compare reuses it.
   Mutate the MODEL (e.g. read-first) to find what depends on it, then check how the precedents sequence it.
+- The directed .ref suite is mostly `.option norvc`: a model of a C-path feature (fetch reuse, 2026-10-29) hit 0.57%
+  of its instructions, 72/91 tests never. Count the feature's events per test before trusting a green suite.
 - Macro placement "from the precedent" with a different location: re-derive the PDN alignment
   (isolated power-pin stubs vs strap offset/pitch) and the routing wall (OBS layers) for the new spot.
 
@@ -96,3 +105,5 @@ PPA / area claims
 - Unbuffered pre-layout STA is noise (a dead-code commit moved it 4.8 ns); only post-CTS/signoff
   numbers from the real flow can rank timing.
 
+- New test not RF_X-clean -> mutation runner's +rfx second pass reports EVERY plain-suite survivor as killed by
+  that test (WO-27 fr_misa, 2026-10-30). Check: run each new test on the UNMUTATED RTL with +RF_X +RF_COLLIDE_X.

@@ -11,3 +11,7 @@
   > 175 s locally). The hold-until-ready rule is 1-inductive (full proof).
   muldiv handshake formal waived (tb_muldiv checks it per clock). No
   encoded FSM in fyracore, so no one-hot proofs apply.
+- W-004 (2026-10-25, user decision on review F1) The watchdog is "never
+  early unless software writes mtime": writes that toggle the tapped bit
+  are ticks (probe: 3 writes fire it 10 clocks after a kick). No test, no
+  prescaler (+0.06 t). Linux never writes mtime.

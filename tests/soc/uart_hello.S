@@ -12,6 +12,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, UART
     EVENT 1
     la   a0, hello

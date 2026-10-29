@@ -3,7 +3,7 @@
 // The SoC's memory map, as far as the core-level testbench needs it:
 //   0x8000_0000 – 0x80FF_FFFF : PSRAM (16 MB) — the program, data and stack
 //   0x2000_0000 – 0x20FF_FFFF : flash (16 MB) — reads as zeros, never written
-//   0x0200_0000 – 0x020B_FFFF : CLINT aperture — see CLINT_TOP below
+//   0x0200_0000 – 0x0200_BFFF : CLINT — see CLINT_TOP below
 //
 // The core's PMA check refuses everything else before it reaches this
 // model, so PSRAM is recognised by address bit 31 alone and indexed by
@@ -144,22 +144,11 @@ module memory_model #(
 
     // ── Address decode ───────────────────────────────────────────────────────
     //
-    // The CLINT *aperture* is 0xC0000 wide, not the 48 KB the register block
-    // needs, because that is what the reference model does and the two have to
-    // agree about which addresses exist. Spike maps CLINT_SIZE = 0xC0000 from
-    // the CLINT base and ignores the size in its device tree: measured on
-    // spike 1.1.1-dev, a load or store anywhere in 0x02000000-0x020BFFFF
-    // succeeds, returning the register at 0x0000/0x4000/0xBFF8/0xBFFC and
-    // plain zeros everywhere else, and 0x020C0000 is the first address that
-    // faults.
-    //
-    // Zeros, not aliases: clint_inst is addressed with a 16-bit offset, so
-    // handing it 0x0201_0000 would read back msip. Spike returns 0 there, so
-    // anything at or above offset 0x1_0000 is answered with 0 here and its
-    // writes are dropped -- CLINT_REG_TOP is the line between the two.
+    // Spike 5a760667's CLINT map (48 KB), probe 2026-10-23: every offset in it
+    // reaches clint_inst, which reads 0 and drops writes outside its
+    // registers, as Spike does.
     localparam CLINT_BASE    = 32'h0200_0000;
-    localparam CLINT_TOP     = 32'h020B_FFFF;  // = CLINT_BASE + 0xC0000 - 1
-    localparam CLINT_REG_TOP = 32'h0200_FFFF;  // highest offset clint_inst sees
+    localparam CLINT_TOP     = 32'h0200_BFFF;  // = CLINT_BASE + 0xC000 - 1
 
     // Software-triggered machine external interrupt.
     //
@@ -176,19 +165,21 @@ module memory_model #(
     // as inert for the whole regression, while directed tests can reach the
     // MEIP path.
     //
+    // The address is inside the CLINT window: the mtimecmp slot of hart 2048,
+    // which Spike answers with 0 and whose writes it drops; no test, generator
+    // or Linux driver uses it; the core reaches it because it is inside IO0.
+    //
     // NOTE: a test that uses this will NOT match Spike until a matching device
     // plugin exists on the Spike side. It is a hook for DUT-only directed
     // tests, not for lockstep comparison.
-    localparam EXTIRQ_ADDR = 32'h0200_C000;
+    localparam EXTIRQ_ADDR = 32'h0200_8000;
 
     wire in_extirq = (dmem_addr == EXTIRQ_ADDR);
     wire in_clint  = (dmem_addr >= CLINT_BASE) && (dmem_addr <= CLINT_TOP);
-    // Only the bottom 64 KiB of the aperture reaches the CLINT registers; the
-    // rest of it reads 0 and swallows writes, which is what spike does.
-    // The MEIP hook is carved out explicitly: widening the aperture put its
-    // address inside it, and without this it would answer from clint_inst's
-    // default case (0) and lose its read-back.
-    wire in_clint_reg = in_clint && (dmem_addr <= CLINT_REG_TOP) && !in_extirq;
+    // The MEIP hook is carved out of the CLINT window explicitly; without this
+    // it would answer from clint_inst's default case (0) and lose its
+    // read-back.
+    wire in_clint_reg = in_clint && !in_extirq;
     wire in_mem    = dmem_addr[31];            // PSRAM; flash is never written
 
     reg extirq_reg;
@@ -285,12 +276,11 @@ module memory_model #(
         .mtime_out(mtime_out)
     );
 
-    // --- Data read mux: MEIP hook, CLINT registers, CLINT padding, or SRAM ---
-    // in_extirq is first because its address lies inside the CLINT aperture.
+    // --- Data read mux: MEIP hook, CLINT registers, or SRAM ---
+    // in_extirq is first because its address lies inside the CLINT window.
     // Masked by dmem_ready for the same reason as imem_rdata above.
     wire [31:0] dmem_word = in_extirq    ? {31'b0, extirq_reg} :
-                            in_clint_reg ? clint_rdata :
-                            in_clint     ? 32'h0000_0000 : mem_rdata;
+                            in_clint_reg ? clint_rdata : mem_rdata;
     wire [31:0] notready_dword = (notready_data == 1) ? 32'h0000_0000 :
                                  (notready_data == 2) ? ~lfsr :
                                                         32'hxxxx_xxxx;
@@ -302,7 +292,8 @@ module memory_model #(
     //   * a fetch is requested only inside flash or PSRAM (no fetch from an IO
     //     window or an unmapped address), at a halfword-aligned address;
     //   * a data request is word-aligned and inside flash, PSRAM or the CLINT
-    //     aperture (the core's PMA check refuses everything else first), and
+    //     window (0x0200_0000-0x0200_BFFF) (the core's PMA check refuses
+    //     everything else first), and
     //     a write never goes to flash;
     //   * dmem_be is the lanes of a byte (one lane), a halfword (lanes 1:0 or
     //     3:2) or a word, for loads too;

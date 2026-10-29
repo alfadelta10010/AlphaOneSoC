@@ -23,6 +23,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, UART
     li   s1, GPIO
     li   s3, MTIMECMP
@@ -40,6 +41,10 @@ _start:
     # ---- A: THR ----
     la   t0, a_after
     sw   t0, MB_VALUE2(s11)
+#ifdef MB_UART
+    li   t1, MB_LOG_BASE
+    sw   t0, 0x7F0(t1)              # the part's store-completion address, for the pins bench
+#endif
     EVENT 1
     li   s6, 0                   # timer delay, clocks
     li   s7, 12
@@ -69,6 +74,10 @@ a_after:
     sw   t0, G_OUT(s1)           # RES# high, CS# low: the OLED model listens
     la   t0, b_after
     sw   t0, MB_VALUE2(s11)
+#ifdef MB_UART
+    li   t1, MB_LOG_BASE
+    sw   t0, 0x7F4(t1)              # the part's store-completion address, for the pins bench
+#endif
     EVENT 2
     li   s6, 0
     li   s7, 16
@@ -100,13 +109,17 @@ b_after:
     # ---- C: amoswap.w to THR ----
     la   t0, c_after
     sw   t0, MB_VALUE2(s11)
+#ifdef MB_UART
+    li   t1, MB_LOG_BASE
+    sw   t0, 0x7F8(t1)              # the part's store-completion address, for the pins bench
+#endif
     EVENT 3
     li   s6, 100
     li   s7, 9
     li   s9, 'a'                 # the byte the RP2350 sends next
 c_loop:
     WAIT_LSR s0, LSR_TEMT
-    EVENT 4                      # the RP2350 sends s9
+    EVENT_P 4                    # the RP2350 sends s9
     WAIT_LSR s0, LSR_DR
     addi s8, s8, 1
     li   t6, MTIME
@@ -143,6 +156,16 @@ handler:
     sw   a3, MB_VALUE(s11)       # checked by the testbench
     li   a4, -1
     sw   a4, 0(s3)               # mtimecmp far off again: MTIP drops
+#ifdef MB_UART
+    csrw mscratch, a3            # log mepc for the pins bench: word 0 = count, entry n at +4+4n
+    lui  a3, 0x80FFF             # MB_LOG_BASE
+    addi a4, s5, 1
+    sw   a4, 0(a3)
+    slli a4, s5, 2
+    add  a4, a4, a3
+    csrr a3, mscratch
+    sw   a3, 4(a4)
+#endif
     addi s5, s5, 1
     mret
 1:  mv   a7, a3

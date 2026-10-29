@@ -45,3 +45,48 @@
   files gls_model/{primitives,sky130_fd_sc_hd}.v + pnl + src/rf_top.v + the
   two models + tb_tt_um.v; earlier GL runs: PASS, GL = RTL + 1 cycle.
   netlists/ in the repo is 2024-era and unrelated.
+- Spike 5a760667 CLINT (probe 2026-10-23, build/wo/probes/clint-offsets.S):
+  offsets 0x0000-0xBFFF answer (hart-0 msip/mtimecmp/mtime; every other
+  offset reads 0, sw/sh/sb dropped, mtime_hi writable); 0xC000 and up fault
+  (load 5, store 7, mtval = address). Same with or without
+  plugins/helpers/spike-fyracore.dtb: Spike ignores the clint reg size. The
+  committed dtb is byte-identical to `dtc` of the .dts. Spike has
+  `--wfi-as-nop` (all modes; not usable suite-wide: FyraCore's M-mode WFI waits).
+- tb_soc_periph's req_hold_check instances are reset by the bench's rst only:
+  any SoC-internal reset (syscon reboot/power-off) cuts an outstanding fetch
+  and they $fatal. WO-12 resets them with `rst || done`; tb_syscon_soc
+  (WO-15) with `rst || soc.rst_soc`.
+- Review lesson (2026-10-24): aim directed boundary cases at fire-1 and
+  fire+1, not only at the predicted cycle; a model rule never exercised at
+  its edge ("frozen while held") hid a DUT/spec split. Re-read my own WO's
+  exclusions (sweep data sets) as test targets.
+- GL facts (2026-10-25): TT's GL test Makefile (sc-3x4/test) defines
+  GL_TEST FUNCTIONAL USE_POWER_PINS SIM UNIT_DELAY=#1 and reads the pnl
+  netlist as test/gate_level_netlist.v; rf_top.v's power ports are under
+  GL_TEST. GL sim ~8 us simulated per wall second (~500 clocks/s). Sandbox
+  read-only ssh works: `timeout 20 ssh -o BatchMode=yes sandbox '...'`.
+- EQY 0.62 in librelane:3.0.14 (2026-10-26, tested in sandbox
+  ~/regr/eqy/plan-exp): [recode] does NOT cut the gate-side recoded
+  register (gate one-hot $dff stays inside every downstream partition) ->
+  unusable for FSM recodes; use nomatch + reset `init` attrs on both sides
+  + sby abc pdr (honours init; sat cannot find the onehot=E(bin)
+  invariant). The container lacks make (coder mounts host make via a
+  shim) AND awk (EQY's sby run.sh uses awk '{print $1}' -> every sby
+  verdict reads ERROR); strategies.mk caches a sat FAIL as pdr FAIL. Run
+  docker as ~/regr/eqy/plan-exp/dkp.sh (shims in plan-exp/bin).
+- Yosys setundef with a wire selection does NOT scope the x's that `cutpoint -undef`
+  leaves on module connects: `cutpoint -undef A B; setundef -zero @A; setundef -one @B`
+  zeroes both. Tie per value instead (cutpoint one set, unscoped setundef, then the next set).
+  Guard it: gold_pre.il must hold no other x constant (WO-24 q1 tied misa 1-bits to 0).
+- EQY FSM cut point (2026-10-28, sandbox ~/regr/eqy/plan-exp3): yosys has no
+  "add cell" command, so the cut is an RTLIL text patch (fsmcut.py) +
+  instance of a Verilog module + flatten; `rename -hide w:fsmcutI_*` after
+  flatten or the instance port names become public aliases of the cut. In the
+  gate RTLIL most FSM bit names are ALIASES (`connect \soc.qspi.state[0]
+  \net2205`): the flop's Q is on the netNNN name, so follow module-level
+  connects. RTLIL needs wires declared before use (insert after `module`).
+  EQY sat strategy runs `formalff -ff2anyinit` on the gate and
+  `sat -set-init-undef`: init attrs do not reach sat, only sby/pdr.
+  `partition.list` lines are "module partition : nets" (take field 2).
+  gate sat invariant: `sat -tempinduct` honours init attrs ("Import
+  set-constraint from init attribute"). EQY setup for this design: 30 s.

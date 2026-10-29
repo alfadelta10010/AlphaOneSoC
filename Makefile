@@ -38,9 +38,9 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-seeds \
-        test-qspi test-uart test-gpio test-soc-periph \
-        test-wrapper asm \
+        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
+        test-qspi test-uart test-gpio test-soc-periph test-syscon-soc \
+        test-wrapper test-wrapper-soc test-gl asm \
         rivercore-build rivercore-test
 
 all: test-all
@@ -57,12 +57,15 @@ help:
 	@echo "  make test-controller   Run controller testbench"
 	@echo "  make test-regfile      Run register file testbench"
 	@echo "  make test-csr          Run CSR testbench"
+	@echo "  make test-syscon       Run syscon + watchdog testbench"
 	@echo "  make test-compressed   Run compressed decoder testbench"
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
 	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
+	@echo "  make test-syscon-soc   Run syscon (reboot, strap, fail, watchdog) through the whole SoC"
 	@echo "  make test-wrapper      Run the TinyTapeout top level, pins only"
+	@echo "  make test-gl NETLIST=.. PDK_ROOT=..  One tt_pins run on a gate-level netlist (smoke)"
 	@echo "  make test-components   Run all component tests"
 	@echo ""
 	@echo "CPU tests:"
@@ -156,11 +159,16 @@ test-clint: $(BUILD_DIR)
 	@$(IVERILOG) -o $(BUILD_DIR)/tb_clint $(SRC_DIR)/clint.v $(SRC_DIR)/csr.v $(TB_DIR)/tb_clint.v
 	@$(call run_tb,tb_clint)
 
+test-syscon: $(BUILD_DIR)
+	@echo "=== Testing syscon + watchdog ==="
+	@$(IVERILOG) -I $(TB_DIR) -o $(BUILD_DIR)/tb_syscon $(SRC_DIR)/syscon.v $(TB_DIR)/tb_syscon.v
+	@$(call run_tb,tb_syscon)
+
 # The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
 # Each bench prints its seed; rerun one failure with its +SEED=.
 SEEDS ?= 1 2 3 4 5 6 7 8
-SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_uart tb_gpio
-test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-uart test-gpio
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio
 	@for s in $(SEEDS); do for t in $(SEEDED); do \
 		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
 		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
@@ -218,6 +226,16 @@ test-gpio: $(BUILD_DIR)
 # from the QSPI Pmod model's flash with the demo board's devices on the pins
 # (RP2350 UART with CTS, SSD1331, keypad) -- tb/tb_soc_periph.v. A run fails
 # on a FAIL, ERROR or TIMEOUT line or a missing PASS; all runs go first.
+# `make test-soc-periph MB_UART=1` (and test-syscon-soc) build the programs with
+# -DMB_UART, as the pins bench does (tests/soc/periph.h): they send their cues and
+# values over the UART as well, the benches strip those frames from the stream
+# and follow the program's divisor (+MB_DIV), and every floor and check stays.
+# MB_DIV per program as in scripts/gl/build_isa.sh; the programs that run at the
+# reset divisor need none (4 here).
+define MB_FLAGS
+case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|syscon_reboot) d=;; *) d=1;; esac; \
+	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
+endef
 SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
@@ -225,18 +243,47 @@ test-soc-periph: $(BUILD_DIR)
 	@mkdir -p $(SOC_PERIPH_DIR)
 	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
-		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf || { bad=1; continue; }; \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 $$t.elf $$t.hex; \
-		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex > $$t.log 2>&1; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex $$pl > $$t.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_]+: ' $$t.log | head -6; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
+	done; exit $$bad
+
+# syscon through the whole SoC (tb/tb_syscon_soc.v): each tests/soc/syscon_*.S
+# program boots from the QSPI Pmod model's flash; the bench checks every syscon
+# load against its own model, every reboot's timing and pins, the strap path
+# and the watchdog. Each run is "<program> [plusargs]"; +TEST= and +FLASH_FILE=
+# are added here. A run fails on a FAIL, ERROR or TIMEOUT line or a missing
+# PASS; all runs go first.
+SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
+SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
+test-syscon-soc: $(BUILD_DIR)
+	@echo "=== Testing syscon through the SoC ==="
+	@mkdir -p $(SYSCON_SOC_DIR)
+	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(SYSCON_SOC_DIR)/sim -s tb_syscon_soc $(SRC_FILES) \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
+	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
+		set -- $$run; t=$$1; shift; n=$$((n+1)); \
+		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 $$t.elf $$t.hex || { bad=1; continue; }; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SYSCON_SOC_DIR)/$$t.hex $$pl "$$@" > $$t.$$n.log 2>&1; \
+		grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' $$t.$$n.log | head -40; \
+		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.$$n.log || ! grep -q '^PASS' $$t.$$n.log; then bad=1; fi; \
 	done; exit $$bad
 
 # The TinyTapeout top level through its pins alone (tb/tb_tt_um.v):
@@ -245,8 +292,10 @@ test-soc-periph: $(BUILD_DIR)
 #   default            2 ns device delay, ui_in[0] = 0 through reset
 #   QSPI_DELAY=19      just under one SCK period, which rd_late = 0 must take
 #   RD_LATE, 25 ns     ui_in[0] = 1 through reset: only rd_late = 1 reads this
+# then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
+# strap at 0 and at 1 (RD_LATE, 25 ns).
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
-                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/alphaone_soc.v \
+                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper
@@ -254,20 +303,62 @@ test-wrapper: $(BUILD_DIR)
 	@echo "=== Testing the TinyTapeout top level ==="
 	@mkdir -p $(WRAPPER_DIR)
 	@$(IVERILOG) -g2012 -o $(WRAPPER_DIR)/sim -s tb_tt_um $(WRAPPER_SRC) \
-		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_tt_um.v
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_tt_um.v
 	@cd $(WRAPPER_DIR) && \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/tt_pins.S -o tt_pins.elf && \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 tt_pins.elf tt_pins.hex && \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/tt_reboot.S -o tt_reboot.elf && \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 tt_reboot.elf tt_reboot.hex && \
 		for args in $(WRAPPER_RUNS); do \
 			$(VVP) -n sim +FLASH_FILE=$(CURDIR)/$(WRAPPER_DIR)/tt_pins.hex $$args > tt_pins.log 2>&1; \
 			grep -E '^(PASS|FAIL|ERROR|TIMEOUT)' tt_pins.log | head -6; \
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_pins.log || ! grep -q '^PASS' tt_pins.log; then exit 1; fi; \
+		done && \
+		n=0; for args in "" "$(QSPI_LATE)"; do \
+			n=$$((n + 1)); \
+			$(VVP) -n sim +FLASH_FILE=$(CURDIR)/$(WRAPPER_DIR)/tt_reboot.hex +TEST=reboot $$args > tt_reboot.$$n.log 2>&1; \
+			grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' tt_reboot.$$n.log | head -12; \
+			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_reboot.$$n.log || ! grep -q '^PASS' tt_reboot.$$n.log; then exit 1; fi; \
 		done
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-qspi test-uart test-gpio test-soc-periph test-wrapper
+# The 16 mailbox programs of tests/soc through the pins (tb_tt_um.v
+# +TEST=soc +PROG=<name>), on the RTL: scripts/gl/build_isa.sh PARTS=D builds
+# them with -DMB_UART and each one's divisor, run_gl.sh runs the two lists. The
+# same lists run on the hardened netlist on the sandbox; this is the baseline,
+# one job at a time. Not part of test-components.
+test-wrapper-soc:
+	@echo "=== The mailbox programs through the TinyTapeout pins (RTL) ==="
+	@bash scripts/gl/build_isa.sh PARTS=D OUT=$(BUILD_DIR)/wrapper_soc TOOLCHAIN=$(TOOLCHAIN)
+	@for l in D10:10.0 D20:20.0; do \
+		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$(BUILD_DIR)/wrapper_soc/list.$${l%%:*} \
+			TCLK=$${l##*:} OUT=$(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*} JOBS=1 > /dev/null; \
+		cat $(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*}/summary; \
+	done; ! grep -qE '^(FAIL|TIMEOUT) [1-9]' $(BUILD_DIR)/wrapper_soc/rtl-D10/summary $(BUILD_DIR)/wrapper_soc/rtl-D20/summary
+
+# One tt_pins run on a gate-level netlist (the pnl from the harden, or its nl),
+# the local smoke only: every set runs on a bigger machine through
+# scripts/gl/run_gl.sh. The cell models come from PDK_ROOT (ciel 8afc8346), or
+# from CELLS=<dir> holding primitives.v and sky130_fd_sc_hd.v.
+GL_DIR := $(BUILD_DIR)/gl
+test-gl:
+	@test -n "$(NETLIST)" || { echo "test-gl: NETLIST=<netlist.v> is required (PDK_ROOT=<dir> or CELLS=<dir> too)"; exit 2; }
+	@test -n "$(PDK_ROOT)$(CELLS)" || { echo "test-gl: PDK_ROOT=<dir> or CELLS=<dir> is required"; exit 2; }
+	@echo "=== tt_pins on $(NETLIST) ==="
+	@rm -rf $(GL_DIR)/smoke
+	@bash scripts/gl/build_isa.sh PARTS=A OUT=$(GL_DIR) TOOLCHAIN=$(TOOLCHAIN) > /dev/null
+	@bash scripts/gl/run_gl.sh NETLIST=$(abspath $(NETLIST)) PDK_ROOT=$(PDK_ROOT) CELLS=$(CELLS) \
+		IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$(GL_DIR)/list.A ONLY='^tt_pins\.0$$' JOBS=1 OUT=$(GL_DIR)/smoke
+	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
+	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 

@@ -14,10 +14,12 @@
  * that has nothing to do with the core. Dropping both nodes makes Spike fault
  * there exactly as the DUT's PMA check does.
  *
- * What this file CANNOT change, measured on spike 1.1.1-dev:
- *   * the CLINT's size. The reg size below is ignored; Spike always maps
- *     CLINT_SIZE = 0xC0000 from the base. tb_rivercore.v's PMA_IO0 window is
- *     sized to match that, not to match this node.
+ * What this file CANNOT change (the boot-ROM fact was measured on spike
+ * 1.1.1-dev):
+ *   * the CLINT's size. Spike ignores the reg size; 5a760667 maps 0xC000 from
+ *     the base (probe 2026-10-23, the same with this tree or Spike's own).
+ *     The node says 0xC000 so the tree documents what Spike does, and
+ *     tb_rivercore.v's PMA_IO0 window matches it.
  *   * the boot ROM at 0x1000. It is added at the hardcoded DEFAULT_RSTVEC
  *     after this tree is parsed, and it holds the reset vector, so it cannot
  *     be removed (see --disable-dtb) or relocated.
@@ -79,7 +81,7 @@
     clint@2000000 {
       compatible = "riscv,clint0";
       interrupts-extended = <&CPU0_intc 3 &CPU0_intc 7 >;
-      reg = <0x0 0x2000000 0x0 0xc0000>;
+      reg = <0x0 0x2000000 0x0 0xc000>;
     };
   };
 

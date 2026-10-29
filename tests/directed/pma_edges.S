@@ -6,9 +6,9 @@
 # goes there); loads one byte past each end and just below each start,
 # which must fault (cause 5, mtval the address). The CLINT is only touched
 # where both models agree: its last register, and past and below the
-# testbench's aperture -- Spike 5a760667 faults its aperture from offset
-# 0xC000 up, where the testbench's window (IO0_TOP, 0x020BFFFF) still
-# answers, an older Spike's layout. The handler copies mcause and mtval
+# window. The CLINT window is 0x0200_0000-0x0200_BFFF on both models
+# (Spike 5a760667's map; the testbench's IO0_TOP): its last byte reads, and
+# a load and a store at 0x0200_C000 fault (cause 5, 7). The handler copies mcause and mtval
 # into registers and skips the access.
   .option norvc
   .section .text.init
@@ -44,8 +44,10 @@ rvtest_entry_point:
   lb   a5, 0(s0)
   li   s0, 0x0200bffc           # mtime_hi, the CLINT's last register
   lw   s3, 0(s0)
-  li   s0, 0x020c0000           # past the testbench's CLINT aperture
-  lw   s4, 0(s0)
+  lbu  s6, 3(s0)                # the window's last byte, 0x0200bfff
+  li   s0, 0x0200c000           # the first byte past the window
+  lw   s4, 0(s0)                # cause 5 on both models
+  sw   t2, 0(s0)                # cause 7 on both models
   li   s0, 0x01fffffc           # below it
   lw   s5, 0(s0)
   li   t4, 1

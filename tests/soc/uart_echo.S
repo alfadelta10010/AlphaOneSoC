@@ -13,9 +13,10 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, UART
     la   a0, line
-    EVENT 1
+    EVENT_P 1
 1:  lbu  t0, 0(a0)
     beqz t0, 3f
 2:  lbu  t1, LSR(s0)
@@ -35,7 +36,7 @@ _start:
     lbu  t1, LSR(s0)
     CHECK t1, 0x60, 0x13
 
-    EVENT 2                      # "XYZ", flow control off
+    EVENT_P 2                      # "XYZ", flow control off
     DELAY 3000                   # three frames at divisor 4 are 1920 clocks
     lbu  t1, LSR(s0)
     CHECK t1, 0x63, 0x20
@@ -43,7 +44,7 @@ _start:
     CHECK t1, 'X', 0x21
     lbu  t1, LSR(s0)
     CHECK t1, 0x60, 0x22
-    EVENT 3
+    EVENT_P 3
     j    test_pass
     EPILOGUE
 

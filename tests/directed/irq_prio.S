@@ -1,6 +1,6 @@
 # Interrupt priority, Priv 3.1.9: with MEI, MSI and MTI all pending and
 # enabled, they are taken in the order MEI, MSI, MTI. All three are raised
-# while MIE = 0 -- MEIP through the testbench's MEIP hook at 0x0200C000
+# while MIE = 0 -- MEIP through the testbench's MEIP hook at 0x02008000
 # (tb/memory_model.v), MSIP through the CLINT's msip, MTIP by mtimecmp = 0
 # -- and then MIE is set. Each handler run clears its own source and
 # returns, so the next is taken at once. x10 collects the causes a byte at
@@ -17,7 +17,7 @@ rvtest_entry_point:
   li   a0, 0
   li   a1, 0
   li   s1, 0x02000000           # msip
-  li   s2, 0x0200c000           # MEIP hook
+  li   s2, 0x02008000           # MEIP hook
   li   s3, 0x02004000           # mtimecmp
   li   t0, 1
   sw   t0, 0(s1)                # MSIP

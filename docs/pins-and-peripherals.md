@@ -36,7 +36,7 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uo_out[5]` | UART RTS# | out | RP2350 GPIO38 (UART1 CTS) |
 | `uo_out[6]` | GPIO out 6 | out | OLED RES# and VCCEN |
 | `uo_out[7]` | GPIO out 7 | out | spare (7-segment DP) |
-| `ui_in[0]` | `qspi_rd_late` strap during reset, then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
+| `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
 | `ui_in[1]` | GPIO in 1 | in | DIP 2 |
 | `ui_in[2]` | GPIO in 2 | in | DIP 3 |
 | `ui_in[3]` | UART RX | in | RP2350 GPIO20 (UART1 TX) |
@@ -49,7 +49,9 @@ enabling the transmitter makes no edge. On the keypad that leaves two columns
 high and two low, which nothing reads until software scans.
 UART TX resets to 1 (idle) and RTS# to 1 (not ready), so the RP2350 sees
 neither a break nor a clear-to-send while the chip is in reset. While reset is
-held the QSPI pins are released, as they are today.
+held the QSPI pins are released, as they are today. The same values hold at a
+syscon reboot (for two clocks) and for as long as the chip is powered off, and
+the QSPI pins are released then too.
 
 ## Why this layout
 
@@ -162,6 +164,7 @@ columns).
 | 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
 | 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
 | 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
+| 6 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.151 tile, 23 flops (0.078 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
 block synthesised on its own with the audit's recipe; 1 tile ≈ 11,300 µm² of
@@ -180,13 +183,27 @@ about 0.4 tiles of that.
   SoC's active-high reset, is set by `rst_n` itself, with or without a clock,
   and cleared by the second clock edge after `rst_n` rises.
   * It has to be set without a clock. The demo board's firmware, loading a
-    project that has no section in its `config.ini`, stops the clock, pulses
-    `rst_n` low for 2 ms and only then starts the clock
-    (`tt-micropython-firmware`, `demoboard.py`: `clock_project_stop()`,
-    `_first_encouter_reset()`, `clock_project_PWM()`). A reset that waited for
-    a clock edge would never see that pulse.
+    project for the first time since it booted and finding no section for it
+    in its `config.ini`, stops the clock, pulses `rst_n` low for 2 ms and
+    only then starts the clock (`tt-micropython-firmware`, `demoboard.py`:
+    `clock_project_stop()`, `_first_encouter_reset()`,
+    `clock_project_PWM()`). A reset that waited for a clock edge would never
+    see that pulse. The other ways the board resets a project, and the ways
+    it does not, are listed below.
   * Those two edges are what carries the reset into the SoC's flops, so any
     pulse on `rst_n` resets the chip, however short.
+  * The pins leave reset on the second edge as well, one edge after the SoC's
+    flops first take their reset values. They are gated by `run`, a flop of
+    their own that rises on the edge `rst` falls. After a reset with the clock
+    running this changes nothing: the flops took their reset values long
+    before. After one with the clock stopped, edge 1 is where they take them,
+    and pins opened on that edge would race them for about a nanosecond.
+    TinyTapeout confirmed (Discord, 2026-10-23) that the clock is not
+    guaranteed to run during reset and that such a glitch reaches the pin; a
+    few ns of contention on `uio` with the RP2350 is harmless. `run` also
+    loads 0 on the edge where `rst_n` is released, so that release cannot
+    make it metastable. No RTL bench can tell the second edge from the first
+    (mutant TT01, `tb/VPLAN.md` 4.2): keep it.
   * `ena` is unused.
 * **While `rst` is high the pins depend on neither a clock nor on what the
   SoC's flops powered up with:**
@@ -206,9 +223,46 @@ about 0.4 tiles of that.
   the pin; the QSPI engine samples it on every clock edge while `rst` is
   high, the last of them the second edge after `rst_n` rises. **Hold
   `ui_in[0]` until then.** The whole `ui_in` byte also feeds GPIO IN.
+  syscon latches the strap while `rst` is high (the same window: every edge up
+  to the second after `rst_n` rises) and the QSPI engine uses that copy
+  afterwards, so a reboot does not re-read the pin.
+* **A reboot or power-off is generated inside the SoC**, so the wrapper's
+  `run` gating applies to `rst_n` only. The pins still go to their reset
+  values: the QSPI pins are released by the engine's own registered output
+  enables (each `uio_oe` bit is that flop ANDed with `run`, which stays 1), and
+  `uo_out` goes to `0x39` on the same edge. Every `uo_out` bit is a flop except
+  `uo_out[1]` and `uo_out[3]` while the SPI transmitter is on: those are a mux
+  whose select and data both change on that edge, a possible sub-nanosecond
+  hazard at the instant RES# falls and CS# rises. The OLED is being reset
+  anyway. Gating `run` as well would not remove it, so the follow-up is for the
+  SPI controller to drive MOSI and SCK from flops.
 * The demo board starts the clock by itself only if the project's `clock_hz`
   in `info.yaml` is not 0. With 0 the clock has to be started by hand, or
   from a `config.ini` section for the project.
+
+**Selecting the project does not reset it. Reset it after every selection**
+(Reset in the TinyTapeout commander). An unselected project has `clk`,
+`rst_n`, `ui_in` and `uio_in` tied to 0 and its power switched off, both by
+the same enable (`tt-multiplexer`, `rtl/tt_mux.v`), so at selection it powers
+up with `rst_n` already high and starts from whatever its flops powered up
+with. Until the first reset the SoC may drive the QSPI pins and `uo_out` from
+that state; the RP2350's `uio` pins are inputs by then (below). What each
+board action does, from the sources as of 2026-10-24:
+
+| Action | Clock while `rst_n` is low | Reset? |
+|---|---|---|
+| Firmware loads the project for the first time since boot, no `config.ini` section | none: stopped, 2 ms pulse, then started if `clock_hz` is set | yes (the case the second edge is for) |
+| Firmware loads it with a `config.ini` section (also written by the commander's "Make default") | running: `clock_frequency` starts it before the pulse | yes, unless `start_in_reset` holds it |
+| Firmware selects it again in the same session | - | **no** (`_first_encouter_reset` runs once per project per boot) |
+| Commander selects it (`ttcontrol.py` `select_design`) | - | **no** (it turns the firmware's config handling off) |
+| Commander Reset (`ttcontrol.py` `reset_project`) | 10 clocks, released with the clock stopped, then restarted | yes |
+| `tt.reset_project(True)` / `(False)` from the REPL | whatever the clock is doing; only the pin moves | yes |
+| The demo board's reset button | whatever the clock is doing; the contacts bounce | yes |
+
+Every selection, by the firmware or the commander, first sets all the
+RP2350's `uio` pins to inputs (`project_mux.py`, `safe_bidir()`), so after
+programming the flash with the chip-ROM project selected the RP2350 has let
+go of the bus before this project is selected.
 
 `make test-wrapper` (`tb/tb_tt_um.v`, `tests/soc/tt_pins.S`) checks all of
 this through the pins alone, with the board wired from the pinout table
@@ -400,7 +454,35 @@ writing the driver.
   and `gpio_out[7:0]` (SPI muxed inside the GPIO block; `gpio_out[5:4]` are
   0, since those pins are the UART's). The wrapper maps them onto `ui_in`
   and `uo_out` as in the pinout table.
-* `syscon` (`0x1002_0000`) stays reserved and unassigned.
+* `syscon` (`0x1002_0000`, `src/syscon.v`) decodes its own offsets in full
+  and never holds `ready` low. `alphaone_soc` resets every other block from
+  `rst_soc` (the chip reset, or a syscon reboot for two clock edges, or
+  power-off until the chip reset); the chip reset `rst` resets only syscon's
+  RESET_CAUSE, BOOT_MODE, strap and reboot flops.
+
+### 6. syscon at `0x1002_0000`
+
+The register map, the reset architecture, the reboot timeline and the device
+tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
+
+* **Reboot** (a FINISH write of `0x7777`): the SoC is in reset for two clock
+  edges. The QSPI pins are released for those two clocks, the control pins
+  (SCK and the chip selects) come back driven idle on the first running edge,
+  and the start-up sequence runs again, so the board sees what it sees after
+  `rst_n` rises. `uo_out` is `0x39` through it, then follows the GPIO block.
+* **Power-off** (`0x5555`, or `0x3333`): the same values held until `rst_n`.
+  The QSPI pins stay released, so the Pmod's pull-ups deselect the flash and
+  both PSRAMs; `uo_out` stays `0x39` (UART idle, RTS# not ready, the OLED in
+  reset with its panel supply off). The clock keeps running. Only `rst_n`
+  wakes the chip.
+* **The strap** is read once, at the pin reset, and kept (see the wrapper
+  section). The pin is GPIO afterwards.
+* **The watchdog** (`0x1002_0100`, DesignWare layout) resets the SoC through
+  the reboot path when it expires, so the pins behave as for a reboot. It is
+  disabled again afterwards, since its flops are on `rst_soc`. It cannot fire
+  while the chip is powered off.
+* The RP2350 reads no syscon state from the pins; software reads
+  RESET_CAUSE, BOOT_MODE and STRAPS over the bus.
 
 ## Not building
 

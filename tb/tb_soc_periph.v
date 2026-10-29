@@ -14,8 +14,13 @@
 // flash (about 57 clocks per instruction), so back-pressure really stalls.
 //
 // Programs (tests/soc/*.S) talk to the testbench through a mailbox in the
-// reserved syscon window (tests/soc/periph.h): FINISH (1 = pass, else the
-// failing check's code), EVENT (a cue), VALUE and VALUE2. +TEST=<name>
+// syscon window (tests/soc/periph.h): FINISH at +0x000 (QEMU's sifive_test
+// codes: 0x5555 pass, (code << 16) | 0x3333 fail, a word store), EVENT (a
+// cue), VALUE and VALUE2 at +0x7F0 / +0x7F4 / +0x7F8, decoded exactly;
+// every other syscon word is not the mailbox. The verdict is taken at
+// FINISH: no UART or SSD1331 byte may arrive after it, and the core's ports
+// are not checked after it (a FINISH powers the SoC off once the syscon
+// exists). +TEST=<name>
 // picks the test's cues and final checks; +FLASH_FILE=<hex> (read by the
 // Pmod model) is its program; +MAX_CYCLES=<n> the time limit.
 //
@@ -70,11 +75,15 @@ module tb_soc_periph;
     assign gpio_in = {kp_fitted ? kp_row : tb_in[7:4], uart_rx, tb_in[2:1], 1'b0};
 
     // ── Checks on every clock ───────────────────────────────────────────────
+    reg done = 1'b0, passed = 1'b0, failed = 1'b0;
+    // After FINISH the core's ports are not this bench's business: once the
+    // syscon exists a FINISH powers the SoC off one clock later and cuts the
+    // fetch the core's spin loop has outstanding.
     req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
-        .clk(clk), .rst(rst), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
+        .clk(clk), .rst(rst || done), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
         .payload({soc.dmem_addr, soc.dmem_we, soc.dmem_be, soc.dmem_we ? soc.dmem_wdata : 32'h0}));
     req_hold_check #(.W(32), .NAME("imem request")) chk_imem (
-        .clk(clk), .rst(rst), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
+        .clk(clk), .rst(rst || done), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
         .payload(soc.imem_addr));
 
     integer errors = 0;
@@ -121,9 +130,26 @@ module tb_soc_periph;
 
     // ── Mailbox ─────────────────────────────────────────────────────────────
     string     test;
-    reg        done = 1'b0;
     reg [31:0] result = 0, value = 0, value2 = 0;
+    integer    rx_fin = 0, oled_fin = 0, res_fin = 0;
     wire       mb = soc.dmem_req && soc.dmem_we && soc.dmem_ready && soc.dmem_addr[31:16] == 16'h1002;
+
+    task automatic finish(input [3:0] be, input [31:0] w);
+        begin
+            done = 1'b1;
+            rx_fin = rp.rx_n;  oled_fin = oled.nlog;  res_fin = oled.n_res_pulses;
+            if (be !== 4'b1111)
+                fail($sformatf("%s: FINISH written with lanes %b (want a word store)", test, be));
+            else if (^w === 1'bx)
+                fail($sformatf("%s: FINISH written with %h", test, w));
+            else if (w[15:0] == 16'h5555) passed = 1'b1;
+            else if (w[15:0] == 16'h3333) begin failed = 1'b1; result = {16'h0, w[31:16]}; end
+            else if (w[15:0] == 16'h7777)
+                fail($sformatf("%s: FINISH 0x7777 (reboot) in a test that expects none", test));
+            else
+                fail($sformatf("%s: FINISH written with %h: not 0x5555, (code << 16) | 0x3333 or 0x7777", test, w));
+        end
+    endtask
 
     // The line uart_echo's RP2350 types (tests/soc/uart_echo.S has its copy).
 `define ECHO_LINE "The quick brown fox jumps over the lazy dog, 0123456789!\015\n"
@@ -143,16 +169,54 @@ module tb_soc_periph;
         for (i = 0; i < 4; i = i + 1) begin irq_hits[i] = 0; irq_n[i] = 0; end
     end
 
+    // ── +MB_UART: the program also sends its cues and values over the UART ───
+    // (tests/soc/periph.h, built with -DMB_UART [-DMB_DIV=n]). The stream the
+    // RP2350 compares is the payload without the frames; the divisor follows
+    // +MB_DIV (default the reset divisor); uart_linux's baud change follows its
+    // cue frame, which the program sends before it writes the divisor.
+    reg        mb_uart = 1'b0;
+    integer    mb_div = UART_DIV, mb_seen = 0, mb_st = 0, mb_n = 0, mb_tag = 0;
+    string     mb_pay = "";
+    initial begin
+        mb_uart = $test$plusargs("MB_UART");
+        if (!$value$plusargs("MB_DIV=%d", mb_div)) mb_div = UART_DIV;
+        #1 if (mb_uart) rp.set_baud(16.0 * mb_div * TCLK);
+    end
+    always @(rp.rx_n) if (mb_uart) begin : mb_demux
+        reg [7:0] b;
+        while (mb_seen < rp.rx_n) begin
+            b = rp.rx_buf[mb_seen % 16384]; mb_seen = mb_seen + 1;
+            if (mb_st == 0) begin
+                if (b >= 8'h10 && b <= 8'h13) begin mb_tag = b; mb_n = 0; mb_st = (b == 8'h10) ? 1 : 2; end
+                else if (b == 8'h00) fail("a NUL byte in the payload (it would vanish from the string)");
+                else mb_pay = $sformatf("%s%c", mb_pay, b);
+            end else if (mb_st == 1) begin
+                mb_st = 0;
+                if (test == "uart_linux" && b == 8'd4) rp.set_baud(16.0 * 3 * TCLK);
+                // uart_echo acts on the frame, as the pins bench does: the program polls LSR
+                // while it sends the frame, and a poll after "XYZ" has arrived would clear OE
+                if (test == "uart_echo") begin
+                    if (b == 1) begin rp.set_flow(1'b1); rp.send_str(`ECHO_LINE); ph[1] = cts_wait; end
+                    if (b == 2) begin ph[2] = cts_wait; rp.set_flow(1'b0); rp.send_str("XYZ"); end
+                    if (b == 3) rp.set_flow(1'b1);
+                end
+            end else begin
+                mb_n = mb_n + 1;
+                if (mb_n == 4) mb_st = 0;
+            end
+        end
+    end
+
     task automatic on_event(input [31:0] e);
         begin
             if (test == "uart_hello" && e >= 1 && e <= 3) begin
                 ph[e] = uart_wait; ph[e + 3] = uart_waits;
-            end else if (test == "uart_echo") begin
+            end else if (test == "uart_echo" && !mb_uart) begin
                 if (e == 1) begin rp.set_flow(1'b1); rp.send_str(`ECHO_LINE); ph[1] = cts_wait; end
                 if (e == 2) begin ph[2] = cts_wait; rp.set_flow(1'b0); rp.send_str("XYZ"); end
                 if (e == 3) rp.set_flow(1'b1);
             end else if (test == "uart_linux") begin
-                if (e == 4) rp.set_baud(16.0 * 3 * TCLK);
+                if (e == 4 && !mb_uart) rp.set_baud(16.0 * 3 * TCLK);
                 if (e == 5) begin rp.set_flow(1'b1); rp.send_str("ls -l /dev\015"); end
             end else if (test == "oled_spi") begin
                 if (e == 9)  oled.expect_violations = 1'b1;
@@ -206,13 +270,21 @@ module tb_soc_periph;
     endtask
 
     always @(posedge clk)
-        if (!rst && mb)
-            case (soc.dmem_addr[3:2])
-                2'd0: begin done = 1'b1; result = soc.dmem_wdata; end
-                2'd1: on_event(soc.dmem_wdata);
-                2'd2: begin value = soc.dmem_wdata; on_value(soc.dmem_wdata); end
-                2'd3: value2 = soc.dmem_wdata;
-            endcase
+        if (!rst && mb && !done) begin
+            if (soc.dmem_addr[15:0] == 16'h0000) finish(soc.dmem_be, soc.dmem_wdata);
+            else if (soc.dmem_addr[15:0] == 16'h07F0 || soc.dmem_addr[15:0] == 16'h07F4 ||
+                     soc.dmem_addr[15:0] == 16'h07F8) begin
+                if (soc.dmem_be !== 4'b1111)
+                    fail($sformatf("%s: mailbox +%h written with lanes %b (want a word store)",
+                                   test, soc.dmem_addr[15:0], soc.dmem_be));
+                else case (soc.dmem_addr[3:2])
+                    2'd0: on_event(soc.dmem_wdata);
+                    2'd1: begin value = soc.dmem_wdata; on_value(soc.dmem_wdata); end
+                    default: value2 = soc.dmem_wdata;
+                endcase
+            end
+            // +0x7FC (spare) and every other word: not the mailbox
+        end
 
     // ── Expected outputs ────────────────────────────────────────────────────
     function automatic string want_uart;
@@ -292,19 +364,23 @@ module tb_soc_periph;
         while (!done && cyc < max_cycles) @(posedge clk);
         if (!done) begin
             fail($sformatf("%s: no FINISH within %0d cycles (pc %h)", test, max_cycles, soc.cpu.pc));
-        end else if (result !== 32'h1) begin
+        end else if (failed) begin
             fail($sformatf("%s: program check %h failed (value seen %h)", test, result, value2));
-        end else begin
+        end else if (passed) begin
             // Let the UART's last character reach the RP2350.
-            repeat (16 * 3 * 12 * UART_DIV) @(posedge clk);
-            got_u = rp.rx_str();
+            repeat (16 * 3 * 12 * UART_DIV) @(posedge clk);   // (mb_div <= UART_DIV in every MB_UART run)
+            if (rp.rx_n != rx_fin)
+                fail($sformatf("%s: %0d UART byte(s) arrived after FINISH: the program did not drain TX", test, rp.rx_n - rx_fin));
+            if (oled.nlog != oled_fin)
+                fail($sformatf("%s: %0d SSD1331 byte(s) arrived after FINISH", test, oled.nlog - oled_fin));
+            if (mb_uart) got_u = mb_pay; else got_u = rp.rx_str();
             exp_u = want_uart();
             if (got_u != exp_u)
                 fail($sformatf("%s: the RP2350 received \"%s\" (%0d characters), want \"%s\" (%0d)",
                                test, got_u, got_u.len(), exp_u, exp_u.len()));
-            if (oled.nlog != n_want_oled)
-                fail($sformatf("%s: the SSD1331 got %0d bytes, want %0d", test, oled.nlog, n_want_oled));
-            for (k = 0; k < oled.nlog && k < n_want_oled; k = k + 1)
+            if (oled_fin != n_want_oled)
+                fail($sformatf("%s: the SSD1331 got %0d bytes, want %0d", test, oled_fin, n_want_oled));
+            for (k = 0; k < oled_fin && k < n_want_oled; k = k + 1)
                 if (oled.log[k] !== want_oled[k])
                     fail($sformatf("%s: SSD1331 byte %0d = {D/C %b, %h}, want {D/C %b, %h}", test, k,
                                    oled.log[k][8], oled.log[k][7:0], want_oled[k][8], want_oled[k][7:0]));
@@ -328,8 +404,8 @@ module tb_soc_periph;
             end
             if (test == "oled_spi") begin
                 $display("oled_spi: %0d SSD1331 bytes, %0d GPIO clocks waited, %0d RES# pulses, %0d timing violations flagged on the deliberate DIV 1 byte",
-                         oled.nlog, gpio_wait, oled.n_res_pulses, oled.n_expected);
-                if (oled.n_res_pulses != 1) fail("oled_spi: want one RES# pulse");
+                         oled_fin, gpio_wait, res_fin, oled.n_expected);
+                if (res_fin != 1) fail("oled_spi: want one RES# pulse");
             end
             if (test == "keypad") begin
                 $display("keypad: %0d patterns scanned; the IN read that follows an OUT write came %0d clocks after it at the soonest",
