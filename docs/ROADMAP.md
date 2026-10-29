@@ -214,6 +214,14 @@ Clear the valid bit on every redirect (branch, jump, trap, interrupt, MRET),
 on FENCE.I and on reset. A store to the kept halfword need not clear it:
 Zifencei only promises that instruction fetch sees stores after a FENCE.I.
 
+**Status (WO-27, built on `fetch-reuse_alfadelta10010`, always on).** `if_kbuf`
+16 flops + `if_kv`, a 16-bit mux in front of the window mask. Spike-trace model on
+compiled C: 24.6% (-Os) to 26.1% (-O2) of fetches removed. Measured in the RTL
+benches (directed code is mostly `.option norvc`, so the hit rate is low):
+`t_memstress` 65 hits in 3027 loads, `fr_pairs` 22 of 78. Checked by the `fr_*` directed tests, the
+`tb_rivercore` shadow/hit checks, `tb/formal/run.sh core_fetch` and mutants
+FR01-FR14. Harden, GL, EQY and river_core follow the last WO.
+
 * Saves one fetch for each compressed instruction that follows a fetched
   compressed instruction, so at most half the fetches in runs of compressed
   code. On compiled C, with roughly half the instructions compressed, it
