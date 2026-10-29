@@ -322,3 +322,24 @@ fr_misa             spike  +IMEM_WAIT=2
 fr_shift_ld         spike
 fr_shift_ld         spike  +IMEM_WAIT=2 +DMEM_WAIT=2
 fr_shift_ld         spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_irq              spike
+fr_irq              spike  +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_irq              spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+# The interrupt raised by C1 itself lands wherever the pipeline takes it; the
+# trace differs from Spike's, the result does not (see the test's comment).
+fr_irq_sw           expect x9=0x20 x26=0x4
+fr_irq_sw           expect x9=0x20 x26=0x4 -- +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_irq_sw           expect x9=0x20 x26=0x4 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+# The timer's period is in clocks, Spike's is in instructions: DUT only.
+fr_irq_tmr          expect x10=0x0 x15=0x1 x26=0x1
+fr_irq_tmr          expect x10=0x0 x15=0x1 x26=0x1 -- +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_page             spike
+fr_page             spike  +IMEM_WAIT=2 +IMEM_RANDOM=1
+fr_window_end       spike
+fr_window_end       spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_pmp              spike
+fr_pmp              spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=1
+# Self-modifying code without FENCE.I: the instruction in hand runs stale.
+# Spike's decode cache is keyed by pc and need not agree, so DUT only.
+fr_smc              expect x12=0x1 x13=0x5
+fr_smc              expect x12=0x1 x13=0x5 -- +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1
