@@ -437,7 +437,12 @@ module tb_tt_um;
     integer    sw_fl = 0, sw_a = 0, sw_b = 0, sw_idle = 0, sw_split = 0, sw_data = 0, sw_fl_ok = 0;
     reg [2:0]  sw_prev = 3'b111;         // {CS2, CS1, CS0} at the previous sample
     reg [23:0] a_start = 24'hFFFFFF;     // PSRAM A: the address the latest read began at (when it started driving)
-    always @(posedge pmod_oe) if (soc_test && uio_pin[6] === 1'b0 && pmod.cmd === 8'h0B) a_start = pmod.addr;
+    reg        sp_arm = 1'b0;            // a PSRAM A read began at 0x3FE (the first half of a split fetch) and no other has since, bar 0x400..0x403 (its second half)
+    always @(posedge pmod_oe) if (soc_test && uio_pin[6] === 1'b0 && pmod.cmd === 8'h0B) begin
+        a_start = pmod.addr;
+        if (pmod.addr === 24'h0003FE) sp_arm = 1'b1;
+        else if (!(pmod.addr >= 24'h000400 && pmod.addr <= 24'h000403)) sp_arm = 1'b0;
+    end
     reg        fl_arm = 1'b0;            // the first flash read after a reboot must be at address 0
     reg        pr_arm = 1'b0;            // a pin reset inside the next window
     reg [7:0]  pr_in = 8'h00;
@@ -652,8 +657,10 @@ module tb_tt_um;
                    else if (!sw_prev[2]) sw_b = sw_b + 1;
                    else sw_idle = sw_idle + 1;
                    if (!sw_prev[2]) sw_data = sw_data + 1;
-                   // a page-split fetch: the first half reads 0x3FC..0x3FF, the second begins at 0x400
-                   if (a_start >= 24'h0003FC && a_start <= 24'h0003FF) sw_split = sw_split + 1;
+                   // a page-split fetch: the first half began at 0x3FE; the fire is genuinely between the halves if the
+                   // second (0x400..0x403) is in flight (mem_ctrl has not yet issued it as the first), or if nothing is selected
+                   if (sp_arm && ((!sw_prev[1] && pmod.cmd === 8'h0B && pmod.addr >= 24'h000400 && pmod.addr <= 24'h000403)
+                                  || sw_prev == 3'b111)) sw_split = sw_split + 1;
                    sw_dist = cyc - s_cue_cyc;
                    if (s_hi != 0) begin
                        if (sw_dist <= s_lo || sw_dist > s_hi)
@@ -666,6 +673,7 @@ module tb_tt_um;
                    $display("NOTE window %0d at cycle %0d: cut class %s, last flash/PSRAM command %h addr %h, PSRAM A read began at %h", sw_n, cyc,
                             !sw_prev[0] ? "flash" : !sw_prev[1] ? "psram-A" : !sw_prev[2] ? "psram-B" : "idle",
                             pmod.cmd, pmod.addr, a_start);
+                   sp_arm = 1'b0; a_start = 24'hFFFFFF;
                    check_reset_pins("in a reboot / power-off window, first sample");
                    if (pr_arm) begin pr_arm = 1'b0; -> pr_go; end
                end else sw_prev = {uio_pin[7], uio_pin[6], uio_pin[0]};
@@ -768,7 +776,7 @@ module tb_tt_um;
                 end
                 ID_syscon_wdt: $display("NOTE syscon_wdt: window d = %0d clocks after the cue frame", s_d_last);
                 ID_syscon_wdt_split: begin
-                    $display("NOTE syscon_wdt_split: %0d windows, %0d on a split fetch (PSRAM A's last read began at 0x3FC..0x3FF), %0d on PSRAM B (data)",
+                    $display("NOTE syscon_wdt_split: %0d windows, %0d on a split fetch (a PSRAM A read began at 0x3FE and the fire came between its halves), %0d on PSRAM B (data)",
                              sw_n, sw_split, sw_data);
                     if (sw_split < 1) fail("syscon_wdt_split: no fire between the halves of a split fetch");
                     if (sw_data < 1) fail("syscon_wdt_split: no fire on a data transaction");
