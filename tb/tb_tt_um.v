@@ -444,6 +444,9 @@ module tb_tt_um;
         if (pmod.addr === 24'h0003FE) sp_arm = 1'b1;
         else if (!(pmod.addr >= 24'h000400 && pmod.addr <= 24'h000403)) sp_arm = 1'b0;
     end
+    // the pair is over when the second half's read ends (CS1 rises with a_start in 0x400..0x403) or another chip is selected
+    always @(posedge uio_pin[6]) if (soc_test && a_start >= 24'h000400 && a_start <= 24'h000403) sp_arm = 1'b0;
+    always @(negedge uio_pin[0] or negedge uio_pin[7]) if (soc_test) sp_arm = 1'b0;
     reg        fl_arm = 1'b0;            // the first flash read after a reboot must be at address 0
     reg        pr_arm = 1'b0;            // a pin reset inside the next window
     reg [7:0]  pr_in = 8'h00;
@@ -664,8 +667,11 @@ module tb_tt_um;
                    if (sw_n == 1 && sw_prev == 3'b111) sw_w1_idle = 1;
                    // a page-split fetch: the first half began at 0x3FE; the fire is genuinely between the halves if the
                    // second (0x400..0x403) is in flight (mem_ctrl has not yet issued it as the first), or if nothing is selected
-                   if (sp_arm && ((!sw_prev[1] && pmod.cmd === 8'h0B && pmod.addr >= 24'h000400 && pmod.addr <= 24'h000403)
-                                  || sw_prev == 3'b111)) sw_split = sw_split + 1;
+                   if (sp_arm && !sw_prev[1] && pmod.cmd === 8'h0B && pmod.addr >= 24'h000400 && pmod.addr <= 24'h000403) begin
+                       sw_split = sw_split + 1; $display("NOTE window %0d counted as split: second half in flight", sw_n);
+                   end else if (sp_arm && sw_prev == 3'b111) begin
+                       sw_split = sw_split + 1; $display("NOTE window %0d counted as split: armed, all chip selects high", sw_n);
+                   end else $display("NOTE window %0d not a split (armed %0d)", sw_n, sp_arm);
                    sw_dist = cyc - s_cue_cyc;
                    if (s_hi != 0) begin
                        if (sw_dist <= s_lo || sw_dist > s_hi)
