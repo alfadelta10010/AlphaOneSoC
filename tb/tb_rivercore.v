@@ -975,7 +975,8 @@ module tb_rivercore;
                 fr_fetches = fr_fetches + 1;
                 fr_kaddr   = `CPU.pc + 32'd2;
                 fr_dirty   = 1'b0;
-            end else if (dmem_req && dmem_ready && dmem_we) begin
+            end
+            if (dmem_req && dmem_ready && dmem_we) begin     // a store in a fetch's cycle counts too
                 for (fr_k = 0; fr_k < 4; fr_k = fr_k + 1)
                     if (dmem_be[fr_k] &&
                         ({dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr ||
@@ -989,6 +990,8 @@ module tb_rivercore;
                     fr_loads = fr_loads + 1;
                     if (`CPU.if_hit) begin
                         fr_hits = fr_hits + 1;
+                        if (`CPU.pc !== fr_kaddr)
+                            fr_fail("hit at a pc other than fetch + 2");
                         if (`CPU.pc[31] && `CPU.if_exec && !fr_dirty) begin
                             fr_mem_h = {fr_byte(`CPU.pc + 32'd1), fr_byte(`CPU.pc)};
                             if (`CPU.if_kbuf !== fr_mem_h)
