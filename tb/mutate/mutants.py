@@ -392,3 +392,43 @@ m("AS05", "alphaone_soc.v", "        .rd_late  (qspi_late),", "        .rd_late 
 m("AS06", "alphaone_soc.v", "    mem_ctrl memc (\n        .clk        (clk),\n        .rst        (rst_soc),", "    mem_ctrl memc (\n        .clk        (clk),\n        .rst        (rst),", "memory controller reset by the pin reset only")
 m("AS07", "alphaone_soc.v", "        .wdt_tap      (mtime[29:14])", "        .wdt_tap      (mtime[28:13])", "watchdog tap from mtime[28:13] (twice as fast)")
 m("AS08", "alphaone_soc.v", "    ) cpu (\n        .clk         (clk),\n        .rst         (rst_soc),", "    ) cpu (\n        .clk         (clk),\n        .rst         (rst),", "the core on the pin reset only (a reboot does not restart it)")
+
+# ── fetch word reuse (WO-27): if_kbuf / if_kv in fyracore.v ──────────────
+# FR07, FR08, FR09, FR13 and FR14 change nothing a Spike-compared trace can
+# show; the notes say what is meant to kill each one.
+KV_LOAD = "                if_kv          <= !if_hit && if_exec && if_compressed &&\n                                  (if_fetched[17:16] != 2'b11);"
+m("FR01", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= if_kv;",
+  "if_kv survives a flush: a taken branch / trap / MRET issues the stale kept halfword")
+m("FR02", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= if_kv && !(flush && !irq_inject);",
+  "if_kv survives an interrupt injection: the handler's first instruction is the kept halfword")
+m("FR03", "fyracore.v", KV_LOAD,
+  "                if_kv          <= !if_hit && if_exec && if_compressed;",
+  "kept even when the halfword starts a 32-bit instruction: its upper half is never fetched")
+m("FR04", "fyracore.v", KV_LOAD,
+  "                if_kv          <= !if_hit && if_exec &&\n                                  (if_fetched[17:16] != 2'b11);",
+  "if_kv set after a 32-bit fetch too: the upper half of the instruction is issued as the next one")
+m("FR05", "fyracore.v", KV_LOAD,
+  "                if_kv          <= if_exec && if_compressed &&\n                                  (if_fetched[17:16] != 2'b11);",
+  "a hit does not consume if_kv: the same halfword is issued again, pc running on")
+m("FR06", "fyracore.v", "if_kbuf <= imem_rdata[31:16];", "if_kbuf <= imem_rdata[15:0];",
+  "the lower halfword is kept: C2 is replaced by C1")
+m("FR07", "fyracore.v", "assign imem_req  = if_exec && !ex_nofetch && !if_hit;", "assign imem_req  = if_exec && !ex_nofetch;",
+  "a fetch is requested with the instruction in hand (functionally equivalent, the hit wins; the bench's no-fetch check kills it)")
+m("FR08", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= 1'b0;",
+  "if_kv cleared behind a not-taken branch too (perf only; the bench's if_kv shadow kills it)")
+m("FR09", "fyracore.v", "wire [31:0] if_fetched    = if_word & {32{if_exec}};",
+  "wire [31:0] if_fetched    = {imem_rdata[31:16] & {16{if_exec}}, if_hit ? if_kbuf : (imem_rdata[15:0] & {16{if_exec}})};",
+  "mux behind the window mask (equivalent: a kept halfword outside the window faults in EX on its address, whatever its bits)")
+m("FR10", "fyracore.v", "        if (imem_req && imem_ready)\n            if_kbuf <= imem_rdata[31:16];",
+  "        if (imem_ready)\n            if_kbuf <= imem_rdata[31:16];",
+  "if_kbuf captured on ready alone: overwritten with the port's idle data while in use (needs NOTREADY_DATA)")
+m("FR11", "fyracore.v", "ifex_raw16     <= if_fetched[15:0];", "ifex_raw16     <= imem_rdata[15:0];",
+  "the trace / mtval 16 bits come from the port, not from the kept halfword, on a hit")
+m("FR12", "fyracore.v", "            if_kv             <= 1'b0;\n        end else begin",
+  "            if_kv             <= (if_kv === 1'bx) ? 1'b0 : if_kv;\n        end else begin",
+  "if_kv survives a reset (a mid-run reset issues a halfword of the old stream)")
+m("FR13", "fyracore.v", "            if (stall) begin\n                // Hold IF/EX on stall.",
+  "            if (stall) begin\n                if_kv <= if_kv && !flush;\n                // Hold IF/EX on stall.",
+  "if_kv cleared by a flush on a stalled cycle too (perf only: pc holds, the hit is lost; the if_kv shadow kills it)")
+m("FR14", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= if_kv && !(flush && !ex_is_fencei && !ex_pmp_csr_wr);",
+  "FENCE.I and a PMP write do not clear if_kv (equivalent: neither has a compressed form, so if_kv is 0 while they are in EX)")

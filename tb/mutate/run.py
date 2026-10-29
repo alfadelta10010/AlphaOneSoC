@@ -63,7 +63,7 @@ SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v
 TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
 # Formal harnesses (tb/formal/<name>_props.sv) per source file. soc_rst_sync is
 # structural and has no _props.sv.
-FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req"], "regFile.v": ["core_hold"],
+FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req", "core_fetch"], "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"]}
 NO_PROPS = {"soc_rst_sync"}
 
