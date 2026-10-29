@@ -226,6 +226,16 @@ test-gpio: $(BUILD_DIR)
 # from the QSPI Pmod model's flash with the demo board's devices on the pins
 # (RP2350 UART with CTS, SSD1331, keypad) -- tb/tb_soc_periph.v. A run fails
 # on a FAIL, ERROR or TIMEOUT line or a missing PASS; all runs go first.
+# `make test-soc-periph MB_UART=1` (and test-syscon-soc) build the programs with
+# -DMB_UART, as the pins bench does (tests/soc/periph.h): they send their cues and
+# values over the UART as well, the benches strip those frames from the stream
+# and follow the program's divisor (+MB_DIV), and every floor and check stays.
+# MB_DIV per program as in scripts/gl/build_isa.sh; the programs that run at the
+# reset divisor need none (4 here).
+define MB_FLAGS
+case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|syscon_reboot) d=;; *) d=1;; esac; \
+	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
+endef
 SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
@@ -237,12 +247,13 @@ test-soc-periph: $(BUILD_DIR)
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
-		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf || { bad=1; continue; }; \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 $$t.elf $$t.hex; \
-		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex > $$t.log 2>&1; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex $$pl > $$t.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_]+: ' $$t.log | head -6; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
 	done; exit $$bad
@@ -264,12 +275,13 @@ test-syscon-soc: $(BUILD_DIR)
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
 		set -- $$run; t=$$1; shift; n=$$((n+1)); \
-		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 $$t.elf $$t.hex || { bad=1; continue; }; \
-		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SYSCON_SOC_DIR)/$$t.hex "$$@" > $$t.$$n.log 2>&1; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SYSCON_SOC_DIR)/$$t.hex $$pl "$$@" > $$t.$$n.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' $$t.$$n.log | head -40; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.$$n.log || ! grep -q '^PASS' $$t.$$n.log; then bad=1; fi; \
 	done; exit $$bad

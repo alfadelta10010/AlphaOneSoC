@@ -169,16 +169,53 @@ module tb_soc_periph;
         for (i = 0; i < 4; i = i + 1) begin irq_hits[i] = 0; irq_n[i] = 0; end
     end
 
+    // ── +MB_UART: the program also sends its cues and values over the UART ───
+    // (tests/soc/periph.h, built with -DMB_UART [-DMB_DIV=n]). The stream the
+    // RP2350 compares is the payload without the frames; the divisor follows
+    // +MB_DIV (default the reset divisor); uart_linux's baud change follows its
+    // cue frame, which the program sends before it writes the divisor.
+    reg        mb_uart = 1'b0;
+    integer    mb_div = UART_DIV, mb_seen = 0, mb_st = 0, mb_n = 0, mb_tag = 0;
+    string     mb_pay = "";
+    initial begin
+        mb_uart = $test$plusargs("MB_UART");
+        if (!$value$plusargs("MB_DIV=%d", mb_div)) mb_div = UART_DIV;
+        #1 if (mb_uart) rp.set_baud(16.0 * mb_div * TCLK);
+    end
+    always @(rp.rx_n) if (mb_uart) begin : mb_demux
+        reg [7:0] b;
+        while (mb_seen < rp.rx_n) begin
+            b = rp.rx_buf[mb_seen % 16384]; mb_seen = mb_seen + 1;
+            if (mb_st == 0) begin
+                if (b >= 8'h10 && b <= 8'h13) begin mb_tag = b; mb_n = 0; mb_st = (b == 8'h10) ? 1 : 2; end
+                else mb_pay = $sformatf("%s%c", mb_pay, b);
+            end else if (mb_st == 1) begin
+                mb_st = 0;
+                if (test == "uart_linux" && b == 8'd4) rp.set_baud(16.0 * 3 * TCLK);
+                // uart_echo acts on the frame, as the pins bench does: the program polls LSR
+                // while it sends the frame, and a poll after "XYZ" has arrived would clear OE
+                if (test == "uart_echo") begin
+                    if (b == 1) begin rp.set_flow(1'b1); rp.send_str(`ECHO_LINE); ph[1] = cts_wait; end
+                    if (b == 2) begin ph[2] = cts_wait; rp.set_flow(1'b0); rp.send_str("XYZ"); end
+                    if (b == 3) rp.set_flow(1'b1);
+                end
+            end else begin
+                mb_n = mb_n + 1;
+                if (mb_n == 4) mb_st = 0;
+            end
+        end
+    end
+
     task automatic on_event(input [31:0] e);
         begin
             if (test == "uart_hello" && e >= 1 && e <= 3) begin
                 ph[e] = uart_wait; ph[e + 3] = uart_waits;
-            end else if (test == "uart_echo") begin
+            end else if (test == "uart_echo" && !mb_uart) begin
                 if (e == 1) begin rp.set_flow(1'b1); rp.send_str(`ECHO_LINE); ph[1] = cts_wait; end
                 if (e == 2) begin ph[2] = cts_wait; rp.set_flow(1'b0); rp.send_str("XYZ"); end
                 if (e == 3) rp.set_flow(1'b1);
             end else if (test == "uart_linux") begin
-                if (e == 4) rp.set_baud(16.0 * 3 * TCLK);
+                if (e == 4 && !mb_uart) rp.set_baud(16.0 * 3 * TCLK);
                 if (e == 5) begin rp.set_flow(1'b1); rp.send_str("ls -l /dev\015"); end
             end else if (test == "oled_spi") begin
                 if (e == 9)  oled.expect_violations = 1'b1;
@@ -330,12 +367,12 @@ module tb_soc_periph;
             fail($sformatf("%s: program check %h failed (value seen %h)", test, result, value2));
         end else if (passed) begin
             // Let the UART's last character reach the RP2350.
-            repeat (16 * 3 * 12 * UART_DIV) @(posedge clk);
+            repeat (16 * 3 * 12 * UART_DIV) @(posedge clk);   // (mb_div <= UART_DIV in every MB_UART run)
             if (rp.rx_n != rx_fin)
                 fail($sformatf("%s: %0d UART byte(s) arrived after FINISH: the program did not drain TX", test, rp.rx_n - rx_fin));
             if (oled.nlog != oled_fin)
                 fail($sformatf("%s: %0d SSD1331 byte(s) arrived after FINISH", test, oled.nlog - oled_fin));
-            got_u = rp.rx_str();
+            if (mb_uart) got_u = mb_pay; else got_u = rp.rx_str();
             exp_u = want_uart();
             if (got_u != exp_u)
                 fail($sformatf("%s: the RP2350 received \"%s\" (%0d characters), want \"%s\" (%0d)",

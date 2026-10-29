@@ -119,6 +119,7 @@ module tb_syscon_soc;
     reg [15:0] exp_fail_code = 16'h0;
     integer max_cycles;
     integer min_loads = 1;           // floor on checked syscon loads
+    integer mb_div;                  // +MB_UART +MB_DIV=n: the program's UART divisor (its frames follow)
     reg     rd_late_run;             // +RD_LATE: the strap is 1 through the pin reset
 
     // ── Syscon model ────────────────────────────────────────────────────────
@@ -487,7 +488,9 @@ module tb_syscon_soc;
         strap = rd_late_run;
         if (rd_late_run) TCLK = 10.0;
         clk_go = 1'b1;
-        #1 rp.set_baud(16.0 * UART_DIV * TCLK);
+        mb_div = UART_DIV;
+        if ($test$plusargs("MB_UART") && !$value$plusargs("MB_DIV=%d", mb_div)) mb_div = UART_DIV;   // the MB_UART build's divisor
+        #1 rp.set_baud(16.0 * mb_div * TCLK);
         if (test == "syscon_regs") begin
             fin_noise_ok = 1'b1; min_loads = 302;
         end else if (test == "syscon_reboot") begin
