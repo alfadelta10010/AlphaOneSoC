@@ -34,6 +34,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, UART
 
     # ---- 1. earlycon: init_port() ----
@@ -91,6 +92,9 @@ _start:
 
     # ---- 3. serial8250_do_set_termios() ----
     sb   s1, IER(s0)
+#ifdef MB_UART
+    EVENT_P 4                    # the terminal follows the new baud rate: before the write
+#endif
     li   t0, 0x83
     sb   t0, LCR(s0)             # serial8250_do_set_divisor: lcr | DLAB
     li   t0, NEW_DIV
@@ -113,7 +117,9 @@ _start:
     lbu  t0, DLM(s0)
     CHECK t0, 0, 0x122
     sb   zero, LCR(s0)
+#ifndef MB_UART
     EVENT 4                      # the terminal follows the new baud rate
+#endif
 
     # ---- 4. start_tx() and the polled handler ----
     la   s2, s_tx
@@ -169,7 +175,7 @@ poll_tx:
     CHECK t0, 0x01, 0x135        # THRI off, nothing received
 
     # ---- 5. receive: serial8250_rx_chars() from the polled handler ----
-    EVENT 5                      # the terminal types s_rx, CTS flow control on
+    EVENT_P 5                      # the terminal types s_rx, CTS flow control on
     li   s6, 0x80000100          # the tty flip buffer
     li   s7, 0                   # characters received
 poll_rx:

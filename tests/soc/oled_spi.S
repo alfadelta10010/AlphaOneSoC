@@ -17,6 +17,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s1, GPIO
     lw   t0, G_OUT(s1)
     CHECK t0, 0x09, 0x201        # reset: CS# high, SCK idle high, RES# low
@@ -86,7 +87,7 @@ _start:
     li   t0, 0x4D
     sw   t0, G_OUT(s1)
 
-    EVENT 9
+    EVENT_P 9
     li   t0, 0x03
     sw   t0, G_CTRL(s1)          # DIV 1: too fast for the SSD1331
     li   t0, 0x48
@@ -95,7 +96,7 @@ _start:
     sw   t0, G_DATA(s1)
     li   t0, 0x49
     sw   t0, G_OUT(s1)
-    EVENT 10
+    EVENT_P 10
     li   t0, 0x04
     sw   t0, G_CTRL(s1)          # EN off: out[3] is OUT bit 3 (high) again
     lw   t0, G_OUT(s1)

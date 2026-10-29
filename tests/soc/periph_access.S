@@ -14,19 +14,20 @@
 .macro RP_SEND byte
     li   t0, \byte
     VALUE t0
-    EVENT 0x10
+    EVENT_P 0x10
     WAIT_LSR s0, LSR_DR
 .endm
 .macro PINS v
     li   t0, \v
     VALUE t0
-    EVENT 0x20
+    EVENT_P 0x20
 .endm
 
     .section .text.init
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, UART
     li   s1, GPIO
     la   t0, trap
@@ -172,7 +173,7 @@ _start:
     lw   t1, G_OUT(s1)
     CHECK t1, 0x81, 0x143
     PINS 0x81
-    EVENT 0x21                   # IN = 0xA4 on bits 7-4, 2-1
+    EVENT_P 0x21                   # IN = 0xA4 on bits 7-4, 2-1
     lw   t0, G_IN(s1)
     CHECK t0, 0xAC, 0x144        # + RX idle (bit 3), strap 0 (bit 0)
     lb   t0, G_IN(s1)
@@ -217,7 +218,7 @@ _start:
     CHECK t1, 0x4, 0x162
     li   t0, 0x48
     sw   t0, G_OUT(s1)           # CS# low: the OLED model captures from here
-    EVENT 0x30
+    EVENT_P 0x30
     li   t0, 0x81
     sw   t0, G_DATA(s1)
     addi t2, s1, G_DATA

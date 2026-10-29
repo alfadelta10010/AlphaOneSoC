@@ -22,10 +22,11 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s1, GPIO
     sw   zero, G_CTRL(s1)        # EN = 0: the keypad owns out[3:0]
     li   s2, NSETS
-1:  EVENT 1
+1:  EVENT_P 1
     jal  scan
     VALUE a0
     addi s2, s2, -1

@@ -35,6 +35,7 @@
     .globl _start
 _start:
     li   s11, SYSCON
+    MB_INIT
     li   s0, CLINT
     li   t0, 0x4000
     add  s1, s0, t0              # mtimecmp
