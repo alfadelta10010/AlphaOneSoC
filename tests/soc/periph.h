@@ -87,9 +87,91 @@
     li   t5, \code
     sw   t5, MB_EVENT(s11)
 .endm
+#ifdef MB_UART
+/* -DMB_UART: the mailbox also goes out over the UART, so a bench that sees
+ * only the chip's pins (tb/tb_tt_um.v +TEST=soc) can take the reports and the
+ * cues. The syscon stores stay, so the same build runs on the internal
+ * benches. A frame is a tag byte 0x10-0x13 and, but for the cue, 4 bytes LE:
+ *   0x10 code    EVENT_P         a cue the pins bench acts on
+ *   0x11 word    VALUE
+ *   0x12 word    VALUE2, in EPILOGUE's fail path
+ *   0x13 word    FINISH, in EPILOGUE, after DRAIN and before the store
+ * Every other byte the chip sends is the program's own traffic. A frame waits
+ * for LSR.TEMT first (the program's own characters finish) and again at the
+ * end. These macros clobber only t4, t5 and t6, the set DELAY already uses. */
+#ifndef MB_CUE_WAIT
+#define MB_CUE_WAIT 3000          /* clocks EVENT_P waits for the bench's action */
+#endif
+#define MB_LOG_BASE 0x80FFF000    /* irq_stall's log in the board's PSRAM B */
+.macro MB_TEMT
+    li   t6, UART
+89: lbu  t5, LSR(t6)
+    andi t5, t5, LSR_TEMT
+    beqz t5, 89b
+.endm
+.macro MB_PUT r                   /* t6 = UART; sends the low byte of r */
+89: lbu  t5, LSR(t6)
+    andi t5, t5, LSR_THRE
+    beqz t5, 89b
+    sb   \r, THR(t6)
+.endm
+.macro MB_FRAME tag, r
+    MB_TEMT
+    li   t4, \tag
+    MB_PUT t4
+    MB_PUT \r
+    srli t4, \r, 8
+    MB_PUT t4
+    srli t4, \r, 16
+    MB_PUT t4
+    srli t4, \r, 24
+    MB_PUT t4
+    MB_TEMT
+.endm
+/* A cue the pins bench acts on: the syscon store, then the frame, then
+ * MB_CUE_WAIT clocks for the action to land. */
+.macro EVENT_NW code             /* the cue frame alone, no wait */
+    EVENT \code
+    MB_TEMT
+    li   t4, 0x10
+    MB_PUT t4
+    li   t4, (\code) & 0xFF
+    MB_PUT t4
+    MB_TEMT
+.endm
+.macro EVENT_P code
+    EVENT_NW \code
+    DELAY MB_CUE_WAIT
+.endm
+.macro VALUE r
+    sw   \r, MB_VALUE(s11)
+    MB_FRAME 0x11, \r
+.endm
+/* At each program's entry (every boot): MB_DIV sets the divisor. */
+#ifdef MB_DIV
+.macro MB_INIT
+    li   t0, UART
+    li   t1, 0x80
+    sb   t1, LCR(t0)
+    li   t1, MB_DIV
+    sb   t1, DLL(t0)
+    sb   zero, DLM(t0)
+    sb   zero, LCR(t0)
+.endm
+#else
+.macro MB_INIT
+.endm
+#endif
+#else
+.macro EVENT_P code
+    EVENT \code
+.endm
 .macro VALUE r
     sw   \r, MB_VALUE(s11)
 .endm
+.macro MB_INIT
+.endm
+#endif
 /* Spin until mtime has advanced by n clocks (clobbers t4, t5, t6). */
 .macro DELAY n
     li   t6, MTIME
@@ -120,6 +202,9 @@
 .macro EPILOGUE
 test_fail:
     sw   a7, MB_VALUE2(s11)
+#ifdef MB_UART
+    MB_FRAME 0x12, a7
+#endif
     slli a6, a6, 16
     li   t5, FINISH_FAIL
     or   a6, a6, t5
@@ -128,6 +213,9 @@ test_pass:
     li   a6, FINISH_PASS
 87:
     DRAIN
+#ifdef MB_UART
+    MB_FRAME 0x13, a6
+#endif
     sw   a6, MB_FINISH(s11)
 1:  j    1b
 .endm
