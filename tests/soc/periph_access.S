@@ -80,6 +80,11 @@ _start:
     CHECK t0, 0x80, 0x113
     lhu  t0, 0(s0)
     CHECK t0, UART_DIV_RESET, 0x114   # DLM DLL = UART_DIV_RESET
+#ifdef MB_UART
+    # a DLL write reloads the baud counter: let 'B' finish first, or its bit
+    # edges move and the RP2350 model flags them
+    WAIT_LSR s0, LSR_TEMT
+#endif
     lbu  t0, IIR(s0)
     CHECK t0, 0x01, 0x115        # IER was cleared by the word store
     li   t0, UART_DIV_RESET
