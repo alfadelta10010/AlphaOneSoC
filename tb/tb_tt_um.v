@@ -531,6 +531,8 @@ module tb_tt_um;
                     s_div = 27; s_n_val = 5; s_exp_re = 4;
                 end
                 ID_syscon_strap: begin
+                    // (with rd_late = 1 the cue changes nothing: the strap pin is already 0 from the second edge on. The run is
+                    // still sound: STRAPS reads 1 with the pin at 0, and boot 2 reads the strap at 25 ns.)
                     s_div = 1; s_n_ev = 1; s_ev[0] = 'h52; s_n_val = 1; s_val_known = 1'b1;
                     s_val[0] = {31'b0, rd_late}; s_exp_re = 1;
                 end
