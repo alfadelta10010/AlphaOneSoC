@@ -438,6 +438,7 @@ module tb_tt_um;
     reg [2:0]  sw_prev = 3'b111;         // {CS2, CS1, CS0} at the previous sample
     reg [23:0] a_start = 24'hFFFFFF;     // PSRAM A: the address the latest read began at (when it started driving)
     reg        sp_arm = 1'b0;            // a PSRAM A read began at 0x3FE (the first half of a split fetch) and no other has since, bar 0x400..0x403 (its second half)
+    integer    sw_w1_idle = 0;           // 1 if window 1 found every chip select high
     always @(posedge pmod_oe) if (soc_test && uio_pin[6] === 1'b0 && pmod.cmd === 8'h0B) begin
         a_start = pmod.addr;
         if (pmod.addr === 24'h0003FE) sp_arm = 1'b1;
@@ -657,6 +658,7 @@ module tb_tt_um;
                    else if (!sw_prev[2]) sw_b = sw_b + 1;
                    else sw_idle = sw_idle + 1;
                    if (!sw_prev[2]) sw_data = sw_data + 1;
+                   if (sw_n == 1 && sw_prev == 3'b111) sw_w1_idle = 1;
                    // a page-split fetch: the first half began at 0x3FE; the fire is genuinely between the halves if the
                    // second (0x400..0x403) is in flight (mem_ctrl has not yet issued it as the first), or if nothing is selected
                    if (sp_arm && ((!sw_prev[1] && pmod.cmd === 8'h0B && pmod.addr >= 24'h000400 && pmod.addr <= 24'h000403)
@@ -781,6 +783,8 @@ module tb_tt_um;
                     if (sw_split < 1) fail("syscon_wdt_split: no fire between the halves of a split fetch");
                     if (sw_data < 1) fail("syscon_wdt_split: no fire on a data transaction");
                 end
+                ID_syscon_poweroff:
+                    if (sw_w1_idle) fail("syscon_poweroff: window 1 found every chip select high, nothing was in flight at the hold");
                 ID_keypad: if (s_ev_i != 28) fail("keypad: not every pattern was scanned");
                 default: ;
             endcase
