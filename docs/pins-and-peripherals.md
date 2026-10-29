@@ -29,22 +29,22 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uio[6]` | QSPI CS1 (PSRAM A) | out | QSPI Pmod |
 | `uio[7]` | QSPI CS2 (PSRAM B) | out | QSPI Pmod |
 | `uo_out[0]` | GPIO out 0 | out | OLED CS# / keypad COL4 |
-| `uo_out[1]` | GPIO out 1, or SPI MOSI | out | OLED MOSI / keypad COL3 |
+| `uo_out[1]` | GPIO out 1, or SPI MOSI (a flop either way) | out | OLED SDIN and SD DI (MOSI) / keypad COL3 |
 | `uo_out[2]` | GPIO out 2 | out | OLED D/C (moved there, see below) / keypad COL2 |
-| `uo_out[3]` | GPIO out 3, or SPI SCK | out | OLED SCK / keypad COL1 |
+| `uo_out[3]` | GPIO out 3, or SPI SCK (a flop either way) | out | OLED SCK and SD SCK / keypad COL1 |
 | `uo_out[4]` | UART TX | out | RP2350 GPIO37 (UART1 RX) |
 | `uo_out[5]` | UART RTS# | out | RP2350 GPIO38 (UART1 CTS) |
 | `uo_out[6]` | GPIO out 6 | out | OLED RES# and VCCEN |
-| `uo_out[7]` | GPIO out 7 | out | spare (7-segment DP) |
+| `uo_out[7]` | GPIO out 7: SD CS# (resets high) | out | SD CS# (DAT3), by a jumper wire; the 7-segment DP otherwise |
 | `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
-| `ui_in[1]` | GPIO in 1 | in | DIP 2 |
+| `ui_in[1]` | GPIO in 1, and SPI MISO | in | SD DO (MISO); DIP 2 must be off with the SD fitted |
 | `ui_in[2]` | GPIO in 2 | in | DIP 3 |
 | `ui_in[3]` | UART RX | in | RP2350 GPIO20 (UART1 TX) |
 | `ui_in[4..7]` | GPIO in 4..7 | in | keypad ROW4..ROW1, or DIP 5–8 |
 
-**Reset values.** GPIO OUT resets to `0x09`: `uo_out[6]` low holds the OLED
-in reset with its panel supply off, while its CS# (`uo_out[0]`) is high,
-deselected, and SCK (`uo_out[3]`) sits at SPI mode 3's idle-high level, so
+**Reset values.** GPIO OUT resets to `0x89`: `uo_out[6]` low holds the OLED
+in reset with its panel supply off, while its CS# (`uo_out[0]`) and the SD
+card's (`uo_out[7]`) are high, deselected, and SCK (`uo_out[3]`) sits at SPI mode 3's idle-high level, so
 enabling the transmitter makes no edge. On the keypad that leaves two columns
 high and two low, which nothing reads until software scans.
 UART TX resets to 1 (idle) and RTS# to 1 (not ready), so the RP2350 sees
@@ -211,8 +211,8 @@ about 0.4 tiles of that.
     `qspi_ctl_oe`, bits 1, 2, 4, 5 = `qspi_io_oe`. So whoever holds the chip
     in reset owns the QSPI bus without needing a clock, and the pins stay
     inputs after `rst_n` rises until the SoC has really been reset.
-  * `uo_out` is `0x39`, the SoC's own reset values (TX and RTS# high, GPIO
-    OUT `0x09`: the OLED held in reset with its panel supply off). Nothing
+  * `uo_out` is `0xB9`, the SoC's own reset values (TX and RTS# high, GPIO
+    OUT `0x89`: the OLED held in reset with its panel supply off). Nothing
     moves when `rst` falls, because the SoC is driving the same values by
     then.
 * `uio_out`: `[0]` cs_n[0], `[1]` io_out[0], `[2]` io_out[1], `[3]` sck,
@@ -230,7 +230,7 @@ about 0.4 tiles of that.
   `run` gating applies to `rst_n` only. The pins still go to their reset
   values: the QSPI pins are released by the engine's own registered output
   enables (each `uio_oe` bit is that flop ANDed with `run`, which stays 1), and
-  `uo_out` goes to `0x39` on the same edge. Every `uo_out` bit is a flop except
+  `uo_out` goes to `0xB9` on the same edge. Every `uo_out` bit is a flop except
   `uo_out[1]` and `uo_out[3]` while the SPI transmitter is on: those are a mux
   whose select and data both change on that edge, a possible sub-nanosecond
   hazard at the instant RES# falls and CS# rises. The OLED is being reset
@@ -390,10 +390,24 @@ the device tree takes `clock-frequency` from the node and is also right.
 
 ### 3. GPIO at `0x1001_0000`
 
+The window is decoded on `addr[5:2]`: 16 word slots that alias every 64 bytes
+through the 64 KB. Writes take byte lane 0 only. Reserved slots read 0 and
+ignore writes.
+
 | Offset | Register |
 |---|---|
-| `0x00` | OUT (read/write). Bit *i* drives `uo_out[i]`. Bits 4 and 5 belong to the UART: they read 0 and ignore writes. Resets to `0x09`. |
+| `0x00` | OUT (read/write). Bit *i* drives `uo_out[i]`; reads return the pins. Bits 4 and 5 belong to the UART: they read 0 and ignore writes. Bit 7 is the SD card's CS#. Bits 1 and 3 are the MOSI and SCK pin flops: with EN = 1 the SPI engine drives them and OUT writes to them are ignored. Resets to `0x89`. |
 | `0x04` | IN (read only). `ui_in[7:0]` through a two-flop synchroniser. |
+| `0x08` | reserved |
+| `0x0C` | SPICTL. Bit 0 EN (resets 0): 1 = the SPI engine owns `uo_out[1]` and `uo_out[3]`. Bit 8 BUSY (read only) = not TXE. |
+| `0x10`-`0x1C` | reserved |
+| `0x20`-`0x30` | the SPI controller, section 4 |
+| `0x34`-`0x3C` | reserved |
+
+The flash loader sets EN before it enters the kernel on an SD/OLED board;
+Linux never writes it. A reboot in the middle of an SD block leaves the card
+mid-transfer: boot code must clock `0xFF` with CS# low until the card returns
+`0xFF`, then send CMD0 (Linux's `mmc_spi` does the clocking).
 
 Linux uses the generic gpio-mmio driver: one output-only chip and one
 input-only chip. Pick the exact binding when writing the device tree.
@@ -403,47 +417,62 @@ four times over. Linux's `matrix_keypad` driver needs interrupt-capable row
 GPIOs, which this chip does not have. The keypad is therefore a small polled
 input driver, or a userspace program.
 
-### 4. SPI transmitter (for the OLED) at `0x1001_0008`
+### 4. SPI controller (tiny_spi) at `0x1001_0020`
 
-**Why it is needed.** The OLED works without it: GPIO can bit-bang its SPI.
-But through Linux's `spi-gpio` that costs very roughly 100 instructions per
-bit at ~0.9 MIPS:
-
-* about 0.1 s to draw one 8×6-pixel character;
-* about 10 s for a full 96×64 frame.
-
-The transmitter makes each byte a single store. That brings a character down
-to a few milliseconds and a full frame to under a second (both estimates).
-The transmitter lives in the GPIO block, which already owns the pins it
-shares.
+A general SPI master for the SD card and the OLED on one bus, inside the GPIO
+block (`src/spi.v`). Its registers have the semantics of OpenCores
+`tiny_spi`, so Linux's `drivers/spi/spi-oc-tiny.c` (compatible
+`opencores,tiny-spi-rtlsvn2`) drives it unchanged, polled, with the chip
+selects as `cs-gpios` on GPIO OUT (OLED CS# = bit 0, SD CS# = bit 7; D/C =
+bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
 
 | Offset | Register |
 |---|---|
-| `0x08` | DATA (write). Shifts 8 bits out, MSB first. While a byte is shifting, **every** GPIO register write stalls until it is done, the same back-pressure as the UART; reads do not. |
-| `0x0C` | CTRL (read/write). Bit 0 EN: 1 = the transmitter drives `uo_out[1]` (MOSI) and `uo_out[3]` (SCK); 0 = GPIO does. Bits 2:1 DIV: SCK = clk / 2^(DIV+1). Bit 8 BUSY (read only). |
+| `0x20` | RXDATA (read): the byte received with the last byte sent; valid once TXE = 1. |
+| `0x24` | TXDATA. Write: queue a byte (waits while the holding register is full). Read: that register, i.e. the byte written but not yet loaded, or after a load the byte received with the byte before. |
+| `0x28` | STATUS (read): bit 0 TXE = engine idle and holding register empty, bit 1 TXR = holding register empty. Writes are ignored. |
+| `0x2C` | CONTROL: bit 0 CPHA, bit 1 CPOL. All four modes; resets to 3 (mode 3). |
+| `0x30` | BAUD, 8 bits, resets to `0xFF`. SCK = clk / (2 x (BAUD + 1)): 122 kHz to 31.25 MHz at 62.5 MHz. |
 
-* SPI mode 3: SCK idles high, data changes on the falling edge and is sampled
-  on the rising edge.
-* The SSD1331 needs an SCK period of at least 150 ns and each phase at
-  least 75 ns. DIV=2 (clk/8) meets that exactly at 53 MHz, with no margin
-  for pad duty-cycle distortion or edge rates, so use DIV=2 up to about
-  48 MHz and DIV=3 (clk/16) above.
-* CS# and D/C stay GPIO lines.
-* With the keypad fitted, EN stays 0.
-* As built (`src/gpio.v`): MOSI is its own flop and changes only on SCK's
-  falling edge, so the device gets half an SCK period of setup and of hold
-  even when the next byte is loaded the cycle after the last rising edge.
-  The transmitter stays busy for one more half-period after that edge, and
-  every register write waits for it, so `DATA; OUT` back to back is safe:
-  the SSD1331 samples D/C on each byte's eighth rising edge and needs CS# and
-  D/C held 60 / 40 ns after it, which the extra half-period gives. It also
-  stops a CTRL write from changing DIV or EN mid-byte. Between two bytes SCK
-  stays high for at least a period. DATA reads 0.
+* Polled loop, as the driver runs it: write TXDATA(b0); for each further
+  byte write TXDATA, wait TXR, read TXDATA; at the end wait TXE and read
+  RXDATA.
+* **Back-pressure.** A TXDATA write waits only while the holding register is
+  full. Every other write (OUT, SPICTL, CONTROL, BAUD, STATUS, reserved slots)
+  waits for TXE, so `TXDATA; OUT` back to back is safe: the OUT store lands at
+  least one SCK half-period after the last sampling edge (the SSD1331's tCSH
+  60 ns and tAH 40 ns), and a change of mode, BAUD or EN cannot cut a phase
+  short. Reads never wait.
+* **Timing.** A byte takes exactly 16 x (BAUD + 1) clocks and bytes run back
+  to back. MOSI changes only at a launch edge, from a flop, so the device gets
+  BAUD + 1 clocks of setup and hold. MISO is sampled one core clock before
+  the edge that ends each bit, from GPIO IN 1's first synchroniser flop.
+  The SSD1331 needs 75 ns phases: BAUD >= 5 at 62.5 MHz. The SD card is
+  capped at 12.5 MHz in the device tree (BAUD 2 = 10.4 MHz); BAUD 1 only
+  after the round trip is measured on silicon (loopback `uo_out[1]` ->
+  `ui_in[1]`). Never use BAUD 0 to receive.
+* **Modes.** The driver writes CONTROL and BAUD before every transfer with
+  the mode of the last device set up, so run both devices in mode 3.
+* Device tree: `baud-width = <8>` and `clock-frequency` are both required.
+* With the keypad fitted EN stays 0: COL3 and COL1 are MOSI and SCK.
+* Departures from the tiny_spi RTL: a TXDATA write to a full holding register
+  waits (tiny_spi overwrote it); TXE also needs the holding register empty;
+  STATUS writes are ignored (no IRQ); CONTROL, BAUD and the data registers have
+  reset values.
+* A reset or reboot in the middle of A in mode 3 raises SCK on the same edge as
+  SD CS#; the frame is abandoned either way.
 
-Linux needs a small SPI controller driver under fbtft's `fb_ssd1331`
-(staging); its `transfer_one` is one register write per byte. Alternatively,
-make the registers compatible with an existing mainline driver. Decide when
-writing the driver.
+#### Board setup: SD card + OLED
+
+* PmodMicroSD J1: 1 CS, 2 MOSI, 3 MISO, 4 SCK, 5/11 GND, 6/12 3V3, 7 DAT1,
+  8 DAT2, 9 CD (confirm against Digilent's reference manual).
+* MOSI, SCK to both devices; MISO (`ui_in[1]`) from the card's DO; SD CS# from
+  `uo_out[7]` by a jumper wire (the OLED adapter clips that pin). Keep the
+  wires short, or fit 33 ohm series resistors, and scope SCK at the card.
+* A 10-100 kohm pull-up on MISO on the card side (the card tri-states DO while
+  deselected); check whether the Pmod has one. RP2350 GPIO18 must be an input
+  with no pull-down.
+* DIP 2 off with the SD fitted (its 1 kohm pull-up loads DO).
 
 ### 5. Bus and top level
 
@@ -469,10 +498,10 @@ tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
   edges. The QSPI pins are released for those two clocks, the control pins
   (SCK and the chip selects) come back driven idle on the first running edge,
   and the start-up sequence runs again, so the board sees what it sees after
-  `rst_n` rises. `uo_out` is `0x39` through it, then follows the GPIO block.
+  `rst_n` rises. `uo_out` is `0xB9` through it, then follows the GPIO block.
 * **Power-off** (`0x5555`, or `0x3333`): the same values held until `rst_n`.
   The QSPI pins stay released, so the Pmod's pull-ups deselect the flash and
-  both PSRAMs; `uo_out` stays `0x39` (UART idle, RTS# not ready, the OLED in
+  both PSRAMs; `uo_out` stays `0xB9` (UART idle, RTS# not ready, the OLED in
   reset with its panel supply off). The clock keeps running. Only `rst_n`
   wakes the chip.
 * **The strap** is read once, at the pin reset, and kept (see the wrapper

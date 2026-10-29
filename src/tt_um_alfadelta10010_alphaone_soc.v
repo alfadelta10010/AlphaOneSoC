@@ -2,14 +2,15 @@
 // the board wiring and the reasons for both are in
 // docs/pins-and-peripherals.md.
 //
-//   ui_in[7:0]   GPIO IN, all eight pins. Two of them have a second job:
+//   ui_in[7:0]   GPIO IN, all eight pins. Three of them have a second job:
+//   ui_in[1]       SPI MISO (the SD card's DO)
 //   ui_in[0]       the qspi_rd_late strap, read during reset (see below)
 //   ui_in[3]       UART RX
 //   uo_out[3:0]  GPIO OUT 3:0 ([1] / [3] are MOSI / SCK while the SPI
-//                transmitter is on)
+//                controller is on, both straight from flops)
 //   uo_out[4]    UART TX
 //   uo_out[5]    UART RTS#
-//   uo_out[7:6]  GPIO OUT 7:6
+//   uo_out[7:6]  GPIO OUT 7:6 ([7] is the SD card's CS#, high at reset)
 //   uio[0]       QSPI CS0, flash         uio[3]  QSPI SCK
 //   uio[6]       QSPI CS1, PSRAM A       uio[7]  QSPI CS2, PSRAM B
 //   uio[1], uio[2], uio[4], uio[5]       QSPI SD0, SD1, SD2, SD3
@@ -27,7 +28,7 @@
 // SoC's flops happened to power up with:
 //   * all eight bidirectional pins are inputs. Whoever holds the chip in
 //     reset owns the QSPI bus and can program the flash through it;
-//   * uo_out shows the SoC's reset values: TX and RTS# high, GPIO OUT 0x09.
+//   * uo_out shows the SoC's reset values: TX and RTS# high, GPIO OUT 0x89.
 // The strap on ui_in[0] is read on every clock edge while rst is high, the
 // last of them the second edge after rst_n rises: hold it until then.
 //
