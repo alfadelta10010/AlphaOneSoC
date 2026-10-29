@@ -48,7 +48,9 @@ if has D; then
   mutd() {
     python3 $S/mutate_netlist.py $NETLIST $D/mut-spi.v --kind spi > $D/mut-spi.txt 2>&1 || return
     bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$BUILD/list.D20 TCLK=20.0 OUT=$D/mut-D20 BASE=$D/rtl-D20 JOBS=$JOBS ONLY='^(oled_spi|periph_access)$' > /dev/null 2>&1
-    bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$BUILD/list.A OUT=$D/mut-A10 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
+    # (part A's list is empty under PARTS=D: build tt_pins for it)
+    [ -s $D/build-A/list.A ] || bash $S/build_isa.sh PARTS=A OUT=$D/build-A > /dev/null 2>&1
+    bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$D/build-A/list.A OUT=$D/mut-A10 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
   }
   for l in D10 D20; do stage rtl-$l rtld $l; done
   for l in D10 D20; do stage gl-$l gld $l; done
