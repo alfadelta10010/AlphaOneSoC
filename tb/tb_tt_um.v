@@ -636,7 +636,8 @@ module tb_tt_um;
             else case (fr_st)
                 0: if (b >= 8'h10 && b <= 8'h13) begin
                        fr_tag = b; fr_n = 0; fr_acc = 32'h0; fr_st = (b == 8'h10) ? 1 : 2;
-                   end else s_pay = $sformatf("%s%c", s_pay, b);
+                   end else if (b == 8'h00) fail("a NUL byte in the payload (it would vanish from the string)");
+                   else s_pay = $sformatf("%s%c", s_pay, b);
                 1: begin fr_st = 0; soc_event(b); end
                 default: begin
                     fr_acc[8 * fr_n +: 8] = b; fr_n = fr_n + 1;

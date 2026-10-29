@@ -188,6 +188,7 @@ module tb_soc_periph;
             b = rp.rx_buf[mb_seen % 16384]; mb_seen = mb_seen + 1;
             if (mb_st == 0) begin
                 if (b >= 8'h10 && b <= 8'h13) begin mb_tag = b; mb_n = 0; mb_st = (b == 8'h10) ? 1 : 2; end
+                else if (b == 8'h00) fail("a NUL byte in the payload (it would vanish from the string)");
                 else mb_pay = $sformatf("%s%c", mb_pay, b);
             end else if (mb_st == 1) begin
                 mb_st = 0;
