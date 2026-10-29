@@ -63,13 +63,14 @@ module gpio (
 );
 
     reg [7:0] in_m, in_s;          // synchroniser
-    reg [7:0] out_r;               // bits 5:4 unused
+    reg [7:0] out_r;               // bits 5:4, 3 and 1 stay 0 (p_sck, p_mosi hold 3 and 1)
     reg       spi_en;
     reg [1:0] spi_div;
     reg [8:0] spi_sh;
     reg [2:0] spi_pre;             // clocks into the current half-period
-    reg       spi_sck;
-    reg       spi_mosi;
+    reg       spi_sck;             // the shifter's SCK phase (timing only)
+    reg       p_sck;               // the uo_out[3] pin flop: OUT bit 3, or SCK while EN
+    reg       p_mosi;              // the uo_out[1] pin flop: OUT bit 1, or MOSI while EN
     wire      spi_busy = (spi_sh != 9'd0);
 
     // A half-period is 2^DIV clocks: spi_pre counts clocks from the load and
@@ -80,16 +81,14 @@ module gpio (
     assign ready = !(sel && we && be[0] && spi_busy);
     wire   wr    = sel && we && be[0] && ready;
 
-    assign rdata = (addr == 2'd0) ? {24'b0, out_r[7:6], 2'b00, out_r[3:0]} :
+    assign rdata = (addr == 2'd0) ? {24'b0, out_r[7:6], 2'b00, p_sck, out_r[2], p_mosi, out_r[0]} :
                    (addr == 2'd1) ? {24'b0, in_s} :
                    (addr == 2'd3) ? {23'b0, spi_busy, 5'b0, spi_div, spi_en} :
                                     32'h0000_0000;
 
-    assign out = {out_r[7:6], 2'b00,
-                  spi_en ? spi_sck  : out_r[3],
-                  out_r[2],
-                  spi_en ? spi_mosi : out_r[1],
-                  out_r[0]};
+    // MOSI and SCK come straight from flops: no mux, so a change of EN and of
+    // an OUT bit on the same edge cannot make a glitch on the pin.
+    assign out = {out_r[7:6], 2'b00, p_sck, out_r[2], p_mosi, out_r[0]};
 
     always @(posedge clk) begin
         in_m <= in;
@@ -104,13 +103,20 @@ module gpio (
             spi_sh   <= 9'd0;
             spi_pre  <= 3'd0;
             spi_sck  <= 1'b1;
-            spi_mosi <= 1'b0;
+            p_sck    <= 1'b1;
+            p_mosi   <= 1'b0;
         end else begin
-            if (wr && addr == 2'd0)
-                out_r <= {wdata[7:6], 2'b00, wdata[3:0]};
+            if (wr && addr == 2'd0) begin
+                out_r <= {wdata[7:6], 3'b000, wdata[2], 1'b0, wdata[0]};
+                if (!spi_en) begin          // while EN, the shifter owns bits 3 and 1
+                    p_sck  <= wdata[3];
+                    p_mosi <= wdata[1];
+                end
+            end
             if (wr && addr == 2'd3) begin
                 spi_en  <= wdata[0];
                 spi_div <= wdata[2:1];
+                if (wdata[0]) p_sck <= 1'b1;  // the shifter is idle: SCK at the mode-3 idle level
             end
 
             if (wr && addr == 2'd2) begin
@@ -123,8 +129,9 @@ module gpio (
                         spi_sh   <= 9'd0;                 // hold after the last rise
                     end else begin
                         spi_sck  <= !spi_sck;
+                        if (spi_en) p_sck <= !spi_sck;
                         if (spi_sck) begin                // falling edge
-                            spi_mosi <= spi_sh[8];
+                            if (spi_en) p_mosi <= spi_sh[8];
                             spi_sh   <= {spi_sh[7:0], 1'b0};
                         end
                     end
