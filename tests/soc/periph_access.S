@@ -78,10 +78,10 @@ _start:
     lbu  t0, LCR(s0)
     CHECK t0, 0x80, 0x113
     lhu  t0, 0(s0)
-    CHECK t0, 0x0004, 0x114      # DLM DLL = UART_DIV_RESET
+    CHECK t0, UART_DIV_RESET, 0x114   # DLM DLL = UART_DIV_RESET
     lbu  t0, IIR(s0)
     CHECK t0, 0x01, 0x115        # IER was cleared by the word store
-    li   t0, 0x0004
+    li   t0, UART_DIV_RESET
     sh   t0, 0(s0)               # DLL/DLM rewritten, no THR write (DLAB)
     sb   zero, LCR(s0)
     lbu  t0, IER(s0)

@@ -104,7 +104,7 @@ boot2:
     li   t2, 0x80
     sb   t2, LCR(t0)
     lbu  t1, DLL(t0)
-    CHECK t1, 4, 0x209               # the bench's UART_DIV_RESET
+    CHECK t1, UART_DIV_RESET, 0x209   # the bench's UART_DIV_RESET
     sb   zero, LCR(t0)
     lbu  t1, LSR(t0)
     CHECK t1, 0x60, 0x20A
