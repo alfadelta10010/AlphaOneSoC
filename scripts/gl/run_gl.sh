@@ -96,3 +96,5 @@ wait
   echo "not PASS:"; grep -L '^PASS' "$OUT"/*.verdict 2>/dev/null | xargs -r -n1 basename | sed 's/.verdict//' | while read -r n; do echo "  $n: $(cat "$OUT/$n.verdict")"; done
 } > "$OUT/summary"
 log "done $(basename "$LIST")"; touch "$OUT/done.run.$(basename "$LIST")"
+nv=$(ls "$OUT"/*.verdict 2>/dev/null | wc -l)
+[ "$nv" -gt 0 ] || { echo "FAIL: no program ran (empty list or ONLY matched nothing)" >> "$OUT/summary"; log "FAIL no program ran"; exit 1; }
