@@ -303,3 +303,48 @@ t_ctl_slow          soc expect x8=0x64 x25=0x64 x20=0x1
 core_reset          expect x10=0x0 x11=0xa0 x12=0xa0 -- +RESETS=160 +RESET_AT=400 +RESET_STRIDE=1
 core_reset          expect x10=0x0 x11=0xa0 x12=0xa0 -- +RESETS=160 +RESET_AT=400 +RESET_STRIDE=7 +RESET_LEN=1 +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1
 #soc-skip core_reset -- a SoC reset restarts qspi_ctrl's start-up sequence, which resets the PSRAMs (66h/99h); whether they keep their array across that is outside the datasheet subset in docs/, and the SoC boots from flash anyway. Covered at the SoC level only by tb_tt_um's resets and tb_qspi_stress +RESETS.
+# Reset with a kept halfword in hand (fr_reset.S says how): a compressed loop,
+# 160 resets, DUT only. Kills a core whose if_kv survives a reset (FR12).
+fr_reset            expect x11=0xa0 -- +RESETS=160 +RESET_AT=400 +RESET_STRIDE=1
+fr_reset            expect x11=0xa0 -- +RESETS=160 +RESET_AT=400 +RESET_STRIDE=7 +RESET_LEN=1 +IMEM_WAIT=2 +IMEM_RANDOM=1
+#soc-skip fr_reset -- a SoC reset restarts qspi_ctrl's start-up sequence; the core-level run covers the core
+
+# ---- fetch word reuse (WO-27) ---------------------------------------------------
+# A compressed instruction's fetch brings in the halfword behind it; the core
+# keeps that halfword for the next instruction. These tests pin the pairs, the
+# redirects that must drop it and the traps that must drop it.
+fr_pairs            spike
+fr_pairs            spike  +IMEM_WAIT=2
+fr_pairs            spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_branch           spike
+fr_branch           spike  +IMEM_WAIT=2
+fr_branch           spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_trap             spike
+fr_trap             spike  +IMEM_WAIT=2
+fr_trap             spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_misa             spike
+fr_misa             spike  +IMEM_WAIT=2
+fr_shift_ld         spike
+fr_shift_ld         spike  +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_shift_ld         spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=3 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_irq              spike
+fr_irq              spike  +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_irq              spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+# The interrupt raised by C1 itself lands wherever the pipeline takes it; the
+# trace differs from Spike's, the result does not (see the test's comment).
+fr_irq_sw           expect x9=0x20 x26=0x4
+fr_irq_sw           expect x9=0x20 x26=0x4 -- +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_irq_sw           expect x9=0x20 x26=0x4 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1 +NOTREADY_DATA=2
+# The timer's period is in clocks, Spike's is in instructions: DUT only.
+fr_irq_tmr          expect x10=0x0 x15=0x1 x26=0x1
+fr_irq_tmr          expect x10=0x0 x15=0x1 x26=0x1 -- +IMEM_WAIT=2 +DMEM_WAIT=2
+fr_page             spike
+fr_page             spike  +IMEM_WAIT=2 +IMEM_RANDOM=1
+fr_window_end       spike
+fr_window_end       spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +NOTREADY_DATA=2
+fr_pmp              spike
+fr_pmp              spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=1
+# Self-modifying code without FENCE.I: the instruction in hand runs stale.
+# Spike's decode cache is keyed by pc and need not agree, so DUT only.
+fr_smc              expect x12=0x1 x13=0x5
+fr_smc              expect x12=0x1 x13=0x5 -- +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1

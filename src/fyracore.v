@@ -70,10 +70,21 @@ module fyracore #(
     // Nothing is transferred on a cycle with *_req low, whatever *_ready is.
     //
     // Instruction memory interface (read-only). imem_req is high whenever the
-    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*) and EX holds
-    // no instruction that decides the next pc (ex_nofetch); outside them no fetch is requested at all (see
-    // imem_req below). When the pipeline is stalled
-    // with a fetch already completed, the same address is requested again.
+    // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*), EX holds
+    // no instruction that decides the next pc (ex_nofetch) and the
+    // instruction at pc is not already in hand (see if_kv below); outside
+    // them no fetch is requested at all (see imem_req below). When the
+    // pipeline is stalled with a fetch already completed, the same address is
+    // requested again.
+    //
+    // A fetch returns the 4 bytes from pc. When the instruction at pc is
+    // compressed, the upper two bytes are the halfword behind it; the core
+    // keeps them, and if the next instruction (at pc + 2) is compressed too
+    // it takes it from there without a request: two compressed instructions
+    // cost one fetch. IF/EX can therefore load a cycle in which imem_req is
+    // low. Nothing is snooped: a store to the kept halfword is not seen
+    // before the next FENCE.I (which drops it), as for a fetch that was
+    // already in flight.
     //
     // For the memory controller:
     //   - While a data request waits for dmem_ready the pipeline is stalled
@@ -136,9 +147,26 @@ module fyracore #(
     // unused and pc does not take if_pc_next, so nothing looks at the
     // fetched word. Masking with imem_req put that instruction's decode in
     // front of everything IF computes: the expansion, the register file's
-    // read addresses and the next pc.
+    // read addresses and the next pc. It is also low on a hit (below), and
+    // IF/EX then loads: the mask stays if_exec so that it can.
     wire        if_exec;         // pc is in an executable window (assigned with imem_req)
-    wire [31:0] if_fetched    = imem_rdata & {32{if_exec}};
+    // Fetch word reuse. A fetch of a compressed instruction at P also brought
+    // in the halfword at P + 2; if_kbuf keeps it and if_kv says it is the
+    // instruction at pc. No address tag: if_kv is only 1 while pc is the
+    // sequential successor of the fetch that filled if_kbuf. It is set when a
+    // compressed instruction is loaded into IF/EX from a fetch (the same edge
+    // pc moves to P + 2), held on the cycles pc holds (stall, and a
+    // not-taken branch's bubble) and cleared by every other pc change
+    // (flush) and by the hit that consumes it. Every redirect is taken on a
+    // !stall edge, so a held if_kv is never stale.
+    reg  [15:0] if_kbuf;         // upper halfword of the last fetch (no reset)
+    reg         if_kv;           // if_kbuf is the compressed instruction at pc
+    wire        if_hit        = if_kv;
+    // The mux is in front of the window mask: a kept halfword at pc outside
+    // the window (the last halfword of a window) is forced to 0 like a fetched
+    // one and faults in EX. The upper half of the word is not used on a hit.
+    wire [31:0] if_word       = {imem_rdata[31:16], if_hit ? if_kbuf : imem_rdata[15:0]};
+    wire [31:0] if_fetched    = if_word & {32{if_exec}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     // A compressed instruction is expanded here, on its way into IF/EX, so
     // that EX starts from the 32-bit form. Expanding it in EX put the
@@ -182,7 +210,17 @@ module fyracore #(
     // fetch would have to complete (~42 clocks) before the redirect could be
     // taken. See ex_nofetch. A not-taken branch then costs one bubble.
     assign if_exec   = in_exec(pc);
-    assign imem_req  = if_exec && !ex_nofetch;
+    // Nothing is requested while the instruction at pc is in hand (if_hit).
+    assign imem_req  = if_exec && !ex_nofetch && !if_hit;
+
+    // Captured on every completed fetch, not on the IF/EX load: no fetch can
+    // complete while if_kv is 1 (imem_req is low), so the bits are frozen
+    // exactly while they are needed, and the 16 enables stay off the stall
+    // net. imem_ready alone is not enough: a memory may raise it with no
+    // request, and the kept bits would be overwritten while in use.
+    always @(posedge clk)
+        if (imem_req && imem_ready)
+            if_kbuf <= imem_rdata[31:16];
 
     // ================================================================
     //  IF/EX Pipeline Register
@@ -1246,6 +1284,8 @@ module fyracore #(
             // Reservation
             reservation_valid <= 1'b0;
             reservation_addr  <= 30'b0;
+            // Fetch word reuse
+            if_kv             <= 1'b0;
         end else begin
             // ---- PC ----
             pc <= next_pc;
@@ -1289,6 +1329,9 @@ module fyracore #(
                 end
             end else if (flush || ex_nofetch) begin
                 // Insert bubble (nothing was fetched behind ex_nofetch)
+                // A not-taken branch (ex_nofetch alone) leaves pc where it is
+                // and keeps the kept halfword; any flush moves pc.
+                if_kv          <= if_kv && !flush;
                 ifex_valid     <= 1'b0;
                 ex_rf_ok       <= 1'b0;
                 ex_ph          <= 1'b0;
@@ -1306,6 +1349,12 @@ module fyracore #(
                 ifex_compressed<= if_compressed;
                 ifex_c_illegal <= if_compressed && if_c_illegal_raw;
                 ifex_valid     <= 1'b1;
+                // Keep the halfword behind a compressed instruction that came
+                // from a fetch, unless it starts a 32-bit instruction (its
+                // low bits are 11): the instruction at pc + 2 then needs a
+                // fetch of its own for its upper half. A hit consumes it.
+                if_kv          <= !if_hit && if_exec && if_compressed &&
+                                  (if_fetched[17:16] != 2'b11);
                 ex_rf_ok       <= 1'b0;
                 ex_ph          <= 1'b0;
                 // The register file's read addresses while this

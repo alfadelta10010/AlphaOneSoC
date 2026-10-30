@@ -917,6 +917,95 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  Fetch word reuse checks
+    //
+    //  The core keeps the upper halfword of a fetched compressed
+    //  instruction (if_kbuf, if_kv) and takes the next instruction from it
+    //  without a fetch, so a retired instruction no longer always has a
+    //  fetch of its own. Three checks, and a counter:
+    //
+    //  C-int      every hit's if_kbuf is the memory's halfword at pc (PSRAM
+    //             only; skipped once a store wrote either byte since the
+    //             fill: self-modifying code without FENCE.I runs stale by
+    //             design).
+    //  C-nofetch  imem_req is never high while if_kv is.
+    //  C-musthit  if_kv equals an independent shadow of the rule: set by a
+    //             load from a fetch of a compressed instruction whose
+    //             successor halfword is not the start of a 32-bit one, held
+    //             while pc holds (stall, a not-taken branch's bubble),
+    //             cleared by any flush, by the hit that uses it and by any
+    //             other load. Without it a buffer that never hits is
+    //             functionally invisible.
+    //
+    //  The counters are in the summary ("fetch-reuse:"), so a run can show
+    //  that it exercised hits at all.
+    // ================================================================
+    integer fr_hits = 0, fr_fetches = 0, fr_loads = 0;
+    reg        fr_exp_kv = 1'b0, fr_dirty = 1'b0, fr_seen_rst = 1'b0;
+    reg [31:0] fr_kaddr = 32'h0;
+    reg [15:0] fr_mem_h;
+    integer    fr_k;
+    function [7:0] fr_byte(input [31:0] a);
+        reg [7:0] v;
+        begin
+            v = `MEMARR[a[23:0]];
+            fr_byte = (^v === 1'bx) ? 8'h00 : v;
+        end
+    endfunction
+    task fr_fail(input [8*48-1:0] what);
+        begin
+            $display("ERROR: fetch reuse: %0s at pc 0x%08h cycle %0d (if_kv %b, expected %b, kbuf %04h)",
+                     what, `CPU.pc, cycle_count, `CPU.if_kv, fr_exp_kv, `CPU.if_kbuf);
+            emit_abort_marker;
+            $fclose(dump_fd);
+            $finish;
+        end
+    endtask
+    always @(posedge clk) begin
+        if (rst) begin
+            fr_exp_kv   <= 1'b0;
+            fr_seen_rst <= 1'b1;
+        end else if (fr_seen_rst) begin
+            if (`CPU.if_kv !== fr_exp_kv)
+                fr_fail("if_kv differs from the rule");
+            if (`CPU.imem_req && `CPU.if_kv)
+                fr_fail("fetch requested with the instruction in hand");
+            // the shadow and the fill/store bookkeeping
+            if (`CPU.imem_req && `CPU.imem_ready) begin
+                fr_fetches = fr_fetches + 1;
+                fr_kaddr   = `CPU.pc + 32'd2;
+                fr_dirty   = 1'b0;
+            end
+            if (dmem_req && dmem_ready && dmem_we) begin     // a store in a fetch's cycle counts too
+                for (fr_k = 0; fr_k < 4; fr_k = fr_k + 1)
+                    if (dmem_be[fr_k] &&
+                        ({dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr ||
+                         {dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr + 32'd1))
+                        fr_dirty = 1'b1;
+            end
+            if (!`CPU.stall) begin
+                if (`CPU.flush || `CPU.ex_nofetch) begin
+                    fr_exp_kv <= fr_exp_kv && !`CPU.flush;
+                end else begin
+                    fr_loads = fr_loads + 1;
+                    if (`CPU.if_hit) begin
+                        fr_hits = fr_hits + 1;
+                        if (`CPU.pc !== fr_kaddr)
+                            fr_fail("hit at a pc other than fetch + 2");
+                        if (`CPU.pc[31] && `CPU.if_exec && !fr_dirty) begin
+                            fr_mem_h = {fr_byte(`CPU.pc + 32'd1), fr_byte(`CPU.pc)};
+                            if (`CPU.if_kbuf !== fr_mem_h)
+                                fr_fail("kept halfword is not the memory's");
+                        end
+                    end
+                    fr_exp_kv <= !fr_exp_kv && `CPU.if_exec && `CPU.if_compressed &&
+                                 (`CPU.imem_rdata[17:16] != 2'b11);
+                end
+            end
+        end
+    end
+
+    // ================================================================
     //  Abort marker
     //
     //  Every abort path here ends in $finish, i.e. exit status 0, and leaves a
@@ -952,6 +1041,7 @@ module tb_rivercore;
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
             $display("  Register-file reads checked: %0d", rf_chk_n);
             $display("  Bus transactions checked: %0d", bus_chk_n);
+            $display("  fetch-reuse: hits %0d fetches %0d loads %0d", fr_hits, fr_fetches, fr_loads);
             $display("  Dump: %0s", dump_file_str);
         end
     endtask

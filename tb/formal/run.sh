@@ -9,6 +9,8 @@
 # Modes: induct (k-induction, PROVED) or bmc (bounded from reset, BOUNDED;
 # core_req is not inductive without internal invariants). The core harnesses
 # read tb/formal/rf_top_stub.v instead of src/rf_top.v (free read data).
+# core_fetch (fetch word reuse, core_fetch_props.sv) reads fyracore.v with
+# observation ports added by sed, since the tools read no hierarchical names.
 # Mode struct (soc_rst_sync) is not a SAT proof: the SoC is flattened and the
 # fan-out cone of rst_soc is walked through buffers and logic but not through
 # flops, $mem* cells or latches, which end the walk; it is FAILED if the cone
@@ -29,16 +31,25 @@ mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
 SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
-declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC" )
-declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" )   # read from $HERE
-declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct )
+declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC" )
+declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" )   # read from $HERE
+declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
+declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct )
 declare -A BDEPTH=( [syscon_comb]=24 )     # per-harness bmc depth; default $BMC_DEPTH
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req syscon_comb syscon_gate soc_rst_sync)
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync)
 bad=0
 err=0
 for n in "${names[@]}"; do
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
+  if [ "$n" = core_fetch ]; then
+    # fyracore.v with the f_* observation ports (see core_fetch_props.sv)
+    inst="$OUT/formal_core_fetch_fyracore.v"
+    sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf,\n\1output wire        f_kv, f_exec, f_load/' \
+        -e 's/^endmodule$/    assign f_pc = pc; assign f_fetched = if_fetched; assign f_kbuf = if_kbuf;\n    assign f_kv = if_kv; assign f_exec = if_exec;\n    assign f_load = !rst \&\& !stall \&\& !(flush || ex_nofetch);\nendmodule/' \
+        "$SRC/fyracore.v" > "$inst"
+    grep -q "f_load" "$inst" && grep -q "assign f_pc" "$inst" || { echo "ERROR $n: could not instrument fyracore.v"; err=1; continue; }
+    srcs="${srcs/$SRC\/fyracore.v/$inst}"
+  fi
   for f in ${EXTRA[$n]:-}; do srcs="$srcs $HERE/$f"; done
   log="$OUT/formal_${n}.log"
   if [ "${MODE[$n]}" = struct ]; then
