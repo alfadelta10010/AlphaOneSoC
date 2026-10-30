@@ -31,12 +31,22 @@ mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
 SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
-declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC" )
+declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC"
+                   [spi_core]="spi.v" [spi_dc]="spi.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct )
+declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct
+                  [spi_core]=induct [spi_dc]=induct )
 declare -A BDEPTH=( [syscon_comb]=24 )     # per-harness bmc depth; default $BMC_DEPTH
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync)
+# spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
+# needs more reports FAILED and gets a strengthening invariant instead.
+declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 )
+# spi_*: white-box access with `expose` (a hierarchical reference such as
+# dut.x would become an undriven wire, and `bind` does nothing: both are
+# forbidden). PRE runs after the RTL is read and before the harness is.
+SPI_EXPOSE="w:st w:sr w:bb w:bba w:cc w:bc w:cpol w:cpha w:baud"
+declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE" )
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc)
 bad=0
 err=0
 for n in "${names[@]}"; do
@@ -98,10 +108,17 @@ PYEOF
   if [ "${MODE[$n]}" = bmc ]; then
     sat="sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd"
   else
-    sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps $DEPTH"
+    sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps ${IDEPTH[$n]:-$DEPTH}"
   fi
-  timeout 1800 yosys -p "read_verilog -sv -formal $srcs $HERE/${n}_props.sv; prep -top ${n}_props; \
+  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal $HERE/${n}_props.sv"
+  else rd="read_verilog -sv -formal $srcs $HERE/${n}_props.sv"; fi
+  timeout 1800 yosys -p "$rd; prep -top ${n}_props; \
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
+  case "$n" in spi_*)
+    if grep -qE "is implicitly declared|is used but has no driver" "$log"; then
+      echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue
+    fi;;
+  esac
   if [ "${MODE[$n]}" = bmc ]; then
     if grep -q "SAT proof finished - no model found: SUCCESS" "$log"; then
       echo "BOUNDED $n (no counterexample within $bd steps of reset)"
@@ -120,7 +137,7 @@ PYEOF
     echo "FAILED $n: a counterexample from reset (log: $log)"
     grep -E "failed|ERROR" "$log" | tail -3; bad=1
   elif grep -q "Reached maximum" "$log"; then
-    echo "FAILED $n: induction did not close by length $DEPTH (log: $log)"
+    echo "FAILED $n: induction did not close by length ${IDEPTH[$n]:-$DEPTH} (log: $log)"
     grep -E "failed|Reached maximum" "$log" | tail -3; bad=1
   else
     echo "ERROR $n: no verdict (log: $log)"; err=1
