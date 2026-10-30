@@ -398,6 +398,7 @@ module tb_tt_um;
     localparam integer ID_syscon_wdt_split = 14;
     localparam integer ID_syscon_poweroff = 15;
     localparam integer ID_syscon_pinreset = 16;
+    localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
     integer pid = 0;
     function automatic integer prog_id(input string p);
         begin
@@ -418,6 +419,7 @@ module tb_tt_um;
             if (p == "syscon_wdt_split") prog_id = ID_syscon_wdt_split;
             if (p == "syscon_poweroff") prog_id = ID_syscon_poweroff;
             if (p == "syscon_pinreset") prog_id = ID_syscon_pinreset;
+            if (p == "sd_init") prog_id = ID_sd_init;
         end
     endfunction
     // ── +TEST=soc +PROG=<name>: the mailbox programs of tests/soc ───────────
@@ -580,6 +582,11 @@ module tb_tt_um;
                 ID_syscon_pinreset: begin
                     s_div = 1; s_n_ev = 3; s_ev[0] = 'h54; s_ev[1] = 'h55; s_ev[2] = 'h57;
                     s_exp_re = 1; s_exp_cut = 2;
+                end
+                ID_sd_init: begin
+                    // VALUE s5 bytes checked, VALUE s6 CRC16s checked, VALUE the data phase's BAUD
+                    s_div = 1; s_n_val = 3; s_val_known = 1'b1;
+                    s_val[0] = 32'd2048; s_val[1] = 32'd4; s_val[2] = 32'd2;
                 end
                 default: fail($sformatf("+PROG=%s: not a program of this bench", prog));
             endcase
@@ -824,6 +831,15 @@ module tb_tt_um;
                 ID_syscon_poweroff:
                     if (sw_w1_idle) fail("syscon_poweroff: window 1 found every chip select high, nothing was in flight at the hold");
                 ID_keypad: if (s_ev_i != 28) fail("keypad: not every pattern was scanned");
+`ifdef TT_SD
+                ID_sd_init: begin
+                    $display("NOTE sd_init: %0d cmds, %0d blocks read, %0d written, %0d crc16 ok, %0d race, %0d model errors",
+                             sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, sd.n_crc16_ok, sd.n_race, sd.errors);
+                    if (!sd_fit) fail("sd_init needs +SD");
+                    if (sd.n_cmd != 16 || sd.n_rd_blk != 4 || sd.n_wr_blk != 1 || sd.n_race != 0)
+                        fail("sd_init through the pins: want 16 cmds, 4 blocks read, 1 written, race 0");
+                end
+`endif
                 default: ;
             endcase
             $display("NOTE soc %s: %0d cues, %0d VALUE frames, %0d windows (%0d reboots, %0d power-offs, %0d cut by a pin reset)",
