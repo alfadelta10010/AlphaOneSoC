@@ -14,7 +14,10 @@
 // B+1 clocks later, sample at clock 2k(B+1)+2B.
 // The one assumption: a BAUD write carries wdata[7:0] = 0 (BAUD 0), so a
 // byte is 16 clocks and depth 24 reaches a whole byte (BAUD <= 1 at depth 40 gave no verdict in 1800 s). Checks start
-// at the first reset (armed).
+// at the first reset (armed). Built with -DBB_BAUD1 (harness spi_bb1) the BAUD assumption is 1
+// and the inputs are narrowed, so a phase-length fault (SPI08) is visible. Depth 40 gave no
+// verdict in 1800 s; depth 24 (407 s) covers the setup writes and the first launches, not a
+// whole byte (32 clocks at BAUD 1); SPI08 fails it at depth 16 in 8 s.
 module spi_bb_props (
     input  wire        clk, rst,
     input  wire        sel, we,
@@ -101,7 +104,16 @@ module spi_bb_props (
     end
 
     always @(*) begin
+`ifdef BB_BAUD1
+        // spi_bb1: BAUD 1 (a phase is 2 clocks, so a phase-length fault shows), and the
+        // inputs narrowed to what the SoC drives: 8-bit data, only MISO live, one reset.
+        assume (!(acc && addr == 4'd12 && wdata[7:0] != 8'd1));
+        assume (wdata[31:8] == 24'd0);
+        assume (in[7:2] == 6'd0 && in[0] == 1'b0);
+        assume (!(armed && rst));
+`else
         assume (!(acc && addr == 4'd12 && wdata[7:0] != 8'd0));
+`endif
         if (armed) begin
             assert (ready == ready_s);                                              // E5 (stall rule on the timeline)
             assert (out[5:4] == 2'b00);

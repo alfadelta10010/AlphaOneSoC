@@ -65,10 +65,13 @@ TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1
 # structural and has no _props.sv.
 FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req", "core_fetch"], "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"],
-          "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_cover"],
-          "gpio.v": ["spi_bus", "spi_bb", "spi_f12"],
+          "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
+          "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12"],
           "tt_um_alfadelta10010_alphaone_soc.v": ["spi_f12"]}
 NO_PROPS = {"soc_rst_sync", "spi_f12"}
+
+
+SKIP_FORMAL = set()
 
 
 def make_has(target):
@@ -84,7 +87,7 @@ def benches_for(f, kinds):
         units += [t for t in UNIT_EXTRA.get(f, []) if make_has(t)]
         out += [("unit", t) for t in units]
     if "formal" in kinds:
-        out += [("formal", h) for h in FORMAL.get(f, [])
+        out += [("formal", h) for h in FORMAL.get(f, []) if h not in SKIP_FORMAL
                 if h in NO_PROPS or os.path.exists(os.path.join(ROOT, "tb/formal/%s_props.sv" % h))]
     if f in SOC_FILES:
         if "soc" in kinds:
@@ -245,10 +248,12 @@ def main():
     ap.add_argument("-j", type=int, default=1)
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--tree")
+    ap.add_argument("--skip-formal", default="", help="comma list of formal harnesses to leave out, e.g. spi_cover")
     ap.add_argument("--results")
     a = ap.parse_args()
     os.chdir(ROOT)
-    global TREE, RESULTS
+    global TREE, RESULTS, SKIP_FORMAL
+    SKIP_FORMAL = {x for x in a.skip_formal.split(",") if x}
     if a.tree:
         TREE = os.path.abspath(a.tree)
     if a.results:

@@ -32,12 +32,12 @@ BMC_DEPTH="${BMC_DEPTH:-10}"
 SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
 declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC"
-                   [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
+                   [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_bb1]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" [spi_f12]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
 declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct
-                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_cover]=cover [spi_f12]=struct )
-declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=24 [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
+                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_bb1]=bmc [spi_cover]=cover [spi_f12]=struct )
+declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=24 [spi_bb1]=${BB1_DEPTH:-24} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
 declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
@@ -51,8 +51,10 @@ GPIO_PRE="hierarchy -top gpio; proc; flatten; cd gpio;"
 for x in wr_tx wr_ctl wr_baud wr_en wr_out miso st bba bb sr baud cpol cpha cc bc; do GPIO_PRE="$GPIO_PRE rename spi_inst.$x x_$x;"; done
 GPIO_PRE="$GPIO_PRE expose w:x_wr_tx w:x_wr_ctl w:x_wr_baud w:x_wr_en w:x_wr_out w:x_miso w:x_st w:x_bba w:x_bb w:x_sr w:x_baud w:x_cpol w:x_cpha w:x_cc w:x_bc w:spi_en w:in_m w:in_s w:out_r; cd .."
 declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
-                 [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_cover]="$GPIO_PRE" )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_cover spi_f12)
+                 [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_bb1]="" [spi_cover]="$GPIO_PRE" )
+# spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
+declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
 bad=0
 err=0
 for n in "${names[@]}"; do
@@ -216,8 +218,8 @@ PYEOF
     sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps ${IDEPTH[$n]:-$DEPTH}"
   fi
   if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal $HERE/${n}_props.sv"
-  else rd="read_verilog -sv -formal $srcs $HERE/${n}_props.sv"; fi
-  timeout 1800 yosys -p "$rd; prep -top ${n}_props; \
+  else rd="read_verilog -sv -formal $srcs; read_verilog -sv -formal ${DEFS[$n]:-} $HERE/${PROPN[$n]:-$n}_props.sv"; fi
+  timeout 1800 yosys -p "$rd; prep -top ${PROPN[$n]:-$n}_props; \
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
   case "$n" in spi_*)
     if grep -qE "is implicitly declared|is used but has no driver" "$log"; then
