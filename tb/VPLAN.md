@@ -295,21 +295,22 @@ gone; GP03 would be equivalent), GP01 is rewritten, GP05 stands. The soc benches
 SPI01 (survives test-soc-periph, test-wrapper, test-syscon-soc; killed by test-soc-spi sd_b1)
 and the formal benches only as planted copies (below), not as a full campaign.
 
-| Mutant | First failing check in test-spi | Note |
+| Mutant | Killed by | Note |
 |---|---|---|
-| SPI01 | T04 MISO probe | also sd_b1; equivalent at BAUD 0 |
-| SPI02, SPI21 | T04 MISO probe | spi_bb planted copy of SPI02 FAILS (E-checks) |
-| SPI03 | T03 pins | |
-| SPI04a | random phase (T12 does not kill it) | a gap to close: C13 in spi_core is the named formal killer |
-| SPI04b, SPI16, SPI31 | T04 | |
-| SPI05 | T04 (ready) | T06 is the named killer; the probe's writes see it first |
-| SPI06, SPI07 | T07 | |
-| SPI08, SPI10, SPI11, SPI17, SPI18, SPI19, SPI23, SPI24, SPI26, SPI31, SPI32, SPI03 | T03 | |
-| SPI09, SPI13, SPI25 | T02 | the WO listed SPI25 as SoC-equivalent: the unit bench kills it |
-| SPI14, SPI20, SPI27, SPI28, SPI30, GP05 | T01 / start | |
-| SPI15, SPI22 | T06 / T04 | |
-| SPI29, GP01 | T09 byte lanes | |
-| SPI12 | none (equivalent in simulation) | spi_f12 only |
+| SPI01 | test-spi T04 MISO probe; test-soc-spi sd_b1 | survives test-soc-periph, test-wrapper, test-syscon-soc; equivalent at BAUD 0 |
+| SPI02 | test-spi T04 MISO probe; test-soc-spi sd_b1_rt40 (the negative control flips to PASS) | contradicts the WO's "survives every delay-based test"; spi_bb planted copy FAILS |
+| SPI21 | test-spi T04 MISO probe; test-soc-spi sd_b1 ("program check 00000009 failed (value seen 000000ff)") | |
+| SPI03, SPI08, SPI10, SPI11, SPI17, SPI18, SPI19, SPI23, SPI24, SPI26, SPI32 | test-spi T03 | |
+| SPI04a | test-spi random phase only | T12 does not kill it; C13 in spi_core is the named formal killer |
+| SPI04b, SPI16, SPI31 | test-spi T04 | |
+| SPI05 | test-spi T04 (ready) | T06 is the named killer; the probe's writes see it first |
+| SPI06, SPI07 | test-spi T07 | |
+| SPI09, SPI13 | test-spi T02 | |
+| SPI25 | test-spi T02 | the WO called it SoC-equivalent; the unit bench kills it |
+| SPI14, SPI20, SPI27, SPI28, SPI30, GP05 | test-spi T01 / start | |
+| SPI15, SPI22 | test-spi T06 / T04 | |
+| SPI29, GP01 | test-spi T09 byte lanes | |
+| SPI12 | spi_f12 only | equivalent in every simulation; planted copy: F1 out[3] driven by $or |
 
 ### 4.2 Survivors and verdicts
 
