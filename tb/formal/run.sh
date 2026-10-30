@@ -32,21 +32,27 @@ BMC_DEPTH="${BMC_DEPTH:-10}"
 SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
 declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC"
-                   [spi_core]="spi.v" [spi_dc]="spi.v" )
+                   [spi_core]="spi.v" [spi_dc]="spi.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
 declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct
-                  [spi_core]=induct [spi_dc]=induct )
-declare -A BDEPTH=( [syscon_comb]=24 )     # per-harness bmc depth; default $BMC_DEPTH
+                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_cover]=cover )
+declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=24 [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
-declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 )
+declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
 # spi_*: white-box access with `expose` (a hierarchical reference such as
 # dut.x would become an undriven wire, and `bind` does nothing: both are
 # forbidden). PRE runs after the RTL is read and before the harness is.
 SPI_EXPOSE="w:st w:sr w:bb w:bba w:cc w:bc w:cpol w:cpha w:baud"
-declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE" )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc)
+# gpio is flattened and the wires of its spi instance renamed s_<port>, then
+# exposed (the names of spi.v's ports and of the flops listed in WO-28 2.1).
+GPIO_PRE="hierarchy -top gpio; proc; flatten; cd gpio;"
+for x in wr_tx wr_ctl wr_baud wr_en wr_out miso st bba bb sr baud cpol cpha cc bc; do GPIO_PRE="$GPIO_PRE rename spi_inst.$x x_$x;"; done
+GPIO_PRE="$GPIO_PRE expose w:x_wr_tx w:x_wr_ctl w:x_wr_baud w:x_wr_en w:x_wr_out w:x_miso w:x_st w:x_bba w:x_bb w:x_sr w:x_baud w:x_cpol w:x_cpha w:x_cc w:x_bc w:spi_en w:in_m w:in_s w:out_r; cd .."
+declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
+                 [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_cover]="$GPIO_PRE" )
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_cover)
 bad=0
 err=0
 for n in "${names[@]}"; do
@@ -105,6 +111,24 @@ PYEOF
     continue
   fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
+  if [ "${MODE[$n]}" = cover ]; then
+    # one run per point (-D COVER_i); the point is assert(!cond), so "model found" = COVERED
+    ncov=0; ntot=6; unr=""; ecov=0
+    for i in 1 2 3 4 5 6; do
+      clog="$OUT/formal_${n}_$i.log"
+      timeout 1800 yosys -p "read_verilog -sv -formal $srcs; ${PRE[$n]:-}; read_verilog -sv -formal -DCOVER_$i $HERE/${n}_props.sv; \
+          prep -top ${n}_props; chformal -lower; flatten; opt -fast; \
+          sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd" > "$clog" 2>&1
+      if grep -qE "is implicitly declared|is used but has no driver" "$clog"; then ecov=1
+      elif grep -q "SAT proof finished - model found: FAIL" "$clog"; then ncov=$((ncov+1))
+      elif grep -q "SAT proof finished - no model found: SUCCESS" "$clog"; then unr="$unr $i"
+      else ecov=1; fi
+    done
+    if [ $ecov = 1 ]; then echo "ERROR $n: a cover run gave no verdict (logs: $OUT/formal_${n}_*.log)"; err=1
+    elif [ $ncov = $ntot ]; then echo "COVERED $n ($ncov/$ntot)"
+    else echo "FAILED $n: $ncov/$ntot covered, unreachable within $bd steps:$unr"; bad=1; fi
+    continue
+  fi
   if [ "${MODE[$n]}" = bmc ]; then
     sat="sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd"
   else
