@@ -132,7 +132,9 @@ module tb_tt_um;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted
     reg [15:0] keys = 16'h0000;
     wire [3:0] kp_row;
-    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, tb_in[2:1], strap_on ? strap : tb_in[0]};
+    reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[7], SCK [3], MOSI [1], DO ui_in[1]
+    wire       sd_do_in1;
+    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
 `ifdef USE_POWER_PINS
@@ -179,6 +181,33 @@ module tb_tt_um;
     ssd1331_model oled (.fitted(oled_fit), .cs_n(uo_out[0]), .sck(uo_out[3]), .mosi(uo_out[1]),
                         .dc(uo_out[2]), .res_n(uo_out[6]));
     keypad_model kp (.col(uo_out[3:0]), .pressed(keys), .row(kp_row));
+
+    // ── The SD card (WO-29 6.3), behind +SD, compiled in with -DTT_SD ───────
+    // The card sees uo_out through RT_OUT (default 12.5 ns) and its DO reaches
+    // ui_in[1] through RT_IN (12.5 ns): transport delays (a nonblocking
+    // assignment with a delay), never an inertial `assign #`. tb/sd_spi_model.v
+    // must be on the compile line (scripts/gl/run_gl.sh adds it in the GL WO).
+    real      rt_out = 12.5, rt_in = 12.5;
+    reg [7:0] pd = 8'hB9;
+    always @(uo_out[1]) pd[1] <= #(rt_out) uo_out[1];
+    always @(uo_out[3]) pd[3] <= #(rt_out) uo_out[3];
+    always @(uo_out[7]) pd[7] <= #(rt_out) uo_out[7];
+    reg       do_in1_r = 1'b1;
+    assign    sd_do_in1 = do_in1_r;
+`ifdef TT_SD
+    tri1      sd_do_c;
+    sd_spi_model sd (.fitted(sd_fit), .cs_n(pd[7]), .sck(pd[3]), .di(pd[1]),
+                     .expect_violations(1'b0), .do_o(sd_do_c));
+    always @(sd_do_c) do_in1_r <= #(rt_in) sd_do_c;
+`endif
+    initial begin
+        sd_fit = $test$plusargs("SD");
+        if ($value$plusargs("RT_OUT=%f", rt_out)) ;
+        if ($value$plusargs("RT_IN=%f", rt_in)) ;
+`ifndef TT_SD
+        if (sd_fit) begin $display("FAIL +SD needs the bench compiled with -DTT_SD and tb/sd_spi_model.v"); $finish; end
+`endif
+    end
 
 `ifdef SDF_FILE
     initial $sdf_annotate(`SDF_FILE, dut);
@@ -1166,6 +1195,9 @@ module tb_tt_um;
         if (soc_test) soc_final;
         if (cs0_falls == 0 || sck_rises == 0) fail("no flash read on uio[0] and uio[3]");
         if (rp.errors != 0) fail($sformatf("%0d RP2350 UART errors", rp.errors));
+`ifdef TT_SD
+        if (sd_fit && sd.errors != 0) fail($sformatf("%0d SD model errors", sd.errors));
+`endif
         if (rp.tx_pending() != 0) fail("a byte for the program was never sent: RTS# stayed high");
         tag = reboot_test ? " reboot" : "";
         if (isa_test) tag = {" ", testname};
