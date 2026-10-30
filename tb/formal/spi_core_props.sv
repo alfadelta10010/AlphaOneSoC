@@ -143,6 +143,7 @@ module spi_core_props (
             if (busy) assert (((sr ^ rxs) & kmask) == 8'd0);                                    // C12
             if (busy) assert (since == exp_since);                                              // C14
             assert (d == {1'b0, bba});                                                          // C9
+            assert (txe == (st == IDLE && !bba) && txr == !bba);                                  // C9 (status flags)
             if (bba) assert (bb == hb);                                                         // C9
         end
         // ---- C15
