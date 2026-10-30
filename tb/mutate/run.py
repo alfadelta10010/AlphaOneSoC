@@ -68,7 +68,7 @@ FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req", "core_fetch"
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
           "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12"],
           "tt_um_alfadelta10010_alphaone_soc.v": ["spi_f12"]}
-NO_PROPS = {"soc_rst_sync", "spi_f12"}
+NO_PROPS = {"soc_rst_sync", "spi_f12", "spi_bb1"}  # spi_bb1 reuses spi_bb_props.sv
 
 
 SKIP_FORMAL = set()
