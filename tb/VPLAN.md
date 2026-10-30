@@ -146,7 +146,7 @@ IDs follow WO-29 section 3 (`SPI-nnn`). The expected value of every check comes 
 | REQ-SPI-008 | MOSI: MSB first, changes only at a launch, stable B+1 clocks before and after every A->B edge | C | tb_spi T03, SSD1331 tDSW/tDHW | pins every clock; ssd1331_model |
 | REQ-SPI-009 | MISO: bit k is the `ui_in[1]` value at edge launch_k + 2B + 1; it lands in sr (lone or last byte) or bb (back-to-back load) | C | tb_spi T04 PROBE, T14 | the probe drives the bit only at that edge and its complement elsewhere |
 | REQ-SPI-010 | One byte per write: never overwritten, never duplicated, never lost | C | tb_spi T05/T06 + random | scoreboard in the model |
-| REQ-SPI-011 | An IDLE load moves sr into bb, so a TXDATA read after the load returns the previous RX byte | C | tb_spi T05/T12 | timing model |
+| REQ-SPI-011 | An IDLE load moves sr into bb, so a TXDATA read after the load returns the previous RX byte | C | tb_spi T05 slow driver (writes 16(B+1)+0..7 clocks apart, B=0 and B=2; floor: TXDATA reads after an idle load >= 50) | timing model; mutant SPI04a |
 | REQ-SPI-012 | EN = 1: the engine owns out[1] and out[3] and OUT writes to them are ignored; EN = 0: pins follow OUT, the engine still times bytes; an EN or CONTROL write leaving EN = 1 sets SCK to the new CPOL; EN 1->0 leaves the pins | C | tb_spi T10 | timing model |
 | REQ-SPI-013 | OUT bits 0, 2, 6, 7 rw, bits 5:4 read 0, reads return the pins; bit 7 (SD CS#) resets high | C | tb_spi T01/T02 | timing model |
 | REQ-SPI-014 | F12: out[0,1,2,3,6,7] are flop outputs with no logic between; at the wrapper one gate with `run` per pin | C | spi_f12 (WO-29 V9) | structural |
@@ -301,7 +301,7 @@ and the formal benches only as planted copies (below), not as a full campaign.
 | SPI02 | test-spi T04 MISO probe; test-soc-spi sd_b1_rt40 (the negative control flips to PASS) | contradicts the WO's "survives every delay-based test"; spi_bb planted copy FAILS |
 | SPI21 | test-spi T04 MISO probe; test-soc-spi sd_b1 ("program check 00000009 failed (value seen 000000ff)") | |
 | SPI03, SPI08, SPI10, SPI11, SPI17, SPI18, SPI19, SPI23, SPI24, SPI26, SPI32 | test-spi T03 | |
-| SPI04a | test-spi random phase only | T12 does not kill it; C13 in spi_core is the named formal killer |
+| SPI04a | test-spi T05 slow driver (scratch run: FAIL at T05 "rdata" and "driver: received byte") | T12 does not kill it (it overwrites bb one clock after the load); C13 in spi_core is the named formal killer |
 | SPI04b, SPI16, SPI31 | test-spi T04 | |
 | SPI05 | test-spi T04 (ready) | T06 is the named killer; the probe's writes see it first |
 | SPI06, SPI07 | test-spi T07 | |

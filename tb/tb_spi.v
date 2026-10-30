@@ -111,6 +111,8 @@ module tb_spi;
     integer s_rx1 [0:7];
     integer s_stall [0:4];
     integer s_b2b, s_txd_stall, s_nobe0, s_en01, s_en10, s_rst_a, s_rst_b, s_rst_bba, s_rdmid;
+    integer n_idld_rd = 0;               // TXDATA reads after an IDLE load, before the next TXDATA write
+    reg     last_ld_idle = 1'b0;
     integer ii;
     task snap;
         integer q;
@@ -154,7 +156,7 @@ module tb_spi;
                     `SL_IN:      begin exp_rd = {24'b0, m_ins}; skip = (^m_ins === 1'bx); end
                     4'd3:        exp_rd = {23'b0, !txe, 7'b0, m_en};
                     `SL_RXDATA:  begin exp_rd = {24'b0, m_sr}; skip = m_active; if (m_active) n_rdmid = n_rdmid + 1; end
-                    `SL_TXDATA:  exp_rd = {24'b0, m_bb};
+                    `SL_TXDATA:  begin exp_rd = {24'b0, m_bb}; if (last_ld_idle) n_idld_rd = n_idld_rd + 1; end
                     `SL_STATUS:  exp_rd = {30'b0, !m_bba, txe};
                     `SL_CONTROL: exp_rd = {30'b0, m_cpol, m_cpha};
                     `SL_BAUD:    exp_rd = {24'b0, m_baud};
@@ -176,7 +178,7 @@ module tb_spi;
             if (m_bba) n_rst_bba = n_rst_bba + 1;
             m_o = 8'h81; m_p1 = 1'b0; m_p3 = 1'b1; m_en = 1'b0; m_cpol = 1'b1; m_cpha = 1'b1;
             m_baud = 8'hFF; m_bb = 8'h00; m_sr = 8'h00; m_bba = 1'b0; m_active = 1'b0;
-            armed = 1'b1; cur_stalled = 1'b0;
+            armed = 1'b1; cur_stalled = 1'b0; last_ld_idle = 1'b0;
         end else begin
             // ---- the engine, from the load time
             do_ld = 1'b0;
@@ -191,11 +193,11 @@ module tb_spi;
                 end
                 if (t == 16 * m_P) begin
                     if (probe_active) begin checks = checks + 1; if (m_rx !== plan) fail("probe: byte sampled by the model is not the planned one", m_rx, plan); end
-                    if (m_bba) begin bbn = m_rx; txn = m_bb; do_ld = 1'b1; n_b2b = n_b2b + 1; end
+                    if (m_bba) begin bbn = m_rx; txn = m_bb; do_ld = 1'b1; n_b2b = n_b2b + 1; last_ld_idle = 1'b0; end
                     else begin m_sr = m_rx; m_active = 1'b0; if (m_en) m_p3 = m_cpol; end
                 end
             end else if (m_bba) begin
-                bbn = m_sr; txn = m_bb; do_ld = 1'b1;
+                bbn = m_sr; txn = m_bb; do_ld = 1'b1; last_ld_idle = 1'b1;
             end
             if (do_ld) begin
                 m_bb = bbn; m_tx = txn; m_bba = 1'b0; m_active = 1'b1; m_L = ecnt;
@@ -230,7 +232,7 @@ module tb_spi;
                         if (!wdata[0] && m_en) n_en10 = n_en10 + 1;
                         m_en = wdata[0];
                     end
-                    `SL_TXDATA: begin m_bb = wdata[7:0]; m_bba = 1'b1; end
+                    `SL_TXDATA: begin m_bb = wdata[7:0]; m_bba = 1'b1; last_ld_idle = 1'b0; end
                     `SL_CONTROL: begin
                         m_cpol = wdata[1]; m_cpha = wdata[0];
                         if (m_en) m_p3 = wdata[1];
@@ -382,11 +384,16 @@ module tb_spi;
     // ── The Linux polled driver loop (WO-28 1.1), the three paths ───────────
     reg [7:0] tx_buf [0:511];
     reg [7:0] rx_buf [0:511];
+    // drv_slow = 1: a slow driver, every write after the first waits 16(B+1) + 0..7 clocks, so the
+    // engine is idle and the write is loaded from IDLE (bb <= sr, REQ-SPI-011), not back-to-back.
+    reg     drv_slow = 1'b0;
+    integer drv_B = 0;
     task drv_xfer(input integer len, input do_tx, input do_rx);
         integer i; reg [31:0] v;
         begin
             wr(`SL_TXDATA, do_tx ? tx_buf[0] : 8'hFF);
             for (i = 1; i < len; i = i + 1) begin
+                if (drv_slow) idle(16 * (drv_B + 1) + rn(8));
                 wr(`SL_TXDATA, do_tx ? tx_buf[i] : 8'hFF);
                 wait_txr;
                 if (do_rx) begin rd(`SL_TXDATA, v); rx_buf[i - 1] = v[7:0]; end
@@ -520,6 +527,18 @@ module tb_spi;
                 drv_frame(17, 1, 1);
                 if (bb != 2) begin drv_frame(512, 1, 1); drv_frame(512, 0, 1); drv_frame(512, 1, 0); end
             end
+            // The slow driver: each write finds the engine idle (an IDLE load), TXDATA then reads the
+            // previous RX byte, checked against the slave's memory.
+            drv_slow = 1'b1;
+            for (bb = 0; bb < 2; bb = bb + 1) begin
+                drv_B = (bb == 0) ? 0 : 2;
+                wr(`SL_CONTROL, 3); wr(`SL_BAUD, drv_B);
+                for (pth = 0; pth < 3; pth = pth + 1) begin
+                    drv_frame(6, pth != 1, pth != 2);
+                    drv_frame(20, pth != 1, pth != 2);
+                end
+            end
+            drv_slow = 1'b0;
             probe_force = 0;
         end
     endtask
@@ -872,7 +891,7 @@ module tb_spi;
             $display("FAIL tb_spi: %0d errors, %0d coverage floors missed (seed %0d)", errors, floor_bad, seed);
         $finish;
     end
-    task verdict_extra; begin floor("probe bits", n_probe, 10240); end endtask
+    task verdict_extra; begin floor("probe bits", n_probe, 10240); floor("TXDATA reads after an idle load", n_idld_rd, 50); end endtask
 
     initial begin
         #((ncycles + 6_000_000) * T);
