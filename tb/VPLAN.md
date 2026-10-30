@@ -293,7 +293,7 @@ every simulation by construction and is killed only by `spi_f12` (planted copy:
 F1 out[3] driven by $or). GP02-GP04 are retired (the DIV shifter and OUT[5:4] storage are
 gone; GP03 would be equivalent), GP01 is rewritten, GP05 stands. The soc benches ran only for
 SPI01 (survives test-soc-periph, test-wrapper, test-syscon-soc; killed by test-soc-spi sd_b1)
-and the formal benches only as planted copies (below), not as a full campaign.
+and the formal benches are now a full campaign (table below).
 
 | Mutant | Killed by | Note |
 |---|---|---|
@@ -310,8 +310,67 @@ and the formal benches only as planted copies (below), not as a full campaign.
 | SPI14, SPI20, SPI27, SPI28, SPI30, GP05 | test-spi T01 / start | |
 | SPI15, SPI22 | test-spi T06 / T04 | |
 | SPI29, GP01 | test-spi T09 byte lanes | |
-| GP03 | test-spi (pins 5:4 mirror 7:6, found by the every-clock `out` check) | formal spi_bus/spi_bb not yet run on it |
+| GP03 | test-spi (pins 5:4 mirror 7:6, found by the every-clock `out` check) | formal: spi_bus, spi_bb, spi_bb1 (see the formal table below) |
 | SPI12 | spi_f12 only | equivalent in every simulation; planted copy: F1 out[3] driven by $or |
+
+Formal campaign (2026-10-31, combined tree on main 2937cd5, local, `ulimit -v 4000000`;
+`python3 tb/mutate/run.py --only <SPI*,GP01,GP03> --benches formal --skip-formal spi_cover`,
+SPI12 not run through spi_bb1; spi_bb1 needed a one-line runner fix, it reuses spi_bb_props.sv).
+Every mutant is killed by at least one harness. Formal killers per mutant:
+
+| Mutant | Formal killers |
+|---|---|
+| GP01 | spi_bus, spi_bb, spi_bb1 |
+| GP03 | spi_bus, spi_bb, spi_bb1 |
+| SPI01 | spi_core, spi_dc, spi_bb |
+| SPI02 | spi_bus, spi_bb |
+| SPI03 | spi_core, spi_bb, spi_bb1 |
+| SPI04a | spi_core, spi_bb, spi_bb1 |
+| SPI04b | spi_core, spi_bb |
+| SPI05 | spi_bus, spi_bb, spi_bb1 |
+| SPI06 | spi_bus, spi_bb, spi_bb1 |
+| SPI07 | spi_bus, spi_bb, spi_bb1 |
+| SPI08 | spi_core, spi_bb1 |
+| SPI09 | spi_core, spi_bb, spi_bb1 |
+| SPI10 | spi_core, spi_bb |
+| SPI11 | spi_core, spi_bb |
+| SPI12 | spi_f12 |
+| SPI13 | spi_core, spi_bb, spi_bb1 |
+| SPI14 | spi_bus, spi_bb, spi_bb1 |
+| SPI15 | spi_bus, spi_bb, spi_bb1 |
+| SPI16 | spi_bus, spi_bb |
+| SPI17 | spi_core, spi_bb, spi_bb1 |
+| SPI18 | spi_core, spi_bb, spi_bb1 |
+| SPI19 | spi_bus, spi_bb, spi_bb1 |
+| SPI20 | spi_core, spi_dc, spi_bb, spi_bb1 |
+| SPI21 | spi_bus, spi_bb |
+| SPI22 | spi_core, spi_bb |
+| SPI23 | spi_core, spi_bb, spi_bb1 |
+| SPI24 | spi_core, spi_bb, spi_bb1 |
+| SPI25 | spi_bus, spi_bb, spi_bb1 |
+| SPI26 | spi_core, spi_bb, spi_bb1 |
+| SPI27 | spi_core, spi_bb, spi_bb1 |
+| SPI28 | spi_core, spi_bb, spi_bb1 |
+| SPI29 | spi_bus, spi_bb, spi_bb1 |
+| SPI30 | spi_bus, spi_bb, spi_bb1 |
+| SPI31 | spi_core, spi_bb, spi_bb1 |
+| SPI32 | spi_core, spi_bb, spi_bb1 |
+
+How to read the formal columns:
+
+* A spi_core, spi_dc or spi_bus "kill" is a failure to close k-induction at length 1, not a
+  concrete counterexample: the property is not inductive on the mutant. It says the mutant
+  breaks an invariant, nothing about a reachable trace. spi_bb and spi_bb1 kills are real
+  counterexamples within the bound.
+* spi_bb is BAUD 0 only, depth 24. A phase-length fault (SPI08) is invisible to it: SPI08
+  survives spi_bb (207 s) and is killed by spi_core and by spi_bb1.
+* spi_bb1 is BAUD 1 (inputs narrowed), depth 24: covers setup and the first launches but
+  not a whole byte. Clean run 407 s. Depth 40 timed out at 1800 s (748k vars), so 24 is
+  what ships. It FAILs SPI08 at depth 16 in 8 s. It does not kill SPI01, SPI02, SPI04b,
+  SPI10, SPI11, SPI16, SPI21, SPI22 (RX-path and later-bit faults beyond its depth); spi_bb
+  or spi_core kill those.
+* spi_dc kills only SPI01 and SPI20 (don't-care/X-path faults); spi_f12 kills SPI12 only
+  (structural).
 
 ### 4.2 Survivors and verdicts
 
