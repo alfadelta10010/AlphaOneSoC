@@ -337,9 +337,11 @@ m("UA05", "uart.v", "if (rst || wr_dll || wr_dlm) brg <= 16'd0;", "if (rst) brg 
 m("UA06", "uart.v", "wire [7:0] lsr = {1'b0, tx_idle, tx_idle, bi, 2'b00, oe, dr};", "wire [7:0] lsr = {1'b0, 1'b1, tx_idle, bi, 2'b00, oe, dr};", "LSR.TEMT always 1")
 m("UA07", "uart.v", "(rx_s ? !rx_chk : rx_zero);", "(rx_s ? 1'b1 : rx_zero);", "frame after a framing error accepted")
 m("GP01", "gpio.v", "wire req   = sel && we && be[0];", "wire req   = sel && we;", "writes without lane 0 stall and act too")
-# GP02 (MOSI one bit early), GP03 (OUT bits 5:4 stored) and GP04 (DIV 3 runs at DIV 2) are retired:
-# the DIV shifter they mutated was replaced by src/spi.v (WO-28), and OUT[5:4] cannot reach a pin
-# any more (the pin assign ties them to 0), so GP03 would be equivalent. SPI01-SPI32 below cover the new logic.
+# GP02 (MOSI one bit early) and GP04 (DIV 3 runs at DIV 2) are retired: the DIV shifter they
+# mutated was replaced by src/spi.v (WO-28). SPI01-SPI32 below cover the new logic.
+# GP03 is back as a pin-assign mutant. The old form (OUT bits 5:4 stored) and "2'b00 -> out_r[5:4]"
+# are equivalent, since out_r[5:4] is never written; bits 5:4 mirroring bits 7:6 is not.
+m("GP03", "gpio.v", "assign out = {out_r[7:6], 2'b00, p_sck,", "assign out = {out_r[7:6], out_r[7:6], p_sck,", "OUT pins 5:4 mirror pins 7:6 (the pin assign must tie them to 0)")
 m("GP05", "gpio.v", "in_s <= in_m;", "in_s <= in;", "one-flop input synchroniser")
 m("TT01", "tt_um_alfadelta10010_alphaone_soc.v", "else        run <= !rst_sync[0];", "else        run <= 1'b1;", "reset released on the first edge")
 m("TT02", "tt_um_alfadelta10010_alphaone_soc.v", "assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, ctl_oe, io_oe, io_oe, ctl_oe};", "assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, io_oe, io_oe, io_oe, ctl_oe};", "SCK's output enable follows the data pins")

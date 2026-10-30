@@ -310,6 +310,7 @@ and the formal benches only as planted copies (below), not as a full campaign.
 | SPI14, SPI20, SPI27, SPI28, SPI30, GP05 | test-spi T01 / start | |
 | SPI15, SPI22 | test-spi T06 / T04 | |
 | SPI29, GP01 | test-spi T09 byte lanes | |
+| GP03 | test-spi (pins 5:4 mirror 7:6, found by the every-clock `out` check) | formal spi_bus/spi_bb not yet run on it |
 | SPI12 | spi_f12 only | equivalent in every simulation; planted copy: F1 out[3] driven by $or |
 
 ### 4.2 Survivors and verdicts
@@ -330,7 +331,7 @@ touches behaviour nothing specifies (section 5).
 | FC27 | equivalent | argument: garbage rd writes during a load wait are unobservable, EX is held by use_hazard until the final write, and after a reset x1-x31 are unspecified (Priv 3.4) |
 | FC81 | equivalent | timing only: a stale wfi_active clears on the first cycle after reset because mie resets to 0 (pinned by tb_csr); costs at most one stall cycle |
 | FC84 | equivalent | every use of exwb_memWR is gated by exwb_valid, which resets, and the stale bit is overwritten on the first cycle |
-| GP03 | equivalent | SoC file, as scored before |
+| GP03 (old: OUT[5:4] stored) | equivalent | retired; replaced by the pin-assign mutant GP03 (pins 5:4 mirror 7:6), which test-spi kills (4.1a). "2'b00 -> out_r[5:4]" would also be equivalent: out_r[5:4] is never written |
 | TT01 | equivalent in zero-delay RTL; kept by design (settled 2026-10-24) | `run` opening the pin gates on the first edge after `rst_n` rises instead of the second. It differs only on a reset with no clock edge while `rst_n` is low (the demo board firmware's first load of a project; the reset button with the clock stopped): there the SoC's flops first take their reset values on edge 1, so the mutant opens the gates on that same edge, a race of about a nanosecond on `uo_out` and `uio_oe`, and gives `run` D = 1 at the asynchronous release of `rst_n` (the design has D = 0 there, so `run` cannot go metastable). TinyTapeout (Discord, 2026-10-23): the clock is not guaranteed to toggle during reset, a few-ns glitch on a project output reaches the pin, and a few ns of `uio_oe` contention with the RP2350 is harmless. The second edge is therefore defence in depth for one flop. Only a gate-level run with SDF of tb_tt_um's stopped-clock reset can see it (section 5) |
 
 RG01 and RG04 (x0 masked in the core) are killed by test-regfile, so they are
