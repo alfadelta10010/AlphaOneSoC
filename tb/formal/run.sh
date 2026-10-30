@@ -32,11 +32,11 @@ BMC_DEPTH="${BMC_DEPTH:-10}"
 SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
 declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC"
-                   [spi_core]="spi.v" [spi_dc]="spi.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
-declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" )   # read from $HERE
+                   [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
+declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" [spi_f12]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
 declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct
-                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_cover]=cover )
+                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_cover]=cover [spi_f12]=struct )
 declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=24 [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
@@ -52,7 +52,7 @@ for x in wr_tx wr_ctl wr_baud wr_en wr_out miso st bba bb sr baud cpol cpha cc b
 GPIO_PRE="$GPIO_PRE expose w:x_wr_tx w:x_wr_ctl w:x_wr_baud w:x_wr_en w:x_wr_out w:x_miso w:x_st w:x_bba w:x_bb w:x_sr w:x_baud w:x_cpol w:x_cpha w:x_cc w:x_bc w:spi_en w:in_m w:in_s w:out_r; cd .."
 declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
                  [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_cover]="$GPIO_PRE" )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_cover)
+names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_cover spi_f12)
 bad=0
 err=0
 for n in "${names[@]}"; do
@@ -71,8 +71,88 @@ for n in "${names[@]}"; do
   if [ "${MODE[$n]}" = struct ]; then
     json="$OUT/formal_${n}.json"
     rm -f "$json"
-    timeout 1800 yosys -p "read_verilog -sv $srcs; prep -top alphaone_soc; flatten; opt_clean; write_json $json" > "$log" 2>&1
+    stop=alphaone_soc; [ "$n" = spi_f12 ] && stop=tt_um_alfadelta10010_alphaone_soc
+    timeout 1800 yosys -p "read_verilog -sv $srcs; prep -top $stop; flatten; opt_clean; write_json $json" > "$log" 2>&1
     if [ ! -s "$json" ]; then echo "ERROR $n: yosys gave no netlist (log: $log)"; err=1; continue; fi
+    if [ "$n" = spi_f12 ]; then
+    out=$(python3 - "$json" <<'PYEOF'
+# F12 (SPI-014): MOSI, SCK and the chip selects leave from flops.
+#   F1  gpio's out[0,1,2,3,6,7]: the driver, through wires and $pos only, is the
+#       Q of a sequential cell.
+#   F2  the wrapper's uo_out[0,1,2,3,6,7]: the cone back to sequential Q outputs
+#       holds exactly one gate (a 2-input logic cell, or a mux with a constant
+#       leg) that has `run` in its cone, plus at most one inverter; its leaves
+#       are the gpio pin flop and the flop `run`.
+import json, sys
+d = json.load(open(sys.argv[1]))
+top = d["modules"]["tt_um_alfadelta10010_alphaone_soc"]
+SEQ = ("$dff", "$sdff", "$adff", "$aldff", "$dffsr", "$ff", "$dlatch", "$adlatch", "$dlatchsr", "$sr", "$mem")
+drv = {}
+for name, c in top["cells"].items():
+    for port, bits in c["connections"].items():
+        if c["port_directions"].get(port) == "output":
+            for i, b in enumerate(bits):
+                if isinstance(b, int):
+                    drv[b] = (name, c, port, i)
+def bits_of(n):
+    return [b for b in top["netnames"][n]["bits"]]
+bad = []
+def seqcell(c):
+    return c["type"].startswith(SEQ)
+# F1
+gout = [n for n in top["netnames"] if n.endswith("gpio_inst.out")]
+if len(gout) != 1:
+    print("ERROR no gpio_inst.out net"); sys.exit()
+gb = bits_of(gout[0])
+for i in (0, 1, 2, 3, 6, 7):
+    b = gb[i]
+    seen = 0
+    while isinstance(b, int) and b in drv and drv[b][1]["type"] == "$pos" and seen < 20:
+        b = drv[b][1]["connections"]["A"][drv[b][3]]; seen += 1
+    if not (isinstance(b, int) and b in drv and seqcell(drv[b][1])):
+        t = drv[b][1]["type"] if isinstance(b, int) and b in drv else "undriven"
+        bad.append("F1 out[%d] driven by %s" % (i, t))
+# F2
+run_bits = bits_of("run")
+runq = set(run_bits)
+ub = bits_of("uo_out")
+for i in (0, 1, 2, 3, 6, 7):
+    gates, leaves, work, seen = [], set(), [ub[i]], set()
+    while work:
+        b = work.pop()
+        if not isinstance(b, int) or b in seen:
+            continue
+        seen.add(b)
+        if b not in drv:
+            leaves.add(("const_or_input", b)); continue
+        name, c, port, k = drv[b]
+        if seqcell(c):
+            leaves.add(("seq", b)); continue
+        if c["type"] != "$pos":
+            gates.append(c)
+        ycells = c["connections"].get("Y", [])
+        for p, bs in c["connections"].items():
+            if c["port_directions"].get(p) != "input":
+                continue
+            if len(bs) == len(ycells) and len(bs) > 1:
+                work.append(bs[k])          # a bitwise cell: only this bit's input
+            else:
+                work.extend(bs)             # a 1-bit select or operand
+    logic = [c for c in gates if c["type"] not in ("$not", "$logic_not")]
+    inv   = [c for c in gates if c["type"] in ("$not", "$logic_not")]
+    seqleaves = {b for kind, b in leaves if kind == "seq"}
+    ok = len(logic) == 1 and len(inv) <= 1 and run_bits[0] in seqleaves and len(seqleaves) == 2
+    if ok:
+        c = logic[0]
+        wide = [p for p, bs in c["connections"].items() if c["port_directions"].get(p) == "input" and len(bs) > 1]
+        ok = c["type"] in ("$and", "$or", "$xor", "$nand", "$nor", "$xnor", "$logic_and", "$logic_or", "$mux")
+    if not ok:
+        bad.append("F2 uo_out[%d]: %d logic cells, %d inverters, flop leaves %d, run leaf %s"
+                   % (i, len(logic), len(inv), len(seqleaves), run_bits[0] in seqleaves))
+print("HIT " + "; ".join(bad) if bad else "CLEAN f12")
+PYEOF
+)
+    else
     out=$(python3 - "$json" <<'PYEOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -103,6 +183,7 @@ else:
     print("CLEAN %d nets" % len(seen))
 PYEOF
 )
+    fi
     case "$out" in
       CLEAN*) echo "PROVED $n (structural)";;
       HIT*)   echo "FAILED $n: ${out#HIT } (log: $log)"; bad=1;;
