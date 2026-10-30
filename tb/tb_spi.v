@@ -778,7 +778,7 @@ module tb_spi;
         begin
             c = rn(100);
             if (c < 60) pick_baud = rn(4);
-            else if (c < 85) pick_baud = 4 + rn(74);
+            else if (c < 85) pick_baud = (rn(12) == 0) ? 78 : 4 + rn(74);   // one in 12 is B=78 (the floor of 5 bytes needs about this; seeds 1-4 reach 8, 10, 5, 13)
             else if (ecnt - slow_last > 1500) begin
                 slow_last = ecnt; slow_rr = slow_rr + 1;
                 case (slow_rr % 4)
@@ -866,7 +866,7 @@ module tb_spi;
             floor("bytes mode 2", cov_mode[2] - s_mode[2], 300); floor("bytes mode 3", cov_mode[3] - s_mode[3], 300);
             floor("bytes B=0", cov_bin[0] - s_bin[0], 40); floor("bytes B=1", cov_bin[1] - s_bin[1], 40);
             floor("bytes B=2", cov_bin[2] - s_bin[2], 40); floor("bytes B=3", cov_bin[3] - s_bin[3], 40);
-            floor("bytes B=4-77", cov_bin[4] - s_bin[4], 20); floor("bytes B=78", cov_bin[5] - s_bin[5], 1);
+            floor("bytes B=4-77", cov_bin[4] - s_bin[4], 20); floor("bytes B=78", cov_bin[5] - s_bin[5], 5);
             floor("bytes B=79-253", cov_bin[6] - s_bin[6], 5); floor("bytes B=254-255", cov_bin[7] - s_bin[7], 2);
             floor("back-to-back loads", n_b2b - s_b2b, 300);
             floor("TXDATA writes stalled", n_txd_stall - s_txd_stall, 200);
