@@ -51,21 +51,24 @@ UNIT = {
     "pmp.v": [], "clint.v": [], "fyracore.v": [],
     "mem_ctrl.v": ["test-qspi"], "qspi_ctrl.v": ["test-qspi"],
     "soc_bus.v": [], "alphaone_soc.v": [],
-    "uart.v": ["test-uart"], "gpio.v": ["test-gpio"],
+    "uart.v": ["test-uart"], "gpio.v": ["test-gpio", "test-spi"], "spi.v": ["test-spi"],
     "syscon.v": ["test-syscon"],
     "tt_um_alfadelta10010_alphaone_soc.v": [],
 }
 # Optional unit benches added later; used when the Makefile has the target.
 UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
 SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
-             "gpio.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
+             "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
 
 TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
 # Formal harnesses (tb/formal/<name>_props.sv) per source file. soc_rst_sync is
 # structural and has no _props.sv.
 FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req", "core_fetch"], "regFile.v": ["core_hold"],
-          "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"]}
-NO_PROPS = {"soc_rst_sync"}
+          "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"],
+          "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_cover"],
+          "gpio.v": ["spi_bus", "spi_bb", "spi_f12"],
+          "tt_um_alfadelta10010_alphaone_soc.v": ["spi_f12"]}
+NO_PROPS = {"soc_rst_sync", "spi_f12"}
 
 
 def make_has(target):
@@ -88,6 +91,8 @@ def benches_for(f, kinds):
             out += [("soc", "test-soc-periph"), ("soc", "test-wrapper")]
             if make_has("test-syscon-soc"):
                 out.append(("soc", "test-syscon-soc"))
+            if f in ("spi.v", "gpio.v") and make_has("test-soc-spi"):
+                out.append(("soc", "test-soc-spi"))
         if "dir-soc" in kinds:
             out.append(("dir-soc", "soc"))
     else:
