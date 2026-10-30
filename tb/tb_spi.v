@@ -103,7 +103,25 @@ module tb_spi;
     integer n_rst_a = 0, n_rst_b = 0, n_rst_bba = 0, n_rdmid = 0, n_probe = 0;
     integer n_stall [0:4];               // OUT, SPICTL, CONTROL, BAUD, STATUS/reserved
     reg     cur_stalled = 1'b0;
+    // Snapshot of every counter at the start of the random phase: the floors of the random
+    // phase apply to the difference, so the directed tests cannot meet them alone.
+    integer s_mode [0:3];
+    integer s_bin [0:7];
+    integer s_rx0 [0:7];
+    integer s_rx1 [0:7];
+    integer s_stall [0:4];
+    integer s_b2b, s_txd_stall, s_nobe0, s_en01, s_en10, s_rst_a, s_rst_b, s_rst_bba, s_rdmid;
     integer ii;
+    task snap;
+        integer q;
+        begin
+            for (q = 0; q < 4; q = q + 1) s_mode[q] = cov_mode[q];
+            for (q = 0; q < 8; q = q + 1) begin s_bin[q] = cov_bin[q]; s_rx0[q] = cov_rx0[q]; s_rx1[q] = cov_rx1[q]; end
+            for (q = 0; q < 5; q = q + 1) s_stall[q] = n_stall[q];
+            s_b2b = n_b2b; s_txd_stall = n_txd_stall; s_nobe0 = n_nobe0_busy; s_en01 = n_en01; s_en10 = n_en10;
+            s_rst_a = n_rst_a; s_rst_b = n_rst_b; s_rst_bba = n_rst_bba; s_rdmid = n_rdmid;
+        end
+    endtask
     initial begin
         for (ii = 0; ii < 4; ii = ii + 1) cov_mode[ii] = 0;
         for (ii = 0; ii < 8; ii = ii + 1) begin cov_bin[ii] = 0; cov_rx0[ii] = 0; cov_rx1[ii] = 0; end
@@ -758,6 +776,7 @@ module tb_spi;
         integer end_e, c, p, q, tn, nb0; reg [3:0] b; reg [31:0] d, r;
         begin
             sect("random phase");
+            snap;
             probe_force = 0;
             end_e = ecnt + ncyc; nb0 = n_bytes;
             xwin_en = 1'b0;
@@ -823,26 +842,27 @@ module tb_spi;
         rand_phase(ncycles);
         sect("end");
         if (errors == 0) begin
-            floor("bytes mode 0", cov_mode[0], 300); floor("bytes mode 1", cov_mode[1], 300);
-            floor("bytes mode 2", cov_mode[2], 300); floor("bytes mode 3", cov_mode[3], 300);
-            floor("bytes B=0", cov_bin[0], 40); floor("bytes B=1", cov_bin[1], 40);
-            floor("bytes B=2", cov_bin[2], 40); floor("bytes B=3", cov_bin[3], 40);
-            floor("bytes B=4-77", cov_bin[4], 20); floor("bytes B=78", cov_bin[5], 5);
-            floor("bytes B=79-253", cov_bin[6], 5); floor("bytes B=254-255", cov_bin[7], 2);
-            floor("back-to-back loads", n_b2b, 300);
-            floor("TXDATA writes stalled", n_txd_stall, 200);
-            floor("stalled OUT writes", n_stall[0], 50); floor("stalled SPICTL writes", n_stall[1], 50);
-            floor("stalled CONTROL writes", n_stall[2], 50); floor("stalled BAUD writes", n_stall[3], 50);
-            floor("stalled STATUS/reserved writes", n_stall[4], 50);
-            floor("writes without be0 while busy", n_nobe0_busy, 100);
-            floor("EN 0->1", n_en01, 20); floor("EN 1->0", n_en10, 20);
-            floor("resets in A", n_rst_a, 5); floor("resets in B", n_rst_b, 5);
-            floor("resets with bba=1", n_rst_bba, 5);
+            // Random-phase floors: counters minus the snapshot taken when the random phase began.
+            floor("bytes mode 0", cov_mode[0] - s_mode[0], 300); floor("bytes mode 1", cov_mode[1] - s_mode[1], 300);
+            floor("bytes mode 2", cov_mode[2] - s_mode[2], 300); floor("bytes mode 3", cov_mode[3] - s_mode[3], 300);
+            floor("bytes B=0", cov_bin[0] - s_bin[0], 40); floor("bytes B=1", cov_bin[1] - s_bin[1], 40);
+            floor("bytes B=2", cov_bin[2] - s_bin[2], 40); floor("bytes B=3", cov_bin[3] - s_bin[3], 40);
+            floor("bytes B=4-77", cov_bin[4] - s_bin[4], 20); floor("bytes B=78", cov_bin[5] - s_bin[5], 1);
+            floor("bytes B=79-253", cov_bin[6] - s_bin[6], 5); floor("bytes B=254-255", cov_bin[7] - s_bin[7], 2);
+            floor("back-to-back loads", n_b2b - s_b2b, 300);
+            floor("TXDATA writes stalled", n_txd_stall - s_txd_stall, 200);
+            floor("stalled OUT writes", n_stall[0] - s_stall[0], 50); floor("stalled SPICTL writes", n_stall[1] - s_stall[1], 50);
+            floor("stalled CONTROL writes", n_stall[2] - s_stall[2], 50); floor("stalled BAUD writes", n_stall[3] - s_stall[3], 50);
+            floor("stalled STATUS/reserved writes", n_stall[4] - s_stall[4], 50);
+            floor("writes without be0 while busy", n_nobe0_busy - s_nobe0, 100);
+            floor("EN 0->1", n_en01 - s_en01, 20); floor("EN 1->0", n_en10 - s_en10, 20);
+            floor("resets in A", n_rst_a - s_rst_a, 5); floor("resets in B", n_rst_b - s_rst_b, 5);
+            floor("resets with bba=1", n_rst_bba - s_rst_bba, 5);
             for (f = 0; f < 8; f = f + 1) begin
-                floor($sformatf("RX bit %0d as 0", f), cov_rx0[f], 200);
-                floor($sformatf("RX bit %0d as 1", f), cov_rx1[f], 200);
+                floor($sformatf("RX bit %0d as 0", f), cov_rx0[f] - s_rx0[f], 200);
+                floor($sformatf("RX bit %0d as 1", f), cov_rx1[f] - s_rx1[f], 200);
             end
-            floor("mid-byte RXDATA reads", n_rdmid, 100);
+            floor("mid-byte RXDATA reads", n_rdmid - s_rdmid, 100);
             verdict_extra;
         end
         if (errors == 0 && floor_bad == 0)
