@@ -130,6 +130,35 @@ test kills (`build/mut/syscon-all.tsv`).
 | REQ-SYS-018 | same-cycle cases: fire with a W1C of WDT, fire with a FINISH reboot, fire with a power-off | C | tb_syscon (WO-14, 14a) | spec model | p (no mutant isolates them) |
 | REQ-SYS-019 | no fire while the SoC is held (SA-009) | C | tb_syscon k = 16..18 (WO-14a), formal `syscon_gate` (WO-19) | spec model; proof (P1, P2) | P (WD16, by both) |
 
+### 1.5 SPI controller (REQ-SPI-*, WO-29)
+
+IDs follow WO-29 section 3 (`SPI-nnn`). The expected value of every check comes from WO-28 sections 1-3, WO-29 and the driver/SD/SSD1331 documents, never from `src/spi.v` or `src/gpio.v`.
+
+| ID | Requirement (source) | timing | Test | Checker |
+|---|---|---|---|---|
+| REQ-SPI-001 | Map in the GPIO window, decoded on `addr[5:2]`: 0x20 RXDATA (ro), 0x24 TXDATA (rw), 0x28 STATUS (ro), 0x2C CONTROL (rw), 0x30 BAUD (rw); 0x08, 0x10-0x1C and 0x34-0x3C read 0 and ignore writes; the window aliases every 64 B (WO-28 1.2) | C | tb_spi T01/T02 | timing model, every slot read; X check |
+| REQ-SPI-002 | TXDATA write: bb <- wdata[7:0], bba <- 1; TXDATA read bb; RXDATA sr; STATUS = {TXR = !bba, TXE = idle && !bba}; CONTROL = {CPOL, CPHA}; BAUD [7:0]; every unlisted bit reads 0 (A1, Q5) | C | tb_spi T02/T05 | timing model |
+| REQ-SPI-003 | Reset: OUT 0x89, SPICTL 0, CONTROL 3, BAUD 0xFF, RXDATA 0, TXDATA 0, STATUS 3, pins 0x89; uo_out 0xB9 at the wrapper on every reset path | C | tb_spi T01/T11, tb_tt_um | timing model; pin checks |
+| REQ-SPI-004 | Writes act only with be[0]; a write without be[0] changes nothing and never stalls | C | tb_spi T09 | timing model |
+| REQ-SPI-005 | Stall: !ready iff sel && we && be[0] && (TXDATA ? bba : !TXE); reads never stall; ready never low while not selected | C | tb_spi T06-T09/T13 | stall rule evaluated every clock |
+| REQ-SPI-006 | First launch (the LOAD) at w+1 for an idle engine; every SCK level inside a byte lasts B+1 clocks; a byte is 16(B+1) clocks; no gap between bytes; TXE at w+1+16(B+1) for a lone byte | C | tb_spi T03/T06 | timing equations from the write and load times, never from the DUT pins |
+| REQ-SPI-007 | Levels: idle = CPOL, A = CPOL^CPHA, B = ~A, in all four modes | C | tb_spi T03 | pins every clock |
+| REQ-SPI-008 | MOSI: MSB first, changes only at a launch, stable B+1 clocks before and after every A->B edge | C | tb_spi T03, SSD1331 tDSW/tDHW | pins every clock; ssd1331_model |
+| REQ-SPI-009 | MISO: bit k is the `ui_in[1]` value at edge launch_k + 2B + 1; it lands in sr (lone or last byte) or bb (back-to-back load) | C | tb_spi T04 PROBE, T14 | the probe drives the bit only at that edge and its complement elsewhere |
+| REQ-SPI-010 | One byte per write: never overwritten, never duplicated, never lost | C | tb_spi T05/T06 + random | scoreboard in the model |
+| REQ-SPI-011 | An IDLE load moves sr into bb, so a TXDATA read after the load returns the previous RX byte | C | tb_spi T05/T12 | timing model |
+| REQ-SPI-012 | EN = 1: the engine owns out[1] and out[3] and OUT writes to them are ignored; EN = 0: pins follow OUT, the engine still times bytes; an EN or CONTROL write leaving EN = 1 sets SCK to the new CPOL; EN 1->0 leaves the pins | C | tb_spi T10 | timing model |
+| REQ-SPI-013 | OUT bits 0, 2, 6, 7 rw, bits 5:4 read 0, reads return the pins; bit 7 (SD CS#) resets high | C | tb_spi T01/T02 | timing model |
+| REQ-SPI-014 | F12: out[0,1,2,3,6,7] are flop outputs with no logic between; at the wrapper one gate with `run` per pin | C | spi_f12 (WO-29 V9) | structural |
+| REQ-SPI-015 | A reset mid-byte gives idle, reset values and the reset pins on the next edge, one transition per pin | B | tb_spi T11, sd_reboot | timing model |
+| REQ-SPI-016 | The Linux polled loop (all three paths, lengths 1/2/3/512) returns the bytes the slave sent | C | tb_spi T05, sd_init, spi_mixed | analog slave versus the bytes read |
+| REQ-SPI-017 | cc and bc have no reset and are don't-care in IDLE: no X reaches an output | C | tb_spi X check; spi_dc (WO-29 V7) | X check; miter |
+| REQ-SPI-018 | Round trip: RX is correct iff rt + t_ODLY < (2B+1) T; at T = 16: rt < 2 / 34 / 66 ns at B = 0 / 1 / 2 | C | tb_spi T14, test-soc-spi | transport-delayed analog slave; RTSWEEP |
+| REQ-SPI-019 | SD card in SPI mode: initialisation at <= 400 kHz, read, write, read back, multi-block read at BAUD 2; SSD1331 timing at its speed; both devices share the bus in mode 3 | C | test-soc-spi | sd_spi_model, ssd1331_model, exact counts |
+| REQ-SPI-020 | CS# discipline at the pins: SCK at the idle level at every CS# edge; CS# rises only on byte boundaries (except in a reboot, Q6) | C | sd_spi_model, ssd1331_model | model protocol checks |
+
+Assumptions: A1 unlisted bits read 0; A2 mid-byte RXDATA/TXDATA reads are don't-care but never X; A3 MOSI holds OUT bit 1 after an EN 0->1 write until the first load; A4 a STATUS or reserved write while busy stalls then does nothing; A5 a same-timestamp SCK/CS# change at a reboot is a counted race, allowed only in sd_reboot (constants in `tb/spi_spec.vh`).
+
 ## 2. Audit of the benches as found (at 484ec59)
 
 What each claimed, what it really checked, and how it could pass on a
