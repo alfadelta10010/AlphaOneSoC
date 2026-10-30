@@ -333,7 +333,7 @@ module sd_spi_model #(
                 rx_sh = {rx_sh[6:0], di_s}; bcnt = bcnt + 1;
                 if (bcnt == 8) begin
                     bcnt = 0;
-                    on_rx_byte({rx_sh[6:0], di_s});
+                    on_rx_byte(rx_sh);
                     pop;
                 end
             end else begin
