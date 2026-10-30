@@ -276,13 +276,13 @@ test-soc-periph: $(BUILD_DIR)
 # negative controls (rt 40 ns at BAUD 1, no card, DO stuck at 1) PASS only when
 # the program FAILS. `make test-soc-spi MB_UART=1` also sends the reports over the UART;
 # `ONLY="sd_init sd_b1"` runs just those labels.
+RB_DLY_A ?= 700
+RB_DLY_B ?= 900
 SOC_SPI_RUNS := "sd_init;sd_init;;" "sd_init_busy0;sd_init;;+SD_BUSY=0" "sd_b1;sd_init;-DSD_HZ=15625000;" \
 	"sd_b1_rt40;sd_init;-DSD_HZ=15625000;+RT_OUT=20 +RT_IN=20 +EXPECT_FAIL" \
 	"sd_init_rt60;sd_init;;+RT_OUT=30 +RT_IN=30" "sd_absent;sd_init;;+EXPECT_FAIL" \
 	"sd_stuck_do;sd_init;;+SD_STUCK_DO +EXPECT_FAIL" "spi_mixed;spi_mixed;;" \
 	"sd_reboot_a;sd_reboot;-DRB_DLY=$(RB_DLY_A);" "sd_reboot_b;sd_reboot;-DRB_DLY=$(RB_DLY_B);"
-RB_DLY_A ?= 700
-RB_DLY_B ?= 900
 SOC_SPI_DIR := $(BUILD_DIR)/soc_spi
 test-soc-spi: $(BUILD_DIR)
 	@echo "=== Testing the SD card and the shared SPI bus through the SoC (62.5 MHz) ==="
