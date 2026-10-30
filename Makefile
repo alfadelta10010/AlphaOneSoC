@@ -39,7 +39,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
-        test-qspi test-uart test-gpio test-soc-periph test-syscon-soc \
+        test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc \
         test-wrapper test-wrapper-soc test-gl asm \
         rivercore-build rivercore-test
 
@@ -62,6 +62,7 @@ help:
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
 	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
+	@echo "  make test-spi          Run the SPI controller bench (timing model, MISO probe, round-trip sweep)"
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
 	@echo "  make test-syscon-soc   Run syscon (reboot, strap, fail, watchdog) through the whole SoC"
 	@echo "  make test-wrapper      Run the TinyTapeout top level, pins only"
@@ -167,8 +168,8 @@ test-syscon: $(BUILD_DIR)
 # The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
 # Each bench prints its seed; rerun one failure with its +SEED=.
 SEEDS ?= 1 2 3 4 5 6 7 8
-SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio
-test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio tb_spi
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio test-spi
 	@for s in $(SEEDS); do for t in $(SEEDED); do \
 		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
 		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
@@ -221,6 +222,14 @@ test-gpio: $(BUILD_DIR)
 	@echo "=== Testing GPIO + SPI transmitter ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(TB_DIR)/tb_gpio.v
 	@$(call run_tb,tb_gpio)
+
+# The SPI controller (gpio + spi) against a timing model written from the
+# spec (tb/tb_spi.v, WO-29): directed sections T01-T14, a random phase with
+# coverage floors, the MISO probe and the round-trip sweep. +SEED=, +CYCLES=.
+test-spi: $(BUILD_DIR)
+	@echo "=== Testing the SPI controller ==="
+	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(BUILD_DIR)/tb_spi $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(TB_DIR)/tb_spi.v
+	@$(call run_tb,tb_spi)
 
 # The peripherals through the whole SoC: each tests/soc/*.S program boots
 # from the QSPI Pmod model's flash with the demo board's devices on the pins
@@ -358,7 +367,7 @@ test-gl:
 	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
 	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
