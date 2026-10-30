@@ -8,7 +8,7 @@
 # RESET_CAUSE, BOOT_MODE, STRAPS and CHIP_ID (4 bytes, little-endian). The boot
 # is told by RESET_CAUSE (SOFT, WDT) and BOOT_MODE, which a reboot keeps.
 #
-#   boot 1  'b'  cause 0x1, bm 0     GPIO OUT = 0xC6 (not the 0x09 the pins show
+#   boot 1  'b'  cause 0x1, bm 0     GPIO OUT = 0xC6 (not the 0xB9 the pins show
 #                                    in reset), BOOT_MODE = 0x5A; cue 'r', then
 #                                    FINISH = 0x7777 (reboot)
 #   boot 2  'B'  cause 0x3, bm 0x5A  SPI EN set (MOSI and SCK come from the

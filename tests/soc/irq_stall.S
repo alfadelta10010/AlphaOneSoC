@@ -2,7 +2,7 @@
 # back-pressure:
 #
 #  A. a THR write held while the previous character is on the line;
-#  B. a SPI DATA write held while the previous byte shifts (DIV 3);
+#  B. a SPI TXDATA write held while the previous byte shifts (BAUD 15);
 #  C. the write half of an amoswap.w to THR, held the same way, after its
 #     read half popped a received byte from RBR.
 #
@@ -67,7 +67,7 @@ a_after:
     bnez s7, a_loop
     WAIT_LSR s0, LSR_TEMT
 
-    # ---- B: SPI DATA ----
+    # ---- B: SPI TXDATA ----
     li   t0, 15
     sw   t0, S_BAUD(s1)          # BAUD 15: 256 clocks a byte
     li   t0, 1

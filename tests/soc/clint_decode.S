@@ -13,11 +13,11 @@
 # and that mip.MSIP stayed clear. Interrupts stay off (mstatus.MIE = 0).
 #
 # The stores:
-#   GPIO   +0x0000 OUT  <- 0x09 (its reset value)     msip bit 0
+#   GPIO   +0x0000 OUT  <- 0x09 (not the reset value 0x89: SD CS# low)  msip bit 0
 #          +0x4000 OUT  <- 0x09                        mtimecmp[31:0]
 #          +0x4004 IN   <- 0x11 (read-only: ignored)   mtimecmp[63:32]
-#          +0xBFFC CTRL <- 0x100 (bit 8 is BUSY, read-only; EN = DIV = 0,
-#                          as at reset)                mtime[63:32]
+#          +0xBFFC slot 0x3C <- 0x100 (the window aliases every 64 B, so this is
+#                          a reserved slot: reads 0, ignores writes)  mtime[63:32]
 #   UART   +0x4004, +0xBFFC  word stores to offsets 4-7: MCR, LSR, MSR, SCR,
 #                          all ignored                 mtimecmp[63:32], mtime[63:32]
 #   syscon +0x4004 <- 0, +0xBFF8 <- 0xF0000000: words the syscon does not

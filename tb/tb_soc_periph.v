@@ -514,7 +514,7 @@ module tb_soc_periph;
                 if (kp_set != 28) fail("keypad: not every pattern was scanned");
             end
             if (test == "irq_stall") begin
-                $display("irq_stall: interrupts pending during a held store: THR %0d of %0d, SPI DATA %0d of %0d, amoswap %0d of %0d",
+                $display("irq_stall: interrupts pending during a held store: THR %0d of %0d, SPI TXDATA %0d of %0d, amoswap %0d of %0d",
                          irq_hits[1], irq_n[1], irq_hits[2], irq_n[2], irq_hits[3], irq_n[3]);
                 if (irq_n[1] != 12 || irq_n[2] != 16 || irq_n[3] != 9) fail("irq_stall: wrong interrupt count");
                 if (irq_hits[1] == 0 || irq_hits[2] == 0 || irq_hits[3] == 0)

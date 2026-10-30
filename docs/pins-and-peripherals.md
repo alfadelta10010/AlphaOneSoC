@@ -145,7 +145,9 @@ columns).
 * **An off DIP leaves its pin floating.** The switches pull up through 1 kΩ
   and nothing pulls down. The RP2350 drives `ui_in[0]` (the read-latency
   strap), since it chose the clock. It should also pull down `ui_in[1..2]`
-  if they are used as inputs with their DIPs off.
+  if they are used as inputs with their DIPs off, except `ui_in[1]` with the
+  SD card fitted: the card drives MISO there, and the RP2350 pin must be an
+  input with no pull-down (see the SD notes below).
 * **RP2350 UART.**
   * UART1 on GPIO20 (TX) and GPIO37 (RX), with **CTS** flow control on
     GPIO38.
@@ -403,6 +405,10 @@ ignore writes.
 | `0x10`-`0x1C` | reserved |
 | `0x20`-`0x30` | the SPI controller, section 4 |
 | `0x34`-`0x3C` | reserved |
+
+Setting EN (0 to 1) moves SCK from OUT bit 3 to CPOL on that edge, so it can
+create an SCK edge: set EN only with every CS# high. Clearing EN leaves the
+pins as they are.
 
 The flash loader sets EN before it enters the kernel on an SD/OLED board;
 Linux never writes it. A reboot in the middle of an SD block leaves the card

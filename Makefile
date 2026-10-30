@@ -61,7 +61,7 @@ help:
 	@echo "  make test-compressed   Run compressed decoder testbench"
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
-	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
+	@echo "  make test-gpio         Run the GPIO + SPI register and pin testbench"
 	@echo "  make test-spi          Run the SPI controller bench (timing model, MISO probe, round-trip sweep)"
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
 	@echo "  make test-soc-spi      Run the SD card and shared-bus programs through the SoC at 62.5 MHz"
@@ -217,10 +217,11 @@ test-uart: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart.v
 	@$(call run_tb,tb_uart)
 
-# GPIO OUT/IN and the SPI shifter: register and pin model, a mode-3 SPI
-# checker at every DIV, back-pressure, and a random run.
+# GPIO OUT/IN and the SPI controller's registers: register and pin model, a
+# mode-3 SPI checker at several BAUD values, back-pressure, and a random run.
+# The SPI engine's timing, modes and receive path are in test-spi.
 test-gpio: $(BUILD_DIR)
-	@echo "=== Testing GPIO + SPI transmitter ==="
+	@echo "=== Testing GPIO + SPI registers ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(TB_DIR)/tb_gpio.v
 	@$(call run_tb,tb_gpio)
 

@@ -40,9 +40,9 @@ module tb_gpio;
 
     task wr(input [5:2] a, input [3:0] b, input [31:0] d);
         begin
-            @(negedge clk); sel = 1; we = 1; addr = a; be = b; wdata = d;
+            @(negedge clk); sel = 1; we = 1; addr = a; be = b; wdata = d; #1;
+            if (!ready) chk("write waited with the engine idle", 1, 0);   // ready before the edge that takes the write
             @(posedge clk); #1;
-            if (!ready) chk("write waited with the engine idle", 1, 0);
             sel = 0; we = 0; be = 4'hF;
         end
     endtask
