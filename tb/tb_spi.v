@@ -110,7 +110,10 @@ module tb_spi;
         for (ii = 0; ii < 5; ii = ii + 1) n_stall[ii] = 0;
     end
 
-    reg        probe_active = 1'b0;      // this byte's MISO is the probe (V3)
+    reg        probe_active = 1'b0;      // this byte's MISO is the probe
+    reg        probe_drive = 1'b0, in1_probe = 1'b0;
+    integer    probe_force = 0;          // 0 random per byte, 1 always the probe, 2 never
+    reg [7:0]  plan = 8'h00, plan_prev = 8'h00;   // the RX byte the probe plays for this byte
 
     always @(posedge clk) begin : model
         reg        txe, exp_stall, acc, do_ld, skip;
@@ -169,6 +172,7 @@ module tb_spi;
                     if (probe_active) n_probe = n_probe + 1;
                 end
                 if (t == 16 * m_P) begin
+                    if (probe_active) begin checks = checks + 1; if (m_rx !== plan) fail("probe: byte sampled by the model is not the planned one", m_rx, plan); end
                     if (m_bba) begin bbn = m_rx; txn = m_bb; do_ld = 1'b1; n_b2b = n_b2b + 1; end
                     else begin m_sr = m_rx; m_active = 1'b0; if (m_en) m_p3 = m_cpol; end
                 end
@@ -221,7 +225,33 @@ module tb_spi;
         m_ins = m_inm; m_inm = in;
     end
 
-    task new_byte_hook; begin end endtask   // V3: choose the byte's MISO source
+    // MISO source of the byte now shifting (5.5): the probe, or the analog slave.
+    task new_byte_hook;
+        begin
+            plan_prev = plan; plan = rnd(0);
+            probe_active = (probe_force == 1) || (probe_force == 0 && rn(2) == 1);
+        end
+    endtask
+    // At every negative edge the probe sets in[1] for the coming positive edge: at the
+    // sample edge of bit k the RX bit k, at every other edge the complement of the RX
+    // bit whose sample edge is nearest (ties: the earlier bit). A DUT that samples one
+    // clock early, one clock late, at the A->B edge or through in_s gets the complement.
+    always @(negedge clk) begin : probe
+        integer t, k0, ph, dprev, dnext, kb;
+        reg v;
+        probe_drive = probe_active && m_active;
+        if (probe_drive) begin
+            t = ecnt + 1 - m_L; k0 = t / (2 * m_P); ph = t % (2 * m_P);
+            if (t >= 16 * m_P) v = ~plan[0];
+            else if (ph == 2 * m_P - 1) v = plan[7 - k0];
+            else begin
+                dprev = ph + 1; dnext = 2 * m_P - 1 - ph;
+                kb = (k0 > 0 && dprev <= dnext) ? k0 - 1 : k0;
+                v = ~plan[7 - kb];
+            end
+            in1_probe = v;
+        end
+    end
 
     // ── Analog slave (a generic SPI slave on transport-delayed pins) ────────
     real       rt_out = 0.0, rt_in = 0.0;        // ns
@@ -231,7 +261,6 @@ module tb_spi;
     always @(out[0]) cs_d   <= #(rt_out) out[0];
     reg        do_pre = 1'b0, do_d = 1'b0;
     always @(do_pre) do_d <= #(rt_in) do_pre;
-    reg        probe_drive = 1'b0, in1_probe = 1'b0;
     assign     in1 = probe_drive ? in1_probe : do_d;
 
     reg        xwin_en = 1'b1;                    // X from +t_OH to +t_ODLY at each change
@@ -436,11 +465,33 @@ module tb_spi;
         end
     endtask
 
+    task t04;
+        integer md, g, bsz, nb; reg [7:0] pa;
+        begin
+            sect("T04 MISO probe");
+            probe_force = 1;
+            bset[0] = 0; bset[1] = 1; bset[2] = 2; bset[3] = 3; bset[4] = 78;
+            for (md = 0; md < 4; md = md + 1)
+                for (bi = 0; bi < 5; bi = bi + 1) begin
+                    wait_txe; cfg(md[1:0], bset[bi]);
+                    for (g = 0; g < 32; g = g + 1) begin          // 32 pairs = 64 bytes
+                        wr(`SL_TXDATA, rnd(0)); wr(`SL_TXDATA, rnd(0));
+                        wait_txr;
+                        rd(`SL_TXDATA, v);  ckv("probe: TXDATA after the back-to-back load = the first RX byte", v, plan_prev);
+                        wait_txe;
+                        rd(`SL_RXDATA, v);  ckv("probe: RXDATA at TXE = the last RX byte", v, plan);
+                        if (g % 8 == 7) begin wr(`SL_TXDATA, rnd(0)); wait_txe; rd(`SL_RXDATA, v); ckv("probe: lone byte", v, plan); end
+                    end
+                end
+            probe_force = 0;
+        end
+    endtask
+
     task t05;
         integer len, pth, bb, md;
         begin
             sect("T05 the driver loop");
-            rt_out = 0.0; rt_in = 0.0; xwin_en = 1'b1;
+            rt_out = 0.0; rt_in = 0.0; xwin_en = 1'b1; probe_force = 2;
             for (md = 0; md < 4; md = md + 1) begin
                 wr(`SL_CONTROL, md); wr(`SL_BAUD, 1); wr(4'd3, 1);
                 for (pth = 0; pth < 3; pth = pth + 1)
@@ -451,6 +502,7 @@ module tb_spi;
                 drv_frame(17, 1, 1);
                 if (bb != 2) begin drv_frame(512, 1, 1); drv_frame(512, 0, 1); drv_frame(512, 1, 0); end
             end
+            probe_force = 0;
         end
     endtask
 
@@ -623,6 +675,56 @@ module tb_spi;
         end
     endtask
 
+    // Round-trip sweep: transport delays on SCK/MOSI out and DO in, split equally. RX is
+    // correct iff rt + t_ODLY < (2B+1) T. Bytes 0xAA so a stale bit is always wrong.
+    integer sw_pass [0:100];
+    task rt_point(input real rt, output pass_o);
+        integer i; reg ok;
+        begin
+            rt_out = rt / 2.0; rt_in = rt / 2.0; idle(40);
+            for (i = 0; i < 8; i = i + 1) sl_mem[i] = 8'hAA;
+            wait_txe; wr(4'd0, 32'h0000_0080);                      // OLED CS# low
+            drv_xfer(4, 1'b0, 1'b1);
+            wr(4'd0, 32'h0000_0081);
+            ok = 1'b1;
+            for (i = 0; i < 4; i = i + 1) if (rx_buf[i] !== 8'hAA) ok = 1'b0;
+            pass_o = ok;
+        end
+    endtask
+    task t14;
+        integer b, n, k, lp, ff, bad; real rt, pred; reg ok;
+        begin
+            sect("T14 round-trip sweep");
+            probe_force = 2; xwin_en = 1'b1; x_ok = 1'b1;
+            for (b = 0; b < 3; b = b + 1) begin
+                wait_txe; cfg(2'b11, b);
+                n = (b == 0) ? 11 : 81;
+                pred = (2.0 * b + 1.0) * T - `SD_T_ODLY - 0.5;
+                lp = -1; ff = -1; bad = 0;
+                for (k = 0; k < n; k = k + 1) begin
+                    rt = k + 0.5;
+                    rt_point(rt, ok);
+                    if (ok) lp = k; else if (ff < 0) ff = k;
+                    if ((rt <= pred) != ok) bad = bad + 1;
+                end
+                $display("RTSWEEP baud=%0d last_pass=%0.1f first_fail=%0.1f predicted=%0.1f %0s", b,
+                         (lp < 0) ? -1.0 : lp + 0.5, (ff < 0) ? -1.0 : ff + 0.5, pred, bad == 0 ? "OK" : "MISMATCH");
+                checks = checks + 1;
+                if (bad != 0) fail("RTSWEEP: the passing set is not rt < (2B+1) T - t_ODLY", bad, 0);
+            end
+            // BAUD 0 at rt = 25 must fail ("never BAUD 0 for receive")
+            wait_txe; cfg(2'b11, 0);
+            rt_point(25.0, ok);
+            checks = checks + 1;
+            if (ok) fail("BAUD 0 at rt = 25 ns received correctly (the expected failure is absent)", 1, 0);
+            else $display("RTSWEEP baud=0 rt=25.0 expected-fail seen");
+            rt_out = 0.0; rt_in = 0.0; idle(40);
+            x_ok = 1'b0; probe_force = 0;
+            pulse_rst(2);                                          // flush the X the failing points shifted in
+            idle(4);
+        end
+    endtask
+
     // ── The random phase ────────────────────────────────────────────────────
     reg        rand_rst_en = 1'b0;
     integer    rst_left = 0;
@@ -656,6 +758,7 @@ module tb_spi;
         integer end_e, c, p, q, tn, nb0; reg [3:0] b; reg [31:0] d, r;
         begin
             sect("random phase");
+            probe_force = 0;
             end_e = ecnt + ncyc; nb0 = n_bytes;
             xwin_en = 1'b0;
             wr(`SL_CONTROL, 3); wr(`SL_BAUD, 1); wr(4'd3, 1);
@@ -716,7 +819,7 @@ module tb_spi;
         repeat (4) @(negedge clk);
         rst = 1'b0;
         idle(2);
-        t01; t02; t03; t05; t06; t07; t08; t09; t10; t11; t12; t13;
+        t01; t02; t03; t04; t05; t06; t07; t08; t09; t10; t11; t12; t13; t14;
         rand_phase(ncycles);
         sect("end");
         if (errors == 0) begin
@@ -749,7 +852,7 @@ module tb_spi;
             $display("FAIL tb_spi: %0d errors, %0d coverage floors missed (seed %0d)", errors, floor_bad, seed);
         $finish;
     end
-    task verdict_extra; begin end endtask      // V3: the probe floor and the sweep verdict
+    task verdict_extra; begin floor("probe bits", n_probe, 10240); end endtask
 
     initial begin
         #((ncycles + 6_000_000) * T);
