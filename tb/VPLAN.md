@@ -297,7 +297,7 @@ and the formal benches only as planted copies (below), not as a full campaign.
 
 | Mutant | Killed by | Note |
 |---|---|---|
-| SPI01 | test-spi T04 MISO probe; test-soc-spi sd_b1 | survives test-soc-periph, test-wrapper, test-syscon-soc; equivalent at BAUD 0 |
+| SPI01 | test-spi T04 MISO probe; test-soc-spi sd_b1 | survives test-soc-periph, test-wrapper, test-syscon-soc; not equivalent at BAUD 0: the spi_bb harness gives a counterexample |
 | SPI02 | test-spi T04 MISO probe; test-soc-spi sd_b1_rt40 (the negative control flips to PASS) | contradicts the WO's "survives every delay-based test"; spi_bb planted copy FAILS |
 | SPI21 | test-spi T04 MISO probe; test-soc-spi sd_b1 ("program check 00000009 failed (value seen 000000ff)") | |
 | SPI03, SPI08, SPI10, SPI11, SPI17, SPI18, SPI19, SPI23, SPI24, SPI26, SPI32 | test-spi T03 | |
