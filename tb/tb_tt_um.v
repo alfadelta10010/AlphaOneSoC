@@ -833,11 +833,13 @@ module tb_tt_um;
                 ID_keypad: if (s_ev_i != 28) fail("keypad: not every pattern was scanned");
 `ifdef TT_SD
                 ID_sd_init: begin
-                    $display("NOTE sd_init: %0d cmds, %0d blocks read, %0d written, %0d crc16 ok, %0d race, %0d model errors",
-                             sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, sd.n_crc16_ok, sd.n_race, sd.errors);
+                    $display("NOTE sd_init: %0d cmds, %0d blocks read, %0d written, program reports %0d bytes checked, %0d crc16 checked, baud %0d, %0d race, %0d model errors, min data SCK period %0.1f ns",
+                             sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, s_val[0], s_val[1], s_val[2], sd.n_race, sd.errors, sd.sck_min_dt_ns);
                     if (!sd_fit) fail("sd_init needs +SD");
                     if (sd.n_cmd != 16 || sd.n_rd_blk != 4 || sd.n_wr_blk != 1 || sd.n_race != 0)
                         fail("sd_init through the pins: want 16 cmds, 4 blocks read, 1 written, race 0");
+                    if (sd.sck_min_dt_ns < 80.0)
+                        fail($sformatf("sd_init: the data-phase SCK period was %0.1f ns", sd.sck_min_dt_ns));
                 end
 `endif
                 default: ;

@@ -53,7 +53,6 @@ module sd_spi_model #(
 );
     // ── Counters the benches read ───────────────────────────────────────────
     integer errors = 0, n_expected = 0, n_cmd = 0, n_rd_blk = 0, n_wr_blk = 0, n_race = 0;
-    integer n_crc16_ok = 0;
     real    sck_min_id_ns = 1.0e9, sck_min_dt_ns = 1.0e9;
     reg     ready = 1'b0;                   // out of idle (ACMD41 returned 0x00)
 
