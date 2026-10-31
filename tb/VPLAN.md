@@ -288,9 +288,9 @@ lists six (CS01-04, CS07, CS11) and six is the measured number.
 ### 4.1a SPI mutants (WO-29: SPI01-SPI32, 35 entries with 04a/04b and the GP rewrite)
 
 `python3 tb/mutate/run.py --only SPI01,...,GP05 --benches unit` on the sandbox, from a
-`git archive` of the branch: 34 of 35 killed by `test-spi` (the unit bench), SPI12 survives
-every simulation by construction and is killed only by `spi_f12` (planted copy:
-F1 out[3] driven by $or). GP02-GP04 are retired (the DIV shifter and OUT[5:4] storage are
+`git archive` of the branch: 34 of 35 killed by `test-spi` (the unit bench). SPI12 survives
+the unit and SoC benches; the full mutation run (2026-10-31, every bench) found that
+`test-wrapper` kills it, and `spi_f12` kills it too (planted copy: F1 out[3] driven by $or). GP02-GP04 are retired (the DIV shifter and OUT[5:4] storage are
 gone; GP03 would be equivalent), GP01 is rewritten, GP05 stands. The soc benches ran only for
 SPI01 (survives test-soc-periph, test-wrapper, test-syscon-soc; killed by test-soc-spi sd_b1)
 and the formal benches are now a full campaign (table below).
@@ -311,7 +311,7 @@ and the formal benches are now a full campaign (table below).
 | SPI15, SPI22 | test-spi T06 / T04 | |
 | SPI29, GP01 | test-spi T09 byte lanes | |
 | GP03 | test-spi (pins 5:4 mirror 7:6, found by the every-clock `out` check) | formal: spi_bus, spi_bb, spi_bb1 (see the formal table below) |
-| SPI12 | spi_f12 only | equivalent in every simulation; planted copy: F1 out[3] driven by $or |
+| SPI12 | test-wrapper (`uo_out[3] changed twice` in one time step, cycle 15142); spi_f12 | same value as the flop at every settled clock, so the unit and SoC benches miss it; the wrapper's every-pin check sees two changes at one time; planted copy: F1 out[3] driven by $or |
 
 Formal campaign (2026-10-31, combined tree on main 2937cd5, local, `ulimit -v 4000000`;
 `python3 tb/mutate/run.py --only <SPI*,GP01,GP03> --benches formal --skip-formal spi_cover`,
