@@ -15,7 +15,7 @@ apart, this document says which one won and why.
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
 | PLIC | `0x0C00_0000` | — | reserved, not implemented (accesses fault) | — |
 | UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550-compatible subset, byte registers, polled (`docs/pins-and-peripherals.md`) |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v`: GPIO and the OLED's SPI transmitter (`docs/pins-and-peripherals.md`) |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]` (`docs/pins-and-peripherals.md`) |
 | syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps (section "syscon") |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
@@ -86,8 +86,7 @@ held request (see `src/fyracore.v`), which is all a single-master bus needs.
 
 It has no registers. Peripherals answer with combinational read data, and
 in the cycle they are selected, so a peripheral access is one cycle -- except
-for back-pressure: the UART holds a THR write, and the GPIO block a SPI DATA
-write, until its transmitter is free. An IO target may hold `ready` low only
+for back-pressure: the UART holds a THR write, and the GPIO block a write to the SPI controller, until it is ready. An IO target may hold `ready` low only
 on a cycle its own select is high, so the bus simply ANDs the IO readies. A
 peripheral with a side effect (a UART RX pop, a THR load) acts only on the
 cycle its select and its `ready` are both high; the request strobe
@@ -333,7 +332,7 @@ two-flop hand-over on the reset.
 | Edge | `rst_soc` before it | At the edge |
 |---|---|---|
 | E0 | 0 | The store completes; `rq` <- 1, RESET_CAUSE.SOFT <- 1 |
-| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0x39`, pc <- the reset vector; `rq2` <- 1 |
+| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0xB9`, pc <- the reset vector; `rq2` <- 1 |
 | E2 | 1 | Still in reset; `rq` <- 0, `rq2` <- 0 |
 | E3 | 0 | First running edge: `ctl_oe` <- 1 (SCK and the chip selects driven idle), the start-up sequence starts 8 clocks later, the core fetches `0x2000_0000` |
 
@@ -350,7 +349,7 @@ A store of `0x5555` (or the fail value `0x3333`) sets `off`, which holds
 
 * The QSPI pins are released. The Pmod's 10 kΩ pull-ups hold every chip
   select high, so the flash and both PSRAMs deselect and drop to standby.
-* `uo_out` = `0x39`: UART idle, RTS# not ready, the OLED in reset with its
+* `uo_out` = `0xB9`: UART idle, RTS# not ready, the OLED in reset with its
   panel supply off.
 * The clock keeps running. Nothing gates a clock yet, so only the clock tree
   and the flops' clock pins toggle; `mtime` stops, because the CLINT is in

@@ -39,7 +39,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
-        test-qspi test-uart test-gpio test-soc-periph test-syscon-soc \
+        test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm \
         rivercore-build rivercore-test
 
@@ -61,8 +61,10 @@ help:
 	@echo "  make test-compressed   Run compressed decoder testbench"
 	@echo "  make test-qspi         Run memory controller + QSPI engine testbench"
 	@echo "  make test-uart         Run UART testbench"
-	@echo "  make test-gpio         Run GPIO + OLED SPI transmitter testbench"
+	@echo "  make test-gpio         Run the GPIO + SPI register and pin testbench"
+	@echo "  make test-spi          Run the SPI controller bench (timing model, MISO probe, round-trip sweep)"
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
+	@echo "  make test-soc-spi      Run the SD card and shared-bus programs through the SoC at 62.5 MHz"
 	@echo "  make test-syscon-soc   Run syscon (reboot, strap, fail, watchdog) through the whole SoC"
 	@echo "  make test-wrapper      Run the TinyTapeout top level, pins only"
 	@echo "  make test-gl NETLIST=.. PDK_ROOT=..  One tt_pins run on a gate-level netlist (smoke)"
@@ -167,8 +169,8 @@ test-syscon: $(BUILD_DIR)
 # The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
 # Each bench prints its seed; rerun one failure with its +SEED=.
 SEEDS ?= 1 2 3 4 5 6 7 8
-SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio
-test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio tb_spi
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio test-spi
 	@for s in $(SEEDS); do for t in $(SEEDED); do \
 		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
 		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
@@ -215,12 +217,21 @@ test-uart: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart.v
 	@$(call run_tb,tb_uart)
 
-# GPIO OUT/IN and the SPI shifter: register and pin model, a mode-3 SPI
-# checker at every DIV, back-pressure, and a random run.
+# GPIO OUT/IN and the SPI controller's registers: register and pin model, a
+# mode-3 SPI checker at several BAUD values, back-pressure, and a random run.
+# The SPI engine's timing, modes and receive path are in test-spi.
 test-gpio: $(BUILD_DIR)
-	@echo "=== Testing GPIO + SPI transmitter ==="
-	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(TB_DIR)/tb_gpio.v
+	@echo "=== Testing GPIO + SPI registers ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_gpio $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(TB_DIR)/tb_gpio.v
 	@$(call run_tb,tb_gpio)
+
+# The SPI controller (gpio + spi) against a timing model written from the
+# spec (tb/tb_spi.v, WO-29): directed sections T01-T14, a random phase with
+# coverage floors, the MISO probe and the round-trip sweep. +SEED=, +CYCLES=.
+test-spi: $(BUILD_DIR)
+	@echo "=== Testing the SPI controller ==="
+	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(BUILD_DIR)/tb_spi $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(TB_DIR)/tb_spi.v
+	@$(call run_tb,tb_spi)
 
 # The peripherals through the whole SoC: each tests/soc/*.S program boots
 # from the QSPI Pmod model's flash with the demo board's devices on the pins
@@ -243,9 +254,9 @@ test-soc-periph: $(BUILD_DIR)
 	@mkdir -p $(SOC_PERIPH_DIR)
 	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_soc_periph.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
 		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
@@ -256,6 +267,42 @@ test-soc-periph: $(BUILD_DIR)
 		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex $$pl > $$t.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_]+: ' $$t.log | head -6; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
+	done; exit $$bad
+
+# The SD card and the shared SPI bus through the whole SoC at the chip clock (16 ns;
+# tb_soc_periph.v built with -DTCLK_NS=16.0): tests/soc/sd_init.S, spi_mixed.S and
+# sd_reboot.S against tb/sd_spi_model.v and the SSD1331 model, with pad delays. Each
+# run is "label;program;cflags;plusargs"; the PASS lines carry exact counts, and the
+# negative controls (rt 40 ns at BAUD 1, no card, DO stuck at 1) PASS only when
+# the program FAILS. `make test-soc-spi MB_UART=1` also sends the reports over the UART;
+# `ONLY="sd_init sd_b1"` runs just those labels.
+RB_DLY_A ?= 700
+RB_DLY_B ?= 900
+SOC_SPI_RUNS := "sd_init;sd_init;;" "sd_init_busy0;sd_init;;+SD_BUSY=0" "sd_b1;sd_init;-DSD_HZ=15625000;" \
+	"sd_b1_rt40;sd_init;-DSD_HZ=15625000;+RT_OUT=20 +RT_IN=20 +EXPECT_FAIL" \
+	"sd_init_rt60;sd_init;;+RT_OUT=30 +RT_IN=30" "sd_absent;sd_init;;+EXPECT_FAIL" \
+	"sd_stuck_do;sd_init;;+SD_STUCK_DO +EXPECT_FAIL" "spi_mixed;spi_mixed;;" \
+	"sd_reboot_a;sd_reboot;-DRB_DLY=$(RB_DLY_A);" "sd_reboot_b;sd_reboot;-DRB_DLY=$(RB_DLY_B);"
+SOC_SPI_DIR := $(BUILD_DIR)/soc_spi
+test-soc-spi: $(BUILD_DIR)
+	@echo "=== Testing the SD card and the shared SPI bus through the SoC (62.5 MHz) ==="
+	@mkdir -p $(SOC_SPI_DIR)
+	@$(IVERILOG) -g2012 -DTCLK_NS=16.0 -o $(SOC_SPI_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
+	@cd $(SOC_SPI_DIR) && bad=0; for r in $(SOC_SPI_RUNS); do \
+		IFS=';'; set -- $$r; unset IFS; [ -z "$(ONLY)" ] || case " $(ONLY) " in *" $$1 "*) ;; *) continue;; esac; label=$$1; prog=$$2; cf=$$3; pa=$$4; \
+		fl=$$cf; pl=; if [ -n "$(MB_UART)" ]; then fl="$$fl -DMB_UART -DMB_DIV=1"; pl="+MB_UART +MB_DIV=1"; fi; \
+		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
+			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
+			$(CURDIR)/$(TESTS_DIR)/soc/$$prog.S -o $$label.elf || { bad=1; continue; }; \
+		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
+			--change-addresses=-0x20000000 $$label.elf $$label.hex; \
+		( ulimit -v 4000000; $(VVP) -n sim +TEST=$$label +FLASH_FILE=$(CURDIR)/$(SOC_SPI_DIR)/$$label.hex $$pl $$pa > $$label.log 2>&1 ); \
+		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_0-9]+: ' $$label.log | head -6; \
+		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$label.log || ! grep -q '^PASS' $$label.log; then bad=1; fi; \
 	done; exit $$bad
 
 # syscon through the whole SoC (tb/tb_syscon_soc.v): each tests/soc/syscon_*.S
@@ -271,7 +318,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@mkdir -p $(SYSCON_SOC_DIR)
 	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(SYSCON_SOC_DIR)/sim -s tb_syscon_soc $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
+		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
 		set -- $$run; t=$$1; shift; n=$$((n+1)); \
@@ -295,7 +342,7 @@ test-syscon-soc: $(BUILD_DIR)
 # then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
 # strap at 0 and at 1 (RD_LATE, 25 ns).
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
-                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
+                $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper
@@ -358,7 +405,7 @@ test-gl:
 	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
 	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 

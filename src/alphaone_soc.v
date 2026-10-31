@@ -1,6 +1,6 @@
 // AlphaOneSoC top level: FyraCore, the bus fabric, the memory controller and
 // QSPI engine for the TinyTapeout QSPI Pmod, the CLINT, the UART and the
-// GPIO block (with the OLED's SPI transmitter).
+// GPIO block (with the SPI controller for the OLED and an SD card).
 //
 // Address map (docs/soc-architecture.md):
 //
@@ -8,7 +8,7 @@
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
-//   0x1001_0000  GPIO    OUT / IN / SPI DATA / SPI CTRL (src/gpio.v)
+//   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
 //                        straps, watchdog at +0x100 (src/syscon.v)
 //
@@ -65,7 +65,7 @@ module alphaone_soc #(
     input  wire       uart_rx,
     output wire       uart_tx,
     output wire       uart_rts_n,
-    // GPIO (out[1] / out[3] are MOSI / SCK while the SPI transmitter is on)
+    // GPIO (out[1] / out[3] are MOSI / SCK while the SPI controller is on)
     input  wire [7:0] gpio_in,
     output wire [7:0] gpio_out
 );
@@ -243,14 +243,14 @@ module alphaone_soc #(
         .rts_n(uart_rts_n)
     );
 
-    // ── GPIO + SPI transmitter ──────────────────────────────────────────────
+    // ── GPIO + SPI controller ──────────────────────────────────────────────
     gpio gpio_inst (
         .clk  (clk),
         .rst  (rst_soc),
         .sel  (gpio_sel),
         .we   (dmem_we),
         .be   (dmem_be),
-        .addr (dmem_addr[3:2]),
+        .addr (dmem_addr[5:2]),
         .wdata(dmem_wdata),
         .rdata(gpio_rdata),
         .ready(gpio_ready),

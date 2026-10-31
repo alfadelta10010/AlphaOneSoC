@@ -98,7 +98,7 @@ boot2:
     CHECK t1, 0, 0x206               # no timer or software interrupt pending
     li   t0, GPIO
     lw   t1, G_OUT(t0)
-    CHECK t1, 0x09, 0x207
+    CHECK t1, 0x89, 0x207
     li   t0, UART
     lbu  t1, LCR(t0)
     CHECK t1, 0, 0x208

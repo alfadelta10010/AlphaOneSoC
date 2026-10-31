@@ -130,6 +130,35 @@ test kills (`build/mut/syscon-all.tsv`).
 | REQ-SYS-018 | same-cycle cases: fire with a W1C of WDT, fire with a FINISH reboot, fire with a power-off | C | tb_syscon (WO-14, 14a) | spec model | p (no mutant isolates them) |
 | REQ-SYS-019 | no fire while the SoC is held (SA-009) | C | tb_syscon k = 16..18 (WO-14a), formal `syscon_gate` (WO-19) | spec model; proof (P1, P2) | P (WD16, by both) |
 
+### 1.5 SPI controller (REQ-SPI-*, WO-29)
+
+IDs follow WO-29 section 3 (`SPI-nnn`). The expected value of every check comes from WO-28 sections 1-3, WO-29 and the driver/SD/SSD1331 documents, never from `src/spi.v` or `src/gpio.v`.
+
+| ID | Requirement (source) | timing | Test | Checker |
+|---|---|---|---|---|
+| REQ-SPI-001 | Map in the GPIO window, decoded on `addr[5:2]`: 0x20 RXDATA (ro), 0x24 TXDATA (rw), 0x28 STATUS (ro), 0x2C CONTROL (rw), 0x30 BAUD (rw); 0x08, 0x10-0x1C and 0x34-0x3C read 0 and ignore writes; the window aliases every 64 B (WO-28 1.2) | C | tb_spi T01/T02 | timing model, every slot read; X check |
+| REQ-SPI-002 | TXDATA write: bb <- wdata[7:0], bba <- 1; TXDATA read bb; RXDATA sr; STATUS = {TXR = !bba, TXE = idle && !bba}; CONTROL = {CPOL, CPHA}; BAUD [7:0]; every unlisted bit reads 0 (A1, Q5) | C | tb_spi T02/T05 | timing model |
+| REQ-SPI-003 | Reset: OUT 0x89, SPICTL 0, CONTROL 3, BAUD 0xFF, RXDATA 0, TXDATA 0, STATUS 3, pins 0x89; uo_out 0xB9 at the wrapper on every reset path | C | tb_spi T01/T11, tb_tt_um | timing model; pin checks |
+| REQ-SPI-004 | Writes act only with be[0]; a write without be[0] changes nothing and never stalls | C | tb_spi T09 | timing model |
+| REQ-SPI-005 | Stall: !ready iff sel && we && be[0] && (TXDATA ? bba : !TXE); reads never stall; ready never low while not selected | C | tb_spi T06-T09/T13 | stall rule evaluated every clock |
+| REQ-SPI-006 | First launch (the LOAD) at w+1 for an idle engine; every SCK level inside a byte lasts B+1 clocks; a byte is 16(B+1) clocks; no gap between bytes; TXE at w+1+16(B+1) for a lone byte | C | tb_spi T03/T06 | timing equations from the write and load times, never from the DUT pins |
+| REQ-SPI-007 | Levels: idle = CPOL, A = CPOL^CPHA, B = ~A, in all four modes | C | tb_spi T03 | pins every clock |
+| REQ-SPI-008 | MOSI: MSB first, changes only at a launch, stable B+1 clocks before and after every A->B edge | C | tb_spi T03, SSD1331 tDSW/tDHW | pins every clock; ssd1331_model |
+| REQ-SPI-009 | MISO: bit k is the `ui_in[1]` value at edge launch_k + 2B + 1; it lands in sr (lone or last byte) or bb (back-to-back load) | C | tb_spi T04 PROBE, T14 | the probe drives the bit only at that edge and its complement elsewhere |
+| REQ-SPI-010 | One byte per write: never overwritten, never duplicated, never lost | C | tb_spi T05/T06 + random | scoreboard in the model |
+| REQ-SPI-011 | An IDLE load moves sr into bb, so a TXDATA read after the load returns the previous RX byte | C | tb_spi T05 slow driver (writes 16(B+1)+0..7 clocks apart, B=0 and B=2; floor: TXDATA reads after an idle load >= 50) | timing model; mutant SPI04a |
+| REQ-SPI-012 | EN = 1: the engine owns out[1] and out[3] and OUT writes to them are ignored; EN = 0: pins follow OUT, the engine still times bytes; an EN or CONTROL write leaving EN = 1 sets SCK to the new CPOL; EN 1->0 leaves the pins | C | tb_spi T10 | timing model |
+| REQ-SPI-013 | OUT bits 0, 2, 6, 7 rw, bits 5:4 read 0, reads return the pins; bit 7 (SD CS#) resets high | C | tb_spi T01/T02 | timing model |
+| REQ-SPI-014 | F12: out[0,1,2,3,6,7] are flop outputs with no logic between; at the wrapper one gate with `run` per pin | C | spi_f12 (WO-29 V9) | structural |
+| REQ-SPI-015 | A reset mid-byte gives idle, reset values and the reset pins on the next edge, one transition per pin | B | tb_spi T11, sd_reboot | timing model |
+| REQ-SPI-016 | The Linux polled loop (all three paths, lengths 1/2/3/512) returns the bytes the slave sent | C | tb_spi T05, sd_init, spi_mixed | analog slave versus the bytes read |
+| REQ-SPI-017 | cc and bc have no reset and are don't-care in IDLE: no X reaches an output | C | tb_spi X check; spi_dc (WO-29 V7) | X check; miter |
+| REQ-SPI-018 | Round trip: RX is correct iff rt + t_ODLY < (2B+1) T; at T = 16: rt < 2 / 34 / 66 ns at B = 0 / 1 / 2 | C | tb_spi T14, test-soc-spi | transport-delayed analog slave; RTSWEEP |
+| REQ-SPI-019 | SD card in SPI mode: initialisation at <= 400 kHz, read, write, read back, multi-block read at BAUD 2; SSD1331 timing at its speed; both devices share the bus in mode 3 | C | test-soc-spi | sd_spi_model, ssd1331_model, exact counts |
+| REQ-SPI-020 | CS# discipline at the pins: SCK at the idle level at every CS# edge; CS# rises only on byte boundaries (except in a reboot, Q6) | C | sd_spi_model, ssd1331_model | model protocol checks |
+
+Assumptions: A1 unlisted bits read 0; A2 mid-byte RXDATA/TXDATA reads are don't-care but never X; A3 MOSI holds OUT bit 1 after an EN 0->1 write until the first load; A4 a STATUS or reserved write while busy stalls then does nothing; A5 a same-timestamp SCK/CS# change at a reboot is a counted race, allowed only in sd_reboot (constants in `tb/spi_spec.vh`).
+
 ## 2. Audit of the benches as found (at 484ec59)
 
 What each claimed, what it really checked, and how it could pass on a
@@ -256,6 +285,93 @@ wo-19.tsv), whose report is the 45 faults alone.
 Correction: commit 0980c78's body says the CSR proof kills seven mutants; it
 lists six (CS01-04, CS07, CS11) and six is the measured number.
 
+### 4.1a SPI mutants (WO-29: SPI01-SPI32, 35 entries with 04a/04b and the GP rewrite)
+
+`python3 tb/mutate/run.py --only SPI01,...,GP05 --benches unit` on the sandbox, from a
+`git archive` of the branch: 34 of 35 killed by `test-spi` (the unit bench). SPI12 survives
+the unit and SoC benches; the full mutation run (2026-10-31, every bench) found that
+`test-wrapper` kills it, and `spi_f12` kills it too (planted copy: F1 out[3] driven by $or). GP02-GP04 are retired (the DIV shifter and OUT[5:4] storage are
+gone; GP03 would be equivalent), GP01 is rewritten, GP05 stands. The soc benches ran only for
+SPI01 (survives test-soc-periph, test-wrapper, test-syscon-soc; killed by test-soc-spi sd_b1)
+and the formal benches are now a full campaign (table below).
+
+| Mutant | Killed by | Note |
+|---|---|---|
+| SPI01 | test-spi T04 MISO probe; test-soc-spi sd_b1 | survives test-soc-periph, test-wrapper, test-syscon-soc; not equivalent at BAUD 0: the spi_bb harness gives a counterexample |
+| SPI02 | test-spi T04 MISO probe; test-soc-spi sd_b1_rt40 (the negative control flips to PASS) | contradicts the WO's "survives every delay-based test"; spi_bb planted copy FAILS |
+| SPI21 | test-spi T04 MISO probe; test-soc-spi sd_b1 ("program check 00000009 failed (value seen 000000ff)") | |
+| SPI03, SPI08, SPI10, SPI11, SPI17, SPI18, SPI19, SPI23, SPI24, SPI26, SPI32 | test-spi T03 | |
+| SPI04a | test-spi T05 slow driver (scratch run: FAIL at T05 "rdata" and "driver: received byte") | T12 does not kill it (it overwrites bb one clock after the load); C13 in spi_core is the named formal killer |
+| SPI04b, SPI16, SPI31 | test-spi T04 | |
+| SPI05 | test-spi T04 (ready) | T06 is the named killer; the probe's writes see it first |
+| SPI06, SPI07 | test-spi T07 | |
+| SPI09, SPI13 | test-spi T02 | |
+| SPI25 | test-spi T02 | the WO called it SoC-equivalent; the unit bench kills it |
+| SPI14, SPI20, SPI27, SPI28, SPI30, GP05 | test-spi T01 / start | |
+| SPI15, SPI22 | test-spi T06 / T04 | |
+| SPI29, GP01 | test-spi T09 byte lanes | |
+| GP03 | test-spi (pins 5:4 mirror 7:6, found by the every-clock `out` check) | formal: spi_bus, spi_bb, spi_bb1 (see the formal table below) |
+| SPI12 | test-wrapper (`uo_out[3] changed twice` in one time step, cycle 15142); spi_f12 | same value as the flop at every settled clock, so the unit and SoC benches miss it; the wrapper's every-pin check sees two changes at one time; planted copy: F1 out[3] driven by $or |
+
+Formal campaign (2026-10-31, combined tree on main 2937cd5, local, `ulimit -v 4000000`;
+`python3 tb/mutate/run.py --only <SPI*,GP01,GP03> --benches formal --skip-formal spi_cover`,
+SPI12 not run through spi_bb1; spi_bb1 needed a one-line runner fix, it reuses spi_bb_props.sv).
+Every mutant is killed by at least one harness. Formal killers per mutant:
+
+| Mutant | Formal killers |
+|---|---|
+| GP01 | spi_bus, spi_bb, spi_bb1 |
+| GP03 | spi_bus, spi_bb, spi_bb1 |
+| SPI01 | spi_core, spi_dc, spi_bb |
+| SPI02 | spi_bus, spi_bb |
+| SPI03 | spi_core, spi_bb, spi_bb1 |
+| SPI04a | spi_core, spi_bb, spi_bb1 |
+| SPI04b | spi_core, spi_bb |
+| SPI05 | spi_bus, spi_bb, spi_bb1 |
+| SPI06 | spi_bus, spi_bb, spi_bb1 |
+| SPI07 | spi_bus, spi_bb, spi_bb1 |
+| SPI08 | spi_core, spi_bb1 |
+| SPI09 | spi_core, spi_bb, spi_bb1 |
+| SPI10 | spi_core, spi_bb |
+| SPI11 | spi_core, spi_bb |
+| SPI12 | spi_f12 |
+| SPI13 | spi_core, spi_bb, spi_bb1 |
+| SPI14 | spi_bus, spi_bb, spi_bb1 |
+| SPI15 | spi_bus, spi_bb, spi_bb1 |
+| SPI16 | spi_bus, spi_bb |
+| SPI17 | spi_core, spi_bb, spi_bb1 |
+| SPI18 | spi_core, spi_bb, spi_bb1 |
+| SPI19 | spi_bus, spi_bb, spi_bb1 |
+| SPI20 | spi_core, spi_dc, spi_bb, spi_bb1 |
+| SPI21 | spi_bus, spi_bb |
+| SPI22 | spi_core, spi_bb |
+| SPI23 | spi_core, spi_bb, spi_bb1 |
+| SPI24 | spi_core, spi_bb, spi_bb1 |
+| SPI25 | spi_bus, spi_bb, spi_bb1 |
+| SPI26 | spi_core, spi_bb, spi_bb1 |
+| SPI27 | spi_core, spi_bb, spi_bb1 |
+| SPI28 | spi_core, spi_bb, spi_bb1 |
+| SPI29 | spi_bus, spi_bb, spi_bb1 |
+| SPI30 | spi_bus, spi_bb, spi_bb1 |
+| SPI31 | spi_core, spi_bb, spi_bb1 |
+| SPI32 | spi_core, spi_bb, spi_bb1 |
+
+How to read the formal columns:
+
+* A spi_core, spi_dc or spi_bus "kill" is a failure to close k-induction at length 1, not a
+  concrete counterexample: the property is not inductive on the mutant. It says the mutant
+  breaks an invariant, nothing about a reachable trace. spi_bb and spi_bb1 kills are real
+  counterexamples within the bound.
+* spi_bb is BAUD 0 only, depth 24. A phase-length fault (SPI08) is invisible to it: SPI08
+  survives spi_bb (207 s) and is killed by spi_core and by spi_bb1.
+* spi_bb1 is BAUD 1 (inputs narrowed), depth 24: covers setup and the first launches but
+  not a whole byte. Clean run 407 s. Depth 40 timed out at 1800 s (748k vars), so 24 is
+  what ships. It FAILs SPI08 at depth 16 in 8 s. It does not kill SPI01, SPI02, SPI04b,
+  SPI10, SPI11, SPI16, SPI21, SPI22 (RX-path and later-bit faults beyond its depth); spi_bb
+  or spi_core kill those.
+* spi_dc kills only SPI01 and SPI20 (don't-care/X-path faults); spi_f12 kills SPI12 only
+  (structural).
+
 ### 4.2 Survivors and verdicts
 
 Faults no current bench kills, 12 of 295 (`build/mut/report-all-wo19.txt`): 10 in core files, 2 in SoC files. None of the 45 syscon faults survives every bench; the ones that survive some benches are in section 4.
@@ -274,7 +390,7 @@ touches behaviour nothing specifies (section 5).
 | FC27 | equivalent | argument: garbage rd writes during a load wait are unobservable, EX is held by use_hazard until the final write, and after a reset x1-x31 are unspecified (Priv 3.4) |
 | FC81 | equivalent | timing only: a stale wfi_active clears on the first cycle after reset because mie resets to 0 (pinned by tb_csr); costs at most one stall cycle |
 | FC84 | equivalent | every use of exwb_memWR is gated by exwb_valid, which resets, and the stale bit is overwritten on the first cycle |
-| GP03 | equivalent | SoC file, as scored before |
+| GP03 (old: OUT[5:4] stored) | equivalent | retired; replaced by the pin-assign mutant GP03 (pins 5:4 mirror 7:6), which test-spi kills (4.1a). "2'b00 -> out_r[5:4]" would also be equivalent: out_r[5:4] is never written |
 | TT01 | equivalent in zero-delay RTL; kept by design (settled 2026-10-24) | `run` opening the pin gates on the first edge after `rst_n` rises instead of the second. It differs only on a reset with no clock edge while `rst_n` is low (the demo board firmware's first load of a project; the reset button with the clock stopped): there the SoC's flops first take their reset values on edge 1, so the mutant opens the gates on that same edge, a race of about a nanosecond on `uo_out` and `uio_oe`, and gives `run` D = 1 at the asynchronous release of `rst_n` (the design has D = 0 there, so `run` cannot go metastable). TinyTapeout (Discord, 2026-10-23): the clock is not guaranteed to toggle during reset, a few-ns glitch on a project output reaches the pin, and a few ns of `uio_oe` contention with the RP2350 is harmless. The second edge is therefore defence in depth for one flop. Only a gate-level run with SDF of tb_tt_um's stopped-clock reset can see it (section 5) |
 
 RG01 and RG04 (x0 masked in the core) are killed by test-regfile, so they are

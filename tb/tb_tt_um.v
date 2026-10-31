@@ -26,8 +26,8 @@
 // Checked:
 //
 //   * in reset -- from 2 ns after rst_n falls until the second clock edge
-//     after it rises, clock or no clock -- uio_oe is 0 and uo_out is 0x39 (TX
-//     and RTS# high, GPIO OUT 0x09). The SoC then drives SCK and the chip
+//     after it rises, clock or no clock -- uio_oe is 0 and uo_out is 0xB9 (TX
+//     and RTS# high, GPIO OUT 0x89). The SoC then drives SCK and the chip
 //     selects on the third edge, no sooner and no later, which fixes the
 //     length of the reset's release at the pins;
 //   * the four SCK / chip select output enables are one signal, and the four
@@ -49,7 +49,7 @@
 //
 //   * a reboot (FINISH 0x7777) looks at the pins like a pin reset after rst_n
 //     rises: from the first falling clock edge with uio_oe[3] low, two samples
-//     with uio_oe 0 and uo_out 0x39, the third with SCK and the chip selects
+//     with uio_oe 0 and uo_out 0xB9, the third with SCK and the chip selects
 //     driven again. The window starts within a bound of the program's cue
 //     byte ('r', 'R'); each pin changes at most once into it and once out of
 //     it, never twice at one time stamp, and only just after a clock edge;
@@ -66,7 +66,7 @@
 //   sig  'S' (and, with +SIG_UART, the signature words raw, little-endian).
 //
 // then, within 20,000 clocks of the report, the pins must show the power-off
-// (uio_oe 0, uo_out 0x39) and hold it for 200 clocks, so every program also
+// (uio_oe 0, uo_out 0xB9) and hold it for 200 clocks, so every program also
 // exercises syscon's `off` path. For sig the bench then reads the signature
 // from the board's PSRAM, the Pmod model outside the chip, from SIG_BEGIN up
 // to SIG_END (+SIG_BEGIN=<hex> +SIG_END=<hex>), writes it to +SIG_OUT=<file>
@@ -132,7 +132,9 @@ module tb_tt_um;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted
     reg [15:0] keys = 16'h0000;
     wire [3:0] kp_row;
-    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, tb_in[2:1], strap_on ? strap : tb_in[0]};
+    reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[7], SCK [3], MOSI [1], DO ui_in[1]
+    wire       sd_do_in1;
+    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
 `ifdef USE_POWER_PINS
@@ -180,6 +182,33 @@ module tb_tt_um;
                         .dc(uo_out[2]), .res_n(uo_out[6]));
     keypad_model kp (.col(uo_out[3:0]), .pressed(keys), .row(kp_row));
 
+    // ── The SD card (WO-29 6.3), behind +SD, compiled in with -DTT_SD ───────
+    // The card sees uo_out through RT_OUT (default 12.5 ns) and its DO reaches
+    // ui_in[1] through RT_IN (12.5 ns): transport delays (a nonblocking
+    // assignment with a delay), never an inertial `assign #`. tb/sd_spi_model.v
+    // must be on the compile line (scripts/gl/run_gl.sh adds it in the GL WO).
+    real      rt_out = 12.5, rt_in = 12.5;
+    reg [7:0] pd = 8'hB9;
+    always @(uo_out[1]) pd[1] <= #(rt_out) uo_out[1];
+    always @(uo_out[3]) pd[3] <= #(rt_out) uo_out[3];
+    always @(uo_out[7]) pd[7] <= #(rt_out) uo_out[7];
+    reg       do_in1_r = 1'b1;
+    assign    sd_do_in1 = do_in1_r;
+`ifdef TT_SD
+    tri1      sd_do_c;
+    sd_spi_model sd (.fitted(sd_fit), .cs_n(pd[7]), .sck(pd[3]), .di(pd[1]),
+                     .expect_violations(1'b0), .do_o(sd_do_c));
+    always @(sd_do_c) do_in1_r <= #(rt_in) sd_do_c;
+`endif
+    initial begin
+        sd_fit = $test$plusargs("SD");
+        if ($value$plusargs("RT_OUT=%f", rt_out)) ;
+        if ($value$plusargs("RT_IN=%f", rt_in)) ;
+`ifndef TT_SD
+        if (sd_fit) begin $display("FAIL +SD needs the bench compiled with -DTT_SD and tb/sd_spi_model.v"); $finish; end
+`endif
+    end
+
 `ifdef SDF_FILE
     initial $sdf_annotate(`SDF_FILE, dut);
 `endif
@@ -206,7 +235,7 @@ module tb_tt_um;
     task automatic check_reset_pins(input string when);
         begin
             if (uio_oe !== 8'h00) fail($sformatf("uio_oe = %b %s", uio_oe, when));
-            if (uo_out !== 8'h39) fail($sformatf("uo_out = %h %s, want 39", uo_out, when));
+            if (uo_out !== 8'hB9) fail($sformatf("uo_out = %h %s, want B9", uo_out, when));
         end
     endtask
 
@@ -369,6 +398,7 @@ module tb_tt_um;
     localparam integer ID_syscon_wdt_split = 14;
     localparam integer ID_syscon_poweroff = 15;
     localparam integer ID_syscon_pinreset = 16;
+    localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
     integer pid = 0;
     function automatic integer prog_id(input string p);
         begin
@@ -389,6 +419,7 @@ module tb_tt_um;
             if (p == "syscon_wdt_split") prog_id = ID_syscon_wdt_split;
             if (p == "syscon_poweroff") prog_id = ID_syscon_poweroff;
             if (p == "syscon_pinreset") prog_id = ID_syscon_pinreset;
+            if (p == "sd_init") prog_id = ID_sd_init;
         end
     endfunction
     // ── +TEST=soc +PROG=<name>: the mailbox programs of tests/soc ───────────
@@ -524,7 +555,7 @@ module tb_tt_um;
                     s_ev[5] = 'h21; s_ev[6] = 'h20; s_ev[7] = 'h20; s_ev[8] = 'h20; s_ev[9] = 'h20;
                     s_ev[10] = 'h30; s_ev[11] = 'h20;
                     s_n_val = 10; s_val_known = 1'b1;
-                    s_val[0] = "q"; s_val[1] = "m"; s_val[2] = 8'h09; s_val[3] = 8'hCF; s_val[4] = 8'h81;
+                    s_val[0] = "q"; s_val[1] = "m"; s_val[2] = 8'h89; s_val[3] = 8'hCF; s_val[4] = 8'h81;
                     s_val[5] = 8'hC1; s_val[6] = 8'h41; s_val[7] = 8'h4E; s_val[8] = 8'h49; s_val[9] = 8'h49;
                     push_oled(1'b0, 8'h81); push_oled(1'b0, 8'h7E); push_oled(1'b0, 8'h5A); push_oled(1'b0, 8'hC3);
                 end
@@ -551,6 +582,11 @@ module tb_tt_um;
                 ID_syscon_pinreset: begin
                     s_div = 1; s_n_ev = 3; s_ev[0] = 'h54; s_ev[1] = 'h55; s_ev[2] = 'h57;
                     s_exp_re = 1; s_exp_cut = 2;
+                end
+                ID_sd_init: begin
+                    // VALUE s5 bytes checked, VALUE s6 CRC16s checked, VALUE the data phase's BAUD
+                    s_div = 1; s_n_val = 3; s_val_known = 1'b1;
+                    s_val[0] = 32'd2048; s_val[1] = 32'd4; s_val[2] = 32'd2;
                 end
                 default: fail($sformatf("+PROG=%s: not a program of this bench", prog));
             endcase
@@ -795,6 +831,17 @@ module tb_tt_um;
                 ID_syscon_poweroff:
                     if (sw_w1_idle) fail("syscon_poweroff: window 1 found every chip select high, nothing was in flight at the hold");
                 ID_keypad: if (s_ev_i != 28) fail("keypad: not every pattern was scanned");
+`ifdef TT_SD
+                ID_sd_init: begin
+                    $display("NOTE sd_init: %0d cmds, %0d blocks read, %0d written, program reports %0d bytes checked, %0d crc16 checked, baud %0d, %0d race, %0d model errors, min data SCK period %0.1f ns",
+                             sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, s_val[0], s_val[1], s_val[2], sd.n_race, sd.errors, sd.sck_min_dt_ns);
+                    if (!sd_fit) fail("sd_init needs +SD");
+                    if (sd.n_cmd != 16 || sd.n_rd_blk != 4 || sd.n_wr_blk != 1 || sd.n_race != 0)
+                        fail("sd_init through the pins: want 16 cmds, 4 blocks read, 1 written, race 0");
+                    if (sd.sck_min_dt_ns < 80.0)
+                        fail($sformatf("sd_init: the data-phase SCK period was %0.1f ns", sd.sck_min_dt_ns));
+                end
+`endif
                 default: ;
             endcase
             $display("NOTE soc %s: %0d cues, %0d VALUE frames, %0d windows (%0d reboots, %0d power-offs, %0d cut by a pin reset)",
@@ -838,7 +885,7 @@ module tb_tt_um;
     always begin : isa_poweroff
         @(posedge rep_done);
         pw_i = 0;
-        while (!(uio_oe === 8'h00 && uo_out === 8'h39) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
+        while (!(uio_oe === 8'h00 && uo_out === 8'hB9) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
         if (pw_i >= 20000) fail("no power-off within 20000 clocks of the report");
         else begin
             pw_cyc = cyc;
@@ -1166,6 +1213,9 @@ module tb_tt_um;
         if (soc_test) soc_final;
         if (cs0_falls == 0 || sck_rises == 0) fail("no flash read on uio[0] and uio[3]");
         if (rp.errors != 0) fail($sformatf("%0d RP2350 UART errors", rp.errors));
+`ifdef TT_SD
+        if (sd_fit && sd.errors != 0) fail($sformatf("%0d SD model errors", sd.errors));
+`endif
         if (rp.tx_pending() != 0) fail("a byte for the program was never sent: RTS# stayed high");
         tag = reboot_test ? " reboot" : "";
         if (isa_test) tag = {" ", testname};

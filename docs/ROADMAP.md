@@ -38,6 +38,8 @@ The limits every item is judged against:
 
 ### 1.1 General SPI controller (SD card + OLED)
 
+**Status: implemented** on branch `spi_alfadelta10010` (WO-28, commits C1-C6): `src/spi.v` at `0x1001_0020` with the tiny_spi registers, SD CS# on OUT bit 7, MOSI and SCK from flops. Not yet hardened or measured on silicon; the text below is the design record.
+
 **Today** (`src/gpio.v`): a transmit-only, mode-3, MSB-first byte shifter
 inside the GPIO block. DATA (+0x08) starts a byte; CTRL (+0x0C) has EN (MOSI
 and SCK take over OUT bits 1 and 3), a 2-bit DIV (SCK = clk / 2^(DIV+1), so

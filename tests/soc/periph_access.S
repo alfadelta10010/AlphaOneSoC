@@ -158,8 +158,8 @@ _start:
 
     # ---- GPIO ----
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x09, 0x140
-    PINS 0x09
+    CHECK t0, 0x89, 0x140
+    PINS 0x89
     li   t0, 0xFF
     sw   t0, G_OUT(s1)
     lw   t1, G_OUT(s1)
@@ -189,11 +189,11 @@ _start:
     CHECK t0, 0xAC, 0x147
     lhu  t0, G_IN+2(s1)
     CHECK t0, 0, 0x148
-    li   t2, 0x1001FFF4          # IN, aliased
+    li   t2, 0x1001FFC4          # IN, aliased
     lbu  t0, 0(t2)
     CHECK t0, 0xAC, 0x149
-    lw   t0, G_DATA(s1)
-    CHECK t0, 0, 0x14A           # DATA reads 0
+    lw   t0, 0x8(s1)
+    CHECK t0, 0, 0x14A           # reserved slot 0x08 reads 0
     # AMOs on OUT
     li   t0, 0x40
     amoor.w t1, t0, (s1)
@@ -211,37 +211,39 @@ _start:
     amoswap.w t1, t0, (s1)       # CS# high, RES# high, SCK idle high
     CHECK t1, 0x4E, 0x153
     PINS 0x49
-    # AMOs on CTRL
+    # AMOs on BAUD and SPICTL
+    addi t2, s1, S_BAUD
+    li   t0, 3
+    amoswap.w t1, t0, (t2)       # BAUD 0xFF -> 3
+    CHECK t1, 0xFF, 0x160
+    li   t0, 4
+    amoadd.w t1, t0, (t2)        # BAUD 3 -> 7
+    CHECK t1, 0x3, 0x161
     addi t2, s1, G_CTRL
-    li   t0, 0x2
-    amoadd.w t1, t0, (t2)        # DIV 0 -> 1
-    CHECK t1, 0x0, 0x160
-    amoadd.w t1, t0, (t2)        # DIV 1 -> 2
-    CHECK t1, 0x2, 0x161
-    li   t0, 0x7
-    amoor.w t1, t0, (t2)         # EN, DIV 3
-    CHECK t1, 0x4, 0x162
+    li   t0, 1
+    amoor.w t1, t0, (t2)         # EN
+    CHECK t1, 0x0, 0x162
     li   t0, 0x48
     sw   t0, G_OUT(s1)           # CS# low: the OLED model captures from here
     EVENT_P 0x30
     li   t0, 0x81
-    sw   t0, G_DATA(s1)
-    addi t2, s1, G_DATA
+    sw   t0, S_TXDATA(s1)
+    addi t2, s1, S_TXDATA
     li   t0, 0x7E
-    amoswap.w t1, t0, (t2)       # read DATA (0) at once; the write waits for 0x81
+    amoswap.w t1, t0, (t2)       # reads TXDATA (the last RX byte, 0) once 0x81 is loaded
     CHECK t1, 0, 0x163
     li   t0, 0x5A
-    sh   t0, G_DATA(s1)          # a halfword store sends lane 0
+    sh   t0, S_TXDATA(s1)        # a halfword store sends lane 0; waits for 0x7E to load
     li   t0, 0x33
-    sb   t0, G_DATA+1(s1)        # a byte store to lane 1 sends nothing
+    sb   t0, S_TXDATA+1(s1)      # a byte store to lane 1 sends nothing
     addi t2, s1, G_CTRL
     li   t3, ~0x1
     li   t0, 0xC3
-    sb   t0, G_DATA(s1)          # waits for 0x5A; the AMO is fetched meanwhile
-    amoand.w t1, t3, (t2)        # reads CTRL while 0xC3 shifts; EN off waits for it
-    CHECK t1, 0x107, 0x164       # EN, DIV 3, BUSY
+    sb   t0, S_TXDATA(s1)        # waits for 0x5A to load; the AMO is fetched meanwhile
+    amoand.w t1, t3, (t2)        # reads SPICTL while 0xC3 shifts; EN off waits for it
+    CHECK t1, 0x101, 0x164       # EN, BUSY
     lw   t0, G_CTRL(s1)
-    CHECK t0, 0x6, 0x165
+    CHECK t0, 0x0, 0x165
     li   t0, 0x49
     sw   t0, G_OUT(s1)
     PINS 0x49
