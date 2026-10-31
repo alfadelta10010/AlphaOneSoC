@@ -155,7 +155,8 @@ columns).
   * Leave GPIO21–24 as inputs.
 * **7-segment display.** It is wired to every `uo_out` through solder
   jumpers JP1–8, so it flickers with the traffic. Cut the jumpers to stop
-  that, or use `uo_out[7]` (segment DP) as a heartbeat LED.
+  that. `uo_out[7]` (segment DP) is the SD card's CS#, so it is no
+  heartbeat LED.
 
 ## Peripheral RTL
 
