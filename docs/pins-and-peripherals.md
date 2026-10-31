@@ -416,6 +416,15 @@ Linux never writes it. A reboot in the middle of an SD block leaves the card
 mid-transfer: boot code must clock `0xFF` with CS# low until the card returns
 `0xFF`, then send CMD0 (Linux's `mmc_spi` does the clocking).
 
+SD first: after power-up the card is in SD (native) mode, where it reads
+MOSI as its CMD line whatever its CS# says. OLED bytes can then form a valid
+command frame (start bit, CRC7, end bit), and the card answers on that same
+wire against the chip's MOSI driver. So the flash loader, on every boot and
+before any other SPI traffic, clocks at least 74 cycles (10 bytes of `0xFF`)
+with both CS# high, then sends CMD0 with SD CS# low, which puts the card in
+SPI mode. Linux's probe order cannot guarantee this, so it belongs to the
+loader.
+
 Linux uses the generic gpio-mmio driver: one output-only chip and one
 input-only chip. Pick the exact binding when writing the device tree.
 
