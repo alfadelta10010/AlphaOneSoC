@@ -1,46 +1,65 @@
 # AlphaOneSoC roadmap
 
-Where the design goes after PR #11 (main `b8d8627`, 2026-10-23), and every
-approach considered on the way, including the ones not chosen and why. Area is
+Where the design goes, and every approach considered on the way, including
+the ones not chosen and why. Written after PR #11 (main `b8d8627`,
+2026-10-23); brought up to date after PR #14 (main `a2f7285`, 2026-10-31), by
+which time syscon (1.2), fetch word reuse (1.3) and the SPI controller (1.1)
+were merged. Area is
 in TinyTapeout tiles (1 tile = 11,300 µm² of cells at 60% density). Figures
 marked *estimate* have not been synthesised; nothing here is measured unless
 it cites a run.
 
 ## 0. Decisions and constraints
 
-| Decision (2026-10-23, user) | Consequence |
+| Decision (user, 2026-10-23 unless dated) | Consequence |
 |---|---|
 | **Stay at 3x4 (12 tiles).** A 4x4 slot was considered and not taken. | Every addition below must fit the current die. |
-| The SPI transmitter becomes a **general SPI controller**, with an **SD card and the OLED** on one bus. | Section 1.1. |
-| **syscon** gets reboot, power-off and the rest of what a syscon block usually does. | Section 1.2. |
+| The SPI transmitter becomes a **general SPI controller**, with an **SD card and the OLED** on one bus. | Section 1.1. Merged (PR #14). |
+| **syscon** gets reboot, power-off and the rest of what a syscon block usually does. | Section 1.2. Merged (PR #12). |
 | Order: **lock the RTL**, then the **Verilator port and Linux bring-up**, then **FPGA ports** as a stretch goal. | Sections 1-2, then 3-4, then 5. |
+| (2026-10-31) **The RTL freezes once basic functionality works**, not at the shuttle's close. Software climbs from easy goals up: **FreeRTOS first, then Linux** in the next few PRs. Most of this roadmap stays in scope. | Section 9, the software ladder. |
 | Explore **power domains and power optimisation**. | Section 6. |
-| This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
+| This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
 
 The limits every item is judged against:
 
-* **Area.** The 3x4 harden at 16 ns (`macro/rf_top/README.md`, b5077cd + hold
-  guard) has 14.36 tiles of standard cells at **69.9% utilisation**, about
-  15% of it repair and hold buffers. It routed clean. Nothing has been
-  hardened above 70% at 3x4; the 6x2 attempt at 80% failed detailed placement
-  (`docs/area-audit.md`). Treat about **0.5 tile of new RTL** (at synthesis)
-  as the comfortable budget and anything above as needing a harden to prove it.
-* **Memory is the speed limit.** About 48 clocks per instruction on compiled
-  C, against 3.3 with zero-wait memory: over 90% of the time the core waits
-  for QSPI. The QSPI clock is the core clock / 2 = 31.25 MHz, and TT's pads
-  toggle at about 33 MHz, so a faster core clock does not make memory faster.
-  Speed comes only from fewer or cheaper bus transactions.
+* **Area.** The last harden (2026-10-25, the PR #12 tree with syscon;
+  `localFiles/harden-2026-10-25`) is 12 tiles as 3x4 at 16 ns, with **68.8%
+  area utilisation** and **77.9% routing density**, clean at every corner (ss
+  setup +0.86 ns, ff hold +0.189 ns). Fetch reuse (17 flops, about 750 µm² at
+  synthesis) and the SPI controller (+24 flops, about +1,150 µm², WO-28
+  *estimate*) are merged but not hardened; WO-28 puts the two together at
+  about **69.9%**, the highest utilisation that has routed clean at 3x4
+  (b5077cd, `macro/rf_top/README.md`). The 6x2 attempt at 80% failed detailed
+  placement (`docs/area-audit.md`). The budget set on 2026-10-23 was about
+  5,650 µm² of new RTL at synthesis; syscon (1,708 µm²), fetch reuse and SPI
+  have used about 3,600 of it. Anything larger than the remaining 2,000 needs
+  a harden to prove it fits.
+* **Memory is the speed limit.** About 43 clocks per instruction on compiled
+  C with fetch reuse (53 without; WO-27 A9, `bench.c` at -O2), against 3.3
+  with zero-wait memory: over 90% of the time the core waits for QSPI. At
+  62.5 MHz that is about 1.5 million instructions per second. The QSPI clock
+  is the core clock / 2 = 31.25 MHz, and TT's pads toggle at about 33 MHz, so
+  a faster core clock does not make memory faster. Speed comes only from
+  fewer or cheaper bus transactions.
 * **Pins.** 24 in total. `uio[7:0]` belong to the QSPI Pmod. `uo_out[7]` is
-  the only unused output. Inputs `ui_in[1,2,4..7]` are GPIO, DIP switches or
+  now the SD card's CS# (PR #14), so no output is spare. `ui_in[1]` is MISO
+  when the SD card is fitted; `ui_in[2,4..7]` are GPIO, DIP switches or
   keypad rows.
 
 ## 1. RTL work before the lock
 
 ### 1.1 General SPI controller (SD card + OLED)
 
-**Status: implemented** on branch `spi_alfadelta10010` (WO-28, commits C1-C6): `src/spi.v` at `0x1001_0020` with the tiny_spi registers, SD CS# on OUT bit 7, MOSI and SCK from flops. Not yet hardened or measured on silicon; the text below is the design record.
+**Status: merged** in PR #14 (`a2f7285`, 2026-10-31; design WO-28,
+verification WO-29): `src/spi.v` at `0x1001_0020` with the tiny_spi
+registers at +0x20..+0x30, SD CS# on OUT bit 7, MOSI and SCK from flops. The
+as-built description, the SD-first boot rule and the board setup are in
+`docs/pins-and-peripherals.md` sections 3 and 4. Not yet hardened or
+measured on silicon. The rest of this section is the design record from
+before it was built.
 
-**Today** (`src/gpio.v`): a transmit-only, mode-3, MSB-first byte shifter
+**Before PR #14** (`src/gpio.v`): a transmit-only, mode-3, MSB-first byte shifter
 inside the GPIO block. DATA (+0x08) starts a byte; CTRL (+0x0C) has EN (MOSI
 and SCK take over OUT bits 1 and 3), a 2-bit DIV (SCK = clk / 2^(DIV+1), so
 clk/2 to clk/16) and BUSY. Any register write waits while a byte shifts, which
@@ -84,7 +103,7 @@ checked in torvalds/master 2026-10-23) runs it unchanged:
   check at bring-up that the mode is rewritten per device.
 * **Keep the back-pressure on OUT writes** while a byte shifts: it is how bare
   metal can write `DATA; OUT(D/C)` without polling, and it costs nothing.
-* **Address.** Option A (preferred): inside the GPIO window, e.g. GPIO at
+* **Address.** Option A (chosen, WO-28 D3): inside the GPIO window, e.g. GPIO at
   +0x00/+0x04, SPI at +0x20..+0x30. `soc_bus` passes more address bits, and
   the core's PMA and its formal harness are untouched. Option B: its own
   64 KB window at 0x1003_0000 (bus index 3), which moves `PMA_IO1_TOP` and so
@@ -111,7 +130,8 @@ checked in torvalds/master 2026-10-23) runs it unchanged:
 
 ### 1.2 syscon (0x1002_0000)
 
-**Status (2026-10-23): built** as `src/syscon.v` (`8d54e14`) and wired into
+**Status: merged** in PR #12 (`4c9946a`, 2026-10-30) and hardened at 3x4
+(section 0). Built as `src/syscon.v` (`8d54e14`) and wired into
 `alphaone_soc` (`8b29cf8`); the as-built map and reset architecture are in
 `docs/soc-architecture.md`, section "syscon". It departs from the proposal
 below in these ways:
@@ -142,12 +162,12 @@ compatible; the functions come from small generic drivers that point into it.
 | Reboot | `syscon-reboot` | Write 0x7777 to FINISH. Whole-SoC reset, as from the pin |
 | Simulation exit | QEMU `virt`'s `sifive,test0` convention: 0x5555 pass, `(code << 16) | 0x3333` fail, 0x7777 reset | The same register. Benches stop on it; software is identical to QEMU's |
 | Reboot reason / boot mode | `syscon-reboot-mode` (`mode-normal`, `mode-bootloader`, ...) | BOOT_MODE: 8 bits that survive a soft reset |
-| Reset cause | read by firmware or `devmem` | RESET_CAUSE: power-on / pin / software / watchdog, sticky |
+| Reset cause | read by firmware or `devmem` | RESET_CAUSE: pin / software / watchdog, sticky (no power-on bit, above) |
 | Chip identity | firmware, `/sys/bus/soc` | CHIP_ID / VERSION: constants, no flops |
 | Straps | firmware | STRAPS: `rd_late` as latched at reset |
 | Clock gates, sleep states | firmware first; a Linux clock/power driver later | Section 6 |
 | Pin mux | `pinctrl-single` (`pinctrl-single,bits`) | Optional: move the SPI EN bit here |
-| Watchdog | needs a driver or an existing register map | Optional, about 0.1 tile for a 32-bit counter (*estimate*). Area permitting only |
+| Watchdog | `snps,dw-wdt` (`dw_wdt`) | Built: the DesignWare register layout at +0x100, timed from `mtime` |
 
 Proposed map (word registers):
 
@@ -216,19 +236,27 @@ Clear the valid bit on every redirect (branch, jump, trap, interrupt, MRET),
 on FENCE.I and on reset. A store to the kept halfword need not clear it:
 Zifencei only promises that instruction fetch sees stores after a FENCE.I.
 
-**Status (WO-27, built on `fetch-reuse_alfadelta10010`, always on).** `if_kbuf`
-16 flops + `if_kv`, a 16-bit mux in front of the window mask. Spike-trace model on
-compiled C: 24.6% (-Os) to 26.1% (-O2) of fetches removed. Measured in the RTL
-benches (directed code is mostly `.option norvc`, so the hit rate is low):
-`t_memstress` 65 hits in 3027 loads, `fr_pairs` 22 of 78. Checked by the `fr_*` directed tests, the
+**Status: merged** in PR #13 (`2937cd5`, 2026-10-30), always on (WO-27).
+`if_kbuf` 16 flops + `if_kv`, a 16-bit mux in front of the window mask.
+Spike-trace model on compiled C: 24.6% (-Os) to 26.1% (-O2) of fetches
+removed. Measured through the SoC bench on compiled C (WO-27 A9, `bench.c` at
+-O2, `localFiles/fr-a9-2026-10-30.md`): 26.12% of instruction loads served
+from the buffer, 40 clocks saved per hit, **53.15 to 42.70 clocks per
+instruction (-19.7%)**, the commit log byte-identical to the run without it.
+In the directed benches (mostly `.option norvc`, so the hit rate is low):
+`t_memstress` 65 hits in 3027 loads, `fr_pairs` 22 of 78. Checked by the
+`fr_*` directed tests (4 of them, `fr_reset`, `fr_irq_sw`, `fr_irq_tmr` and
+`fr_smc`, check the DUT against expected values, not against Spike), the
 `tb_rivercore` shadow/hit checks, `tb/formal/run.sh core_fetch` and mutants
-FR01-FR14. Harden, GL, EQY and river_core follow the last WO.
+FR01-FR14. Not yet hardened; the harden, IF-path STA, EQY, gate-level and
+full river_core runs come once, on the tree with SPI as well (1.6).
 
 * Saves one fetch for each compressed instruction that follows a fetched
   compressed instruction, so at most half the fetches in runs of compressed
   code. On compiled C, with roughly half the instructions compressed, it
   might save 10-25% of fetches (*estimate*: measure it by counting C-after-C
-  pairs in a Spike trace of compiled code before building it).
+  pairs in a Spike trace of compiled code before building it). Measured:
+  26.1% (above).
 * Cost: about 17 flops and a 16-bit mux in IF, about 0.05-0.1 tile
   (*estimate*). No change to the memory controller or QSPI protocol.
 * Risks: the instruction that runs from the buffer was never "fetched", so
@@ -261,6 +289,17 @@ No RTL bench can tell that from the first edge, but the demo board resets
 with the clock stopped and TinyTapeout confirms that a glitch at that edge
 would reach the pins (`tb/VPLAN.md` 4.2, `docs/pins-and-peripherals.md` 1).
 
+Open (2026-10-31):
+
+* **What "basic functionality" means for the freeze** (section 0). The
+  user's call; section 9's lower rungs are candidate checkpoints.
+* **The UART's reset divisor.** `UART_DIV_RESET` is 27: 115,200 baud at
+  50 MHz, but 144,676 baud at the 62.5 MHz clock the chip runs at. The
+  divisor is a software register, so this matters only for output sent
+  before software writes it; the boot contract (9.1) writes 34 (114,890 baud)
+  first. Changing the parameter to 34 would make the reset rate right too;
+  the benches and gate-level programs that assume 27 (WO-26) would follow.
+
 ### 1.6 The lock gate
 
 1. area-optimizer measures each block above in tiles.
@@ -268,14 +307,20 @@ would reach the pins (`tb/VPLAN.md` 4.2, `docs/pins-and-peripherals.md` 1).
    hold violation, setup met at every corner, utilisation recorded.
 3. Full verification: test-all, directed core and SoC, formal, seeds,
    mutation on the new blocks, the river_core regression (the fetch-reuse
-   change touches the pipeline), gate-level on the TT flow.
+   change touches the pipeline: rrag and riscv-dv with C, not only the
+   compliance suite), gate-level on the TT flow (`scripts/gl`, parts A-D),
+   and EQY of the RTL against the new netlist (`tb/eqy`; its FSM cut points,
+   tie lists and no-match list were fitted to the 2026-10-25 netlist and
+   need fitting again).
+4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`,
+   which still has the design from before syscon) and pass its CI.
 
 ## 2. Verification status and plan
 
-### 2.1 Formal coverage at main `b8d8627`
+### 2.1 Formal coverage
 
 `tb/formal/run.sh`, yosys's built-in SAT solver (no SMT solver is installed,
-so no SymbiYosys):
+so no SymbiYosys). At main `b8d8627` (PR #11):
 
 | Harness | Mode | Proves |
 |---|---|---|
@@ -283,11 +328,25 @@ so no SymbiYosys):
 | `core_hold` | k-induction (length 1), PROVED | Both memory ports hold the request (address, we, be, wdata) until ready; x0 is never written |
 | `core_req` | bounded, 10 cycles from reset | Every request is legal: fetch halfword-aligned and in flash/PSRAM; data word-aligned, in a mapped window, legal byte lanes, store data replicated, no store to flash |
 
-By the verification plan's own count, **4 of its 56 requirements** are proved
-or bounded formally (REQ-CSR-003, REQ-RF-003, REQ-MEM-001, REQ-MEM-002 to 10
-cycles), with slices of 2 more (misa in REQ-CSR-004, pmpcfg reserved bits in
-REQ-CSR-005). Everything else (ISA results, traps, interrupts, PMP matching,
-LR/SC, counters, every SoC block) is simulation only. In the mutation
+Added by PRs #12-#14 (main `a2f7285`); the property lists are in each
+`tb/formal/*_props.sv`:
+
+| Harness | Mode | Covers |
+|---|---|---|
+| `core_fetch` | k-induction, PROVED | Fetch word reuse against a symbolic 16-halfword code memory: what issues is what memory holds at the pc |
+| `syscon_comb` | bounded, 24 cycles | No combinational path from the bus to `rst_soc` |
+| `syscon_gate` | k-induction, PROVED | No watchdog fire while the SoC is held in reset |
+| `soc_rst_sync` | structural | `rst_soc` reaches no asynchronous reset, set or load |
+| `spi_core`, `spi_dc`, `spi_bus` | k-induction at length 1, PROVED | The SPI engine's invariants, its don't-care state, and the bus rules gpio and spi rely on from each other |
+| `spi_bb`, `spi_bb1` | bounded, 24 cycles | A black-box reference model of the controller at gpio's ports (SCK, MOSI, MISO sampling, RXDATA), written from the spec, sharing no names with the RTL |
+| `spi_cover` | cover | Guards `spi_bb`'s assumptions against vacuity |
+| `spi_f12` | structural | GPIO's pin outputs (MOSI, SCK, the chip selects) come straight from flops (finding F12) |
+
+At PR #11, by the verification plan's own count, **4 of its 56 requirements**
+were proved or bounded formally (REQ-CSR-003, REQ-RF-003, REQ-MEM-001,
+REQ-MEM-002 to 10 cycles), with slices of 2 more (misa in REQ-CSR-004,
+pmpcfg reserved bits in REQ-CSR-005). ISA results, traps, interrupts, PMP
+matching, LR/SC and counters are still simulation only. In the mutation
 campaign the formal harnesses killed 6 of 29 CSR faults and 9 of the 11 core
 faults tried on them. Three survivors were shown equivalent by separate
 k-induction proofs (MD07, FC02, FC49), which are not part of `run.sh`.
@@ -301,10 +360,9 @@ k-induction proofs (MD07, FC02, FC49), which are not part of `run.sh`.
    consistency, causality, liveness. It covers the ISA rows that are
    simulation-only today. It does not check the A extension, and its CSR
    checks are limited; the directed suite keeps those.
-3. **New blocks get formal from the start:** SPI (mode timing, no MOSI change
-   near a sampling edge, one byte per write), syscon (reset request cannot
-   glitch, sticky registers survive soft reset), fetch reuse (equivalence: the
-   same instruction stream with and without the buffer).
+3. ~~**New blocks get formal from the start**~~: done for syscon, fetch reuse
+   and SPI (2.1). Fetch reuse is checked against a symbolic code memory
+   rather than by equivalence with and without the buffer.
 4. **SoC properties:** the bus rule (an IO target drops ready only while
    selected), `mem_ctrl` (data-first, no starvation, bounded), QSPI engine
    (tCEM, never selects flash for a write).
@@ -312,13 +370,20 @@ k-induction proofs (MD07, FC02, FC49), which are not part of `run.sh`.
 
 ### 2.3 Other verification still owed
 
-River_core regression and gate-level runs on the PR #11 tree (not run on the
-branch); the SoC mutation campaign's two survivors; an 8-seed run.
+Done on the PR #12 tree (2026-10-25 to 10-30): river_core compliance plus
+one random round (0 DUT defects), the gate-level programs at the pins (183
+programs and 17 SoC programs, RTL = GL), EQY 157/157. Every mutation survivor
+has a verdict (`tb/VPLAN.md` 4.2). Since then fetch reuse has run the
+compliance suite only (175/176, the known `ma_data`), and SPI its own
+benches, formal and mutation. Owed on the combined tree: everything in 1.6
+item 3. Still open from PR #11: an 8-seed run.
 
 ## 3. Verilator port
 
 Needed because Icarus runs about 30k cycles/s and a Linux boot through QSPI
-is billions of cycles.
+is billions of cycles. At about 43 clocks per instruction that is about 700
+instructions per second on the SoC bench: enough for the bare-metal rungs of
+the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 
 * The QSPI Pmod model and other benches use `#` delays: build with
   `--timing` (Verilator 5) or rewrite the models as clocked logic. Porting
@@ -333,7 +398,8 @@ is billions of cycles.
 
 ## 4. Linux bring-up
 
-Plan in `localFiles/PROGRESS-2026-10-12.md` section 7. In short:
+The top rung of the software ladder (section 9), after FreeRTOS. Plan in
+`localFiles/PROGRESS-2026-10-12.md` section 7. In short:
 
 1. **Spike golden boot.** KianV's nommu buildroot recipe
    (`localFiles/kianRiscV`, Linux 6.8-rc1, HZ=30) rebuilt with C enabled,
@@ -350,7 +416,8 @@ Plan in `localFiles/PROGRESS-2026-10-12.md` section 7. In short:
    `GPIO_GENERIC_PLATFORM`, `FB_TFT_SSD1331`.
 5. Root filesystem: initramfs first (fits the 16 MB flash), then SD.
 6. A flash loader at 0x2000_0000 copies DTB and Image to PSRAM (KianV's
-   layout: loader 1 MiB, DTB 1.5 MiB, Image 2 MiB).
+   layout: loader 1 MiB, DTB 1.5 MiB, Image 2 MiB). It is the same loader as
+   the ladder's first rung and keeps the boot contract (9.1).
 
 ## 5. FPGA ports (stretch)
 
@@ -426,7 +493,7 @@ Considered on 2026-10-22, kept for later:
 * **Code-size extensions** (Zcb; Zcmp push/pop): fewer bytes fetched. Zcmp
   needs a sequencer and kernel support checked.
 * **UART interrupt with an RX FIFO**, a small interrupt controller, a
-  timer/PWM block, a watchdog.
+  timer/PWM block. (The watchdog is built, in syscon.)
 * **A standard peripheral bus** (Wishbone, OBI or APB) behind `soc_bus`, so
   existing open-source peripherals drop in.
 * **Parameterise the core** (PMP entries, C, M unit kind, memory map) for
@@ -441,15 +508,21 @@ a PLIC (all devices are polled).
 
 ## 8. Order
 
-1. Settle 1.5's open decisions; move the test mailbox (1.2).
-2. syscon (1.2), then the SPI controller (1.1), then fetch reuse (1.3), each
-   through the tiered agent pipeline, with formal from the start (2.2 item 3).
-3. Area pass (1.4), harden and the lock gate (1.6).
-4. Solver stack and riscv-formal (2.2 items 1-2), in parallel with step 5.
-5. Verilator port (3), Linux bring-up (4).
-6. Power: L0 measurements anytime after the lock candidate exists; the WFI
+1. ~~Settle 1.5's open decisions; move the test mailbox (1.2).~~ Done.
+2. ~~syscon (1.2), then the SPI controller (1.1), then fetch reuse (1.3), each
+   through the tiered agent pipeline, with formal from the start (2.2 item
+   3).~~ Done: PR #12 (syscon), PR #13 (fetch reuse), PR #14 (SPI).
+3. Area pass (1.4), harden and the lock gate (1.6), on the tree with all
+   three.
+4. The software ladder's bare-metal rungs and FreeRTOS (9.2, rungs 1-5), on
+   the current benches; they can start before the lock and become its
+   checkpoints.
+5. Solver stack and riscv-formal (2.2 items 1-2), in parallel with step 6.
+6. Verilator port (3), then the upper rungs: Zephyr or NuttX, and Linux
+   bring-up (4).
+7. Power: L0 measurements anytime after the lock candidate exists; the WFI
    clock gate (L3) decided by those numbers before the lock; L4 as research.
-7. FPGA ports (5).
+8. FPGA ports (5).
 
 ## 9. Software ladder
 
