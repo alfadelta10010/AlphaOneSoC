@@ -4,10 +4,12 @@ Where the design goes, and every approach considered on the way, including
 the ones not chosen and why. Written after PR #11 (main `b8d8627`,
 2026-10-23); brought up to date after PR #14 (main `a2f7285`, 2026-10-31), by
 which time syscon (1.2), fetch word reuse (1.3) and the SPI controller (1.1)
-were merged. Area is
-in TinyTapeout tiles (1 tile = 11,300 µm² of cells at 60% density). Figures
-marked *estimate* have not been synthesised; nothing here is measured unless
-it cites a run.
+were merged. The design's size is in whole TinyTapeout tiles with the shape
+hardened (3x4 = 12 tiles), with area utilisation and routing density as two
+separate percentages. A block's cost is in flops and µm² of standard cells at
+synthesis; estimates first written as fractions of a tile are converted at
+the old 11,300 µm² per tile. Figures marked *estimate* have not been
+synthesised; nothing here is measured unless it cites a run.
 
 ## 0. Decisions and constraints
 
@@ -120,9 +122,10 @@ checked in torvalds/master 2026-10-23) runs it unchanged:
 * **Linux stack:** `spi-oc-tiny` + `gpio-mmio` (CS#, D/C, RES#) +
   `mmc_spi` (SD) + staging `fbtft` `fb_ssd1331` (OLED; confirm it is still in
   the target kernel).
-* **Cost:** about +0.1 to +0.15 tile over today's shifter (*estimate*: a
+* **Cost:** about +1,100 to +1,700 µm² over the old shifter (*estimate*: a
   holding register, an RX register, an 8-bit divisor and its counter, mode
-  logic, a MISO synchroniser).
+  logic, a MISO synchroniser). WO-28's estimate for the design as built:
+  +24 flops, about +1,150 µm².
 * **Verification:** spec-model unit bench (all four modes, every divisor edge
   case, back-to-back bytes, the driver's polled loop), an SD-card SPI model on
   the SoC bench (CMD0/CMD8/ACMD41/CMD17/CMD24), the existing SSD1331 model,
@@ -150,7 +153,7 @@ below in these ways:
 * CHIP_ID is `0x4131_5301`.
 * The optional watchdog is built (`a133652`) in the Synopsys DesignWare layout
   at +0x100, so Linux's `dw_wdt` runs it unchanged. RESET_CAUSE gained bit 2
-  (WDT). syscon is 0.151 tile, 23 flops with it. See "Watchdog" in
+  (WDT). syscon is 1,708 µm² and 23 flops with it. See "Watchdog" in
   `docs/soc-architecture.md`.
 
 Linux needs nothing more than a generic register block with the `syscon`
@@ -205,8 +208,9 @@ reach +0xF00. The syscon must leave those words RAZ/WI.
 Spike. Lockstep tests must stop before it, or Spike gets a plugin device
 (`--extlib`) for it.
 
-**Cost:** about +0.1 to +0.2 tile (*estimate*: about 20-40 flops, a reset
-request path).
+**Cost:** about +1,100 to +2,300 µm² (*estimate*: about 20-40 flops, a reset
+request path). Built: 1,708 µm² and 23 flops with the watchdog, 882 µm² and
+14 flops without (`docs/soc-architecture.md`).
 
 ### 1.3 Fetch word reuse
 
@@ -257,14 +261,15 @@ full river_core runs come once, on the tree with SPI as well (1.6).
   might save 10-25% of fetches (*estimate*: measure it by counting C-after-C
   pairs in a Spike trace of compiled code before building it). Measured:
   26.1% (above).
-* Cost: about 17 flops and a 16-bit mux in IF, about 0.05-0.1 tile
-  (*estimate*). No change to the memory controller or QSPI protocol.
+* Cost: about 17 flops and a 16-bit mux in IF, about 550-1,100 µm²
+  (*estimate*). WO-27's estimate for the design as built: about 750 µm² at
+  synthesis, about 1,200 µm² once placed, +0.5 points of utilisation. No change to the memory controller or QSPI protocol.
 * Risks: the instruction that runs from the buffer was never "fetched", so
   the trace, the fetch PMP check (it checks `ifex_pc`, not the fetch, so it
   still applies) and `tb_rivercore`'s transaction checker (every fetch matches
   a request) need to agree with it.
 * Alternative in the memory controller: a last-word buffer in `mem_ctrl`
-  (about 0.1 tile) also serves refetches after stalls, but still costs a
+  (about 1,100 µm²) also serves refetches after stalls, but still costs a
   request/ready round trip per instruction.
 
 ### 1.4 Area to win back
@@ -275,8 +280,8 @@ All small; together they could pay for most of 1.1-1.3.
 |---|---|---|
 | FC02: `csr_wb_hazard` is a dead stall term under the 3-cycle EX | small | proved equivalent (VPLAN 4.2) |
 | FC49: the three `flush` gates on the M handshake are dead | small | proved equivalent (VPLAN 4.2); needs STA |
-| UART 8-bit divisor | -0.06 tile | no rates below 12.2 kbaud at 50 MHz |
-| UART fixed divisor | -0.09 tile | software cannot change the baud rate |
+| UART 8-bit divisor | -16 flops, about -680 µm² | no rates below 12.2 kbaud at 50 MHz |
+| UART fixed divisor | -24 flops, about -1,000 µm² | software cannot change the baud rate |
 
 ### 1.5 Open decisions that touch the lock
 
@@ -302,7 +307,7 @@ Open (2026-10-31):
 
 ### 1.6 The lock gate
 
-1. area-optimizer measures each block above in tiles.
+1. area-optimizer measures each block above in flops and µm² at synthesis.
 2. pd-expert hardens 3x4 at 16 ns with all of them: routed, DRC/LVS clean, no
    hold violation, setup met at every corner, utilisation recorded.
 3. Full verification: test-all, directed core and SoC, formal, seeds,
@@ -485,11 +490,13 @@ Considered on 2026-10-22, kept for later:
   fetches are sequential. About 1.6x (review estimate), about 0.5-0.7 kGE;
   must close at each 1 KB PSRAM page and within tCEM; the heaviest to verify.
 * **Instruction cache:** 256 B direct-mapped from two more RF macros plus
-  tags, about 2.4 tiles (*estimate*). Needs the 4x4 slot that was not taken.
+  tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. Needs
+  the 4x4 slot that was not taken.
   Size it first with a cache simulator on a Spike Linux trace.
 * **JTAG debug module** (halt, resume, abstract register access; the demo
-  board's RP2350 as the probe): about 1.5-3 tiles (*estimate*), 3 inputs and
-  1 output. A UART-based debug bridge costs no pins but is non-standard.
+  board's RP2350 as the probe): about 17,000-34,000 µm² (*estimate*, a
+  larger slot than 3x4), 3 inputs and 1 output. A UART-based debug bridge
+  costs no pins but is non-standard.
 * **Code-size extensions** (Zcb; Zcmp push/pop): fewer bytes fetched. Zcmp
   needs a sequencer and kernel support checked.
 * **UART interrupt with an RX FIFO**, a small interrupt controller, a
@@ -498,8 +505,9 @@ Considered on 2026-10-22, kept for later:
   existing open-source peripherals drop in.
 * **Parameterise the core** (PMP entries, C, M unit kind, memory map) for
   smaller TT slots and FPGA builds.
-* **S-mode + Sv32 MMU** for MMU Linux: about 2.5-3.5 tiles (*estimate*), and
-  very slow at about 1 MIPS with page walks over QSPI.
+* **S-mode + Sv32 MMU** for MMU Linux: about 28,000-40,000 µm² (*estimate*, a
+  larger slot than 3x4), and very slow at about 1 MIPS with page walks over
+  QSPI.
 
 Not worth doing while memory-bound: Zba/Zbb, a faster multiplier, forwarding,
 vectored mtvec, a faster core clock (QSPI is pad-limited). Rejected earlier:
