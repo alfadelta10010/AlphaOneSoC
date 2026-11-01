@@ -407,10 +407,16 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
   * Byte-identical dumps against Icarus on the core bench (rv32i_basic,
     csr_test, trap_test, rv32m_test). The SoC directed suite, through the
     QSPI Pmod model, passes 113/113 against the Spike references.
-  * river_core on the sandbox: conf stage 175/176 (only `rv32ui-ma_data`,
-    the known failure), 0 false passes, compile and compare in 14 s against
-    about 66 min on Icarus. Random rounds: see the regression runbook entry
-    for the result.
+  * Full river_core regression on the sandbox, code d00eb8a, 2026-11-01
+    12:30 to 16:51, peak 73 C: conf (riscv_tests + riscof) 175/176, the one
+    failure the known `rv32ui-ma_data`; three random rounds (rrag +
+    riscv_dv) **1076/1076 each**. 0 false passes in the audit, 0 DUT
+    defects. Compile and compare takes about 90 s a round against about 66
+    min on Icarus; generation (about 85 min a round) is now the whole
+    wall clock. The earlier Icarus rounds had 1 to 2 Spike-side failures
+    each (interleave SC yield, one unlinkable rrag program); none occurred
+    in these seeds, so that is not a Verilator difference. Logs stay on the
+    sandbox in `~/regr/multi`.
   * Needs Verilator 5.x on the box; the sandbox copy is the local
     `/tools/verilator-euvm` build under `~/tools/verilator` (the apt
     package there is 5.032 if a rebuild is wanted).
