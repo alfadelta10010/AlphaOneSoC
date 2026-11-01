@@ -99,7 +99,10 @@ module tb_sw;
     initial begin
         if ($value$plusargs("MAX_CYCLES=%d", max_cycles)) ;
         repeat (10) @(posedge clk);
-        rst <= 1'b0;
+        // Not at the edge itself: the DUT's flops and this process would race, and the
+        // simulators resolve that differently (Verilator released the QSPI pins a clock
+        // earlier than Icarus). A board releases reset a little after the edge.
+        #1 rst = 1'b0;
     end
 
     wire fin = soc.dmem_req && soc.dmem_we && soc.dmem_ready &&
