@@ -22,6 +22,7 @@ synthesised; nothing here is measured unless it cites a run.
 | (2026-10-31) **The RTL freezes once basic functionality works**, not at the shuttle's close. Software climbs from easy goals up: **FreeRTOS first, then Linux** in the next few PRs. Most of this roadmap stays in scope. | Section 9, the software ladder. |
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
+| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. The tree with all three blocks misses 16 ns by 0.303 ns at the slowest corner, so the clock is documented as **60 MHz** (16.67 ns, met at every corner). | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 60 MHz; 1.7 is the way back to 62.5 MHz. |
 
 The limits every item is judged against:
 
@@ -41,8 +42,8 @@ The limits every item is judged against:
 * **Memory is the speed limit.** About 43 clocks per instruction on compiled
   C with fetch reuse (53 without; WO-27 A9, `bench.c` at -O2), against 3.3
   with zero-wait memory: over 90% of the time the core waits for QSPI. At
-  62.5 MHz that is about 1.5 million instructions per second. The QSPI clock
-  is the core clock / 2 = 31.25 MHz, and TT's pads toggle at about 33 MHz, so
+  60 MHz that is about 1.4 million instructions per second. The QSPI clock
+  is the core clock / 2 = 30 MHz, and TT's pads toggle at about 33 MHz, so
   a faster core clock does not make memory faster. Speed comes only from
   fewer or cheaper bus transactions.
 * **Pins.** 24 in total. `uio[7:0]` belong to the QSPI Pmod. `uo_out[7]` is
@@ -300,11 +301,12 @@ Open (2026-10-31):
 * **What "basic functionality" means for the freeze** (section 0). The
   user's call; section 9's lower rungs are candidate checkpoints.
 * **The UART's reset divisor.** `UART_DIV_RESET` is 27: 115,200 baud at
-  50 MHz, but 144,676 baud at the 62.5 MHz clock the chip runs at. The
-  divisor is a software register, so this matters only for output sent
-  before software writes it; the boot contract (9.1) writes 34 (114,890 baud)
-  first. Changing the parameter to 34 would make the reset rate right too;
-  the benches and gate-level programs that assume 27 (WO-26) would follow.
+  50 MHz, but 138,889 baud at the 60 MHz clock the chip is documented for.
+  The divisor is a software register, so this matters only for output sent
+  before software writes it; the boot contract (9.1) writes 33 (113,636
+  baud) first. Changing the parameter to 33 would make the reset rate right
+  too; the benches and gate-level programs that assume 27 (WO-26) would
+  follow.
 
 ### 1.6 The lock gate
 
@@ -346,6 +348,18 @@ Open (2026-10-31):
    need fitting again).
 4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`,
    which still has the design from before syscon) and pass its CI.
+
+### 1.7 Back to 62.5 MHz
+
+One path keeps the clock at 60 MHz (1.6 item 2): from `soc.bus.d_addr[17]`,
+the address bit that selects syscon, to `soc.cpu.csr_unit.csr_new[22]`,
+-0.303 ns at 16 ns at the slowest corner (max ss). The PR #12 tree had
++0.861 ns at that corner (2026-10-25); what moved this path since has not
+been analysed. The STA of the routed layout at other periods
+(`localFiles/harden-2026-11-01/sta-sweep.sh`) puts the limit at about
+61 MHz: +0.090 ns at 16.39 ns. Getting 62.5 MHz back needs a change on main
+that takes logic off this path, then another harden and port. The extra 4%
+does not make memory faster (section 0).
 
 ## 2. Verification status and plan
 
@@ -493,7 +507,7 @@ Two kinds, both worth having:
 |---|---|---|---|
 | L0 Measure | Gate-level VCD of real workloads (boot, OLED frame, idle WFI) into OpenSTA `report_power`, per block; on the sandbox, one job at a time | Tells where the power is; nothing else here is sized without it | Flow work only |
 | L1 System | Fewer QSPI transactions (fetch reuse, later a stream or cache): every transaction toggles 3.3 V pads and off-chip lines, likely the largest single consumer. Flash deep power-down (`B9h`) when idle. OLED display off. Lower clock from the RP2350 | Large, mostly free | `B9h` needs a QSPI-engine command; a lower clock changes Linux's timebase |
-| L2 Activity | Load enables instead of free-running flops (`alu_r`, `br_r` load every cycle today); operand isolation on the M unit and the 32-bit buses when idle | Moderate | Small area; must not touch the critical paths that set 62.5 MHz |
+| L2 Activity | Load enables instead of free-running flops (`alu_r`, `br_r` load every cycle today); operand isolation on the M unit and the 32-bit buses when idle | Moderate | Small area; must not touch the critical paths that set the clock (1.7) |
 | L3 Clock gating ("logical power domains") | `dlclkp` gates on: the core during WFI (wake on any enabled pending interrupt), each peripheral (UART, SPI/GPIO), and everything but the reset logic on power-off. CLINT `mtime` stays on the ungated clock so the timer can wake the core | Large while idle: the clock tree is a big share of dynamic power | CTS and STA with gated clocks; our ICG register-file attempt (area-opt, patch 14) failed TT lint (MULTIDRIVEN) and grew hold-fix buffers. Start with one coarse gate (core in WFI) and harden it |
 | L4 Power gating | Real switched domains: a custom header-switch macro, a split PDN, isolation cells on the domain's outputs, state saved to always-on flops or PSRAM first | Leakage only, which is small at the typical corner for this design size | No switch cell in `hd`, no UPF, no power-aware simulation; research tile on a future shuttle, not this SoC |
 
@@ -572,7 +586,8 @@ interrupts are the only interrupts: there is no PLIC, and every device is
 polled. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
 16 MB of PSRAM at `0x8000_0000`. An ns16550 subset UART, GPIO, the tiny_spi
 controller with an SD card and the OLED, and syscon (reboot, power-off,
-reset cause, boot mode, watchdog). About 1.5 million instructions per second.
+reset cause, boot mode, watchdog). About 1.4 million instructions per second
+at 60 MHz.
 
 ### 9.1 Boot contract
 
@@ -583,9 +598,9 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 1. **Set `mtvec` before anything can trap.** It resets to 0, which is
    outside flash and PSRAM, so a trap before it is set faults again at 0.
 2. **Set the UART divisor before the first character:** set LCR.DLAB, write
-   DLL = 34 and DLM = 0, clear DLAB. That is 114,890 baud at 62.5 MHz
-   (115,200 - 0.27%). The reset divisor, 27, gives 144,676 baud at that
-   clock (1.5).
+   DLL = 33 and DLM = 0, clear DLAB. That is 113,636 baud at 60 MHz
+   (115,200 - 1.4%); at 62.5 MHz it would be 34 (114,890 baud, -0.27%). The
+   reset divisor, 27, gives 138,889 baud at 60 MHz (1.5).
 3. **Read RESET_CAUSE and BOOT_MODE, then write `0x7` to RESET_CAUSE** so that
    the next boot sees only its own cause (`docs/soc-architecture.md`,
    syscon).
@@ -594,12 +609,13 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
    kernel. Linux never writes it. With the keypad fitted, EN stays 0.
 5. **SD first, on every boot, before any other SPI traffic:** with both CS#
    high clock at least 74 cycles (10 bytes of `0xFF`; BAUD resets to `0xFF`,
-   122 kHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
+   117 kHz at 60 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
    block, first clock `0xFF` with SD CS# low until the card returns `0xFF`
    (`docs/pins-and-peripherals.md` section 3).
 6. **The watchdog is off at reset, and once enabled only a reset turns it
    off** (the DesignWare behaviour). Enable it only in code that services it.
-7. **Timebase:** `mtime` counts every core clock, 62.5 MHz as shipped.
+7. **Timebase:** `mtime` counts every core clock, 60 MHz as documented
+   (section 0).
    FreeRTOS's RISC-V port computes its tick from `configCPU_CLOCK_HZ`, and
    Linux reads `timebase-frequency`: both take that value.
 
@@ -609,7 +625,7 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 |---|---|---|---|
 | 0 | Directed tests, riscv-tests, river_core (exist) | ISA and privileged behaviour, instruction by instruction | Done; everything below stands on it |
 | 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | Small. Every rung above starts from it |
-| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | Hours. A valid CoreMark run lasts 10 s, about 15 million instructions here: short runs on the benches, full runs on Verilator or silicon |
+| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | Hours. A valid CoreMark run lasts 10 s, about 14 million instructions here: short runs on the benches, full runs on Verilator or silicon |
 | 3 | **Forth monitor** (mecrisp-quintus, an RV32IM Forth) | An interactive prompt over UART that reads and writes registers: the first thing to run on returned silicon | Small; needs only polled UART routines |
 | 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | Small; polled. The SoC bench's SD-card model runs it |
 | 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | Small. The polled UART is enough. U-mode tasks under PMP are not part of the upstream port (to check) |
@@ -622,7 +638,7 @@ Optional, anywhere after rung 1:
 * **Rust:** `riscv32imac-unknown-none-elf` is this exact ISA, and embassy
   needs only an `mtime` time driver.
 * **MicroPython or Lua:** a REPL on the board that drives the OLED and GPIO.
-  Plenty of RAM; slow but usable at about 1.5 MIPS.
+  Plenty of RAM; slow but usable at about 1.4 MIPS.
 * **Tock:** U-mode applications isolated by PMP, which is what M + U + PMP
   is for. 4 PMP entries are tight for a kernel and its applications (to
   check).
@@ -635,7 +651,7 @@ Not on the ladder:
 * OpenSBI: there is no S-mode, and M-mode Linux does not use it.
 * U-Boot: possible later as the Linux loader, but heavy; the rung-1 loader
   comes first.
-* Doom-class programs: far too slow at about 1.5 MIPS.
+* Doom-class programs: far too slow at about 1.4 MIPS.
 
 ### 9.3 Where each rung runs
 
