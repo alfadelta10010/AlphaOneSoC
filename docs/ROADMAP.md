@@ -4,12 +4,13 @@ Where the design goes, and every approach considered on the way, including
 the ones not chosen and why. Written after PR #11 (main `b8d8627`,
 2026-10-23); brought up to date after PR #14 (main `a2f7285`, 2026-10-31), by
 which time syscon (1.2), fetch word reuse (1.3) and the SPI controller (1.1)
-were merged. The design's size is in whole TinyTapeout tiles with the shape
-hardened (3x4 = 12 tiles), with area utilisation and routing density as two
-separate percentages. A block's cost is in flops and µm² of standard cells at
-synthesis; estimates first written as fractions of a tile are converted at
-the old 11,300 µm² per tile. Figures marked *estimate* have not been
-synthesised; nothing here is measured unless it cites a run.
+were merged. That tree was hardened and ported to the submission repo on
+2026-11-01 (1.6). The design's size is in whole TinyTapeout tiles with the
+shape hardened (3x4 = 12 tiles), with area utilisation and routing density as
+two separate percentages. A block's cost is in flops and µm² of standard
+cells at synthesis; estimates first written as fractions of a tile are
+converted at the old 11,300 µm² per tile. Figures marked *estimate* have not
+been synthesised; nothing here is measured unless it cites a run.
 
 ## 0. Decisions and constraints
 
@@ -346,8 +347,12 @@ Open (2026-10-31):
    and EQY of the RTL against the new netlist (`tb/eqy`; its FSM cut points,
    tie lists and no-match list were fitted to the 2026-10-25 netlist and
    need fitting again).
-4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`,
-   which still has the design from before syscon) and pass its CI.
+4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`)
+   and pass its CI. **Done for main `a2f7285`** (2026-11-01, ahead of the
+   lock): one commit per block and one for item 2's build settings, up to
+   submission `7040d85`. Its CI passed: gds, precheck, gate-level tests and
+   viewer in 56 min, plus the test and docs workflows. An RTL change before
+   the lock needs another harden and port.
 
 ### 1.7 Back to 62.5 MHz
 
