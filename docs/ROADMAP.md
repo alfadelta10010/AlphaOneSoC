@@ -390,14 +390,48 @@ is billions of cycles. At about 43 clocks per instruction that is about 700
 instructions per second on the SoC bench: enough for the bare-metal rungs of
 the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 
-* The QSPI Pmod model and other benches use `#` delays: build with
-  `--timing` (Verilator 5) or rewrite the models as clocked logic. Porting
-  effort unknown.
+* **Status (2026-11-01): the port exists and matches Icarus.** The
+  testbenches build unchanged with Verilator 5.031 `--binary --timing`: the
+  `#` delays and the QSPI Pmod model stay as written, so the model is
+  cycle- and timing-accurate with no rewrite to clocked logic. (SDF
+  gate-level timing is not something Verilator does; that stays on Icarus,
+  `scripts/gl`.)
+  * `plugins/fyracore_verilator_plugin` is the river_core DUT plugin
+    (`target = fyracore_verilator`, section `[fyracore_verilator]` in
+    `plugins/river-config.ini`). It runs `verilator` against `src/` in
+    `init`, so every river_core run is built from the current RTL: cold
+    build about 17 s.
+  * `make verilator-build` / `make verilator-test HEX=...` do the same for a
+    single hex; `SIMULATOR=verilator tests/directed/run.sh [soc]` runs the
+    directed suite on it.
+  * Byte-identical dumps against Icarus on the core bench (rv32i_basic,
+    csr_test, trap_test, rv32m_test). The SoC directed suite, through the
+    QSPI Pmod model, passes 113/113 against the Spike references.
+  * river_core on the sandbox: conf stage 175/176 (only `rv32ui-ma_data`,
+    the known failure), 0 false passes, compile and compare in 14 s against
+    about 66 min on Icarus. Random rounds: see the regression runbook entry
+    for the result.
+  * Needs Verilator 5.x on the box; the sandbox copy is the local
+    `/tools/verilator-euvm` build under `~/tools/verilator` (the apt
+    package there is 5.032 if a rebuild is wanted).
+* **Speed, measured:** the SoC bench runs at about 245k clocks/s
+  (`irq_stress`: 208k clocks in 0.85 s, local machine under load), roughly
+  8x Icarus. At about 43 clocks per instruction that is about 5.7k
+  instructions/s: enough for the bare-metal rungs, still about a day per
+  100 million instructions, so Linux (hundreds of millions) is not there
+  yet. Nothing has been tuned: the build is the default `-O`, the testbench
+  does per-cycle checking and writes the dump line by line, and `--timing`
+  is on for every model. Candidates: higher C++ optimisation (`-O3`, `--x-assign fast`),
+  no dump for runs that only need the UART, and a separate core-with-fast-memory
+  build for the benchmark rungs.
 * Two targets: the core with fast memory (lockstep with Spike until the first
   timer interrupt, UART text after), and the full SoC through the pins with
-  the Pmod model (pass = the shell answers).
-* Keep Icarus as the reference simulator for the existing suites; Verilator
-  must give byte-identical traces on them first.
+  the Pmod model (pass = the shell answers). The river_core plugin and the
+  directed suite cover the testbench builds; a UART-only SoC build for long
+  runs is still to do.
+* Keep Icarus as the reference simulator for the existing suites; the
+  byte-identical comparison above is how Verilator earns trust, and any
+  new suite should be run on both before relying on Verilator alone.
 * Reference: georgc4/rv32-linux-soc's Verilator Linux-acceptance CI
   (`localFiles/rv32-linux-soc`).
 
@@ -616,5 +650,5 @@ Not on the ladder:
 |---|---|---|
 | SoC bench, Icarus (today) | about 30k clocks/s, about 700 instructions/s | Rungs 1, 3, 4 and 5 as smoke tests (boot, a few task switches, mounting the card), up to a few hundred thousand instructions: minutes each |
 | Core bench with fast memory, Icarus (today) | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
-| Verilator (section 3) | to be measured | Full benchmarks, Zephyr's test suite, NuttX, Linux |
+| Verilator (section 3) | about 245k clocks/s on the SoC bench, untuned (about 8x Icarus) | Full benchmark runs and the river_core regressions today; Zephyr's test suite, NuttX and Linux need more speed (tuning, a UART-only SoC build) |
 | FPGA (section 5) and silicon | real time | The interactive rungs (Forth, MicroPython, demos), full CoreMark |
