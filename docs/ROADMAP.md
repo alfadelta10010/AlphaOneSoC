@@ -423,13 +423,16 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 * **Speed, measured:** the SoC bench runs at about 245k clocks/s
   (`irq_stress`: 208k clocks in 0.85 s, local machine under load), roughly
   8x Icarus. At about 43 clocks per instruction that is about 5.7k
-  instructions/s: enough for the bare-metal rungs, still about a day per
-  100 million instructions, so Linux (hundreds of millions) is not there
-  yet. Nothing has been tuned: the build is the default `-O`, the testbench
-  does per-cycle checking and writes the dump line by line, and `--timing`
-  is on for every model. Candidates: higher C++ optimisation (`-O3`, `--x-assign fast`),
-  no dump for runs that only need the UART, and a separate core-with-fast-memory
-  build for the benchmark rungs.
+  instructions/s: enough for the bare-metal rungs, and about a day per 100
+  million instructions, so Linux (hundreds of millions) is a long run on
+  this bench. The build is deliberately left untuned (decision 2026-11-02):
+  Verilator flags, a clock driven from C++ or a fast-memory bench would make
+  the simulation quicker without making the core quicker, and the bench
+  should show the core's real clocks per instruction. Measured for the
+  record: `-O3` with `--x-assign fast` gave 340k clocks/s (1.28x); the
+  profile puts about a third of the time in Verilator's `--timing`
+  scheduler. Real speed comes from RTL (fetch reuse is merged), then FPGA
+  and silicon (section 5).
 * Two targets: the core with fast memory (lockstep with Spike until the first
   timer interrupt, UART text after), and the full SoC through the pins with
   the Pmod model (pass = the shell answers). The river_core plugin and the
