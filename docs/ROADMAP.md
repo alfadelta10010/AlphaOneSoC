@@ -346,7 +346,8 @@ Open (2026-10-31):
    compliance suite), gate-level on the TT flow (`scripts/gl`, parts A-D),
    and EQY of the RTL against the new netlist (`tb/eqy`; its FSM cut points,
    tie lists and no-match list were fitted to the 2026-10-25 netlist and
-   need fitting again).
+   need fitting again). Status 2026-11-01: river_core and the directed SoC
+   suite are done on the combined tree; EQY and `scripts/gl` are owed (2.3).
 4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`)
    and pass its CI. **Done for main `a2f7285`** (2026-11-01, ahead of the
    lock): one commit per block and one for item 2's build settings, up to
@@ -426,8 +427,16 @@ one random round (0 DUT defects), the gate-level programs at the pins (183
 programs and 17 SoC programs, RTL = GL), EQY 157/157. Every mutation survivor
 has a verdict (`tb/VPLAN.md` 4.2). Since then fetch reuse has run the
 compliance suite only (175/176, the known `ma_data`), and SPI its own
-benches, formal and mutation. Owed on the combined tree: everything in 1.6
-item 3. Still open from PR #11: an 8-seed run.
+benches, formal (35/35 at PR #14's merge) and mutation.
+
+Done on the combined tree (main `a2f7285`, 2026-11-01): the full river_core
+regression on Verilator (section 3: compliance 175/176 with the known
+`ma_data`, three random rounds 1076/1076 each, 0 DUT defects), the SoC
+directed suite on Verilator (113/113), the harden (1.6 item 2) and the TT
+cocotb tests at RTL and gate level (3/3, also in the submission CI). Owed on
+it: EQY against the new netlist, with its cut points, tie lists and no-match
+list fitted again, and the pin-level gate-level programs (`scripts/gl`) on
+the new netlist. Still open from PR #11: an 8-seed run.
 
 ## 3. Verilator port
 
