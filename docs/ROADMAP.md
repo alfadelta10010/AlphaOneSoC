@@ -25,18 +25,19 @@ synthesised; nothing here is measured unless it cites a run.
 
 The limits every item is judged against:
 
-* **Area.** The last harden (2026-10-25, the PR #12 tree with syscon;
-  `localFiles/harden-2026-10-25`) is 12 tiles as 3x4 at 16 ns, with **68.8%
-  area utilisation** and **77.9% routing density**, clean at every corner (ss
-  setup +0.86 ns, ff hold +0.189 ns). Fetch reuse (17 flops, about 750 µm² at
-  synthesis) and the SPI controller (+24 flops, about +1,150 µm², WO-28
-  *estimate*) are merged but not hardened; WO-28 puts the two together at
-  about **69.9%**, the highest utilisation that has routed clean at 3x4
-  (b5077cd, `macro/rf_top/README.md`). The 6x2 attempt at 80% failed detailed
-  placement (`docs/area-audit.md`). The budget set on 2026-10-23 was about
-  5,650 µm² of new RTL at synthesis; syscon (1,708 µm²), fetch reuse and SPI
-  have used about 3,600 of it. Anything larger than the remaining 2,000 needs
-  a harden to prove it fits.
+* **Area.** The last harden (2026-11-01, main `a2f7285` with syscon, fetch
+  reuse and SPI; `localFiles/harden-2026-11-01`) is 12 tiles as 3x4, with
+  **67.3% area utilisation** (160,752 µm² of standard cells) and **75.8%
+  routing density**, DRC, LVS and antenna clean (1.6 item 2). Against the
+  PR #12 tree's harden (2026-10-25, `localFiles/harden-2026-10-25`: 68.8% and
+  77.9%), fetch reuse and SPI added 42 flops and about 4,000 µm² of flops and
+  gates once placed, and timing-repair buffers came to about 8,300 µm² less
+  with the hold margin cut from 0.2 to 0.1 ns. **Headroom:** about a third of
+  the placement area is free, but routing is the limit. At the 0.2 ns margin
+  the PR #12 tree routed with, this tree did not: global routing at 84.6%,
+  11.7k detailed-routing violations left after 15 iterations. The 6x2 attempt
+  at 80% failed detailed placement (`docs/area-audit.md`). Anything added
+  needs a harden to prove it fits, and 1.4 is where room can come from.
 * **Memory is the speed limit.** About 43 clocks per instruction on compiled
   C with fetch reuse (53 without; WO-27 A9, `bench.c` at -O2), against 3.3
   with zero-wait memory: over 90% of the time the core waits for QSPI. At
@@ -308,8 +309,34 @@ Open (2026-10-31):
 ### 1.6 The lock gate
 
 1. area-optimizer measures each block above in flops and µm² at synthesis.
-2. pd-expert hardens 3x4 at 16 ns with all of them: routed, DRC/LVS clean, no
-   hold violation, setup met at every corner, utilisation recorded.
+2. ~~pd-expert hardens 3x4 at 16 ns with all of them: routed, DRC/LVS clean,
+   no hold violation, setup met at every corner, utilisation recorded.~~
+   **Done 2026-11-01** on main `a2f7285` (LibreLane 3.0.14 on the sandbox,
+   `localFiles/harden-2026-11-01`): 0 route DRC, Magic DRC, LVS and antenna
+   errors; TT precheck passed; the TT cocotb tests pass 3/3 at gate level. No
+   hold violation at any corner (worst +0.092 ns, fast corner), and the
+   register file's inputs keep +0.128 ns against the ff hold guard band.
+   Setup is met at every corner at 16.67 ns (60 MHz) but not at 16 ns: one
+   path, from bus address bit 17 (syscon's select) to the CSR write value,
+   misses by 0.303 ns at the slowest corner only (max ss; nominal ss is
+   +0.315 ns). Utilisation and density are in section 0. Two changes made it
+   route:
+   * `PL_RESIZER_HOLD_SLACK_MARGIN` 0.2 to 0.1 ns; at 0.2 it did not route
+     (section 0).
+   * `rf_top` moved from [3, 189] to [3, 60], orientation E. [3, 3], the
+     placement with the least global-routing overflow, ended detailed routing
+     with 1,075 violations on the macro's nets: rotated to E, one pin row
+     faces the die's bottom edge 3 µm away and has no room to escape. Global
+     routing does not model pin access, so placements were then screened
+     through detailed routing: [3, 189], [3, 30] and [3, 60] all routed
+     clean, and [3, 60] had the least overflow (104) and converged fastest.
+
+   Left as found: max-slew violations, 116 at the slowest corner (99 on
+   2026-10-25), and max-cap, 5 (1); the flow does not block on them. Power is
+   9.37 mW (typical corner, default activity). Worst IR drop is 5.5 mV (0.28%)
+   at the fast corner with 20% switching and the stripes fed from their top
+   ends only; the flow's own estimate is 0.1 mV. `rf_top`'s liberty reports no
+   power, so the register file is missing from both figures.
 3. Full verification: test-all, directed core and SoC, formal, seeds,
    mutation on the new blocks, the river_core regression (the fetch-reuse
    change touches the pipeline: rrag and riscv-dv with C, not only the
@@ -563,8 +590,8 @@ a PLIC (all devices are polled).
 2. ~~syscon (1.2), then the SPI controller (1.1), then fetch reuse (1.3), each
    through the tiered agent pipeline, with formal from the start (2.2 item
    3).~~ Done: PR #12 (syscon), PR #13 (fetch reuse), PR #14 (SPI).
-3. Area pass (1.4), harden and the lock gate (1.6), on the tree with all
-   three.
+3. Area pass (1.4), ~~harden~~ and the lock gate (1.6), on the tree with all
+   three. The harden is done (2026-11-01, 1.6 item 2).
 4. The software ladder's bare-metal rungs and FreeRTOS (9.2, rungs 1-5), on
    the current benches; they can start before the lock and become its
    checkpoints.
