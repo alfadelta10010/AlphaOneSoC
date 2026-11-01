@@ -405,8 +405,16 @@ k-induction proofs (MD07, FC02, FC49), which are not part of `run.sh`.
 
 ### 2.2 Next formal steps, by value
 
-1. **Install a real solver stack** (SymbiYosys + Bitwuzla or Yices, e.g. the
-   oss-cad-suite) on the sandbox: deeper BMC, cover statements, liveness.
+1. ~~**Install a real solver stack** (SymbiYosys + Bitwuzla or Yices, e.g. the
+   oss-cad-suite) on the sandbox~~: done 2026-11-02. The OSS CAD Suite release
+   2026-11-01 is in `~/tools/oss-cad-suite` on the sandbox: yosys 0.70, sby,
+   eqy, bitwuzla 0.9.1, yices 2.7.0, z3 4.15.5, boolector 3.2.4 (smoke test:
+   a counter property proved by BMC with bitwuzla and by k-induction with
+   yices). Use it with `source ~/tools/oss-cad-suite/environment` in the
+   shell that runs the proofs only: that puts the suite's own iverilog and
+   verilator first on `PATH`, which the regression and TT flows must not see.
+   Still to do: port the existing `tb/formal/run.sh` harnesses to `.sby`
+   files and use the new engines for deeper BMC, cover statements and liveness.
 2. **riscv-formal through an RVFI port** (simulation/formal-only `ifdef`,
    zero area): per-instruction checks for RV32IMC, register and pc
    consistency, causality, liveness. It covers the ISA rows that are
@@ -462,6 +470,15 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
   * Byte-identical dumps against Icarus on the core bench (rv32i_basic,
     csr_test, trap_test, rv32m_test). The SoC directed suite, through the
     QSPI Pmod model, passes 113/113 against the Spike references.
+  * **Cycle-exact against Icarus on the SoC bench** (2026-11-02): the
+    software bench (`tb/tb_sw.v`, 9.3) runs the loader and hello world in
+    1,967,772 clocks in both simulators, instruction for instruction. Getting
+    there found one testbench race, not an RTL difference: releasing reset
+    with `rst <= 0` in a process that waits on the clock edge made Verilator
+    release the QSPI pins a clock earlier than Icarus. A bench must release
+    reset after the edge (`#1 rst = 0`); `tb_sw`, `tb_soc_periph` and
+    `tb_syscon_soc` do. `tb_rivercore` compares traces, which this does not
+    change, but a bench that prints cycle counts would differ by one.
   * Full river_core regression on the sandbox, code d00eb8a, 2026-11-01
     12:30 to 16:51, peak 73 C: conf (riscv_tests + riscof) 175/176, the one
     failure the known `rv32ui-ma_data`; three random rounds (rrag +
