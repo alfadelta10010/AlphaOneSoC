@@ -492,19 +492,22 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
   * Needs Verilator 5.x on the box; the sandbox copy is the local
     `/tools/verilator-euvm` build under `~/tools/verilator` (the apt
     package there is 5.032 if a rebuild is wanted).
-* **Speed, measured:** the SoC bench runs at about 245k clocks/s
-  (`irq_stress`: 208k clocks in 0.85 s, local machine under load), roughly
-  8x Icarus. At about 43 clocks per instruction that is about 5.7k
-  instructions/s: enough for the bare-metal rungs, and about a day per 100
-  million instructions, so Linux (hundreds of millions) is a long run on
-  this bench. The build is deliberately left untuned (decision 2026-11-02):
-  Verilator flags, a clock driven from C++ or a fast-memory bench would make
-  the simulation quicker without making the core quicker, and the bench
-  should show the core's real clocks per instruction. Measured for the
-  record: `-O3` with `--x-assign fast` gave 340k clocks/s (1.28x); the
-  profile puts about a third of the time in Verilator's `--timing`
-  scheduler. Real speed comes from RTL (fetch reuse is merged), then FPGA
-  and silicon (section 5).
+* **Speed, measured.** `tb_sw` on the sandbox (i5-8600K): 691 million clocks
+  and 15.8 million instructions in 668 s, i.e. **about 1.0 million clocks/s
+  and 24k instructions/s** (CoreMark, 43.7 clocks per instruction). The
+  river_core SoC bench measured about 245k clocks/s on the loaded laptop
+  (`irq_stress`: 208k clocks in 0.85 s), which is the machine, not the bench.
+  Icarus is about 30k clocks/s. That is enough for every bare-metal rung,
+  including a valid CoreMark in 11 minutes and the whole Embench suite in
+  10 (five at a time). Linux (hundreds of millions of instructions) is a
+  matter of hours on this bench. The build is deliberately left untuned
+  (decision 2026-11-02): Verilator flags, a clock driven from C++ or a
+  fast-memory bench would make the simulation quicker without making the core
+  quicker, and the bench should show the core's real clocks per instruction.
+  Measured for the record: `-O3` with `--x-assign fast` gave 1.28x on the
+  laptop, and the profile puts about a third of the time in Verilator's
+  `--timing` scheduler. Real speed comes from RTL (fetch reuse is merged),
+  then FPGA and silicon (section 5).
 * Two targets: the core with fast memory (lockstep with Spike until the first
   timer interrupt, UART text after), and the full SoC through the pins with
   the Pmod model (pass = the shell answers). The river_core plugin and the
@@ -651,8 +654,8 @@ a PLIC (all devices are polled).
 
 The user's order (2026-10-31): easier goals first, then FreeRTOS, then Linux.
 Each rung proves something the rungs below it do not, and each stays on as a
-regression test for later RTL changes. Collected on 2026-10-31; none of it
-has been run yet.
+regression test for later RTL changes. Collected on 2026-10-31. Rungs 1 and 2
+run since 2026-11-02 (`sw/`, 9.4); the others have not been tried.
 
 What software gets: RV32IMAC with Zicsr, Zicntr and Zifencei; M and U modes;
 4 PMP entries; no S-mode and no MMU. The CLINT's timer and software
@@ -698,8 +701,8 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 | # | Software | What it proves that the rungs below do not | Fit and effort |
 |---|---|---|---|
 | 0 | Directed tests, riscv-tests, river_core (exist) | ISA and privileged behaviour, instruction by instruction | Done; everything below stands on it |
-| 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | Small. Every rung above starts from it |
-| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | Hours. A valid CoreMark run lasts 10 s, about 14 million instructions here: short runs on the benches, full runs on Verilator or silicon |
+| 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | **Done** (`sw/`, 9.4). Every rung above starts from it |
+| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | **Done** (`sw/`, 9.4; results in 9.4). A valid CoreMark run lasts 10 s, about 15 million instructions here: Verilator runs it in under an hour |
 | 3 | **Forth monitor** (mecrisp-quintus, an RV32IM Forth) | An interactive prompt over UART that reads and writes registers: the first thing to run on returned silicon | Small; needs only polled UART routines |
 | 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | Small; polled. The SoC bench's SD-card model runs it |
 | 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | Small. The polled UART is enough. U-mode tasks under PMP are not part of the upstream port (to check) |
@@ -727,11 +730,59 @@ Not on the ladder:
   comes first.
 * Doom-class programs: far too slow at about 1.4 MIPS.
 
+### 9.4 What exists and what it measured
+
+`sw/` holds the bare-metal software; how to build and run it is in the header
+of `sw/Makefile`. Output goes to `build/sw`.
+
+* **Runtime** (`sw/common`): `soc.h` (addresses, register access, `mtime`),
+  a polled UART, a small `printf` (no stdio from newlib), a default trap
+  handler that prints `mcause`/`mepc`/`mtval`, and `exit()`, which stops the
+  run through syscon FINISH.
+* **Loader** (`sw/loader`): runs in place from flash and keeps the boot
+  contract (9.1): mtvec first, UART divisor 33, RESET_CAUSE and BOOT_MODE read
+  and RESET_CAUSE cleared. It copies the image at flash offset 0x10000
+  (20-byte header: magic, load address, size, entry, word sum) to PSRAM,
+  checks the sum, runs `fence.i` and jumps with `a0 = 0` (hartid) and
+  `a1 = 0` (no device tree yet). 1,186 bytes. The SPI controller is left
+  disabled, so rules 4 and 5 are for whoever uses it (rung 4).
+  `sw/tools/mkflash.py` builds the flash image, as the byte hex the Pmod
+  model reads and as a raw `.bin` for programming.
+* **Bench** (`tb/tb_sw.v`): the SoC at 60 MHz, the QSPI Pmod model, a UART
+  decoder that follows the divisor the program sets (framing is checked), a
+  watcher on syscon FINISH. It prints `SW-RESULT: PASS|FAIL|TIMEOUT` with
+  clocks and instructions retired. Built with Verilator by `make -C sw bench`;
+  the same file runs under Icarus.
+* **Programs:** `make -C sw run-hello | run-coremark | run-dhrystone`, and
+  `make -C sw embench` then `sw/tools/run_embench.sh` for the Embench suite.
+  Each has an `expect.txt` that the run must satisfy
+  (`sw/tools/check_run.py`). CoreMark, Dhrystone (from riscv-tests) and
+  Embench-IoT are fetched at pinned commits by `sw/fetch.sh`; none of their
+  source is in this repository. `BENCH_OPT` (default `-O2`) and `CM_ITER` set
+  the flags and CoreMark's iterations.
+
+**Results, RTL as of main `a2f7285` (fetch reuse, SPI, syscon), GCC 14.2
+`-O2`, code and data in PSRAM, 60 MHz.** These are the numbers a later RTL
+change is judged against; every figure is in core clocks, so none depends on
+the bench's clock.
+
+| Benchmark | Result | What it means |
+|---|---|---|
+| Dhrystone 2.2 (500 runs) | 16,697 clocks per run; 59.9 Dhrystones/s per MHz; **0.034 DMIPS/MHz**; all 14 final values correct | |
+| CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (50 iterations, 684 million clocks = 11.4 s at 60 MHz): CoreMark validated the result, **4.39 iterations/s, 0.073 CoreMark/MHz**; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
+| Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `localFiles/sw-results-2026-11-02`: best `tarfind` 0.078, worst `xgboost` 0.020 |
+
+All three say the same thing: the core retires an instruction every 38 to 43
+clocks, because every instruction word comes over QSPI (about 3% of a
+Cortex-M4 per MHz on Embench). Fetch reuse, a longer fetch stream or an
+instruction cache (section 7) are what move these numbers; a faster
+multiplier or branch logic would not.
+
 ### 9.3 Where each rung runs
 
 | Where | Speed | Good for |
 |---|---|---|
 | SoC bench, Icarus (today) | about 30k clocks/s, about 700 instructions/s | Rungs 1, 3, 4 and 5 as smoke tests (boot, a few task switches, mounting the card), up to a few hundred thousand instructions: minutes each |
 | Core bench with fast memory, Icarus (today) | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
-| Verilator (section 3) | about 245k clocks/s on the SoC bench, untuned (about 8x Icarus) | Full benchmark runs and the river_core regressions today; Zephyr's test suite, NuttX and Linux need more speed (tuning, a UART-only SoC build) |
+| Verilator (section 3) | about 1.0 million clocks/s, 24k instructions/s on the sandbox, untuned (about 30x Icarus) | Full benchmark runs (a valid CoreMark in 11 minutes), the river_core regressions, Embench; Zephyr's test suite and Linux in hours |
 | FPGA (section 5) and silicon | real time | The interactive rungs (Forth, MicroPython, demos), full CoreMark |
