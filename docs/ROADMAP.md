@@ -703,7 +703,7 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 | 0 | Directed tests, riscv-tests, river_core (exist) | ISA and privileged behaviour, instruction by instruction | Done; everything below stands on it |
 | 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | **Done** (`sw/`, 9.4). Every rung above starts from it |
 | 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | **Done** (`sw/`, 9.4; results in 9.4). A valid CoreMark run lasts 10 s, about 15 million instructions here: Verilator runs it in under an hour |
-| 3 | **Forth monitor** (mecrisp-quintus, an RV32IM Forth) | An interactive prompt over UART that reads and writes registers: the first thing to run on returned silicon | Small; needs only polled UART routines |
+| 3 | **Monitor** (`sw/monitor`, a C monitor; mecrisp-quintus Forth is left for later) | A prompt over UART that reports any register or memory location: the 31 registers and pc of a stopped program, every CSR, any address, the peripheral registers. The first thing to run on returned silicon | **Done** (9.4). No RTL change: a timer tick looks for Ctrl-C, since the UART has no interrupt line |
 | 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | Small; polled. The SoC bench's SD-card model runs it |
 | 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | Small. The polled UART is enough. U-mode tasks under PMP are not part of the upstream port (to check) |
 | 6 | **Zephyr** | Atomics, U-mode with PMP (userspace), its ns16550 and CLINT drivers, and its kernel test suite (twister) | Medium. KianV's Zephyr port (`localFiles/kianRiscV`) is a starting point. Check that 4 PMP entries are enough for userspace. The test suite needs Verilator |
@@ -739,6 +739,20 @@ of `sw/Makefile`. Output goes to `build/sw`.
   a polled UART, a small `printf` (no stdio from newlib), a default trap
   handler that prints `mcause`/`mepc`/`mtval`, and `exit()`, which stops the
   run through syscon FINISH.
+* **Monitor** (`sw/monitor`, `make -C sw run-monitor`): a prompt on the UART.
+  `r` shows x0-x31 and pc of the stopped program (`r a0 1234` sets one), `csr`
+  every CSR by name or number (`csr scan` tries all 4096 numbers and lists the
+  ones that answer), `m`/`mb`/`mh` dump any address and `w`/`wb`/`wh` write it
+  (an address nothing answers prints `fault`), `p` the CLINT, UART, GPIO/SPI
+  and syscon registers, `i` the ids and counters, `g`/`gb`/`x` run and carry on.
+  A program stops on `ebreak`, on any trap, or at Ctrl-C under `gb`: a
+  timer tick every 10 ms looks at the UART receiver, and the registers shown
+  are the ones the program had. Its trap entry owns `mscratch`, and under `gb`
+  a program must leave the UART receiver alone. The SoC bench plays a
+  scripted session through the UART receiver (`tb_sw +UART_IN`,
+  `sw/monitor/script.txt`): all 31 registers read back, flash, PSRAM, a
+  fault, byte writes, the CSR list, a CSR scan, `p`, and a break-in on a
+  spinning loop. 2 minutes in Verilator.
 * **Loader** (`sw/loader`): runs in place from flash and keeps the boot
   contract (9.1): mtvec first, UART divisor 33, RESET_CAUSE and BOOT_MODE read
   and RESET_CAUSE cleared. It copies the image at flash offset 0x10000
