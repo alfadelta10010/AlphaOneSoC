@@ -1,4 +1,4 @@
-/* Polled UART output, and the syscon finish. */
+/* Polled UART output and input, and the syscon finish. */
 #include "soc.h"
 
 void uart_init(unsigned divisor)
@@ -14,6 +14,18 @@ void uart_putc(int c)
     while (!(*reg8(UART_BASE + UART_LSR) & UART_LSR_THRE))
         ;
     *reg8(UART_BASE + UART_THR) = (uint8_t)c;
+}
+
+int uart_rx_ready(void)
+{
+    return *reg8(UART_BASE + UART_LSR) & UART_LSR_DR;
+}
+
+int uart_getc(void)
+{
+    while (!uart_rx_ready())
+        ;
+    return *reg8(UART_BASE + UART_RBR);
 }
 
 /* Wait until the last character has left the shifter. */

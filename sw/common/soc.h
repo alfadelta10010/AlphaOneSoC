@@ -11,6 +11,7 @@
 #define PSRAM_BASE      0x80000000u
 #define PSRAM_SIZE      0x01000000u
 
+#define CLINT_MTIMECMP  0x02004000u
 #define CLINT_MTIME     0x0200BFF8u
 #define UART_BASE       0x10000000u
 #define SYSCON_BASE     0x10020000u
@@ -36,6 +37,8 @@ struct image_hdr {
 #define UART_LCR        3
 #define UART_LSR        5
 #define UART_LCR_DLAB   0x80
+#define UART_RBR        0
+#define UART_LSR_DR     0x01
 #define UART_LSR_THRE   0x20
 #define UART_LSR_TEMT   0x40
 /* Boot contract rule 2: 113,636 baud at 60 MHz (115,200 - 1.4%). */
@@ -69,6 +72,8 @@ static inline uint64_t mtime_read(void)
 void uart_init(unsigned divisor);
 void uart_putc(int c);
 void uart_flush(void);
+int  uart_getc(void);          /* blocks */
+int  uart_rx_ready(void);
 void uart_puts(const char *s);
 void uart_puthex(uint32_t v, int digits);
 void uart_putdec(uint32_t v);

@@ -1,7 +1,7 @@
 # Bare-metal software for AlphaOneSoC (docs/ROADMAP.md section 9).
 #
-#   make hello | coremark | dhrystone      build the loader, the payload and its flash image
-#   make run-hello | run-coremark | run-dhrystone
+#   make hello | monitor | coremark | dhrystone      build the loader, the payload and its flash image
+#   make run-hello | run-coremark | run-dhrystone | run-monitor
 #                                          ... and run it on the SoC bench (Verilator), check the output
 #   make bench                             build the software bench only
 #   make fetch                             fetch the third-party sources (CoreMark, Dhrystone) at pinned commits
@@ -36,7 +36,7 @@ ifneq ($(words $(wildcard $(TP)/embench-iot/support/main.c $(TP)/coremark/core_m
 $(shell ./fetch.sh >&2)
 endif
 
-.PHONY: all hello coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: all hello monitor coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -68,8 +68,8 @@ $$(BUILD)/$(1)/flash.hex: $$(BUILD)/$(1)/$(1).bin $$(BUILD)/loader/loader.bin to
 	    --entry 0x$$$$($$(TC)nm $$(BUILD)/$(1)/$(1).elf | awk '$$$$3=="_start"{print $$$$1}') \
 	    --out $$@ --bin $$(BUILD)/$(1)/flash.bin
 $(1): $$(BUILD)/$(1)/flash.hex
-run-$(1): $(1) $$(BUILD)/bench/sim
-	cd $$(BUILD)/$(1) && $$(BUILD)/bench/sim +FLASH_FILE=$$(BUILD)/$(1)/flash.hex $$(RUNARGS) | tee run.log
+run-$(1): $(1) $$(BUILD)/bench/sim $$($(1)_RUNDEP)
+	cd $$(BUILD)/$(1) && $$(BUILD)/bench/sim +FLASH_FILE=$$(BUILD)/$(1)/flash.hex $$($(1)_RUNARGS) $$(RUNARGS) | tee run.log
 	python3 tools/check_run.py $$(BUILD)/$(1)/run.log $$(or $$($(1)_EXPECT),$(1)/expect.txt)
 	$$($(1)_CHECK)
 	@echo "$(1): ok"
@@ -77,6 +77,15 @@ endef
 
 hello_SRC := hello/hello.c
 $(eval $(call PAYLOAD,hello))
+
+monitor_SRC    := monitor/monitor.c monitor/mon_asm.S
+monitor_CFLAGS := -Wno-format   # uint32_t is long on this target; the mini printf takes both as 32 bits
+monitor_EXPECT := monitor/expect.txt
+monitor_RUNDEP := $(BUILD)/monitor/in.hex
+monitor_RUNARGS := +UART_IN=$(BUILD)/monitor/in.hex
+$(BUILD)/monitor/in.hex: monitor/script.txt tools/mkscript.py $(BUILD)/monitor/monitor.elf
+	python3 tools/mkscript.py monitor/script.txt $@ --elf $(BUILD)/monitor/monitor.elf
+$(eval $(call PAYLOAD,monitor))
 
 CM := $(TP)/coremark
 coremark_SRC    := $(addprefix $(CM)/,core_main.c core_list_join.c core_matrix.c core_state.c core_util.c) \

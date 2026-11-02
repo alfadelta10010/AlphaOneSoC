@@ -1,0 +1,60 @@
++ AlphaOne monitor
++ stopped: breakpoint at pc=
+- TRAP mcause
+- MONITOR TRAP
+- ERROR
++ ra   a5a50001
++ gp   a5a50003
++ tp   a5a50004
++ t0   a5a50005
++ t1   a5a50006
++ t2   a5a50007
++ s0   a5a50008
++ s1   a5a50009
++ a0   a5a5000a
++ a1   a5a5000b
++ a2   a5a5000c
++ a3   a5a5000d
++ a4   a5a5000e
++ a5   a5a5000f
++ a6   a5a50010
++ a7   a5a50011
++ s2   a5a50012
++ s3   a5a50013
++ s4   a5a50014
++ s5   a5a50015
++ s6   a5a50016
++ s7   a5a50017
++ s8   a5a50018
++ s9   a5a50019
++ s10  a5a5001a
++ s11  a5a5001b
++ t3   a5a5001c
++ t4   a5a5001d
++ t5   a5a5001e
++ t6   a5a5001f
+# r with a value, and a read-back
++ a5 = 1234abcd
+# memory: flash, a fault, a write and its read-back, a byte write
++ 20000000: 
++ 80000000: 
++ 30000000: fault
++ 80100000: deadbeef
++ 80100000: dead5aef
+# CSRs: the list, by name, by number, one that is absent, a scan
++ 301 misa          40101105
++ f14 mhartid
++ 340 mscratch
++ 7c0 fault (no such CSR)
++ 30a 
++ scan done
+# peripherals
++ 10000000 DLL              21
++ 10000001 DLM              00
++ 0200bff8 mtime lo
++ 1002000c CHIP_ID          41315301
++ 10020004 RESET_CAUSE
+# gb and Ctrl-C, resume
++ ^C
++ stopped: interrupt 7 at pc=
++ a0 = 7ffffff0

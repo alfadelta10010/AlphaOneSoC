@@ -1,0 +1,33 @@
+# The monitor session the bench plays (make -C sw run-monitor). Wait text, TAB, keys.
+PROMPT	h
+PROMPT	i
+PROMPT	r
+PROMPT	g {demo_regs}
+PROMPT	r
+PROMPT	r a5
+PROMPT	r a5 1234abcd
+PROMPT	r a5
+PROMPT	m 20000000 8
+PROMPT	mb 80000000 20
+PROMPT	mh 20000000 8
+PROMPT	m 30000000 4
+PROMPT	w 80100000 deadbeef
+PROMPT	m 80100000 2
+PROMPT	wb 80100001 5a
+PROMPT	m 80100000 1
+PROMPT	csr
+PROMPT	csr misa
+PROMPT	csr 301
+PROMPT	csr mscratch
+PROMPT	csr 7c0
+PROMPT	csr scan 300 310
+PROMPT	csr scan f00 f20
+PROMPT	p
+PROMPT	gb {demo_spin}
+\n	^C
+PROMPT	r
+PROMPT	r a0 7ffffff0
+PROMPT	x
+\n	^C
+PROMPT	r a0
+PROMPT	q
