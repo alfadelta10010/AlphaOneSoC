@@ -14,6 +14,10 @@
 // reports a framing error as an ERROR line. The memory and bus request
 // checks are those of the other SoC benches (tb/req_hold_check.v).
 //
+// +UART_IN=<hex> feeds the chip's UART receiver (sw/tools/mkscript.py builds the file
+// from a script): each step waits until the program's output ends in a given text, then
+// sends a line at the baud rate the program has set. That is how the monitor is driven.
+//
 // Both simulators build it; Verilator needs --timing for the Pmod model's
 // delays (sw/Makefile).
 `timescale 1ns / 1ps
@@ -36,6 +40,7 @@ module tb_sw;
     wire [3:0] qspi_io_out, pmod_io;
     wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'bxxxx);
     wire       uart_tx, uart_rts_n;
+    reg        uart_rx_r = 1'b1;
     wire [7:0] gpio_out;
     wire [7:0] gpio_in = 8'h00;
 
@@ -44,7 +49,7 @@ module tb_sw;
         .clk(clk), .rst(rst), .qspi_rd_late(1'b0),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
-        .uart_rx(1'b1), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),
+        .uart_rx(uart_rx_r), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),
         .gpio_in(gpio_in), .gpio_out(gpio_out));
 
     qspi_pmod_model pmod (
@@ -64,6 +69,7 @@ module tb_sw;
     reg [7:0] ub;
     real      bit_ns, t_start;
     integer   k;
+    reg [8*32-1:0] tail = 0;        // the last 32 characters the program sent
     initial begin
         #1;
         forever begin
@@ -86,7 +92,44 @@ module tb_sw;
                     end
                     uart_bytes = uart_bytes + 1;
                     $write("%c", ub);
+                    tail = {tail[8*31-1:0], ub};
                 end
+            end
+        end
+    end
+
+    // ── UART input: steps of {wait length, wait text, send length, send bytes}, ───
+    // ended by a wait length of 255.
+    reg [7:0] sc [0:8191];
+    reg [8*1024-1:0] in_name;
+    integer pos, wl, sl, i;
+    reg [8*32-1:0] pat;
+    reg [7:0] sb;
+    real in_ns;
+    initial begin
+        if ($value$plusargs("UART_IN=%s", in_name)) begin
+            $readmemh(in_name, sc);
+            pos = 0;
+            wl = sc[0];
+            while (wl != 255) begin
+                pos = pos + 1;
+                pat = 0;
+                for (i = 0; i < wl; i = i + 1) pat = {pat[8*31-1:0], sc[pos + i]};
+                pos = pos + wl;
+                sl = sc[pos]; pos = pos + 1;
+                while ((tail << (8 * (32 - wl))) != (pat << (8 * (32 - wl))) || rst)
+                    @(posedge clk);
+                tail = 0;
+                for (i = 0; i < sl; i = i + 1) begin
+                    sb = sc[pos + i];
+                    if ($test$plusargs("RXTRACE")) $display("TB-RX send %02x cyc %0d", sb, cyc);
+                    in_ns = 16.0 * {soc.uart_inst.dlm, soc.uart_inst.dll} * TCLK;
+                    uart_rx_r = 1'b0; #(in_ns);
+                    for (k = 0; k < 8; k = k + 1) begin uart_rx_r = sb[k]; #(in_ns); end
+                    uart_rx_r = 1'b1; #(in_ns * 2.0);
+                end
+                pos = pos + sl;
+                wl = sc[pos];
             end
         end
     end
