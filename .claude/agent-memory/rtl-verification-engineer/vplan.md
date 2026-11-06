@@ -383,3 +383,9 @@ INDEX: build/wo/INDEX-2026-10-23.md (copy in localFiles/verif-reports-2026-10-23
   irq_stall, periph_access; per-program MB_DIV; irq_stall logs to PSRAM 0x80FF_F000.
 - Coverage at the pins: 7 fully, 9 partly, 0 none. Open user decision: C8 (floors re-measured
   on the MB_UART builds through tb_soc_periph/tb_syscon_soc).
+
+## SPI controller (WO-29, planned 2026-10-30; build/wo/WO-29-spi-verification.md)
+REQ-SPI-001..020 -> tb_spi (T01-T14, PROBE, RT sweep), test-soc-spi (sd_init,
+sd_b1, spi_mixed, sd_reboot, 3 expected-fail controls), formal spi_core/dc/bus
+(32 props, induct L1 via expose), spi_bb (BMC 40), spi_cover (6), spi_f12
+(struct); mutants SPI01-SPI32. Status: planned (RTL WO-28 in progress).

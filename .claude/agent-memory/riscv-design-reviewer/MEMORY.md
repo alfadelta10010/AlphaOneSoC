@@ -97,6 +97,8 @@ update after each review with confirmed decisions, findings, and recurring patte
   15.6 MHz MISO margin 2-12 ns -> cap BAUD 2; +1,150 um2, 3x4 ~69.9% w/ fetch reuse -- finding_spi_wo28_2026-10-29.md
 - 2026-10-30 WO-27 impl review f7f956b: RTL OK; BLOCK verif: fr_misa not RF_X-clean -> false FR12/FR14 kills, +rfx leg masks all
   survivors; core_fetch F1 32-bit clause vacuous (FR03 proves) -- finding_fetch_reuse_wo27_2026-10-29.md
+- 2026-10-30 WO-28 SPI impl review 42e2fec: RTL APPROVE, +24 flops exact, sample point probed (D<=2B); verif gap until WO-29
+  (no RX/modes 0-2/unit SPI bench; GP01-04 raise) -- finding_spi_wo28_2026-10-29.md
 
 ## Notes index
 

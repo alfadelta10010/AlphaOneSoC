@@ -90,3 +90,11 @@
   `partition.list` lines are "module partition : nets" (take field 2).
   gate sat invariant: `sat -tempinduct` honours init attrs ("Import
   set-constraint from init attribute"). EQY setup for this design: 30 s.
+- yosys 0.66 formal white-box (probe 2026-10-30, toy in scratchpad): a
+  hierarchical ref `dut.x` in a harness becomes an implicit UNDRIVEN wire
+  (warning "is implicitly declared" only) -> proof about a free signal;
+  `bind` parses but its asserts never reach sat (broken toy still "Induction
+  step proven: SUCCESS"). Both forbidden. Working recipe: `read_verilog rtl.v;
+  expose mod/wire ...; read_verilog -sv -formal harness.sv; prep -top h`
+  (harness instantiates mod with the exposed wires as ports; mutant toy killed).
+  Coordinator rule: a sat PROVED counts only at induction length 1.
