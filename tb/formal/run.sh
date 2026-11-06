@@ -31,6 +31,10 @@
 # write generated sources under $OUT only and prints their paths. A sidecar
 # that redefines a built-in harness, or names a harness with no props file,
 # gives ERROR (exit 2).
+# Engines: FORMAL_ENGINE=sat (default, yosys's built-in solver) or sby (sby with
+# bitwuzla smtbmc, generated from the same tables; a pdr harness always uses
+# sby with `abc pdr`, and a pdr PASS counts as PROVED). `run.sh -e DIR names`
+# writes the generated DIR/sby_<n>.sby for a manual `sby -f` run (VCD traces).
 # Environment: FORMAL_BIN is prepended to PATH inside this script only (the
 # sandbox: $HOME/tools/oss-cad-suite/bin), so a campaign's simulators stay the
 # system ones. Every harness's yosys log is checked for an implicitly declared
@@ -100,11 +104,15 @@ for conf in $(ls "$HERE"/*.conf 2>/dev/null | sort); do
     SIDE+=("$n")
   done
 done
+ENGINE="${FORMAL_ENGINE:-sat}"
+EDIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    -e) EDIR="$2"; shift 2;;
     *) break;;
   esac
 done
+if [ -n "$EDIR" ]; then OUT="$EDIR"; mkdir -p "$OUT"; ENGINE=sby; fi
 names=("$@"); [ ${#names[@]} = 0 ] && names=("${BUILTIN[@]}" "${SIDE[@]}")
 
 # guard_hit LOG: the log shows a hierarchical reference (an implicit, undriven wire)
@@ -113,6 +121,56 @@ names=("$@"); [ ${#names[@]} = 0 ] && names=("${BUILTIN[@]}" "${SIDE[@]}")
 # inputs by `setundef -undriven -expose` in the core_* PASSES).
 guard_hit() { grep -E "is implicitly declared|is used but has no driver" "$1" | grep -vE 'Wire rf_top\.\\(free_a|free_b|ra_data|rb_data) ' | grep -q .; }
 
+# sby_harness N: run harness N through sby (needs $srcs $log $bd; sets bad/err).
+# The [script] is the sat path's read/PRE/prep/flatten/PASSES/opt, minus
+# `chformal -lower` (sby wants the formal cells as they are).
+sby_harness() {
+  local n=$1 m=${MODE[$1]} d="$OUT/sby_$1" top="${PROPN[$1]:-$1}_props" dfn="${DEFS[$1]:-} ${EXTRA_DEFS:-}" opts engines sf="" f st tr
+  if ! command -v sby >/dev/null 2>&1; then echo "ERROR $n: sby not found on PATH (set FORMAL_BIN)"; err=1; return; fi
+  mkdir -p "$d"
+  case "$m" in
+    induct) opts="mode prove
+depth ${IDEPTH[$n]:-1}"; engines="smtbmc bitwuzla";;
+    bmc)    opts="mode bmc
+depth $bd"; engines="smtbmc bitwuzla";;
+    cover)  opts="mode cover
+depth $bd"; engines="smtbmc bitwuzla"; dfn="$dfn -DSBY_COVER";;
+    pdr)    opts="mode prove
+depth 1
+timeout ${PDR_TIMEOUT[$n]:-1200}"; engines="abc pdr";;
+  esac
+  { echo "[options]"; echo "$opts"; echo "[engines]"; echo "$engines"; echo "[script]"
+    echo "read_verilog -sv -formal$(for f in $srcs; do printf ' %s' "$(basename "$f")"; done)"
+    [ -n "${PRE[$n]:-}" ] && echo "${PRE[$n]}" | tr ';' '\n'
+    echo "read_verilog -sv -formal $dfn ${PROPN[$n]:-$n}_props.sv"
+    echo "prep -top $top"; echo "flatten"
+    [ -n "${PASSES[$n]:-}" ] && echo "${PASSES[$n]}" | tr ';' '\n'
+    echo "opt -fast"
+    echo "[files]"; for f in $srcs; do echo "$f"; done; echo "$HERE/${PROPN[$n]:-$n}_props.sv"
+  } | sed '/^ *$/d' > "$d.sby"
+  if [ -n "$EDIR" ]; then echo "WROTE $n: $d.sby (run: sby -f $d.sby)"; return; fi
+  rm -rf "$d"
+  timeout $(( ${PDR_TIMEOUT[$n]:-1200} + 600 )) sby -f -d "$d" "$d.sby" > "$log" 2>&1
+  for f in "$d"/model/*.log; do [ -f "$f" ] && cat "$f" >> "$log"; done 2>/dev/null
+  if [ -d "$d/model" ] && guard_hit "$d"/model/*.log; then
+    echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; return
+  fi
+  st=$(grep -oE "DONE \((PASS|FAIL|UNKNOWN|ERROR|TIMEOUT)" "$log" | tail -1 | grep -oE "[A-Z]+$")
+  tr=$(ls "$d"/engine_0/trace*.vcd 2>/dev/null | head -1)
+  case "$m:$st" in
+    induct:PASS) echo "PROVED $n (sby k-induction, length ${IDEPTH[$n]:-1})";;
+    induct:FAIL) echo "FAILED $n: a counterexample from reset (trace: ${tr:-none}; log: $log)"; bad=1;;
+    induct:UNKNOWN) echo "FAILED $n: induction did not close by length ${IDEPTH[$n]:-1} (log: $log)"; bad=1;;
+    bmc:PASS) echo "BOUNDED $n (no counterexample within $bd steps of reset)";;
+    bmc:FAIL) echo "FAILED $n: counterexample within $bd steps (trace: ${tr:-none}; log: $log)"; bad=1;;
+    pdr:PASS) echo "PROVED $n (pdr)";;
+    pdr:FAIL) echo "FAILED $n: a counterexample (trace: ${tr:-none}; log: $log)"; bad=1;;
+    cover:PASS) k=$(grep -c "Reached cover statement" "$log"); echo "COVERED $n ($k/$k)";;
+    cover:FAIL) k=$(grep -c "Reached cover statement" "$log"); u=$(grep -c "Unreached cover statement" "$log")
+                echo "FAILED $n: $k/$((k+u)) covered, unreachable within $bd steps (log: $log)"; bad=1;;
+    *) echo "ERROR $n: no verdict (${st:-no sby status}; log: $log)"; err=1;;
+  esac
+}
 for n in "${names[@]}"; do
   if [ -n "${BROKEN[$n]:-}" ]; then continue; fi
   if [ -z "${FILES[$n]:-}" ] || [ -z "${MODE[$n]:-}" ]; then echo "ERROR $n: no such harness"; err=1; continue; fi
@@ -257,6 +315,9 @@ PYEOF
     continue
   fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
+  if [ "${MODE[$n]}" = pdr ] || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
+    sby_harness "$n"; continue
+  fi
   if [ "${MODE[$n]}" = cover ]; then
     # one run per point (-D COVER_i); the point is assert(!cond), so "model found" = COVERED
     ncov=0; ntot=6; unr=""; ecov=0

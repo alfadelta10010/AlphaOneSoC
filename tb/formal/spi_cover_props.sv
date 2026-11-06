@@ -61,6 +61,9 @@ module spi_cover_props (
 
     always @(*) begin
         assume (!(req && ready && addr == 4'd12 && wdata[7:0] != 8'd0));
+`ifdef SBY_COVER
+        cover (c1); cover (c2); cover (c3); cover (c4); cover (c5); cover (c6);   // sby form of the six points
+`endif
 `ifdef COVER_1
         assert (!c1);
 `endif
