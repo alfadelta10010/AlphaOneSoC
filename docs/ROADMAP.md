@@ -732,6 +732,15 @@ Not on the ladder:
   comes first.
 * Doom-class programs: far too slow at about 1.4 MIPS.
 
+### 9.3 Where each rung runs
+
+| Where | Speed | Good for |
+|---|---|---|
+| SoC bench (`tb_sw`), Icarus | about 30k clocks/s, about 700 instructions/s | The reference the Verilator build is checked against (cycle-exact on the loader and hello world); smoke runs of up to a few hundred thousand instructions, minutes each |
+| Core bench with fast memory, Icarus or Verilator | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
+| SoC bench (`tb_sw`), Verilator (section 3) | about 1.0 million clocks/s, 24k instructions/s on the sandbox, untuned (about 30x Icarus) | Where rungs 1-3 run: the monitor's scripted session in 2 minutes, a valid CoreMark in 11, Embench; also the river_core regressions. Rungs 4 and 5 next; Zephyr's test suite and Linux in hours |
+| FPGA (section 5) and silicon | real time | The interactive rungs (the monitor at a terminal, MicroPython, demos, Forth if wanted) |
+
 ### 9.4 What exists and what it measured
 
 `sw/` holds the bare-metal software; how to build and run it is in the header
@@ -793,12 +802,3 @@ clocks, because every instruction word comes over QSPI (about 3% of a
 Cortex-M4 per MHz on Embench). Fetch reuse, a longer fetch stream or an
 instruction cache (section 7) are what move these numbers; a faster
 multiplier or branch logic would not.
-
-### 9.3 Where each rung runs
-
-| Where | Speed | Good for |
-|---|---|---|
-| SoC bench (`tb_sw`), Icarus | about 30k clocks/s, about 700 instructions/s | The reference the Verilator build is checked against (cycle-exact on the loader and hello world); smoke runs of up to a few hundred thousand instructions, minutes each |
-| Core bench with fast memory, Icarus or Verilator | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
-| SoC bench (`tb_sw`), Verilator (section 3) | about 1.0 million clocks/s, 24k instructions/s on the sandbox, untuned (about 30x Icarus) | Where rungs 1-3 run: the monitor's scripted session in 2 minutes, a valid CoreMark in 11, Embench; also the river_core regressions. Rungs 4 and 5 next; Zephyr's test suite and Linux in hours |
-| FPGA (section 5) and silicon | real time | The interactive rungs (the monitor at a terminal, MicroPython, demos, Forth if wanted) |
