@@ -21,7 +21,22 @@
 # means yosys finished with a counterexample (or, for induct, hit the depth
 # limit); a yosys error or timeout gives no verdict and prints ERROR instead:
 # exit 2, which tb/mutate/run.py scores as ERROR, never as a kill.
+#
+# Sidecars: every tb/formal/*.conf (sorted) is sourced after the tables below.
+# A sidecar adds harnesses without editing this file: for its own name n it
+# sets FILES[n] and MODE[n] (induct, bmc, cover, pdr or struct), optionally
+# EXTRA PASSES PRE BDEPTH IDEPTH PROPN DEFS PDR_TIMEOUT GEN [n], and appends
+# n to ALL. <PROPN or n>_props.sv must exist in tb/formal. GEN[n] names a bash
+# function, called as `fn "$SRC" "$OUT"` before the sources are read; it may
+# write generated sources under $OUT only and prints their paths. A sidecar
+# that redefines a built-in harness, or names a harness with no props file,
+# gives ERROR (exit 2).
+# Environment: FORMAL_BIN is prepended to PATH inside this script only (the
+# sandbox: $HOME/tools/oss-cad-suite/bin), so a campaign's simulators stay the
+# system ones. Every harness's yosys log is checked for an implicitly declared
+# or undriven wire (a hierarchical reference); a hit is ERROR, never a verdict.
 set -u
+[ -n "${FORMAL_BIN:-}" ] && export PATH="$FORMAL_BIN:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
 SRC="${FYRA_SRC:-$ROOT/src}"
@@ -54,11 +69,58 @@ declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_
                  [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_bb1]="" [spi_cover]="$GPIO_PRE" )
 # spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
 declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
+BUILTIN=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
+declare -A PDR_TIMEOUT=() GEN=()
 bad=0
 err=0
+ARRS=(FILES EXTRA PASSES MODE BDEPTH IDEPTH PRE PROPN DEFS PDR_TIMEOUT GEN)
+sig() { local a n; for a in "${ARRS[@]}"; do for n in "${BUILTIN[@]}"; do eval "printf '%s\n' \"$a[$n]=\${$a[$n]-UNSET}\""; done; done; }
+SIDE=(); declare -A BROKEN=()
+for conf in $(ls "$HERE"/*.conf 2>/dev/null | sort); do
+  ALL=(); before=$(sig)
+  # shellcheck disable=SC1090
+  . "$conf"
+  after=$(sig)
+  if [ "$before" != "$after" ]; then
+    for n in "${BUILTIN[@]}"; do
+      if [ "$(diff <(echo "$before") <(echo "$after") | grep -c "\[$n\]")" != 0 ]; then
+        echo "ERROR $n: sidecar $(basename "$conf") redefines a built-in harness"; BROKEN[$n]=1; err=1
+      fi
+    done
+    continue
+  fi
+  for n in "${ALL[@]}"; do
+    case " ${BUILTIN[*]} " in *" $n "*) echo "ERROR $n: sidecar $(basename "$conf") redefines a built-in harness"; BROKEN[$n]=1; err=1; continue;; esac
+    if [ ! -f "$HERE/${PROPN[$n]:-$n}_props.sv" ] && [ "${MODE[$n]:-}" != struct ]; then
+      echo "ERROR $n: sidecar $(basename "$conf"): ${PROPN[$n]:-$n}_props.sv is missing"; err=1; continue
+    fi
+    if [ -z "${FILES[$n]:-}" ] || [ -z "${MODE[$n]:-}" ]; then
+      echo "ERROR $n: sidecar $(basename "$conf") sets no FILES or MODE"; err=1; continue
+    fi
+    SIDE+=("$n")
+  done
+done
+while [ $# -gt 0 ]; do
+  case "$1" in
+    *) break;;
+  esac
+done
+names=("$@"); [ ${#names[@]} = 0 ] && names=("${BUILTIN[@]}" "${SIDE[@]}")
+
+# guard_hit LOG: the log shows a hierarchical reference (an implicit, undriven wire)
+# The one allowed exception: rf_top_stub.v's wires free_a, free_b, ra_data and
+# rb_data are undriven on purpose (free register-file read data, turned into
+# inputs by `setundef -undriven -expose` in the core_* PASSES).
+guard_hit() { grep -E "is implicitly declared|is used but has no driver" "$1" | grep -vE 'Wire rf_top\.\\(free_a|free_b|ra_data|rb_data) ' | grep -q .; }
+
 for n in "${names[@]}"; do
+  if [ -n "${BROKEN[$n]:-}" ]; then continue; fi
+  if [ -z "${FILES[$n]:-}" ] || [ -z "${MODE[$n]:-}" ]; then echo "ERROR $n: no such harness"; err=1; continue; fi
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
+  if [ -n "${GEN[$n]:-}" ]; then
+    gen=$(${GEN[$n]} "$SRC" "$OUT") || { echo "ERROR $n: generator ${GEN[$n]} failed"; err=1; continue; }
+    srcs="$srcs $gen"
+  fi
   if [ "$n" = core_fetch ]; then
     # fyracore.v with the f_* observation ports (see core_fetch_props.sv)
     inst="$OUT/formal_core_fetch_fyracore.v"
@@ -76,6 +138,7 @@ for n in "${names[@]}"; do
     stop=alphaone_soc; [ "$n" = spi_f12 ] && stop=tt_um_alfadelta10010_alphaone_soc
     timeout 1800 yosys -p "read_verilog -sv $srcs; prep -top $stop; flatten; opt_clean; write_json $json" > "$log" 2>&1
     if [ ! -s "$json" ]; then echo "ERROR $n: yosys gave no netlist (log: $log)"; err=1; continue; fi
+    if guard_hit "$log"; then echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue; fi
     if [ "$n" = spi_f12 ]; then
     out=$(python3 - "$json" <<'PYEOF'
 # F12 (SPI-014): MOSI, SCK and the chip selects leave from flops.
@@ -199,10 +262,10 @@ PYEOF
     ncov=0; ntot=6; unr=""; ecov=0
     for i in 1 2 3 4 5 6; do
       clog="$OUT/formal_${n}_$i.log"
-      timeout 1800 yosys -p "read_verilog -sv -formal $srcs; ${PRE[$n]:-}; read_verilog -sv -formal -DCOVER_$i $HERE/${n}_props.sv; \
+      timeout 1800 yosys -p "read_verilog -sv -formal $srcs; ${PRE[$n]:-}; read_verilog -sv -formal -DCOVER_$i ${EXTRA_DEFS:-} $HERE/${n}_props.sv; \
           prep -top ${n}_props; chformal -lower; flatten; opt -fast; \
           sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd" > "$clog" 2>&1
-      if grep -qE "is implicitly declared|is used but has no driver" "$clog"; then ecov=1
+      if guard_hit "$clog"; then ecov=1
       elif grep -q "SAT proof finished - model found: FAIL" "$clog"; then ncov=$((ncov+1))
       elif grep -q "SAT proof finished - no model found: SUCCESS" "$clog"; then unr="$unr $i"
       else ecov=1; fi
@@ -217,15 +280,13 @@ PYEOF
   else
     sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps ${IDEPTH[$n]:-$DEPTH}"
   fi
-  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal $HERE/${n}_props.sv"
-  else rd="read_verilog -sv -formal $srcs; read_verilog -sv -formal ${DEFS[$n]:-} $HERE/${PROPN[$n]:-$n}_props.sv"; fi
+  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${n}_props.sv"
+  else rd="read_verilog -sv -formal $srcs; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${PROPN[$n]:-$n}_props.sv"; fi
   timeout 1800 yosys -p "$rd; prep -top ${PROPN[$n]:-$n}_props; \
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
-  case "$n" in spi_*)
-    if grep -qE "is implicitly declared|is used but has no driver" "$log"; then
-      echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue
-    fi;;
-  esac
+  if guard_hit "$log"; then
+    echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue
+  fi
   if [ "${MODE[$n]}" = bmc ]; then
     if grep -q "SAT proof finished - no model found: SUCCESS" "$log"; then
       echo "BOUNDED $n (no counterexample within $bd steps of reset)"
