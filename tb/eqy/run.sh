@@ -20,10 +20,13 @@
 #            (fsm_inv_props.sv, sat -tempinduct), with a negative control (NEG must FAIL)
 #   prove    EQY on gold (ties applied) against gate: strategy sat for every
 #            partition, then sby abc pdr for those sat leaves open
-#   mutants  four runs that must FAIL: two mutated netlists (mutate_netlist.py,
-#            a gate changed in the D cone of one flop; core and syscon), the five
-#            tie1 bits tied to 1'0 (fliptie), and a wrong FSM table (fsmtable). Setup is redone for each, but
-#            only the partitions that hold the changed flop are run.
+#   mutants  seven runs that must FAIL: four mutated netlists (mutate_netlist.py,
+#            a gate changed in the D cone of one flop; core, syscon, spi, kbuf), the five
+#            tie1 bits tied to 1'0 (fliptie), and two wrong FSM tables (fsmtable: qspi,
+#            fsmtable_spi). Setup is redone for each, but only the partitions that hold the
+#            changed flop are run. Caught = a real counterexample: a sat FAIL, or a pdr FAIL
+#            (from init) on a partition sat left open; a "vacuous base" sat pass is rerun
+#            with sat noapplied and pdr 600 s, and a pdr that does not FAIL is NOT caught.
 #
 # The last line is `EQY PASS`, `EQY FAIL <partitions>` or `EQY UNPROVEN
 # <partitions>` (the prove stage); `EQY VACUOUS <mutants>` instead when a
@@ -442,7 +445,10 @@ mutant_run() {
   local fl; for fl in $flop; do python3 "$HERE/verdict.py" --partitions-of "$fl" "$M/eqy" >> "$M/partitions.all"; done
   tr ' ' '\n' < "$M/partitions.all" | grep . | sort -u > "$M/partitions.txt"
   # a flipped tie leaves no net of that name (the bit is a constant), so the partitions are named
-  if [ -n "${PARTS_OVERRIDE:-}" ]; then for fl in $PARTS_OVERRIDE; do echo "$TOP.$fl"; done > "$M/partitions.txt"; fi
+  if [ -n "${PARTS_OVERRIDE:-}" ]; then
+    for fl in $PARTS_OVERRIDE; do echo "$TOP.$fl"; done > "$M/partitions.txt"
+    for fl in $(cat "$M/partitions.txt"); do grep -qxF "$fl" "$M/eqy/partition.list" || echo "$fl" >> "$M/override_missing.txt"; done   # a name not in the setup is skipped below
+  fi
   # only partitions the prove stage PROVED can carry the check (an open one proves nothing);
   # the flop's own partition when it is one of them, else the proved ones holding it
   local parts p2 own pre="$TOP." keep=""
@@ -460,22 +466,67 @@ mutant_run() {
   python3 "$HERE/verdict.py" --only "$parts" "$M/eqy" "$M/result.txt"
 }
 
-# a mutant is caught when any partition it ran FAILs or is open as "vacuous base"; TIMEOUT / NOT RUN is not
-mutant_caught() { grep -q -e "^EQY FAIL" -e "(vacuous base)" "$1/result.txt"; }
+# Caught = a real counterexample (coordinator rule 2026-11-07): the mutant's result has a FAIL partition
+# (a sat FAIL, or a pdr FAIL on a partition sat left open). A sat pass at induction length > 1 ("vacuous base")
+# is not a proof and not a catch: pdr_confirm reruns those partitions with sat noapplied and pdr (600 s).
+# A pdr that returns PASS, TIMEOUT or UNKNOWN is NOT caught. mutants/table.txt records each case.
+pdr_confirm() {            # $1 = mutant dir: pdr (from init) on the partitions sat left as "vacuous base"
+  local M="$1" p vp=""
+  for p in $(sed -n 's/^OPEN \([^:]*\): sat induction.*(vacuous base)$/\1/p' "$M/result.txt"); do vp="$vp $p"; done
+  [ -n "$vp" ] || return 0
+  rm -rf "$M/eqy_pdr"
+  awk -v list="$vp" 'BEGIN { n = split(list, a, " ") } { print } /^\[strategy sat\]/ { for (i = 1; i <= n; i++) print "noapply " a[i] }' "$M/soc.eqy" > "$M/soc_pdr.eqy"
+  ( cd "$M" && dk eqy -f -m -d eqy_pdr soc_pdr.eqy ) > "$M/setup_pdr.log" 2>&1
+  local targets=""; for p in $vp; do targets="$targets strategies/$p/pdr/status"; done
+  ( cd "$M/eqy_pdr" && dk make -j2 -k -f strategies.mk $targets ) > "$M/run_pdr.log" 2>&1
+  python3 "$HERE/verdict.py" --only "$vp" "$M/eqy_pdr" "$M/result_pdr.txt"
+}
+
+mutant_table() {           # $1 = name, $2 = mutant dir: appends partition, strategy, raw result, trace path to mutants/table.txt
+  python3 "$HERE/verdict.py" --mutant-table "$1" "$2" >> "$B/mutants/table.txt"
+}
+
+# caught: the table has a FAIL row for the mutant
+mutant_caught() { grep -q -e "^$1	.*	FAIL	" "$B/mutants/table.txt"; }
+
+mutant_finish() {          # $1 = name; confirm, record, and say whether it was caught
+  local k="$1" X="$B/mutants"
+  pdr_confirm "$X/$k"
+  mutant_table "$k" "$X/$k"
+  if mutant_caught "$k"; then say "mutants: $k CAUGHT"; else say "mutants: $k NOT CAUGHT"; notcaught="$notcaught $k"; fi
+}
+
+mutate_flop() {            # $1 name, $2 kind, $3.. candidate flops (the first with a swappable cell in its cone is used)
+  local k="$1" kind="$2" X="$B/mutants" fl; shift 2
+  for fl in "$@"; do
+    if python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind "$kind" --lib "$LIB" $([ -n "$fl" ] && echo --flop "$fl") > "$X/$k.mutation.txt" 2> "$X/$k.mutation.err"; then
+      echo "candidate used: ${fl:-default}" >> "$X/$k.mutation.txt"; return 0
+    fi
+    echo "no swappable cell for ${fl:-default}: $(cat "$X/$k.mutation.err")" >> "$X/$k.skipped.txt"
+  done
+  return 1
+}
 
 stage_mutants() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
-  mkdir -p "$B/mutants"; local X="$B/mutants"; local bad=""
+  mkdir -p "$B/mutants"; local X="$B/mutants"; local notcaught=""
+  : > "$X/table.txt"; rm -f "$X"/*.skipped.txt
+  printf 'mutant\tpartition\tstrategy\traw result\ttrace\n' >> "$X/table.txt"
   local k flop only="${MUT_ONLY:-}"
-  for k in core syscon; do
+  for k in core syscon spi kbuf; do
     [ -z "$only" ] || [ "$only" = "$k" ] || continue
-    python3 "$HERE/mutate_netlist.py" "$NETLIST" "$X/$k.nl.v" --kind $k --lib "$LIB" $([ "$k" = core ] && [ -n "${MUT_CORE_FLOP:-}" ] && echo --flop "$MUT_CORE_FLOP") > "$X/$k.mutation.txt" || die "mutate_netlist.py $k failed"
+    case $k in
+      core)   mutate_flop core core "${MUT_CORE_FLOP:-}" ;;
+      syscon) mutate_flop syscon syscon "" ;;
+      spi)    mutate_flop spi core 'soc.gpio_inst.spi_inst.sr[3]' 'soc.gpio_inst.spi_inst.sr[4]' 'soc.gpio_inst.spi_inst.sr[2]' 'soc.gpio_inst.spi_inst.sr[5]' 'soc.gpio_inst.spi_inst.sr[1]' ;;
+      kbuf)   mutate_flop kbuf core 'soc.cpu.if_kbuf[5]' 'soc.cpu.if_kbuf[6]' 'soc.cpu.if_kbuf[4]' 'soc.cpu.if_kbuf[7]' 'soc.cpu.if_kbuf[3]' ;;
+    esac || die "mutate_netlist.py $k failed for every candidate (see $X/$k.skipped.txt)"
     cat "$X/$k.mutation.txt"
     flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
     NETLIST="$X/$k.nl.v" gate_final > "$X/$k.gate.ys"
     mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop"
     say "mutants: $k mutant: $(tail -1 "$X/$k/result.txt")"
-    mutant_caught "$X/$k" || bad="$bad $k"
+    mutant_finish "$k"
   done
   if [ -z "$only" ] || [ "$only" = fliptie ]; then
     # the 5 tie1 bits tied to 1'0 on the gold side (the q1 bug): a wrong tie value must FAIL
@@ -483,23 +534,29 @@ stage_mutants() {
     awk '$2 == 1 { print $1, 0; next } { print }' "$B/consts.txt" > "$X/consts_flip.txt"
     echo "flipped to 1'0: $fb(consts_flip.txt: $(awk '$2 == 1' "$X/consts_flip.txt" | wc -l) tie1 left)" | tee "$X/fliptie.txt"
     gate_final > "$X/fliptie.gate.ys"
+    # the partitions must exist in this setup (a name missing from partition.list would be silently skipped)
     PARTS_OVERRIDE="soc.bus.d_addr.2 soc.cpu.csr_unit.csr_new.2 soc.cpu.csr_misa_c" mutant_run fliptie "$X/fliptie.gate.ys" "$X/consts_flip.txt" "$fb"
     say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
-    mutant_caught "$X/fliptie" || bad="$bad fliptie"
+    mutant_finish fliptie
   fi
-  if [ -z "$only" ] || [ "$only" = fsmtable ]; then
-    # a wrong enc/dec table in fsmcut_gate_qspi (bits 1 and 2 swapped): the cut partition must FAIL
-    python3 "$HERE/mk_wrong_table.py" "$HERE/fsmcut.v" "$X/fsmcut_wrong.v" || die "fsmtable: could not build the wrong table"
-    [ "$(diff "$HERE/fsmcut.v" "$X/fsmcut_wrong.v" | grep -c '^[<>]')" = 4 ] || die "fsmtable: the wrong table differs in other than 2 lines"
-    cmp -s "$X/fsmcut_wrong.v" "$HERE/fsmcut_neg.v" || die "fsmtable: the wrong table is not fsmcut_neg.v"
-    echo "wrong table: qspi bits 1 and 2 swapped (enc and dec), exactly 2 lines changed, = fsmcut_neg.v" | tee "$X/fsmtable.txt"
-    gate_final > "$X/fsmtable.gate.ys"
-    MUT_VFILE="$X/fsmcut_wrong.v" PARTS_OVERRIDE="soc.qspi.fsmcut_state" mutant_run fsmtable "$X/fsmtable.gate.ys" "$B/consts.txt" "soc.qspi.fsmcut_state"
-    say "mutants: wrong-table mutant: $(tail -1 "$X/fsmtable/result.txt")"
-    mutant_caught "$X/fsmtable" || bad="$bad fsmtable"
-  fi
-  if [ -n "$bad" ]; then echo "EQY VACUOUS$bad" > "$X/summary.txt"; return 3; fi
-  echo "mutants: core, syscon, fliptie and fsmtable all caught (FAIL or vacuous base) as required" > "$X/summary.txt"
+  local tag vfile
+  for tag in qspi spi; do
+    k=fsmtable; [ $tag = qspi ] || k=fsmtable_$tag
+    [ -z "$only" ] || [ "$only" = "$k" ] || continue
+    # a wrong enc/dec table in fsmcut_gate_<tag> (two codes swapped): the cut partition must FAIL
+    vfile=fsmcut_neg.v; [ $tag = qspi ] || vfile=fsmcut_neg_$tag.v
+    python3 "$HERE/mk_wrong_table.py" "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" $tag || die "$k: could not build the wrong table"
+    [ "$(diff "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" | grep -c '^[<>]')" = 4 ] || die "$k: the wrong table differs in other than 2 lines"
+    cmp -s "$X/fsmcut_wrong_$tag.v" "$HERE/$vfile" || die "$k: the wrong table is not $vfile"
+    echo "wrong table: $tag codes swapped (enc and dec), exactly 2 lines changed, = $vfile" | tee "$X/$k.txt"
+    gate_final > "$X/$k.gate.ys"
+    local cut=soc.qspi.fsmcut_state; [ $tag = qspi ] || cut=soc.gpio_inst.spi_inst.fsmcut_st
+    MUT_VFILE="$X/fsmcut_wrong_$tag.v" PARTS_OVERRIDE="$cut" mutant_run $k "$X/$k.gate.ys" "$B/consts.txt" "$cut"
+    say "mutants: wrong-table mutant $tag: $(tail -1 "$X/$k/result.txt")"
+    mutant_finish $k
+  done
+  if [ -n "$notcaught" ]; then echo "EQY VACUOUS$notcaught" > "$X/summary.txt"; return 3; fi
+  echo "mutants: core, syscon, spi, kbuf, fliptie, fsmtable and fsmtable_spi all caught by a real counterexample (see table.txt)" > "$X/summary.txt"
   return 0
 }
 

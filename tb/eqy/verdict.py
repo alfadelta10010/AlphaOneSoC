@@ -10,6 +10,10 @@
   verdict.py --partitions-of NAME EQYDIR
                                    print the partitions whose gold or gate design holds the
                                    net NAME (a flop's output), for the mutant runs
+  verdict.py --mutant-table NAME MUTDIR
+                                   print tab-separated rows NAME, partition, strategy, raw result, trace path
+                                   for every partition the mutant ran (MUTDIR/eqy, then MUTDIR/eqy_pdr, the
+                                   pdr confirm of the sat "vacuous base" partitions)
   verdict.py --only "P1 P2" EQYDIR OUT
                                    as the first form, over those partitions only
 """
@@ -126,9 +130,35 @@ def partitions_of(name, eqydir):
     print(" ".join(hits))
 
 
+def mutant_table(name, mdir):
+    parts = [p for p in open(f"{mdir}/partitions.txt").read().split() if p]
+    for sub in ("eqy", "eqy_pdr"):
+        d = f"{mdir}/{sub}"
+        if not os.path.isdir(d):
+            continue
+        res = statuses(d)
+        for p in parts:
+            for strat, raw, cached in res.get(p, []):
+                if cached:
+                    continue
+                note = ""
+                if strat == "sat" and raw == "PASS":
+                    n = sat_length(d, p)
+                    if n != 1:
+                        note = f" (induction length {n}, vacuous base: not a proof)"
+                tr = ""
+                if raw == "FAIL":
+                    base = f"{d}/strategies/{p}/{strat}"
+                    found = sorted(glob.glob(f"{base}/**/*.vcd", recursive=True) + glob.glob(f"{base}/**/*.yw", recursive=True))
+                    tr = found[0] if found else f"{base}/run.log"
+                print(f"{name}\t{p}\t{strat} ({sub})\t{raw}{note}\t{tr}")
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
-    if a and a[0] == "--partitions-of":
+    if a and a[0] == "--mutant-table":
+        mutant_table(a[1], a[2])
+    elif a and a[0] == "--partitions-of":
         partitions_of(a[1], a[2])
     elif a and a[0] == "--only":
         sys.exit(verdict(a[2], a[3], set(a[1].split())))
