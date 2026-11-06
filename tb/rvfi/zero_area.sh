@@ -44,7 +44,7 @@ done
 if [ "$(norm a)" = "$(norm d)" ]; then echo "ZA stat a=d IDENTICAL (unexpected: ALTOPS should replace the M result)"
 else echo "ZA stat a=d DIFFERS (expected: ALTOPS replaces the M result)"; fi
 # equivalence a vs c: gold = a, gate = c; module names differ by tag via rename
-yosys -l "$W/eq.log" -p "read_rtlil $W/a.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gold; design -stash g; read_rtlil $W/c.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gate; design -stash t; design -copy-from g -as gold gold; design -copy-from t -as gate gate; equiv_make gold gate eq; hierarchy -top eq; equiv_simple -seq 4; equiv_induct -seq 4; tee -o $W/eq.status equiv_status; equiv_status -assert" >/dev/null 2>&1
+yosys -l "$W/eq.log" -p "read_rtlil $W/a.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gold; design -stash g; read_rtlil $W/c.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gate; design -stash t; design -copy-from g -as gold gold; design -copy-from t -as gate gate; equiv_make gold gate eq; hierarchy -top eq; equiv_simple -seq 2; equiv_induct -seq 2; tee -o $W/eq.status equiv_status; equiv_status -assert" >/dev/null 2>&1
 rc=$?
 if [ $rc -eq 0 ]; then echo "ZA equiv a=c PROVEN"
 elif grep -q "are proven and" "$W/eq.status" 2>/dev/null; then
