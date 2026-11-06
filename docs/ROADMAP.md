@@ -471,7 +471,7 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
     csr_test, trap_test, rv32m_test). The SoC directed suite, through the
     QSPI Pmod model, passes 113/113 against the Spike references.
   * **Cycle-exact against Icarus on the SoC bench** (2026-11-02): the
-    software bench (`tb/tb_sw.v`, 9.3) runs the loader and hello world in
+    software bench (`tb/tb_sw.v`, 9.4) runs the loader and hello world in
     1,967,772 clocks in both simulators, instruction for instruction. Getting
     there found one testbench race, not an RTL difference: releasing reset
     with `rst <= 0` in a process that waits on the clock edge made Verilator
@@ -511,8 +511,9 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 * Two targets: the core with fast memory (lockstep with Spike until the first
   timer interrupt, UART text after), and the full SoC through the pins with
   the Pmod model (pass = the shell answers). The river_core plugin and the
-  directed suite cover the testbench builds; a UART-only SoC build for long
-  runs is still to do.
+  directed suite cover the testbench builds, and `tb/tb_sw.v` (9.4) is the
+  SoC build for long runs: UART text and syscon FINISH, no trace. The core
+  with fast memory as a Linux target is still to do.
 * Keep Icarus as the reference simulator for the existing suites; the
   byte-identical comparison above is how Verilator earns trust, and any
   new suite should be run on both before relying on Verilator alone.
@@ -642,10 +643,11 @@ a PLIC (all devices are polled).
    three. The harden is done (2026-11-01, 1.6 item 2).
 4. The software ladder's bare-metal rungs and FreeRTOS (9.2, rungs 1-5), on
    the current benches; they can start before the lock and become its
-   checkpoints.
-5. Solver stack and riscv-formal (2.2 items 1-2), in parallel with step 6.
-6. Verilator port (3), then the upper rungs: Zephyr or NuttX, and Linux
-   bring-up (4).
+   checkpoints. Rungs 1-3 are done (9.4); rungs 4 and 5 are next.
+5. ~~Solver stack~~ (done 2026-11-02) and riscv-formal (2.2 items 1-2), in
+   parallel with step 6.
+6. ~~Verilator port (3)~~ (done 2026-11-01), then the upper rungs: Zephyr or
+   NuttX, and Linux bring-up (4).
 7. Power: L0 measurements anytime after the lock candidate exists; the WFI
    clock gate (L3) decided by those numbers before the lock; L4 as research.
 8. FPGA ports (5).
@@ -654,7 +656,7 @@ a PLIC (all devices are polled).
 
 The user's order (2026-10-31): easier goals first, then FreeRTOS, then Linux.
 Each rung proves something the rungs below it do not, and each stays on as a
-regression test for later RTL changes. Collected on 2026-10-31. Rungs 1 and 2
+regression test for later RTL changes. Collected on 2026-10-31. Rungs 1 to 3
 run since 2026-11-02 (`sw/`, 9.4); the others have not been tried.
 
 What software gets: RV32IMAC with Zicsr, Zicntr and Zifencei; M and U modes;
@@ -702,7 +704,7 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 |---|---|---|---|
 | 0 | Directed tests, riscv-tests, river_core (exist) | ISA and privileged behaviour, instruction by instruction | Done; everything below stands on it |
 | 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | **Done** (`sw/`, 9.4). Every rung above starts from it |
-| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | **Done** (`sw/`, 9.4; results in 9.4). A valid CoreMark run lasts 10 s, about 15 million instructions here: Verilator runs it in under an hour |
+| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | **Done** (`sw/`, 9.4; results in 9.4). A valid CoreMark run lasts 10 s, about 15 million instructions here: Verilator runs it in 11 minutes on the sandbox |
 | 3 | **Monitor** (`sw/monitor`, a C monitor; mecrisp-quintus Forth is left for later) | A prompt over UART that reports any register or memory location: the 31 registers and pc of a stopped program, every CSR, any address, the peripheral registers. The first thing to run on returned silicon | **Done** (9.4). No RTL change: a timer tick looks for Ctrl-C, since the UART has no interrupt line |
 | 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | Small; polled. The SoC bench's SD-card model runs it |
 | 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | Small. The polled UART is enough. U-mode tasks under PMP are not part of the upstream port (to check) |
@@ -796,7 +798,7 @@ multiplier or branch logic would not.
 
 | Where | Speed | Good for |
 |---|---|---|
-| SoC bench, Icarus (today) | about 30k clocks/s, about 700 instructions/s | Rungs 1, 3, 4 and 5 as smoke tests (boot, a few task switches, mounting the card), up to a few hundred thousand instructions: minutes each |
-| Core bench with fast memory, Icarus (today) | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
-| Verilator (section 3) | about 1.0 million clocks/s, 24k instructions/s on the sandbox, untuned (about 30x Icarus) | Full benchmark runs (a valid CoreMark in 11 minutes), the river_core regressions, Embench; Zephyr's test suite and Linux in hours |
-| FPGA (section 5) and silicon | real time | The interactive rungs (Forth, MicroPython, demos), full CoreMark |
+| SoC bench (`tb_sw`), Icarus | about 30k clocks/s, about 700 instructions/s | The reference the Verilator build is checked against (cycle-exact on the loader and hello world); smoke runs of up to a few hundred thousand instructions, minutes each |
+| Core bench with fast memory, Icarus or Verilator | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
+| SoC bench (`tb_sw`), Verilator (section 3) | about 1.0 million clocks/s, 24k instructions/s on the sandbox, untuned (about 30x Icarus) | Where rungs 1-3 run: the monitor's scripted session in 2 minutes, a valid CoreMark in 11, Embench; also the river_core regressions. Rungs 4 and 5 next; Zephyr's test suite and Linux in hours |
+| FPGA (section 5) and silicon | real time | The interactive rungs (the monitor at a terminal, MicroPython, demos, Forth if wanted) |
