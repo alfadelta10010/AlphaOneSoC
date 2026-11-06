@@ -43,7 +43,7 @@ for a in "$@"; do
   esac
 done
 [ -n "$NETLIST" ] || { echo "NETLIST=<path> is required" >&2; exit 2; }
-NL_MD5=fbf13f2241e6945e98f00b43705f7c8b
+NL_MD5=4d861ceb16f49fcadb0e55cf65d6e26d
 # The version of the PDK the harden used (not what $PDK_ROOT/sky130A points to).
 LIB="$PDK_ROOT/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
 TOP=tt_um_alfadelta10010_alphaone_soc
@@ -53,12 +53,14 @@ SRCS="tt_um_alfadelta10010_alphaone_soc.v alphaone_soc.v fyracore.v alu.v branch
 FSMS="soc.cpu.exwb_memSize soc.cpu.muldiv_inst.st soc.qspi.state"
 B="$ROOT/build/eqy"
 # The tools run in the container, in the caller's directory. NATIVE=1 runs
-# them from PATH instead (inside a container already).
+# them from PATH instead (inside a container already; that container needs sed,
+# which the librelane image lacks). DK_OPTS adds docker run options to every
+# container, e.g. DK_OPTS=--cpus=1.5 to cap the CPU.
 dk() {
   if [ "${NATIVE:-0}" = 1 ]; then "$@"; return; fi
   # The container has no make, which eqy needs: the host's GNU make runs
   # through the host's own libc (mounted read-only), via the wrapper below.
-  docker run --rm -u "$(id -u):$(id -g)" -v /home/mempool:/home/mempool \
+  docker run --rm ${DK_OPTS:-} -u "$(id -u):$(id -g)" -v /home/mempool:/home/mempool \
     -v /usr/bin/make:/opt/hostmake/make:ro -v /lib/x86_64-linux-gnu:/opt/hostmake/lib:ro \
     -w "$PWD" ghcr.io/librelane/librelane:3.0.14 \
     bash -c 'export PATH="'"$B"'/bin:$PATH"; exec "$@"' _ "$@"
@@ -106,11 +108,20 @@ stage_read() {
     echo "src      $(cd "$ROOT/src" && md5sum $SRCS | md5sum | cut -d' ' -f1)  (md5 of the 21 per-file md5 lines)"
     ( cd "$B" && dk yosys -V; dk eqy --version; dk sby --version ) 2>&1
     echo "git      $(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "${GITREV:-unknown (not a git tree)}")"; } > "$R/inputs.txt"
-  if [ -d /home/mempool/tt/projects/sc-3x4/src ]; then      # the harden's own copy: log only
+  local HC=/home/mempool/tt/projects/fin-3x4
+  if [ -d $HC/src ]; then      # the harden's own copy: compared without comments; a functional difference dies
+    local a b
     for f in $SRCS; do
-      a=$(md5sum < "$ROOT/src/$f"); b=$(md5sum < "/home/mempool/tt/projects/sc-3x4/src/$f" 2>/dev/null)
-      [ "$a" = "$b" ] || echo "NOTE: src/$f differs from the harden's copy" >> "$R/inputs.txt"
+      a=$(strip_comments "$ROOT/src/$f" | md5sum); b=$(strip_comments "$HC/src/$f" | md5sum)
+      if [ "$(md5sum < "$ROOT/src/$f")" = "$(md5sum < "$HC/src/$f" 2>/dev/null)" ]; then :
+      elif [ "$a" = "$b" ]; then echo "NOTE: src/$f differs from the harden's copy in comments only" >> "$R/inputs.txt"
+      else echo "FUNCTIONAL: src/$f differs from the harden's copy" >> "$R/inputs.txt"; die "src/$f differs functionally from the harden's copy"; fi
     done
+  fi
+  if [ -f $HC/runs/wokwi/resolved.json ]; then    # SRCS = the harden's VERILOG_FILES, in order
+    local rj; rj=$(python3 -c 'import json,sys,os;d=json.load(open(sys.argv[1]));print(" ".join(os.path.basename(x) for x in d["VERILOG_FILES"]))' $HC/runs/wokwi/resolved.json)
+    if [ "$rj" = "$SRCS" ]; then echo "srcs     = resolved.json VERILOG_FILES (same set and order)" >> "$R/inputs.txt"
+    else echo "srcs     DIFFER from resolved.json: $rj" >> "$R/inputs.txt"; die "SRCS differ from resolved.json"; fi
   fi
   gold_common > "$R/gold_pre.ys"
   yos read/gold_pre.log read/gold_pre.ys || die "gold read failed (see $R/gold_pre.log)"
@@ -133,6 +144,10 @@ EOF
   cp "$R/consts.cand" "$B/consts.cand"
   [ $rc = 0 ] || say "read: accounting differs from the work order's table (see read/match.txt)"
   return 0
+}
+
+strip_comments() {        # Verilog without // and /* */ comments and blank space, for the compare with the harden's copy
+  python3 -c 'import re,sys;s=open(sys.argv[1]).read();s=re.sub(r"/\*.*?\*/","",s,flags=re.S);s=re.sub(r"//[^\n]*","",s);print(" ".join(s.split()))' "$1"
 }
 
 gate_script() {            # netlist to flat gate; $1 = buses: FSM registers as buses (read and fsminv stages only)
