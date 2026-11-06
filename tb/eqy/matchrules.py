@@ -28,7 +28,8 @@ The FSM registers (kept as buses for [recode]) are left alone.
 """
 import collections, json, re, sys
 
-FSM = ("soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state")
+FSM = ("soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state",
+       "soc.gpio_inst.spi_inst.st")
 # gold net named like this is the same flop as the gate net named like that
 # (the pc[0] flop; the RTL's if_pc_next[0] is a combinational copy of it).
 EXPLICIT = [("soc.cpu.imem_addr[0]", "soc.cpu.if_pc_next[0]")]

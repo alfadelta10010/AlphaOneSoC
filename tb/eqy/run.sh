@@ -16,7 +16,7 @@
 #   lemma    on the RTL: the 184 removed CSR bits are constant after reset and
 #            the recoded FSMs never hold an unlisted code (lemma_props.sv,
 #            yosys sat -tempinduct); writes consts.txt, the ties of the gold
-#   fsminv   on the netlist: the three one-hot FSMs always hold exactly one set bit
+#   fsminv   on the netlist: the four one-hot FSMs always hold exactly one set bit
 #            (fsm_inv_props.sv, sat -tempinduct), with a negative control (NEG must FAIL)
 #   prove    EQY on gold (ties applied) against gate: strategy sat for every
 #            partition, then sby abc pdr for those sat leaves open
@@ -50,7 +50,7 @@ TOP=tt_um_alfadelta10010_alphaone_soc
 # The harden's sources, in resolved.json's order.
 SRCS="tt_um_alfadelta10010_alphaone_soc.v alphaone_soc.v fyracore.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v muldiv.v pmp.v regFile.v rf_top.v signExt.v qspi_ctrl.v mem_ctrl.v soc_bus.v uart.v gpio.v spi.v syscon.v"
 # FSM registers that synthesis recoded one-hot (kept as buses in gold and gate).
-FSMS="soc.cpu.exwb_memSize soc.cpu.muldiv_inst.st soc.qspi.state"
+FSMS="soc.cpu.exwb_memSize soc.cpu.muldiv_inst.st soc.qspi.state soc.gpio_inst.spi_inst.st"
 B="$ROOT/build/eqy"
 # The tools run in the container, in the caller's directory. NATIVE=1 runs
 # them from PATH instead (inside a container already; that container needs sed,
@@ -182,6 +182,7 @@ gate_fsm_buses() {         # \name[0..n-1] scalar flop nets joined into a bus \n
 soc.cpu.exwb_memSize 3
 soc.cpu.muldiv_inst.st 6
 soc.qspi.state 7
+soc.gpio_inst.spi_inst.st 3
 EOF
 }
 
@@ -267,7 +268,7 @@ write_gold_final() {       # $1 = dir, $2 = consts file
   local D="$1" C="$2"
   {
     echo "read_rtlil $B/read/gold_pre.il"
-    echo -n "select -set notfsm *"; for f in $FSMS; do echo -n " w:$f"; done; echo " %u %u %d"   # 3 FSM wires: 2 unions, then subtract
+    echo -n "select -set notfsm *"; for f in $FSMS; do echo -n " w:$f"; done; echo " %u %u %u %d"   # 4 FSM wires: 3 unions, then subtract
     echo "splitnets -ports -format [] @notfsm"
     # The constant bits are cut from their flops (the flop keeps no fan-out)
     # and driven by the proved constant; bit-level wires exist after splitnets.
@@ -283,6 +284,7 @@ fsm_init_gate() {          # the netlist's FSM buses start at the one-hot image 
   echo "setattr -set init 3'b001 w:soc.cpu.exwb_memSize"
   echo "setattr -set init 6'b000001 w:soc.cpu.muldiv_inst.st"
   echo "setattr -set init 7'b0000001 w:soc.qspi.state"
+  echo "setattr -set init 3'b001 w:soc.gpio_inst.spi_inst.st"
 }
 
 # ---- FSM cut point (fsmcut.py, fsmcut.v): see WO-24's 2026-10-28 amendment ----
@@ -295,7 +297,7 @@ cut_design() {
   python3 "$HERE/fsmcut.py" "$side" "$D/${side}_pre.il" "$D/${side}_cut.il" > "$D/$side.patch.txt" 2>&1 \
     || die "fsmcut.py $side asserted: $(tail -3 "$D/$side.patch.txt" | tr '\n' ' ')"
   nq=$(grep -c "^$side: connect .Q " "$D/$side.patch.txt"); npin=$(grep -c "^$side: rf_macro w_ena" "$D/$side.patch.txt")
-  wq=3; [ "$side" = gate ] && wq=16
+  wq=4; [ "$side" = gate ] && wq=19
   [ "$nq" = "$wq" ] && [ "$npin" = 1 ] || die "cut: $side patch has $nq Q edits (want $wq) and $npin pin edits (want 1)"
   cat > "$D/${side}_cut.ys" <<EOF
 read_rtlil $D/${side}_cut.il
@@ -311,9 +313,9 @@ EOF
 cut_scripts() {            # $1 = dir, $2 = match rules prefix: SIDE_eqy.ys = cut + hides + asserts
   local D="$1" R="$2"
   { cat "$D/gold_cut.ys"; cat "$R.gold_hide"; echo "opt_clean"
-    echo "select -assert-count 3 w:soc.cpu.fsmcut_exwb_memSize w:soc.cpu.muldiv_inst.fsmcut_st w:soc.qspi.fsmcut_state %u %u"; } > "$D/gold_eqy.ys"
+    echo "select -assert-count 4 w:soc.cpu.fsmcut_exwb_memSize w:soc.cpu.muldiv_inst.fsmcut_st w:soc.qspi.fsmcut_state w:soc.gpio_inst.spi_inst.fsmcut_st %u %u %u"; } > "$D/gold_eqy.ys"
   { cat "$D/gate_cut.ys"; cat "$R.gate_hide"; echo "opt_clean"
-    echo "select -assert-count 6 w:soc.cpu.exwb_memSize__oh w:soc.cpu.muldiv_inst.st__oh w:soc.qspi.state__oh w:soc.cpu.fsmcut_exwb_memSize w:soc.cpu.muldiv_inst.fsmcut_st w:soc.qspi.fsmcut_state %u %u %u %u %u"; } > "$D/gate_eqy.ys"
+    echo "select -assert-count 8 w:soc.cpu.exwb_memSize__oh w:soc.cpu.muldiv_inst.st__oh w:soc.qspi.state__oh w:soc.gpio_inst.spi_inst.st__oh w:soc.cpu.fsmcut_exwb_memSize w:soc.cpu.muldiv_inst.fsmcut_st w:soc.qspi.fsmcut_state w:soc.gpio_inst.spi_inst.fsmcut_st %u %u %u %u %u %u %u"; } > "$D/gate_eqy.ys"
 }
 
 write_eqy() {              # $1 = dir, $2 = gold script, $3 = gate script, $4 = match rules
@@ -365,7 +367,7 @@ eqy_verdict() {            # $1 = dir: prints the last line from the strategies'
 stage_fsminv() {
   mkdir -p "$B/fsminv"; local F="$B/fsminv"
   { gate_script buses; fsm_init_gate; echo "delete t:rf_top"
-    echo "expose w:soc.cpu.exwb_memSize w:soc.cpu.muldiv_inst.st w:soc.qspi.state"
+    echo "expose w:soc.cpu.exwb_memSize w:soc.cpu.muldiv_inst.st w:soc.qspi.state w:soc.gpio_inst.spi_inst.st"
     echo "write_rtlil $F/gate_exposed.il"; } > "$F/expose.ys"
   yos fsminv/expose.log fsminv/expose.ys || die "fsminv: expose failed (see $F/expose.log)"
   cat > "$F/inv.ys" <<EOF
@@ -386,7 +388,7 @@ EOF
   ( cd "$B" && dk timeout 600 yosys -ql fsminv/neg.log fsminv/neg.ys ) > /dev/null 2>&1
   local len; len=$(grep -oE "Trying induction with length [0-9]+" "$F/inv.log" | tail -1 | grep -oE "[0-9]+$")
   if grep -q "Induction step proven: SUCCESS" "$F/inv.log" && grep -q "model found: FAIL" "$F/neg.log"; then
-    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of soc.cpu.exwb_memSize (3), muldiv_inst.st (6), qspi.state (7) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
+    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of the 4 FSMs soc.cpu.exwb_memSize (3), muldiv_inst.st (6), qspi.state (7), spi_inst.st (3) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
     say "fsminv: PROVED (k=${len:-?}), NEG FAIL"; return 0
   fi
   echo "FAILED: see $F/inv.log and $F/neg.log" > "$F/fsminv.txt"
