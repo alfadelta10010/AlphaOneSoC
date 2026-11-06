@@ -13,7 +13,7 @@
 #
 #   read     md5 of the netlist and the Liberty file; gold and gate read; the
 #            flop accounting (accounting.py) against the work order's table
-#   lemma    on the RTL: the 184 removed CSR bits are constant after reset and
+#   lemma    on the RTL: the 186 removed bits (184 CSR + gpio out_r[1], [3]) are constant after reset and
 #            the recoded FSMs never hold an unlisted code (lemma_props.sv,
 #            yosys sat -tempinduct); writes consts.txt, the ties of the gold
 #   fsminv   on the netlist: the four one-hot FSMs always hold exactly one set bit
@@ -190,7 +190,7 @@ EOF
 stage_lemma() {
   mkdir -p "$B/lemma"; local L="$B/lemma"
   [ -f "$B/consts.cand" ] || die "no consts.cand: run the read stage first"
-  [ "$(wc -l < "$B/consts.cand")" = 184 ] || die "consts.cand has $(wc -l < "$B/consts.cand") entries, not 184"
+  [ "$(wc -l < "$B/consts.cand")" = 186 ] || die "consts.cand has $(wc -l < "$B/consts.cand") entries, not 186"
   # the design, flat, with the wires the lemma reads brought out as ports
   local regs; regs=$(sed 's/\[[0-9]*\]$//' "$B/consts.cand" | sort -u)
   {
@@ -243,13 +243,14 @@ EOF
   if grep -q "Induction step proven: SUCCESS" "$L/prove.log"; then
     cp "$L/consts.txt" "$B/consts.txt"
     {
-      echo "PROVED k-induction length ${len:-?}, ${dt}s: all 184 constant bits equal their reset value once reset (L1)"
-      echo "PROVED the same run: exwb_memSize != 3, muldiv st not 6 or 7, qspi state != 7 once reset (L2)"
+      echo "PROVED k-induction length ${len:-?}, ${dt}s: all 186 constant bits (184 CSR + gpio out_r[1], [3]) equal their reset value once reset (L1)"
+      [ "${len:-1}" -gt 1 ] && echo "NOTE: induction length ${len} > 1: the step is from any state; the base case covers only the zero power-up of the no-reset flops (if_kbuf, spi cc/bc), which EQY starts free on both sides"
+      echo "PROVED the same run: exwb_memSize != 3, muldiv st not 6 or 7, qspi state != 7, spi st != 3 once reset (L2, 4 FSMs)"
       echo
       echo "bit  value  (consts.txt)"
       sed 's/^/PROVED /' "$L/consts.txt"
     } > "$L/lemma.txt"
-    say "lemma: PROVED 184 constant bits and the 3 FSM invariants (k=${len:-?}, ${dt}s)"
+    say "lemma: PROVED 186 constant bits and the 4 FSM invariants (k=${len:-?}, ${dt}s)"
     return 0
   fi
   local why="no verdict"
@@ -346,7 +347,7 @@ no_x_consts() {            # the unscoped setundefs of the ties are safe only if
   [ "$n" = 0 ] || die "read/gold_pre.il holds $n x constants; the unscoped setundef ties are unsafe"
 }
 
-check_ties() {             # $1 = eqy dir: gold.il ties the 179 tie0 bits to 1'0 and the 5 tie1 bits to 1'1
+check_ties() {             # $1 = eqy dir: gold.il ties the 181 tie0 bits to 1'0 and the 5 tie1 bits to 1'1
   local G="$1/gold.il" bad=0 n0=0 n1=0 name v
   [ -f "$G" ] || die "no $G to check the ties"
   while read -r name v; do
@@ -355,7 +356,7 @@ check_ties() {             # $1 = eqy dir: gold.il ties the 179 tie0 bits to 1'0
     else bad=$((bad + 1)); echo "tie check: $name not tied to 1'$v" >> "$STATUS"; fi
   done < "$B/consts.txt"
   say "prove: tie check: $n0 tie0 bits at 1'0, $n1 tie1 bits at 1'1, $bad wrong"
-  [ "$bad" = 0 ] && [ "$n0" = 179 ] && [ "$n1" = 5 ] || die "tie check failed ($n0/179 tie0, $n1/5 tie1, $bad wrong)"
+  [ "$bad" = 0 ] && [ "$n0" = 181 ] && [ "$n1" = 5 ] || die "tie check failed ($n0/181 tie0, $n1/5 tie1, $bad wrong)"
 }
 
 eqy_verdict() {            # $1 = dir: prints the last line from the strategies' status files
