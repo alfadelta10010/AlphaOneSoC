@@ -35,6 +35,8 @@
 # bitwuzla smtbmc, generated from the same tables; a pdr harness always uses
 # sby with `abc pdr`, and a pdr PASS counts as PROVED). `run.sh -e DIR names`
 # writes the generated DIR/sby_<n>.sby for a manual `sby -f` run (VCD traces).
+# --nonvac N...: runs the broken copies listed in tb/formal/N.nonvac, each of
+# which must FAIL (see the comment above that block).
 # Environment: FORMAL_BIN is prepended to PATH inside this script only (the
 # sandbox: $HOME/tools/oss-cad-suite/bin), so a campaign's simulators stay the
 # system ones. Every harness's yosys log is checked for an implicitly declared
@@ -105,15 +107,68 @@ for conf in $(ls "$HERE"/*.conf 2>/dev/null | sort); do
   done
 done
 ENGINE="${FORMAL_ENGINE:-sat}"
-EDIR=""
+EDIR=""; NONVAC=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -e) EDIR="$2"; shift 2;;
+    --nonvac) NONVAC=1; shift;;
     *) break;;
   esac
 done
 if [ -n "$EDIR" ]; then OUT="$EDIR"; mkdir -p "$OUT"; ENGINE=sby; fi
 names=("$@"); [ ${#names[@]} = 0 ] && names=("${BUILTIN[@]}" "${SIDE[@]}")
+
+# --nonvac N...: tb/formal/N.nonvac lists broken copies, one per line, each of which
+# the harness must FAIL (a cover harness: anything but COVERED). Lines:
+#   cat <ID>             # why   catalogue mutant of tb/mutate/mutants.py
+#   sed <file> <expr>    # why   hand-made copy (must change the file)
+#   def <-DNAME ...>     # why   sources unchanged, harness built with these defines
+# Prints NONVAC-OK / NONVAC-MISS <name> <id>: <verdict line>; NONVAC-ERROR (exit 2)
+# when the copy cannot be made or the run gave no verdict; any MISS exits 1.
+if [ $NONVAC = 1 ]; then
+  nbad=0; nerr=0
+  for n in "${names[@]}"; do
+    nf="$HERE/$n.nonvac"
+    if [ ! -f "$nf" ]; then echo "NONVAC-ERROR $n: no $n.nonvac"; nerr=1; continue; fi
+    k=0
+    while IFS= read -r line; do
+      case "$line" in ''|'#'*) continue;; esac
+      k=$((k+1)); kind=${line%% *}; rest=${line#* }; body=$(echo "$rest" | sed 's/  *# .*$//')
+      d="$OUT/nonvac_${n}_$k"; rm -rf "$d"; mkdir -p "$d"; cp -r "$SRC" "$d/src"; defs=""
+      id="$kind $body"
+      case "$kind" in
+        cat)
+          python3 - "$ROOT/tb/mutate" "$d/src" "$body" <<'PYEOF' || { echo "NONVAC-ERROR $n $id: catalogue mutant not applicable"; nerr=1; continue; }
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from mutants import M
+e = [x for x in M if x[0] == sys.argv[3]]
+if len(e) != 1: sys.exit("no such mutant %s" % sys.argv[3])
+mid, f, find, rep, why = e[0]
+p = os.path.join(sys.argv[2], f)
+t = open(p).read()
+if t.count(find) != 1: sys.exit("%s: find string occurs %d times in %s" % (mid, t.count(find), f))
+open(p, "w").write(t.replace(find, rep))
+PYEOF
+          ;;
+        sed)
+          f=${body%% *}; ex=${body#* }
+          sed -i -e "$ex" "$d/src/$f" 2>/dev/null
+          if cmp -s "$SRC/$f" "$d/src/$f"; then echo "NONVAC-ERROR $n $id: the sed expression did not change $f"; nerr=1; continue; fi;;
+        def) defs="$body";;
+        *) echo "NONVAC-ERROR $n $id: unknown line kind"; nerr=1; continue;;
+      esac
+      v=$(FYRA_SRC="$d/src" OUT_DIR="$d" EXTRA_DEFS="$defs" FORMAL_ENGINE="$ENGINE" bash "$0" "$n" 2>&1 | head -1)
+      case "$v" in
+        FAILED*) echo "NONVAC-OK $n $id: $v";;
+        ERROR*|"") echo "NONVAC-ERROR $n $id: $v"; nerr=1;;
+        *) echo "NONVAC-MISS $n $id: $v"; nbad=1;;
+      esac
+    done < "$nf"
+  done
+  [ $nerr = 1 ] && exit 2
+  exit $nbad
+fi
 
 # guard_hit LOG: the log shows a hierarchical reference (an implicit, undriven wire)
 # The one allowed exception: rf_top_stub.v's wires free_a, free_b, ra_data and

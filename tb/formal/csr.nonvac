@@ -1,0 +1,4 @@
+# catalogue mutants that the WARL proof kills (VPLAN 4.2: CS01-04, CS07, CS11)
+cat CS01   # mie.SSIE writable
+cat CS02   # mtvec bit 1 stored
+cat CS07   # killed by formal csr in the recorded campaign
