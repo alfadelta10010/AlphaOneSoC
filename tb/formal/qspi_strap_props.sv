@@ -4,9 +4,11 @@
 // sampled during reset and held (soc-architecture: "a pin that changes later cannot
 // move the sampling point mid-read"), so every output of the two must be equal.
 // The engine's read data register `sr` and its t_we/t_psram flops are not reset (they
-// are written before they are read); the generated qspi_x.v (qspi_ctrl.v renamed, with
-// those flops and the control flops as extra outputs, see qspi_strap.conf) lets the harness start both copies in
-// the same arbitrary state (a first-cycle assume only: the reset-reached states are a subset).
+// are written before they are read). The generated qspi_x.v (qspi_ctrl.v renamed, with
+// those flops and the control flops as extra outputs, see qspi_strap.conf) is read with
+// setundef -anyseq: the start state is free (sby makes every flop an $anyinit). The two
+// copies are equal at the first reset because, until then, they see identical inputs
+// (rd_late only enters through `late <= rd_late` under rst); every assert is armed-gated.
 module qspi_strap_props (
     input  wire        clk, rst, rd_late,
     input  wire        start, we,
