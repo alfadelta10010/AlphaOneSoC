@@ -238,7 +238,7 @@ for n in "${names[@]}"; do
     gen=$(${GEN[$n]} "$SRC" "$OUT") || { echo "ERROR $n: generator ${GEN[$n]} failed"; err=1; continue; }
     srcs="$srcs $gen"
   fi
-  if [ "$n" = core_fetch ]; then
+  if [ "${PROPN[$n]:-$n}" = core_fetch ]; then
     # fyracore.v with the f_* observation ports (see core_fetch_props.sv)
     inst="$OUT/formal_core_fetch_fyracore.v"
     sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf,\n\1output wire        f_kv, f_exec, f_load/' \

@@ -62,4 +62,11 @@ module core_hold_props (
             end
         end
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (chk && p_chk && p_ipend); cover (chk && p_chk && p_dpend); cover (chk && p_chk && p_dpend && p_we);
+    end
+`endif
 endmodule
