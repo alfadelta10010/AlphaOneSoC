@@ -496,6 +496,12 @@ mutant_finish() {          # $1 = name; confirm, record, and say whether it was 
   if mutant_caught "$k"; then say "mutants: $k CAUGHT"; else say "mutants: $k NOT CAUGHT"; notcaught="$notcaught $k"; fi
 }
 
+mutant_error() {           # $1 = name, $2 = reason: recorded; the stage goes on with the next mutant
+  say "mutants: $1 ERROR $2"; echo "$1 $2" >> "$B/mutants/errors.txt"
+}
+
+want() { [ -z "${MUT_ONLY:-}" ] || case " $MUT_ONLY " in *" $1 "*) return 0;; esac; return 1; }
+
 mutate_flop() {            # $1 name, $2 kind, $3.. candidate flops (the first with a swappable cell in its cone is used)
   local k="$1" kind="$2" X="$B/mutants" fl; shift 2
   for fl in "$@"; do
@@ -510,53 +516,72 @@ mutate_flop() {            # $1 name, $2 kind, $3.. candidate flops (the first w
 stage_mutants() {
   [ -f "$B/consts.txt" ] || die "no consts.txt: the lemma stage has not PROVED"
   mkdir -p "$B/mutants"; local X="$B/mutants"; local notcaught=""
-  : > "$X/table.txt"; rm -f "$X"/*.skipped.txt
-  printf 'mutant\tpartition\tstrategy\traw result\ttrace\n' >> "$X/table.txt"
-  local k flop only="${MUT_ONLY:-}"
+  # MUT_ONLY="a b" runs just those mutants and keeps the table rows of the others
+  if [ -z "${MUT_ONLY:-}" ] || [ ! -f "$X/table.txt" ]; then
+    : > "$X/table.txt"; : > "$X/errors.txt"
+    printf 'mutant\tpartition\tstrategy\traw result\ttrace\n' >> "$X/table.txt"
+  fi
+  touch "$X/errors.txt"
+  local k flop
   for k in core syscon spi kbuf; do
-    [ -z "$only" ] || [ "$only" = "$k" ] || continue
+    want $k || continue
     case $k in
       core)   mutate_flop core core "${MUT_CORE_FLOP:-}" ;;
       syscon) mutate_flop syscon syscon "" ;;
-      spi)    mutate_flop spi core 'soc.gpio_inst.spi_inst.sr[3]' 'soc.gpio_inst.spi_inst.sr[4]' 'soc.gpio_inst.spi_inst.sr[2]' 'soc.gpio_inst.spi_inst.sr[5]' 'soc.gpio_inst.spi_inst.sr[1]' ;;
+      spi)    mutate_flop spi core 'soc.gpio_inst.spi_inst.cc[5]' 'soc.gpio_inst.spi_inst.bba' 'soc.gpio_inst.spi_inst.cc[0]' 'soc.gpio_inst.spi_inst.bc[0]' 'soc.gpio_inst.spi_inst.sr[3]' ;;
       kbuf)   mutate_flop kbuf core 'soc.cpu.if_kbuf[5]' 'soc.cpu.if_kbuf[6]' 'soc.cpu.if_kbuf[4]' 'soc.cpu.if_kbuf[7]' 'soc.cpu.if_kbuf[3]' ;;
-    esac || die "mutate_netlist.py $k failed for every candidate (see $X/$k.skipped.txt)"
+    esac || { mutant_error "$k" "mutate_netlist.py failed for every candidate (see $X/$k.skipped.txt)"; continue; }
     cat "$X/$k.mutation.txt"
+    sed -i "/^$k /d" "$X/errors.txt" 2>/dev/null
+    sed -i "/^$k	/d" "$X/table.txt" 2>/dev/null
     flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
     NETLIST="$X/$k.nl.v" gate_final > "$X/$k.gate.ys"
-    mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop"
+    mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop" || { mutant_error "$k" "$(cat "$X/$k/result.txt" 2>/dev/null)"; continue; }
     say "mutants: $k mutant: $(tail -1 "$X/$k/result.txt")"
     mutant_finish "$k"
   done
-  if [ -z "$only" ] || [ "$only" = fliptie ]; then
+  if want fliptie; then
+    sed -i "/^fliptie	/d" "$X/table.txt"; sed -i "/^fliptie /d" "$X/errors.txt"
     # the 5 tie1 bits tied to 1'0 on the gold side (the q1 bug): a wrong tie value must FAIL
     local fb; fb=$(awk '$2 == 1 { printf "%s ", $1 }' "$B/consts.txt")
     awk '$2 == 1 { print $1, 0; next } { print }' "$B/consts.txt" > "$X/consts_flip.txt"
     echo "flipped to 1'0: $fb(consts_flip.txt: $(awk '$2 == 1' "$X/consts_flip.txt" | wc -l) tie1 left)" | tee "$X/fliptie.txt"
     gate_final > "$X/fliptie.gate.ys"
     # the partitions must exist in this setup (a name missing from partition.list would be silently skipped)
-    PARTS_OVERRIDE="soc.bus.d_addr.2 soc.cpu.csr_unit.csr_new.2 soc.cpu.csr_misa_c" mutant_run fliptie "$X/fliptie.gate.ys" "$X/consts_flip.txt" "$fb"
-    say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
-    mutant_finish fliptie
+    if PARTS_OVERRIDE="soc.bus.d_addr.2 soc.cpu.csr_unit.csr_new.2 soc.cpu.csr_misa_c" mutant_run fliptie "$X/fliptie.gate.ys" "$X/consts_flip.txt" "$fb"; then
+      say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
+      mutant_finish fliptie
+    else mutant_error fliptie "$(cat "$X/fliptie/result.txt" 2>/dev/null)"; fi
   fi
   local tag vfile
   for tag in qspi spi; do
     k=fsmtable; [ $tag = qspi ] || k=fsmtable_$tag
-    [ -z "$only" ] || [ "$only" = "$k" ] || continue
+    want $k || continue
+    sed -i "/^$k	/d" "$X/table.txt"; sed -i "/^$k /d" "$X/errors.txt"
     # a wrong enc/dec table in fsmcut_gate_<tag> (two codes swapped): the cut partition must FAIL
     vfile=fsmcut_neg.v; [ $tag = qspi ] || vfile=fsmcut_neg_$tag.v
-    python3 "$HERE/mk_wrong_table.py" "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" $tag || die "$k: could not build the wrong table"
-    [ "$(diff "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" | grep -c '^[<>]')" = 4 ] || die "$k: the wrong table differs in other than 2 lines"
-    cmp -s "$X/fsmcut_wrong_$tag.v" "$HERE/$vfile" || die "$k: the wrong table is not $vfile"
+    python3 "$HERE/mk_wrong_table.py" "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" $tag || { mutant_error $k "could not build the wrong table"; continue; }
+    [ "$(diff "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" | grep -c '^[<>]')" = 4 ] || { mutant_error $k "the wrong table differs in other than 2 lines"; continue; }
+    cmp -s "$X/fsmcut_wrong_$tag.v" "$HERE/$vfile" || { mutant_error $k "the wrong table is not $vfile"; continue; }
     echo "wrong table: $tag codes swapped (enc and dec), exactly 2 lines changed, = $vfile" | tee "$X/$k.txt"
     gate_final > "$X/$k.gate.ys"
     local cut=soc.qspi.fsmcut_state; [ $tag = qspi ] || cut=soc.gpio_inst.spi_inst.fsmcut_st
-    MUT_VFILE="$X/fsmcut_wrong_$tag.v" PARTS_OVERRIDE="$cut" mutant_run $k "$X/$k.gate.ys" "$B/consts.txt" "$cut"
+    MUT_VFILE="$X/fsmcut_wrong_$tag.v" PARTS_OVERRIDE="$cut" mutant_run $k "$X/$k.gate.ys" "$B/consts.txt" "$cut" || { mutant_error $k "$(cat "$X/$k/result.txt" 2>/dev/null)"; continue; }
     say "mutants: wrong-table mutant $tag: $(tail -1 "$X/$k/result.txt")"
     mutant_finish $k
   done
-  if [ -n "$notcaught" ]; then echo "EQY VACUOUS$notcaught" > "$X/summary.txt"; return 3; fi
-  echo "mutants: core, syscon, spi, kbuf, fliptie, fsmtable and fsmtable_spi all caught by a real counterexample (see table.txt)" > "$X/summary.txt"
+  # the verdict covers all 7 mutants, from the table (rows of earlier partial runs are kept)
+  local nc="" er="" m
+  for m in core syscon spi kbuf fliptie fsmtable fsmtable_spi; do
+    if grep -q "^$m " "$X/errors.txt" 2>/dev/null; then er="$er $m"
+    elif mutant_caught $m; then :
+    else nc="$nc $m"; fi          # no FAIL row, or never run
+  done
+  : > "$X/summary.txt"
+  for m in $er; do echo "ERROR $m: $(grep "^$m " "$X/errors.txt" | head -1 | cut -d' ' -f2-)" >> "$X/summary.txt"; done
+  if [ -n "$nc" ]; then echo "EQY VACUOUS$nc" >> "$X/summary.txt"; return 3; fi
+  if [ -n "$er" ]; then echo "EQY ERROR$er" >> "$X/summary.txt"; return 2; fi
+  echo "mutants: core, syscon, spi, kbuf, fliptie, fsmtable and fsmtable_spi all caught by a real counterexample (see table.txt)" >> "$X/summary.txt"
   return 0
 }
 
