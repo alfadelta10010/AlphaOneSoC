@@ -121,7 +121,7 @@ test kills (`build/mut/syscon-all.tsv`).
 | REQ-SYS-009 | while the SoC is held no write reaches syscon or the watchdog | C | tb_syscon (WO-14) | spec model | P (SY14, killed by tb_syscon only) |
 | REQ-SYS-010 | syscon never holds `ready` low | C | tb_syscon_soc (per clock) | bus check | p (no mutant) |
 | REQ-SYS-011 | `rst_soc` is a function of rst and flops only, and a synchronous reset only | - | formal `syscon_comb` (PROVED, pdr from a free power-up state), `soc_rst_sync` (structural) (WO-19) | miter; netlist walk | P (SY20 by syscon_comb; soc_rst_sync by a hand-made async CLINT copy, not a catalogue fault) |
-| REQ-SYS-012 | at the pins a reboot looks like a pin reset after rst_n rises: uio_oe = 0, uo_out = 0x39 while held, one transition per pin | C | tb_tt_um, tt_pins.S (WO-17) | pin checks | P (SY04, SY05, SY06, AS02-AS05) |
+| REQ-SYS-012 | at the pins a reboot looks like a pin reset after rst_n rises: uio_oe = 0, uo_out = 0xB9 while held, one transition per pin | C | tb_tt_um, tt_pins.S (WO-17) | pin checks | P (SY04, SY05, SY06, AS02-AS05) |
 | REQ-SYS-013 | Linux's syscon-poweroff / -reboot / -reboot-mode and dw_wdt sequences work unchanged | A | syscon_regs.S, syscon_wdt.S, tb_syscon | spec model | p (no mutant targets the driver sequences) |
 | REQ-SYS-014 | watchdog window, DW layout, lane 0 only; CR EN, TORR, CRR key 0x76, COMP_PARAMS_1 | C | tb_syscon, syscon_wdt.S | spec model | P (WD02, WD07, WD08, WD11, WD12, WD13) |
 | REQ-SYS-015 | timeout in mtime counts: after the last kick, more than 2^(16+TOP) and at most 1.5 x 2^(16+TOP) + 1 clocks (never early unless software writes mtime: time is counted in mtime counts) | C | tb_syscon (all 16 TOPs, scaled tap), syscon_wdt.S (TOP 0, real scale), syscon_wdt_split.S | spec model; reboot-time bounds | P (WD03, WD04, WD09, WD10, AS07); K1-K4 in tb_syscon pin the SA-008 case (a kick or TORR write in the fire clock does not stop the fire), with two broken copies failing K1 and K2 |
@@ -386,7 +386,7 @@ touches behaviour nothing specifies (section 5).
 | SE05 | equivalent in the core | the CSR-immediate zimm taken from the wrong field: fyracore takes zimm from rs1 |
 | MD07 | equivalent | PROVED (formal md07, sat and sby k-induction, length 1): in the divide loop acc < m when m != 0 (I2, entered with acc = 0 through NEGA/NEGB, I1), so sum[33] == sum[32], and with m == 0 both arms are equal (E1); the arm-swap copy fails at depth 48. Cross-check: md07_miter (the original muldiv against MD07) is opt-in and not run to a verdict (a bounded run reached step 29 of 40 in 76 min); its cover (1/1) and the MD06 miter non-vacuity run (counterexample within 40) hold |
 | FC02 | equivalent (argument + BOUNDED 80) | csr_wb_hazard implies !ex_ph and another stall_nofetch term (E-FC02a/b), so stall_nofetch never changes when the term is dropped; checked in every state within 80 steps of reset (formal core_inv, bmc), not proved: the length-1 induction does not close (the muldiv unit's latched kind versus the EX instruction is a necessary invariant but not a sufficient one). A dead stall term, removable (an area decision) |
-| FC49 | equivalent (argument + BOUNDED 80) | !(flush && muldiv_want) and ready/busy/done imply muldiv_want (E-FC49a/b), so the next muldiv_ready is 0 on any flush cycle without the flush terms (E-FC49c); the 80 steps include a finished M operation (core_inv_cov reaches a real M-op done at step 38, 38 + 12 <= 80); not proved (as FC02). Non-vacuity: copies that reset ex_ph or drop muldiv_want both give a counterexample within 80 |
+| FC49 | equivalent (argument + BOUNDED 80) | !(flush && muldiv_want) and ready/busy/done imply muldiv_want (E-FC49a/b), so the next muldiv_ready is 0 on any flush cycle without the flush terms (E-FC49c); the 80 steps include a finished M operation (an armed cover, `core_inv_armed_cov` (opt-in), reaches the done of a real M operation at step 38 after reset, 38 + 12 <= 80; the default `core_inv_cov` done point is also met by a short shift, so it does not show this); not proved (as FC02). Non-vacuity: copies that reset ex_ph or drop muldiv_want both give a counterexample within 80 |
 | QS06 | killed by qspi_strap at the unit contract; equivalent in the SoC | the `rd_late` strap not held after reset. It survives every other bench; qspi_strap (PROVED, pdr) fails on it with a counterexample. In the SoC syscon holds the strap, so the SoC cannot see it |
 | FR14 | verdict pending, outside this verification pass | a fetch-reuse (C7) survivor missing from this table; not triaged |
 | FC27 | equivalent | argument: garbage rd writes during a load wait are unobservable, EX is held by use_hazard until the final write, and after a reset x1-x31 are unspecified (Priv 3.4) |
@@ -405,7 +405,9 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
 ### 4.3 Formal harnesses (tb/formal)
 
 `tb/formal/run.sh` runs the default list of 39 harnesses (final run at 7a66221,
-sby engine, rc 0, no FAILED or ERROR). Verdict
+sby engine, rc 0, no FAILED or ERROR; the sat leg of the same tree gave the same 39
+verdict words). The two legs differ only for the induction harnesses: pdr, sbmc and
+cover harnesses (about 26 of the 39) run on sby in both. Verdict
 words, as the logs print them: PROVED (pdr) = sby `abc pdr`, unbounded; PROVED (sby
 k-induction, length 1) = the step starts from any state (a longer induction does not
 count); PROVED (structural) = a netlist walk; BOUNDED n = no counterexample within n
@@ -417,7 +419,7 @@ Every harness has a non-vacuity sidecar (`.nonvac`) and most have a cover (`_cov
 
 | Harness | Checks | Verdict | Non-vacuity (fails on) | Cover |
 |---|---|---|---|---|
-| csr | WARL behaviour of the CSR block | PROVED (pdr, free init 17 `$anyinit`) | CS01-04, CS07, CS11 (both engines) | csr_cov 6/6 |
+| csr | WARL behaviour of the CSR block | PROVED (pdr, free init 17 `$anyinit`) | CS01-04, CS07, CS11 (pdr runs on sby in both engine legs) | csr_cov 6/6 |
 | core_hold | the core holds its requests and RF writes while stalled | PROVED (sby k-induction, length 1) | all broken copies NONVAC-OK | core_hold_cov 3/3 |
 | core_req | request behaviour from reset | BOUNDED 150 (sbmc) | NONVAC-OK | not run as a cover |
 | core_fetch | fetch reuse | PROVED (sby k-induction, length 1) | NONVAC-OK | core_fetch_cov 3/3 |
@@ -436,6 +438,8 @@ Every harness has a non-vacuity sidecar (`.nonvac`) and most have a cover (`_cov
 | core_df | data handshakes per held fetch <= DF_N = 4 (mem's assumption M-A4) | BOUNDED 32 | DF_N = 1, 2, 3 FAIL | core_df_cov 2/2 |
 | md07 | MD07 equivalent (4.2) | PROVED (sby k-induction, length 1) | arm-swap copy | md07_cov 3/3 |
 | core_inv | FC02, FC49 equivalent (4.2) | BOUNDED 80 | ex_ph-reset and muldiv_want copies | core_inv_cov 4/4 |
+
+The mem_* and qspi_strap verdicts hold under `tb/formal/mem_props.sv`'s environment assumptions, so "PROVED" there is conditional on how each is discharged: M-A1 (a request not yet answered is held) by core_hold, PROVED; M-A2 (the PMA window and alignment of requests) by core_req, BOUNDED 150 only; M-A3 (`rd_late` stable while out of reset) by syscon holding the strap, checked in simulation only (tb_syscon, tb_qspi); M-A4 (at most DF_N = 4 data handshakes per fetch, mem_li only) by core_df, BOUNDED 32.
 
 Opt-in (run by name, not in the default list): mem_li and its cover, mem_ld_cov,
 md07_miter (not run to a verdict) and md07_miter_cov (1/1).
