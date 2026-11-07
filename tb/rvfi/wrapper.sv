@@ -85,6 +85,19 @@ module rvfi_wrapper (
 	wire [31:0] imem_rdata = imem_rdata_f;
 `endif
 
+`ifdef FYRA_LAT
+	// WO-37a: anti-covers. The assert FAILs at step k = the first retire of the family.
+`ifdef FYRA_LAT_MUL
+	always @* if (!reset) assert (!(rvfi_valid && !rvfi_trap && rvfi_insn[6:0] == 7'b0110011 && rvfi_insn[31:25] == 7'b0000001 && !rvfi_insn[14]));
+`endif
+`ifdef FYRA_LAT_DIV
+	always @* if (!reset) assert (!(rvfi_valid && !rvfi_trap && rvfi_insn[6:0] == 7'b0110011 && rvfi_insn[31:25] == 7'b0000001 && rvfi_insn[14]));
+`endif
+`ifdef FYRA_LAT_SLL31
+	always @* if (!reset) assert (!(rvfi_valid && !rvfi_trap && rvfi_insn[6:0] == 7'b0010011 && rvfi_insn[14:12] == 3'b001 && rvfi_insn[31:25] == 7'b0000000 && rvfi_insn[24:20] == 5'd31));
+`endif
+`endif
+
 	fyracore #(
 		.PMA_ROM_BASE (32'hFFFF_FFFF), .PMA_ROM_TOP (32'h0000_0000),
 		.PMA_RAM_BASE (32'h0000_0000), .PMA_RAM_TOP (32'hFFFF_FFFF),

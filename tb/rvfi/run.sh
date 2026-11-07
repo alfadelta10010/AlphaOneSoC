@@ -14,7 +14,7 @@ set -u
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PIN=c992aa61fdfe0846c5ed90324c596202a1c69b76
 LIST=0; ONLY=${ONLY:-}; FYRA_SRC=${FYRA_SRC:-$HERE/../../src}; OUT=${OUT:-build/rvfi}; JOBS=${JOBS:-4}; SOLVER=${SOLVER:-}
-TIMEOUT=${TIMEOUT:-7200}; IMEM_DEPTH=${IMEM_DEPTH:-16}; RVFORMAL=${RVFORMAL:-$HOME/regr/vc/rvfi-riscv-formal}
+TIMEOUT=${TIMEOUT:-7200}; IMEM_DEPTH=${IMEM_DEPTH:-22}; RVFORMAL=${RVFORMAL:-$HOME/regr/vc/rvfi-riscv-formal}
 for a in "$@"; do
   case "$a" in
     --list) LIST=1 ;;
@@ -60,10 +60,12 @@ CH=$CORE/checks
 
 # custom fetch-consistency check (D7). Always abc bmc3 with no skip (all steps <= IMEM_DEPTH):
 # smtbmc/yices does not get past depth ~16 on it, bmc3 does depth 16 in ~45 s. Depth 16 covers
-# the fetch-reuse pair (second compressed insn retires by about cycle 14 with waits).
-ENG=$(awk '/^\[engines\]/{getline; print; exit}' "$CH/insn_add_ch0.sby")
-{
-  echo "[options]"; echo "mode bmc"; echo "expect pass,fail"; echo "depth $IMEM_DEPTH"; echo
+# the fetch-reuse pair (second compressed insn retires by about cycle 14 with waits). 22 also reaches
+# the kv clear by an interrupt (csrw mie + csrs mstatus first; handler's first retire ~cycle 18).
+mk_top_sby() {  # name depth defines...  (bmc3, mode bmc, no skip, imem_top as the top)
+  local name=$1 dep=$2; shift 2
+  {
+  echo "[options]"; echo "mode bmc"; echo "expect pass,fail"; echo "depth $dep"; echo
   echo "[engines]"; echo "abc bmc3"; echo
   echo "[script]"
   echo "read -sv defines.sv imem_top.sv $(awk '/^\[verilog-files\]/{f=1;next} /^\[/{f=0} f&&NF{print}' "$CORE/checks.cfg" | sed "s#@basedir@#$RF#; s#@core@#fyracore#" | tr '\n' ' ')"
@@ -71,10 +73,18 @@ ENG=$(awk '/^\[engines\]/{getline; print; exit}' "$CH/insn_add_ch0.sby")
   echo "[files]"; echo "$RF/checks/rvfi_macros.vh"; echo "$CORE/imem_top.sv"; echo
   echo "[file defines.sv]"
   echo '`define RISCV_FORMAL'; echo '`define RISCV_FORMAL_NRET 1'; echo '`define RISCV_FORMAL_XLEN 32'
-  echo '`define RISCV_FORMAL_ILEN 32'; echo '`define FYRA_IMEM_CHECK'
+  echo '`define RISCV_FORMAL_ILEN 32'
+  for d in "$@"; do echo "\`define $d"; done
   sed -n '/^\[defines\]/,/^\[/p' "$CORE/checks.cfg" | grep '^`define'
   echo '`include "rvfi_macros.vh"'
-} > "$CH/fyra_imem.sby"
+  } > "$CH/$name.sby"
+}
+mk_top_sby fyra_imem "$IMEM_DEPTH" FYRA_IMEM_CHECK
+# latency probes (WO-37a): the first retire of a MUL-family / DIV-family / SLLI-by-31 instruction.
+# Inverted verdict: the anti-cover assert FAILing at step k = REACHED (counts as PASS).
+mk_top_sby lat_mul   50 FYRA_LAT FYRA_LAT_MUL
+mk_top_sby lat_div   50 FYRA_LAT FYRA_LAT_DIV
+mk_top_sby lat_sll31 50 FYRA_LAT FYRA_LAT_SLL31
 
 [ "$SOLV" = bmc3 ] && sed -i '/^skip /d' "$CH/fyra_imem.sby"
 ALL=$( (ls "$CH"/*.sby | xargs -n1 basename | sed 's/\.sby$//') | sort)
@@ -88,7 +98,8 @@ one() {
   [ -e "$d" ] && return
   rm -rf "$CH/$c"
   dep=$(awk '/^depth/{print $2-1; exit}' "$CH/$c.sby"); t0=$(date +%s)
-  ( cd "$CH" && nice -n 10 timeout "$TIMEOUT" sby -f "$c.sby" > "$CH/$c.log" 2>&1 ); rc=$?
+  tmo=$TIMEOUT; case $c in cover|fyra_imem) [ "$tmo" -lt 3600 ] && tmo=3600 ;; esac
+  ( cd "$CH" && nice -n 10 timeout "$tmo" sby -f "$c.sby" > "$CH/$c.log" 2>&1 ); rc=$?
   secs=$(( $(date +%s) - t0 ))
   st=ERROR
   if [ $rc = 124 ]; then st=TIMEOUT
@@ -102,6 +113,13 @@ one() {
     mkdir -p "$OUT/keep/$c"; cp -r "$CH/$c/logfile.txt" "$CH/$c/status" "$CH/$c/engine_0" "$OUT/keep/$c/" 2>/dev/null
     rm -rf "$CH/$c"
   fi
+  if [[ $c == lat_* ]]; then   # inverted verdict
+    if [ $st = FAIL ]; then
+      k=$(grep -h "summary:   failed assertion" "$OUT/keep/$c/logfile.txt" | grep -o "step [0-9]*$" | head -1 | awk '{print $2}')
+      [ -z "$k" ] && k=$(grep -h "asserted in frame" "$OUT/keep/$c/logfile.txt" | grep -o "frame [0-9]*" | head -1 | awk '{print $2}')
+      echo "REACHED $secs ${k:-?}" > "$d"; return
+    elif [ $st = PASS ]; then echo "UNREACHED $secs 50" > "$d"; return; fi
+  fi
   [ $st = PASS ] && [[ $c == cover ]] && grep -q "Unreached cover" "$OUT/keep/$c/logfile.txt" && st=FAIL
   [ $st = FAIL ] && [[ $c == cover ]] && grep -h "Unreached cover" "$OUT/keep/$c/logfile.txt" >> "$OUT/keep/$c/unreached.txt"
   echo "$st $secs $dep" > "$d"
@@ -114,7 +132,7 @@ for c in $SEL; do
   read -r st secs dep < "$OUT/done/$c" || { st=ERROR; secs=0; dep=0; }
   printf '%s\t%s\t%s\t%s\n' "$c" "$st" "$secs" "$dep" >> "$OUT/summary.tsv"
   n=$((n+1))
-  case $st in PASS) p=$((p+1));; FAIL) f=$((f+1));; TIMEOUT) t=$((t+1));; *) e=$((e+1));; esac
+  case $st in PASS|REACHED) p=$((p+1));; FAIL) f=$((f+1));; TIMEOUT) t=$((t+1));; *) e=$((e+1));; esac
 done
 cat "$OUT/summary.tsv"
 msg="rvfi: $n checks, $p PASS, $f FAIL, $t TIMEOUT, $e ERROR"
