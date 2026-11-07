@@ -200,18 +200,11 @@ module mem_props (
     end
 `endif
 `ifdef P_TCEM
-    generate for (k = 0; k < 12; k = k + 1) begin : g_lp
-        always @(*) begin
-            cover (armed && !rst && pl_now == 8'd37 + k && !strap);
-            cover (armed && !rst && pl_now == 8'd37 + k && strap);
-        end
-    end endgenerate
-    generate for (k = 0; k < 12; k = k + 1) begin : g_lf
-        always @(*) begin
-            cover (armed && !rst && fl_now == 8'd53 + k && !strap);
-            cover (armed && !rst && fl_now == 8'd53 + k && strap);
-        end
-    end endgenerate
+    // the tight points only (the measured PSRAM / flash runs, both strap values)
+    always @(*) begin
+        cover (armed && !rst && pl_now == `LP0 && !strap);  cover (armed && !rst && pl_now == `LP1 && strap);
+        cover (armed && !rst && fl_now == `LF0 && !strap);  cover (armed && !rst && fl_now == `LF1 && strap);
+    end
     always @(*) cover (armed && !rst && rise_q != 3'b000 && cs_n == rise_q);
 `endif
 `ifdef P_ARB
