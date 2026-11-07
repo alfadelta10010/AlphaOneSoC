@@ -97,7 +97,7 @@ one() {
   c=$1; d=$OUT/done/$c
   [ -e "$d" ] && return
   rm -rf "$CH/$c"
-  dep=$(awk '/^depth/{print $2-1; exit}' "$CH/$c.sby"); t0=$(date +%s)
+  dep=$(awk '/^depth/{print $2-1; exit}' "$CH/$c.sby"); case $c in fyra_imem|lat_*) dep=$((dep+1)) ;; esac; t0=$(date +%s)
   tmo=$TIMEOUT; case $c in cover|fyra_imem) [ "$tmo" -lt 3600 ] && tmo=3600 ;; esac
   ( cd "$CH" && nice -n 10 timeout "$tmo" sby -f "$c.sby" > "$CH/$c.log" 2>&1 ); rc=$?
   secs=$(( $(date +%s) - t0 ))
