@@ -60,8 +60,8 @@ The limits every item is judged against:
 verification WO-29): `src/spi.v` at `0x1001_0020` with the tiny_spi
 registers at +0x20..+0x30, SD CS# on OUT bit 7, MOSI and SCK from flops. The
 as-built description, the SD-first boot rule and the board setup are in
-`docs/pins-and-peripherals.md` sections 3 and 4. Not yet hardened or
-measured on silicon. The rest of this section is the design record from
+`docs/pins-and-peripherals.md` sections 3 and 4. Hardened on 2026-11-01 as
+part of the combined tree (1.6); not measured on silicon. The rest of this section is the design record from
 before it was built.
 
 **Before PR #14** (`src/gpio.v`): a transmit-only, mode-3, MSB-first byte shifter
@@ -255,8 +255,8 @@ In the directed benches (mostly `.option norvc`, so the hit rate is low):
 `fr_*` directed tests (4 of them, `fr_reset`, `fr_irq_sw`, `fr_irq_tmr` and
 `fr_smc`, check the DUT against expected values, not against Spike), the
 `tb_rivercore` shadow/hit checks, `tb/formal/run.sh core_fetch` and mutants
-FR01-FR14. Not yet hardened; the harden, IF-path STA, EQY, gate-level and
-full river_core runs come once, on the tree with SPI as well (1.6).
+FR01-FR14. Hardened on 2026-11-01 with SPI and syscon on the same tree; the
+EQY, gate-level and river_core runs of that tree are in 1.6 item 3.
 
 * Saves one fetch for each compressed instruction that follows a fetched
   compressed instruction, so at most half the fetches in runs of compressed
@@ -340,13 +340,24 @@ Open (2026-10-31):
    at the fast corner with 20% switching and the stripes fed from their top
    ends only; the flow's own estimate is 0.1 mV. `rf_top`'s liberty reports no
    power, so the register file is missing from both figures.
-3. Full verification: test-all, directed core and SoC, formal, seeds,
-   mutation on the new blocks, the river_core regression (the fetch-reuse
-   change touches the pipeline: rrag and riscv-dv with C, not only the
-   compliance suite), gate-level on the TT flow (`scripts/gl`, parts A-D),
-   and EQY of the RTL against the new netlist (`tb/eqy`; its FSM cut points,
-   tie lists and no-match list were fitted to the 2026-10-25 netlist and
-   need fitting again).
+3. Full verification. **Done** on the combined tree (formal at `7a66221`; EQY
+   and gate level on the 2026-11-01 netlist):
+   * EQY of main `a2f7285` against the fin-3x4 post-PnR netlist (`tb/eqy`,
+     refitted): **165 of 165 partitions PASS**, all by sat at induction
+     length 1; 186 constant bits and 4 one-hot FSMs proved; 7 of 7 netlist
+     mutants caught.
+   * Gate-level programs at the pins on that netlist: RTL = gate level in
+     every part except `tt_pins.1`, which fails at unit delay only (a 1 ns
+     margin at the 10 ns bench clock; STA is the setup check).
+   * TT01 on the SDF-annotated netlist (24 runs, 9 corners): no observable
+     difference at SDF gate level. The pins' glitch check is done.
+   * Formal: 39 harnesses in the default list, rc 0 (VPLAN 4.3, 2.1 below).
+   * Seeds 1-8 on the 12 seeded benches, `tb_uart` and `tb_spi` over 1-32:
+     all pass; SA-008 is tested (K1-K4 in `tb_syscon`).
+   * Mutation re-score of the formal benches: VPLAN 4.6. Residuals, listed
+     in 2.1.
+   * The river_core regression of the combined tree has been run (no DUT
+     defect recorded against it).
 4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`)
    and pass its CI. **Done for main `a2f7285`** (2026-11-01, ahead of the
    lock): one commit per block and one for item 2's build settings, up to
@@ -370,64 +381,89 @@ does not make memory faster (section 0).
 
 ### 2.1 Formal coverage
 
-`tb/formal/run.sh`, yosys's built-in SAT solver (no SMT solver is installed,
-so no SymbiYosys). At main `b8d8627` (PR #11):
+`tb/formal/run.sh` runs 39 harnesses by default (final run at `7a66221`,
+sby engine, rc 0, no FAILED or ERROR), through yosys's SAT solver or
+SymbiYosys (bitwuzla and yices smtbmc, `abc pdr`; the OSS CAD Suite, yosys
+0.70, named by `FORMAL_BIN` on the sandbox). Verdict words as in
+`tb/VPLAN.md` 4.3: PROVED (k-induction at length 1, or pdr from a free
+power-up state), BOUNDED n (no counterexample within n steps of reset),
+COVERED, NONVAC-OK (a broken copy fails with a counterexample). riscv-formal
+results are BOUNDED only.
 
-| Harness | Mode | Proves |
+| Harness | Verdict | Checks |
 |---|---|---|
-| `csr` | k-induction, PROVED | P1-P8: mstatus.MPP in {U, M}; no stray mstatus/mie/mcounteren/mcountinhibit bits; mtvec direct; pmpcfg reserved bits 0 and no R=0/W=1; misa constant except C; mepc alignment |
-| `core_hold` | k-induction (length 1), PROVED | Both memory ports hold the request (address, we, be, wdata) until ready; x0 is never written |
-| `core_req` | bounded, 10 cycles from reset | Every request is legal: fetch halfword-aligned and in flash/PSRAM; data word-aligned, in a mapped window, legal byte lanes, store data replicated, no store to flash |
+| `csr` | PROVED (pdr) | WARL invariants: mstatus.MPP in {U, M}; no stray mstatus/mie/mcounteren/mcountinhibit bits; mtvec direct; pmpcfg reserved bits and no R=0/W=1; misa constant except C; mepc alignment |
+| `core_hold` | PROVED (k-induction, length 1) | Both memory ports hold the request until ready; x0 is never written |
+| `core_req` | BOUNDED 150 | Every request is legal: alignment, mapped window, byte lanes, replicated store data, no store to flash |
+| `core_fetch` | PROVED (k-induction, length 1) | Fetch word reuse against a symbolic code memory |
+| `core_df` | BOUNDED 32 | At most 4 data handshakes per held fetch (the assumption the memory-latency bound rests on) |
+| `core_inv` | BOUNDED 80 | FC02 and FC49 equivalence checks (argument plus bounded) |
+| `syscon_comb` | PROVED (pdr) | No combinational path from the bus to `rst_soc` |
+| `syscon_gate` | PROVED (k-induction, length 1) | No watchdog fire while the SoC is held in reset |
+| `soc_rst_sync` | PROVED (structural) | `rst_soc` reaches no asynchronous reset, set or load |
+| `spi_core`, `spi_dc`, `spi_bus` | PROVED (k-induction, length 1) | The SPI engine's invariants, its don't-care state, and the bus rules gpio and spi rely on |
+| `spi_bb`, `spi_bb1` | BOUNDED 96 | A black-box reference model of the controller at gpio's ports |
+| `spi_cover` | COVERED 6/6 | Guards `spi_bb`'s assumptions against vacuity |
+| `spi_f12` | PROVED (structural) | GPIO's pin outputs come straight from flops (finding F12) |
+| `bus` | PROVED (k-induction, length 1) | An IO target drops ready only while selected; decode; read mux |
+| `qspi_strap` | PROVED (pdr) | The `rd_late` strap is held after reset |
+| `mem_flash` | PROVED (pdr) | Flash never selected for a write; CS0 sees only EB/FF |
+| `mem_tcem` | PROVED (pdr) | PSRAM tCEM and tCPH |
+| `mem_arb` | PROVED (pdr) | Data first, split atomicity |
+| `mem_ld` | BOUNDED 366 | A held data request is served within 182/183 clocks |
+| `md07` | PROVED (k-induction, length 1) | MD07 equivalent |
 
-Added by PRs #12-#14 (main `a2f7285`); the property lists are in each
-`tb/formal/*_props.sv`:
+Each has a non-vacuity sidecar and, where listed in `tb/VPLAN.md`, a cover
+harness; every broken copy of every harness fails with a counterexample.
+riscv-formal through the RVFI port (`tb/rvfi`): 82 of 82 checks BOUNDED (BMC
+from reset, depth 20 to 62), 0 FAIL, 49-row fault matrix; the not-covered list
+is in `tb/rvfi/RESULTS.md` (U-mode/PMP/MPRV/misa.C, CSRs and trap and mret
+targets, A, M arithmetic, illegal encodings other than the all-zero parcel,
+memory waits over 2 cycles, data-memory consistency).
 
-| Harness | Mode | Covers |
-|---|---|---|
-| `core_fetch` | k-induction, PROVED | Fetch word reuse against a symbolic 16-halfword code memory: what issues is what memory holds at the pc |
-| `syscon_comb` | bounded, 24 cycles | No combinational path from the bus to `rst_soc` |
-| `syscon_gate` | k-induction, PROVED | No watchdog fire while the SoC is held in reset |
-| `soc_rst_sync` | structural | `rst_soc` reaches no asynchronous reset, set or load |
-| `spi_core`, `spi_dc`, `spi_bus` | k-induction at length 1, PROVED | The SPI engine's invariants, its don't-care state, and the bus rules gpio and spi rely on from each other |
-| `spi_bb`, `spi_bb1` | bounded, 24 cycles | A black-box reference model of the controller at gpio's ports (SCK, MOSI, MISO sampling, RXDATA), written from the spec, sharing no names with the RTL |
-| `spi_cover` | cover | Guards `spi_bb`'s assumptions against vacuity |
-| `spi_f12` | structural | GPIO's pin outputs (MOSI, SCK, the chip selects) come straight from flops (finding F12) |
+Residuals, none a defect:
 
-At PR #11, by the verification plan's own count, **4 of its 56 requirements**
-were proved or bounded formally (REQ-CSR-003, REQ-RF-003, REQ-MEM-001,
-REQ-MEM-002 to 10 cycles), with slices of 2 more (misa in REQ-CSR-004,
-pmpcfg reserved bits in REQ-CSR-005). ISA results, traps, interrupts, PMP
-matching, LR/SC and counters are still simulation only. In the mutation
-campaign the formal harnesses killed 6 of 29 CSR faults and 9 of the 11 core
-faults tried on them. Three survivors were shown equivalent by separate
-k-induction proofs (MD07, FC02, FC49), which are not part of `run.sh`.
+* `mem_li`: the worst fetch latency (442/456 clocks) is measured by
+  simulation, not proved, and rests on the bounded `core_df`. Opt-in.
+* FC02 and FC49 are equivalent by argument plus BOUNDED 80 (`core_inv`); the
+  length-1 induction does not close. MD07 is PROVED.
+* `md07_miter`, the cross-check of `md07`, is opt-in and was not run to a
+  verdict.
+* The RVFI not-covered list above.
+* TT01: a race closer than one gate delay is invisible to the SDF run, and
+  metastability of `run` at an asynchronous release cannot be simulated.
+* The mutation re-score of the formal benches is in `tb/VPLAN.md` 4.6.
+
+ISA results, traps, interrupts, PMP matching, LR/SC and counters have
+bounded riscv-formal checks and simulation, not proofs.
 
 ### 2.2 Next formal steps, by value
 
-1. **Install a real solver stack** (SymbiYosys + Bitwuzla or Yices, e.g. the
-   oss-cad-suite) on the sandbox: deeper BMC, cover statements, liveness.
-2. **riscv-formal through an RVFI port** (simulation/formal-only `ifdef`,
-   zero area): per-instruction checks for RV32IMC, register and pc
-   consistency, causality, liveness. It covers the ISA rows that are
-   simulation-only today. It does not check the A extension, and its CSR
-   checks are limited; the directed suite keeps those.
+1. ~~**Install a real solver stack**~~ (SymbiYosys + Bitwuzla/Yices/abc pdr):
+   done on the sandbox (OSS CAD Suite, yosys 0.70); covers and pdr are in use.
+2. ~~**riscv-formal through an RVFI port**~~: done, 82 of 82 checks BOUNDED
+   (2.1). It does not check the A extension, and its CSR checks are limited;
+   the directed suite keeps those. Residual: the not-covered list in
+   `tb/rvfi/RESULTS.md`.
 3. ~~**New blocks get formal from the start**~~: done for syscon, fetch reuse
    and SPI (2.1). Fetch reuse is checked against a symbolic code memory
    rather than by equivalence with and without the buffer.
-4. **SoC properties:** the bus rule (an IO target drops ready only while
-   selected), `mem_ctrl` (data-first, no starvation, bounded), QSPI engine
-   (tCEM, never selects flash for a write).
-5. Turn the MD07/FC02/FC49 equivalence proofs into `run.sh` harnesses.
+4. ~~**SoC properties:**~~ done: `bus`, `mem_arb`, `mem_flash`, `mem_tcem`,
+   `qspi_strap` PROVED; `mem_ld` BOUNDED. Residual: `mem_li` (2.1).
+5. ~~Turn the MD07/FC02/FC49 equivalence proofs into `run.sh` harnesses~~:
+   done (`md07`, `core_inv`); FC02 and FC49 stay at argument plus BOUNDED 80.
 
 ### 2.3 Other verification still owed
 
-Done on the PR #12 tree (2026-10-25 to 10-30): river_core compliance plus
-one random round (0 DUT defects), the gate-level programs at the pins (183
-programs and 17 SoC programs, RTL = GL), EQY 157/157. Every mutation survivor
-has a verdict (`tb/VPLAN.md` 4.2). Since then fetch reuse has run the
-compliance suite only (175/176, the known `ma_data`), and SPI its own
-benches, formal and mutation. Owed on the combined tree: everything in 1.6
-item 3. Still open from PR #11: an 8-seed run.
+Done on the combined tree: everything in 1.6 item 3 (EQY 165/165, gate-level
+programs at the pins, TT01 on SDF, formal, seeds 1-8, SA-008 tested). Every
+mutation survivor has a verdict (`tb/VPLAN.md` 4.2). Owed: the mutation
+re-score numbers (`tb/VPLAN.md` 4.6) and the residuals in 2.1. A re-harden
+needs the EQY, gate-level and SDF runs again (one netlist each).
+
+Next RTL change: QSPI streaming fetch and an optional DDR mode, after this
+branch merges (the verification runbook, when it lands, will describe how
+to re-run the checks above).
 
 ## 3. Verilator port
 
