@@ -101,7 +101,9 @@ st_formal() {
     if diff "$OUT/formal.expected" "$OUT/formal.$eng.got" > "$OUT/formal.$eng.diff"; then txt="$txt $eng:$nexp/$nexp-match"
     else bad=1; txt="$txt $eng:$(grep -c '^[<>]' "$OUT/formal.$eng.diff")-verdict-lines-differ(see formal.$eng.diff)"; fi
   done
-  local names=""; for f in tb/formal/*.nonvac; do n=$(basename "$f" .nonvac); names="$names $n"; done
+  # only harnesses of the default list (the names in verify-all.expected); opt-in ones (mem_li, ...) are residuals
+  local names=""; for f in tb/formal/*.nonvac; do n=$(basename "$f" .nonvac)
+    awk -v n="$n" '$2==n{f=1} END{exit !f}' scripts/verify-all.expected && names="$names $n"; done
   bash tb/formal/run.sh --nonvac $names > "$OUT/formal.nonvac.log" 2>&1
   local ok miss er; ok=$(grep -c '^NONVAC-OK' "$OUT/formal.nonvac.log"); miss=$(grep -c '^NONVAC-MISS' "$OUT/formal.nonvac.log"); er=$(grep -c '^NONVAC-ERROR' "$OUT/formal.nonvac.log")
   txt="$txt nonvac:ok=$ok,miss=$miss,error=$er"
