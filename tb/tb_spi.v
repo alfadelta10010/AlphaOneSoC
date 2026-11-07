@@ -778,7 +778,7 @@ module tb_spi;
         begin
             c = rn(100);
             if (c < 60) pick_baud = rn(4);
-            else if (c < 85) pick_baud = (rn(12) == 0) ? 78 : 4 + rn(74);   // one in 12 is B=78 (the floor of 5 bytes needs about this; seeds 1-4 reach 8, 10, 5, 13)
+            else if (c < 85) pick_baud = (rn(12) == 0) ? 78 : 4 + rn(74);   // one in 12 is B=78; the byte-bin floors are met by the steering in rand_phase, not by this draw
             else if (ecnt - slow_last > 1500) begin
                 slow_last = ecnt; slow_rr = slow_rr + 1;
                 case (slow_rr % 4)
@@ -791,6 +791,68 @@ module tb_spi;
         end
     endfunction
 
+    // Byte-bin quota steering (TB-009). The floor and a representative BAUD of each B bin, and the
+    // clocks one forced byte takes there (16 (B+1) shift clocks + load/handshake allowance).
+    function integer bin_floor(input integer q);
+        bin_floor = (q < 4) ? 40 : (q == 4) ? 20 : (q == 7) ? 2 : 5;
+    endfunction
+    function integer bin_rep(input integer q);
+        bin_rep = (q < 4) ? q : (q == 4) ? 4 : (q == 5) ? 78 : (q == 6) ? 79 + rn(175) : 254 + rn(2);
+    endfunction
+    function integer bin_cost(input integer q);
+        bin_cost = 16 * (((q < 4) ? q : (q == 4) ? 77 : (q == 5) ? 78 : (q == 6) ? 253 : 255) + 1) + 40;
+    endfunction
+    integer n_steer = 0, n_rops = 0;
+    // Clocks the bins' outstanding needs would take at the worst B of each bin, and the bin with
+    // the most outstanding work (-1 if every floor is met).
+    integer st_budget, st_pick;
+    task steer_look;
+        integer q, nd, w, wb;
+        begin
+            st_budget = 0; st_pick = -1; wb = 0;
+            for (q = 0; q < 14; q = q + 1) begin
+                nd = (q < 8) ? bin_floor(q) - (cov_bin[q] - s_bin[q]) :
+                     (q < 13) ? 50 - (n_stall[q - 8] - s_stall[q - 8]) : 100 - (n_rdmid - s_rdmid);
+                if (nd > 0) begin
+                    w = nd * ((q < 8) ? bin_cost(q) : 200);
+                    st_budget = st_budget + w;
+                    if (w > wb) begin wb = w; st_pick = q; end
+                end
+            end
+        end
+    endtask
+    // One forced byte at the most-behind bin: resets off, engine idle, configure, load, finish.
+    task steer_byte(input integer q);
+        integer g; reg [31:0] r;
+        begin
+            rand_rst_en = 1'b0; rst_left = 0;
+            @(negedge clk); rst = 1'b0;
+            g = 0;
+            while ((m_active || m_bba) && g < 100000) begin idle(1); g = g + 1; end
+            if (q < 8) begin
+                cfg(rn(4), bin_rep(q));
+                acc(1'b1, 4'hF, `SL_TXDATA, rnd(0), r);
+            end else begin
+                // Stall quota: a byte at BAUD 1, a RXDATA read in it (mid-byte read), then a write to the
+                // class's register in it, which stalls until the byte is done (q 12 and 13: STATUS).
+                cfg(rn(4), 1);
+                acc(1'b1, 4'hF, `SL_TXDATA, rnd(0), r);
+                acc(1'b0, 4'hF, `SL_RXDATA, 0, r);
+                case (q)
+                    8:  acc(1'b1, 4'h1, 4'd0, rnd(0), r);
+                    9:  acc(1'b1, 4'h1, 4'd3, 1, r);
+                    10: acc(1'b1, 4'h1, `SL_CONTROL, rn(4), r);
+                    11: acc(1'b1, 4'h1, `SL_BAUD, 1, r);
+                    default: acc(1'b1, 4'h1, `SL_STATUS, rnd(0), r);
+                endcase
+            end
+            g = 0;
+            while ((m_active || m_bba) && g < 100000) begin idle(1); g = g + 1; end
+            n_steer = n_steer + 1;
+            rand_rst_en = 1'b1;
+        end
+    endtask
+
     task rand_phase(input integer ncyc);
         integer end_e, c, p, q, tn, nb0; reg [3:0] b; reg [31:0] d, r;
         begin
@@ -802,6 +864,13 @@ module tb_spi;
             wr(`SL_CONTROL, 3); wr(`SL_BAUD, 1); wr(4'd3, 1);
             rand_rst_en = 1'b1;
             while (ecnt < end_e) begin
+                // The floors hold for every seed: once the clocks left only just cover the bytes
+                // still owed to the byte bins, the stall classes and the mid-byte reads, those are forced (most-behind first).
+                // The 10000 clocks of slack cover the one random access in flight, which can wait out a BAUD 255 byte (4100).
+                steer_look;
+                n_rops = n_rops + 1;
+                if (st_pick >= 0 && end_e - ecnt <= st_budget + 10000) steer_byte(st_pick);
+                else begin
                 if (m_baud >= 8'd78 && rn(100) < 6) rst_left = 1;            // leave a slow BAUD soon
                 if (!m_active && !m_bba && m_baud == 8'hFF && ecnt - slow_last > 200 && rn(2))
                     acc(1'b1, 4'h1, `SL_BAUD, rn(4), r);
@@ -833,9 +902,10 @@ module tb_spi;
                         else acc(1'b1, {rn(8), 1'b0} & 4'hE, rn(16), d, r);   // no byte lane 0: never stalls
                     end else acc(1'b0, 4'hF, rn(2) ? 4'd0 : `SL_BAUD, 0, r);
                 end
+                end
             end
             rand_rst_en = 1'b0; rst = 1'b0;
-            $display("random phase: %0d bytes", n_bytes - nb0);
+            $display("random phase: %0d bytes, steered %0d of %0d random ops", n_bytes - nb0, n_steer, n_rops);
             idle(4);
         end
     endtask
