@@ -225,6 +225,9 @@ M routing, reg, pc, causal, unique, liveness, ill, cover, fyra_imem) fails on at
   U-mode, MPRV and C toggling are not exercised (W-RVFI-2). Covered by tb_pmp, csr formal, directed.
 * **M arithmetic (A-v3):** replaced by ALTOPS; covered by tb_muldiv and directed. Only M dispatch (isMulDiv),
   latency and writeback are checked.
+* **M operand latch (A-v3):** the ALTOPS hook computes from `alu_d1`/`alu_d2` when the M op is
+  captured, upstream of muldiv's operand latch, so a fault in that latch (or in the op select
+  into muldiv) is invisible here; covered by tb_muldiv and the directed suite.
 * **CSRs:** no csr checks (trap causes, mtval, mepc, interrupt causes included); covered by the
   CSR/trap benches and river_core.
 * **A extension:** reported but no A insn checks exist for rv32imc; covered by directed and river_core.
