@@ -76,10 +76,10 @@ declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_
 # spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
 declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
 BUILTIN=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
-declare -A PDR_TIMEOUT=() GEN=()
+declare -A PDR_TIMEOUT=() GEN=() NVDEPTH=()
 bad=0
 err=0
-ARRS=(FILES EXTRA PASSES MODE BDEPTH IDEPTH PRE PROPN DEFS PDR_TIMEOUT GEN)
+ARRS=(FILES EXTRA PASSES MODE BDEPTH IDEPTH PRE PROPN DEFS PDR_TIMEOUT GEN NVDEPTH)
 sig() { local a n; for a in "${ARRS[@]}"; do for n in "${BUILTIN[@]}"; do eval "printf '%s\n' \"$a[$n]=\${$a[$n]-UNSET}\""; done; done; }
 SIDE=(); declare -A BROKEN=()
 for conf in $(ls "$HERE"/*.conf 2>/dev/null | sort); do
@@ -123,6 +123,9 @@ names=("$@"); [ ${#names[@]} = 0 ] && names=("${BUILTIN[@]}" "${SIDE[@]}")
 #   cat <ID>             # why   catalogue mutant of tb/mutate/mutants.py
 #   sed <file> <expr>    # why   hand-made copy (must change the file)
 #   def <-DNAME ...>     # why   sources unchanged, harness built with these defines
+#   engine sat|sby       # why   the engine for the lines below (default: the current one);
+#                                for harnesses whose copies differ only through state that
+#                                sat starts at zero (spi_dc's unreset cc/bc)
 # Prints NONVAC-OK / NONVAC-MISS <name> <id>: <verdict line>; NONVAC-ERROR (exit 2)
 # when the copy cannot be made or the run gave no verdict; any MISS exits 1.
 if [ $NONVAC = 1 ]; then
@@ -130,9 +133,9 @@ if [ $NONVAC = 1 ]; then
   for n in "${names[@]}"; do
     nf="$HERE/$n.nonvac"
     if [ ! -f "$nf" ]; then echo "NONVAC-ERROR $n: no $n.nonvac"; nerr=1; continue; fi
-    k=0
+    k=0; neng="$ENGINE"
     while IFS= read -r line; do
-      case "$line" in ''|'#'*) continue;; esac
+      case "$line" in ''|'#'*) continue;; 'engine '*) neng=$(echo "${line#engine }" | sed 's/ .*//'); continue;; esac
       k=$((k+1)); kind=${line%% *}; rest=${line#* }; body=$(echo "$rest" | sed 's/  *# .*$//')
       d="$OUT/nonvac_${n}_$k"; rm -rf "$d"; mkdir -p "$d"; cp -r "$SRC" "$d/src"; defs=""
       id="$kind $body"
@@ -158,8 +161,9 @@ PYEOF
         def) defs="$body";;
         *) echo "NONVAC-ERROR $n $id: unknown line kind"; nerr=1; continue;;
       esac
-      v=$(FYRA_SRC="$d/src" OUT_DIR="$d" EXTRA_DEFS="$defs" FORMAL_ENGINE="$ENGINE" bash "$0" "$n" 2>&1 | head -1)
+      v=$(FYRA_SRC="$d/src" OUT_DIR="$d" EXTRA_DEFS="$defs" NONVAC_RUN=1 FORMAL_ENGINE="$neng" bash "$0" "$n" 2>&1 | head -1)
       case "$v" in
+        *"did not close"*) echo "NONVAC-MISS $n $id: no counterexample ($v)"; nbad=1;;
         FAILED*) echo "NONVAC-OK $n $id: $v";;
         ERROR*|"") echo "NONVAC-ERROR $n $id: $v"; nerr=1;;
         *) echo "NONVAC-MISS $n $id: $v"; nbad=1;;
@@ -369,8 +373,11 @@ PYEOF
     esac
     continue
   fi
+  # --nonvac child run: an induct harness runs as bmc (a broken copy must give a
+  # counterexample from reset, not merely "induction did not close")
+  if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = induct ]; then MODE[$n]=bmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
-  if [ "${MODE[$n]}" = pdr ] || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
+  if [ "${MODE[$n]}" = pdr ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
     sby_harness "$n"; continue
   fi
   if [ "${MODE[$n]}" = cover ]; then
@@ -396,7 +403,7 @@ PYEOF
   else
     sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps ${IDEPTH[$n]:-$DEPTH}"
   fi
-  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${n}_props.sv"
+  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${PROPN[$n]:-$n}_props.sv"
   else rd="read_verilog -sv -formal $srcs; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${PROPN[$n]:-$n}_props.sv"; fi
   timeout 1800 yosys -p "$rd; prep -top ${PROPN[$n]:-$n}_props; \
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
