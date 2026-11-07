@@ -77,10 +77,10 @@ declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_
 # spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
 declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
 BUILTIN=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
-declare -A PDR_TIMEOUT=() GEN=() NVDEPTH=()
+declare -A PDR_TIMEOUT=() GEN=() NVDEPTH=() SBYOPT=()   # SBYOPT[n]: extra sby [options] lines (core_inv_armed_cov: vcd off)
 bad=0
 err=0
-ARRS=(FILES EXTRA PASSES MODE BDEPTH IDEPTH PRE PROPN DEFS PDR_TIMEOUT GEN NVDEPTH)
+ARRS=(FILES EXTRA PASSES MODE BDEPTH IDEPTH PRE PROPN DEFS PDR_TIMEOUT GEN NVDEPTH SBYOPT)
 sig() { local a n; for a in "${ARRS[@]}"; do for n in "${BUILTIN[@]}"; do eval "printf '%s\n' \"$a[$n]=\${$a[$n]-UNSET}\""; done; done; }
 SIDE=(); declare -A BROKEN=()
 for conf in $(ls "$HERE"/*.conf 2>/dev/null | sort); do
@@ -200,6 +200,8 @@ depth $bd"; engines="smtbmc bitwuzla"; dfn="$dfn -DSBY_COVER";;
 depth 1
 timeout ${PDR_TIMEOUT[$n]:-1200}"; engines="abc pdr";;
   esac
+  [ -n "${SBYOPT[$n]:-}" ] && opts="$opts
+${SBYOPT[$n]}"
   { echo "[options]"; echo "$opts"; echo "[engines]"; echo "$engines"; echo "[script]"
     echo "read_verilog -sv -formal$(for f in $srcs; do printf ' %s' "$(basename "$f")"; done)"
     [ -n "${PRE[$n]:-}" ] && echo "${PRE[$n]}" | tr ';' '\n'

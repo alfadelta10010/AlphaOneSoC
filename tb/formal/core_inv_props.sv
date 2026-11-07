@@ -87,11 +87,22 @@ module core_inv_props (
     end
 
 `ifdef SBY_COVER
+`ifdef ARMED_COVER
+    reg idle_seen = 1'b0, flush_q = 1'b0, fix_q = 1'b0, fix_q_seen = 1'b0;   // fix_q: the unit was in S_FIX last cycle, so a done now ends a MUL/DIV, not a shift
+    always @(posedge clk) begin
+        flush_q <= flush; fix_q <= (x_mst == 3'd4); if (rst) fix_q_seen <= 1'b0; else if (idle_seen && fix_q && muldiv_done) fix_q_seen <= 1'b1;
+        if (rst) idle_seen <= 1'b0; else if (chk && x_mst == 3'd0) idle_seen <= 1'b1;
+    end
+`endif
     always @(*) begin
         cover (chk && csr_wb_hazard);
         cover (chk && flush && ifex_valid && ex_is_iter);   // a flush with an M/shift instruction in EX (a trapping one: muldiv_want is 0)
         cover (chk && muldiv_ready);
         cover (chk && muldiv_done);
+`ifdef ARMED_COVER
+        // after a reset, with the unit seen idle first: a done is a whole operation from IDLE
+        cover (idle_seen && muldiv_done && fix_q);                          // armed done of a full MUL/DIV (a shift is done in a few cycles)
+`endif
     end
 `endif
 endmodule
