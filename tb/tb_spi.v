@@ -829,6 +829,7 @@ module tb_spi;
             @(negedge clk); rst = 1'b0;
             g = 0;
             while ((m_active || m_bba) && g < 100000) begin idle(1); g = g + 1; end
+            if (g >= 100000) fail("steer: engine still busy after 100000 clocks", g, 0);
             if (q < 8) begin
                 cfg(rn(4), bin_rep(q));
                 acc(1'b1, 4'hF, `SL_TXDATA, rnd(0), r);
@@ -848,6 +849,7 @@ module tb_spi;
             end
             g = 0;
             while ((m_active || m_bba) && g < 100000) begin idle(1); g = g + 1; end
+            if (g >= 100000) fail("steer: engine still busy after 100000 clocks", g, 0);
             n_steer = n_steer + 1;
             rand_rst_en = 1'b1;
         end

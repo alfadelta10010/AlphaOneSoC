@@ -281,7 +281,7 @@ module tb_uart;
     // that frame's DR (bi_link 1) or OE (bi_link 2).
     reg        bi_val = 1'b0, bi_pend = 1'b0;
     real       bi_lo, bi_hi;
-    integer    bi_link = 0, rx_breaks = 0, bi_seen = 0, rx_steered = 0;
+    integer    bi_link = 0, rx_breaks = 0, bi_seen = 0, rx_steered = 0, brk_floor = 5;
     reg  [7:0] m_rbr;
     reg        m_rbr_known = 1'b0;
     integer    rx_kept = 0, rx_dropped = 0, rx_popped = 0, rx_bad = 0, rx_glitches = 0;
@@ -802,6 +802,7 @@ module tb_uart;
 
     initial begin
         if ($value$plusargs("SEED=%d", seed)) ;
+        if ($value$plusargs("BRK_FLOOR=%d", brk_floor)) ;
         if (!$value$plusargs("NRAND=%d", nrand)) nrand = 1500;
         model_reset;
         noise;
@@ -1534,7 +1535,7 @@ module tb_uart;
         // followed by the LSR read that clears BI (one rx_breaks and one bi_seen per forced break;
         // the guard below only stops a broken bench from looping).
         n = 0;
-        while ((rx_breaks < 5 || bi_seen < 5) && n < 20) begin
+        while ((rx_breaks < brk_floor || bi_seen < brk_floor) && n < 2 * brk_floor + 10) begin
             d = cur_div(); tb = bit_ns(d, 0.0);
             wait_cts;
             rx_break((10 + urand(20)) * tb, d);
@@ -1596,12 +1597,12 @@ module tb_uart;
                  tx_frames_by_div[3], tx_stalls);
         $display("tb_uart: RX %0d kept, %0d dropped (overrun), %0d popped, %0d bad-stop/break (%0d breaks), %0d glitches, OE seen %0d times, BI %0d",
                  rx_kept, rx_dropped, rx_popped, rx_bad, rx_breaks, rx_glitches, oe_seen, bi_seen);
-        $display("tb_uart: steered %0d of %0d random ops (breaks %0d, BI %0d)", rx_steered, 2 * nrand, rx_breaks, bi_seen);
+        $display("tb_uart: steered %0d of %0d random ops (breaks %0d, BI %0d, floor %0d)", rx_steered, 2 * nrand, rx_breaks, bi_seen, brk_floor);
         // The floor of 5 holds by construction (the top-up after the random phase). BI is sticky until an
         // LSR read clears it, so one observation can cover two breaks but never
         // the other way round; bi_seen counts clearing reads only.
         if (bi_seen > rx_breaks) fail($sformatf("BI seen %0d times for %0d breaks sent", bi_seen, rx_breaks));
-        if (rx_breaks < 5 || bi_seen < 5) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
+        if (rx_breaks < brk_floor || bi_seen < brk_floor) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
         if (tx_frames != tx_writes) fail($sformatf("%0d THR writes but %0d frames", tx_writes, tx_frames));
         if (errors == 0) $display("PASS tb_uart (%0d checks)", checks);
         else             $display("FAIL tb_uart: %0d errors, %0d checks", errors, checks);
