@@ -31,8 +31,8 @@ RUN=$T/tb/eqy/run.sh
 n=$(grep -c '^NL_MD5=[0-9a-f]*$' "$RUN"); [ "$n" = 1 ] || { echo "eqy-refit.sh: NL_MD5 line not found once in run.sh" >&2; exit 2; }
 sed -i "s/^NL_MD5=[0-9a-f]*\$/NL_MD5=$md5/" "$RUN"
 # stop after the setup of the prove stage (the partition list, the match report), before any proof
-n=$(grep -c '^  say "prove: ' "$RUN"); [ "$n" = 1 ] || { echo "eqy-refit.sh: run.sh changed: the 'say \"prove:' line is not unique; update this script" >&2; exit 2; }
-sed -i '/^  say "prove: /a\  [ -n "${SETUP_ONLY:-}" ] \&\& { echo "EQY STAGE setup OK"; exit 0; }' "$RUN"
+n=$(grep -c '^  say "prove: \$(tail -1' "$RUN"); [ "$n" = 1 ] || { echo "eqy-refit.sh: run.sh changed: the 'say \"prove:' line is not unique; update this script" >&2; exit 2; }
+sed -i '/^  say "prove: \$(tail -1/a\  [ -n "${SETUP_ONLY:-}" ] \&\& { echo "EQY STAGE setup OK"; exit 0; }' "$RUN"
 export GITREV="refit"
 for s in read lemma fsminv prove; do
   echo "--- stage $s"
