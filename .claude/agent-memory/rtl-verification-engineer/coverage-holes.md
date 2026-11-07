@@ -48,3 +48,7 @@
 - Formal mutants measured locally: spi_core fails on SPI01/04a/08/18/22; spi_bus on SPI18/21; spi_bb on SPI01/04a/18/21/22 (not 08). Times: core ~20 s, bus <1 s, bb ~1 s, cover ~4 min per point.
 - RVFI reporting hole (by design, 2026-11-07): an interrupt taken while a WFI is still in EX (mepc = pc+4) makes that WFI vanish from the RVFI trace (NRET=1). Not a pc-check problem; instret/Spike behaviour stays with the directed suite.
 - 2026-11-07: FC49 core_inv bmc 20 never reaches muldiv_done/ready (vacuous for FC49). mem_li LI 442/456 measured, not proved (needs depth 582; conditional on DF_N<=4, bounded only).
+- reg_ch0 is blind to transient operand faults (port samples at EX exit; WO-38 review 2026-11-07); CSR-write/A operands have no riscv-formal operand check. Also unexplored there: memory waits >2 cycles, illegal encodings other than 0, trap/mret targets.
+
+- 2026-11-07 VC-10: qspi_pmod_model does not hold-check a host IO output-enable drop (end of write, read
+  turnaround); measured 10 ns at RTL, unmeasured at SDF. Edit proposed in vc10/REVIEW.md. Untested, not unreachable.

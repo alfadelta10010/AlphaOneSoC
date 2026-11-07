@@ -126,3 +126,25 @@
 - sby prep runs `formalff -setundef -clk2ff -ff2anyinit -hierarchy`; aiger is written `-zinit`: a flop with no init value gets a free power-up value (`$anyinit`). Check: `grep -E '^ +[0-9]+ +\$anyinit' sby_<n>/model/design_aiger.log`.
 - A harness PASSES `setundef -zero -init` runs BEFORE that and pins every such flop to 0 (0 `$anyinit`). WO-31's mem.conf/qspi_strap.conf did this; "pdr refused x bits" does NOT reproduce: `setundef -anyseq;` (no -init) and `setundef -zero;` both run and PROVE under abc pdr.
 - Probes: ~/regr/vc/review-f/{tree,tA,tP} (tA = free-init copies, tP = core_inv M2 induction copy).
+
+## WO-38 review (2026-11-07, VC-5, localFiles/verif-close-2026-11-07/vc5/REVIEW.md)
+- riscv-formal facts (c992aa61): pc_bwd is vacuous on any in-order NRET=1 core (same-cycle loop is empty
+  for ch0; expectation comes only from an earlier retire of N+1). pc_fwd + liveness + unique cover it.
+  [depth] "a b": a = checker RESET_CYCLES (genchecks.py:716), b = the single check cycle.
+  The reg check uses a free register and order and compares reported values only. ill = insn==0 only.
+  bus_* checks exist but need an RVFI_BUS port.
+- FyraCore port: rs*_rdata is sampled at EX exit (fyracore.v:1636-1640), so reg_ch0 cannot see a
+  transient RF-read fault (RG05). ALTOPS hook takes op/operands from ex_funct3/alu_d1/alu_d2, so a
+  muldiv op/operand wiring fault is masked.
+- Probe ~/regr/vc/review38 (`reg 1 20`): FC56 FAIL in 55 s; RG05 TIMEOUT at 540 s under load ~5.5/6.
+  bmc3 reg on RG05 is slow; do not expect a quick PASS.
+
+## WO-43 review (2026-11-07, VC-10, localFiles/verif-close-2026-11-07/vc10/REVIEW.md)
+- qspi_pmod_model setup/hold (c38546d): mask 482-489, chk_rise 518, io_chg 552, CS hold #0.001 at 595.
+  Gap: oe drop not hold-checked (566 clears hold_pend); RTL drop = 10.000 ns after last sampled rise (safe).
+- Cheap non-vacuity for model timing checks: raise one `parameter real` limit above the measured value
+  (python re.subn on a model copy) -> must fail with that device/kind; all 7 killed in ~1 s each.
+- ctl_oe is reset-only: qspi_ctrl.v:240/247, wrapper :113 (& run from rst_sync).
+- QUIRK: Makefile QSPI_RUNS words carry literal quotes ("+A +B"); `for a in $QR` in bash mangles them.
+  Use `eval "set -- $QR"` or run via make. $test$plusargs prefix-matches (+FLASH_CRM" still matches).
+- Probe dir ~/regr/vc/review43 (m/<param>/ model copies, b/<param>/ builds).
