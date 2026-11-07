@@ -413,3 +413,11 @@ non-vacuity matrix". Mutant map in WO-38 step 3.
   real CEX (induct -> bmc NVDEPTH 24; "did not close" = MISS); sidecar covers via sby as <n>_cov
   (sat cover loop is spi_cover-only); PRE branch PROPN. sby bmc ~20x faster than sat (spi_bb 7 s vs 157 s).
   Finding: run.py counts "induction did not close" as a kill -> N3 35/35 may include non-CEX kills.
+
+## Formal review of WO-30 D / WO-31 / WO-32 (2026-11-07, localFiles/verif-close-2026-11-07/REVIEW-formal-2026-11-07.md)
+- pdr init: csr 17 / syscon_comb 14 `$anyinit` (free, sound as is). qspi_strap, mem_flash, mem_arb, mem_tcem committed zero-pinned (0 `$anyinit`) but sound by argument (armed-gated; qspi t_we/t_psram written on every S_IDLE->S_CMD, read only outside S_IDLE; sr feeds rdata only, mem_props never reads rdata) and re-PROVED with free init (25/12/14/13 `$anyinit`; mem_tcem 326 s). Edit E1: replace `setundef -zero -init;` by `setundef -anyseq;`.
+- core_inv_props.sv:81 misplaced `end`: S2/S3/M1/S4 asserted ungated ("when 1'1"); fails under sby free init.
+- core_inv BMC depth 20 < one M op (1+32+1 cycles): FC49 bounded check vacuous (done/ready never rise). Needs depth >= core_inv_cov's muldiv_ready step.
+- M2 (muldiv_busy -> (st==S_SH)==ex_is_shift && (st==S_SH || isdiv==ctrl_aluOp[2])) is necessary, NOT sufficient: L1 induction still fails (5 s probe). FC02/FC49 -> "equivalent (argument + bounded)".
+- md07 PROVED L1 accepted. md07_miter drv1 ERROR no verdict; drv2 pending at review time.
+- WO-30 logs show NONVAC-MISS spi_dc SPI01/SPI20 - confirm resolved.

@@ -121,3 +121,8 @@
   supports RISCV_FORMAL_PMA_MAP(pc only) + MEM_FAULT; ill check = only insn 0;
   liveness/hang get RISCV_FORMAL_FAIRNESS; [depth] "a b c" = reset-cycles trig
   check; genchecks solver option: yices|boolector|bitwuzla|bmc3|btormc.
+
+## sby initial state (review 2026-11-07, verified on the sandbox)
+- sby prep runs `formalff -setundef -clk2ff -ff2anyinit -hierarchy`; aiger is written `-zinit`: a flop with no init value gets a free power-up value (`$anyinit`). Check: `grep -E '^ +[0-9]+ +\$anyinit' sby_<n>/model/design_aiger.log`.
+- A harness PASSES `setundef -zero -init` runs BEFORE that and pins every such flop to 0 (0 `$anyinit`). WO-31's mem.conf/qspi_strap.conf did this; "pdr refused x bits" does NOT reproduce: `setundef -anyseq;` (no -init) and `setundef -zero;` both run and PROVE under abc pdr.
+- Probes: ~/regr/vc/review-f/{tree,tA,tP} (tA = free-init copies, tP = core_inv M2 induction copy).
