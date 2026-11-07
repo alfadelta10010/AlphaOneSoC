@@ -7,7 +7,8 @@
 # LIST lines are `name|hex|plusargs` (build_isa.sh). The hex is looked up in HEXDIR
 # (default: the list's own directory/hex); @RUN@ in the plusargs is OUT.
 # One compile, then the list with JOBS vvp processes (auto: 2 while the file
-# Q3DONE is missing, else 5). Resumable: a test with a <name>.verdict is skipped.
+# Q3DONE is missing, else 5). A line with +SIG_REF=<file> whose file is missing or empty stops the
+# whole run before the compile (exit 1, message on stderr and in STATUS). Resumable: a test with a <name>.verdict is skipped.
 # Per test OUT/<name>.log and OUT/<name>.verdict:
 #   `PASS|FAIL|TIMEOUT <cycles> cycles <wall> s [known: <label>]`
 # MAX_CYCLES = BASE's cycles * 2 + 50000, else DEFMAX (5,000,000). The last
@@ -28,6 +29,16 @@ PDKV=${PDKV:-8afc8346a57fe1ab7934ba5a6056ea8b43078e71}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 t0=$SECONDS
 log() { echo "$(date -Is) $*" >> "$OUT/STATUS"; }
+# a list line with +SIG_REF=<file> needs that reference signature (spike_sig.sh): stop before any simulation
+nref=0
+while IFS='|' read -r name hex args; do
+  [ -n "$name" ] || continue
+  [ -n "${ONLY:-}" ] && ! [[ $name =~ $ONLY ]] && continue
+  [ -e "$OUT/$name.verdict" ] && continue
+  ref=$(echo " $args" | sed -n 's/.* +SIG_REF=\([^ ]*\).*/\1/p')
+  [ -n "$ref" ] && [ ! -s "$ref" ] && { echo "run_gl.sh: no reference signature for $name: $ref missing or empty (run spike_sig.sh OUT=<build dir>)" | tee -a "$OUT/STATUS" >&2; nref=$((nref + 1)); }
+done < "$LIST"
+[ "$nref" -eq 0 ] || { echo "run_gl.sh: $nref list line(s) without a SIG_REF file: nothing simulated" | tee -a "$OUT/STATUS" >&2; exit 1; }
 if [ "${RTL:-0}" = 1 ]; then
   SRC="$R/src/alu.v $R/src/branchCtrl.v $R/src/clint.v $R/src/compressed_decoder.v $R/src/controller.v $R/src/csr.v $R/src/decoder.v $R/src/fyracore.v $R/src/muldiv.v $R/src/pmp.v $R/src/regFile.v $R/src/regs.v $R/src/rf_top.v $R/src/signExt.v $R/src/qspi_ctrl.v $R/src/mem_ctrl.v $R/src/soc_bus.v $R/src/uart.v $R/src/gpio.v $R/src/spi.v $R/src/syscon.v $R/src/alphaone_soc.v $R/src/tt_um_alfadelta10010_alphaone_soc.v"
   DEFS=""
