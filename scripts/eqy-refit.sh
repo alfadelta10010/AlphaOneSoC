@@ -38,13 +38,13 @@ for s in read lemma fsminv prove; do
   echo "--- stage $s"
   SETUP_ONLY=1 bash "$RUN" NETLIST="$NETLIST" JOBS="$JOBS" STAGE=$s > "$WORK/stage.$s.log" 2>&1; rc=$?
   tail -3 "$WORK/stage.$s.log"
+  [ "$s" = read ] && [ -f "$T/build/eqy/read/accounting.txt" ] && { echo "--- flop accounting"; cat "$T/build/eqy/read/accounting.txt"; }
   if [ $rc != 0 ]; then
     if [ "$s" = lemma ] || [ "$s" = fsminv ]; then echo "eqy-refit.sh: stage $s failed (rc=$rc): the constant set or the FSM invariant changed; a person must look (see $WORK/stage.$s.log)"; exit 3; fi
     echo "eqy-refit.sh: stage $s failed (rc=$rc), see $WORK/stage.$s.log"; exit 2
   fi
 done
 B=$T/build/eqy
-echo "--- flop accounting"; cat "$B/read/accounting.txt"
 PC=$(grep -c . "$B/prove/eqy/partition.list"); echo "--- partitions $PC"
 echo "--- match report"; cat "$B/prove/match.txt"
 python3 - "$R" "$B" "$WORK" "$md5" "$PC" <<'PY'
