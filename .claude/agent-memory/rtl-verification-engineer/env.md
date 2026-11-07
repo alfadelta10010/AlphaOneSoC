@@ -98,3 +98,26 @@
   expose mod/wire ...; read_verilog -sv -formal harness.sv; prep -top h`
   (harness instantiates mod with the exposed wires as ports; mutant toy killed).
   Coordinator rule: a sat PROVED counts only at induction length 1.
+
+## 2026-11-07 (planner C, VC-1/VC-8)
+- tb/eqy runs on fin-3x4 **nl.v** (md5 4d861ceb16f49fcadb0e55cf65d6e26d), as WO-24 used sc-3x4 nl.v (fbf13f22...), not pnl. STAGE=read takes 6 s.
+- `nice` on the docker CLI does not reach the container. To cap an EQY stage during someone else's night run: one `docker run --cpus=1.5 ... nice -n 10 env NATIVE=1 bash tb/eqy/run.sh ...` (fine for read/lemma/fsminv; prove needs run.sh's dk route for make).
+- fin-3x4 synthesis recodes 4 FSMs: + soc.gpio_inst.spi_inst.st (log 2180: 00->bit0, 10->bit1, 01->bit2). The SDF corner files have identical min:typ:max triplets; CLOCK_PERIOD 16 ns.
+- An SDF GLS full tt_pins run at 16 ns is about 2-3 min (~/regr/rfm/gls-sdf/results-repo.txt).
+- 2026-11-07 sandbox formal (probes ~/regr/vc/plannerA/p1,p2): OSS CAD yosys 0.70+286 gives all 14
+  run.sh verdict words (csr PROVED at k-ind LENGTH 8; others as recorded), ~3.5 min total. sby:
+  abc pdr PASS syscon_gate / FAIL WD16 (1 s); smtbmc bitwuzla prove depth 1 PASS syscon_gate and
+  spi_core (4 s) but UNKNOWN on WD16 (base depth too short); abc pdr TIMEOUT >280 s on spi_core.
+  OSS CAD bin/* are self-contained wrappers (set PATH themselves); suprove/avy present.
+- riscv-formal / RVFI probes (2026-11-07, sandbox, under GL load; planner B VC-5):
+  clone pinned c992aa61 at ~/regr/vc/plannerB/riscv-formal. Bare fyracore BMC
+  (free mem, full-RAM PMA, functional RF stub): yices depth 40 in 88 s (~linear),
+  bitwuzla explodes (step 15 = 87 s, doubling), abc bmc3 depth 40 in 3 s; sby
+  `abc bmc3` honours assume (PASS with, FAIL without). Generic `synth` (ABC) gate
+  stat differs ~0.1% between two equivalent inputs -> never a zero-area criterion;
+  coarse `prep -flatten; opt_clean -purge` stat is deterministic (2063 cells, 1 s).
+  equiv_make on prep RTLIL exited 1 under -q (cause unseen; try memory_map first).
+  riscv-formal facts: insn check asserts spec_trap==trap (no priv/PMP model) and
+  supports RISCV_FORMAL_PMA_MAP(pc only) + MEM_FAULT; ill check = only insn 0;
+  liveness/hang get RISCV_FORMAL_FAIRNESS; [depth] "a b c" = reset-cycles trig
+  check; genchecks solver option: yices|boolector|bitwuzla|bmc3|btormc.

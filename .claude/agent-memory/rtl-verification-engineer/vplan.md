@@ -389,3 +389,27 @@ REQ-SPI-001..020 -> tb_spi (T01-T14, PROBE, RT sweep), test-soc-spi (sd_init,
 sd_b1, spi_mixed, sd_reboot, 3 expected-fail controls), formal spi_core/dc/bus
 (32 props, induct L1 via expose), spi_bb (BMC 40), spi_cover (6), spi_f12
 (struct); mutants SPI01-SPI32. Status: planned (RTL WO-28 in progress).
+
+## 2026-11-07 planner C
+- VC-1 -> WO-35 (EQY refit to fin-3x4: derived accounting 1528/1349/1323/7/10-19/188; 186 constants incl. gpio out_r[1],[3]; 4th FSM cut; 7 mutants + pdr confirm). VC-8 -> WO-34 (glitch_mon on tb_tt_um, SDF pnl; non-vacuity = TT01 + SoC pin-gate inputs +2 ns must FAIL; the real TT01 netlist (N1) gives the verdict, either outcome legal).
+
+## 2026-11-07 VC planner A (WOs only, no code)
+WO-30 (run.sh sidecars/FORMAL_BIN/sby engine/--nonvac/--cover, deeper csr/syscon_comb/spi_bb/core_req),
+WO-31 (bus BA1-5; mem MF1-3 MT1-2 MD1-3 ML1-2 by pdr; qspi_strap miter kills QS06; core_df BMC
+discharges M-A4 DF_N=2), WO-32 (md07 pdr/len1 + md07_miter BMC; core_inv FC02/FC49 via expose),
+WO-33 (floors by quota steering TB-007/TB-009; SA-008 K1-K4), WO-39 (run.py FORMAL map, formal-only
+campaign, VPLAN/CLAUDE.md). Index build/wo/INDEX-VC-A.md. PROVED = length 1 or abc pdr PASS (user Q open).
+SA-008 is now docs text (soc-architecture.md "SA-008" paragraph: fire wins) -> spec, not ambiguity.
+
+## VC-5 riscv-formal (planned 2026-11-07, WO-36/37/38, build/wo/INDEX-VC-B.md)
+Status: planned. RVFI port in fyracore.v under ifdef RISCV_FORMAL (+ALTOPS hook on
+muldiv .result); wrapper tb/rvfi: full-RAM PMA, env = M-mode/no PMP lock/no MPRV-U/
+misa.C=1 (assumes on fv_ taps), free mem data + bounded ready, RF model with free
+init + free collision value, custom fyra_imem check. Depths: insn 20, shifts/M at
+measured min+3, consistency 10-30, liveness ~62. Not verified "until WO-38 PASS +
+non-vacuity matrix". Mutant map in WO-38 step 3.
+- 2026-11-07 review WO-30 stage A (3ed605a 1d9a5dc be95413): APPROVED as base. Fixups: armed-gate
+  syscon_comb + spi_bus (they relied on sat -set-init-zero; sby starts flops free); nonvac must be a
+  real CEX (induct -> bmc NVDEPTH 24; "did not close" = MISS); sidecar covers via sby as <n>_cov
+  (sat cover loop is spi_cover-only); PRE branch PROPN. sby bmc ~20x faster than sat (spi_bb 7 s vs 157 s).
+  Finding: run.py counts "induction did not close" as a kill -> N3 35/35 may include non-CEX kills.

@@ -44,3 +44,6 @@
   193/206" (e4de29c..a4ac1d0) was the any-bench count; correct directed
   181/213 (176/206 of the original faults). Told to the user at PR #11 as
   part of "193 (95% core)"; 95% (any bench) stands.
+- TB-009 (2026-11-07, VC-3 8-seed run) tb_spi +SEED=5: "coverage floor missed: bytes B=79-253"
+  (random-phase floor 5, tuned to seeds 1-4 per tb_spi.v:781). Same class as TB-007. Fix planned
+  in WO-33 (quota steering). TB-007: seed 4 passes since 2dde982 but still luck-based -> WO-33.

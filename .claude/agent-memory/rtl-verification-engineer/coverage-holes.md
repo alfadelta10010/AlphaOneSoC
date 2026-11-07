@@ -46,3 +46,4 @@
 - REQ-SPI-011 (idle load bb <= sr = the slow-CPU/interrupted driver path): no directed sim test. T05 is always the fast path and T12 overwrites bb. Covered by spi_core C13 (fails on SPI04a), spi_bb (CEX on SPI04a) and the random phase. No SoC run takes the path (SPI04a survives test-soc-spi).
 - spi_bb runs at BAUD 0 only (depth 24), so it cannot see phase-length faults: SPI08 passes it (measured). For B>=1 the only black-box checks are in simulation.
 - Formal mutants measured locally: spi_core fails on SPI01/04a/08/18/22; spi_bus on SPI18/21; spi_bb on SPI01/04a/18/21/22 (not 08). Times: core ~20 s, bus <1 s, bb ~1 s, cover ~4 min per point.
+- RVFI reporting hole (by design, 2026-11-07): an interrupt taken while a WFI is still in EX (mepc = pc+4) makes that WFI vanish from the RVFI trace (NRET=1). Not a pc-check problem; instret/Spike behaviour stays with the directed suite.
