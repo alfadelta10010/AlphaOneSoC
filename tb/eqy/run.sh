@@ -463,7 +463,9 @@ mutant_run() {
   local p targets=""
   for p in $parts; do targets="$targets strategies/$p/pdr/status"; done
   ( cd "$M/eqy" && dk make -j2 -k -f strategies.mk $targets ) > "$M/run.log" 2>&1
-  python3 "$HERE/verdict.py" --only "$parts" "$M/eqy" "$M/result.txt"
+  # verdict.py's exit status is the verdict (1 FAIL, 2 unproven), not an error of the run
+  python3 "$HERE/verdict.py" --only "$parts" "$M/eqy" "$M/result.txt" || true
+  [ -s "$M/result.txt" ]
 }
 
 # Caught = a real counterexample (coordinator rule 2026-11-07): the mutant's result has a FAIL partition
@@ -474,12 +476,14 @@ pdr_confirm() {            # $1 = mutant dir: pdr (from init) on the partitions 
   local M="$1" p vp=""
   for p in $(sed -n 's/^OPEN \([^:]*\): sat induction.*(vacuous base)$/\1/p' "$M/result.txt"); do vp="$vp $p"; done
   [ -n "$vp" ] || return 0
+  grep -q '^FAIL ' "$M/result.txt" && return 0       # already caught by a real counterexample
   rm -rf "$M/eqy_pdr"
   awk -v list="$vp" 'BEGIN { n = split(list, a, " ") } { print } /^\[strategy sat\]/ { for (i = 1; i <= n; i++) print "noapply " a[i] }' "$M/soc.eqy" > "$M/soc_pdr.eqy"
+  [ -z "${PDR_TIMEOUT:-}" ] || sed -i "s/^timeout 600\$/timeout $PDR_TIMEOUT/" "$M/soc_pdr.eqy"   # the one longer retry
   ( cd "$M" && dk eqy -f -m -d eqy_pdr soc_pdr.eqy ) > "$M/setup_pdr.log" 2>&1
   local targets=""; for p in $vp; do targets="$targets strategies/$p/pdr/status"; done
   ( cd "$M/eqy_pdr" && dk make -j2 -k -f strategies.mk $targets ) > "$M/run_pdr.log" 2>&1
-  python3 "$HERE/verdict.py" --only "$vp" "$M/eqy_pdr" "$M/result_pdr.txt"
+  python3 "$HERE/verdict.py" --only "$vp" "$M/eqy_pdr" "$M/result_pdr.txt" || true
 }
 
 mutant_table() {           # $1 = name, $2 = mutant dir: appends partition, strategy, raw result, trace path to mutants/table.txt
@@ -525,6 +529,9 @@ stage_mutants() {
   local k flop
   for k in core syscon spi kbuf; do
     want $k || continue
+    sed -i "/^$k /d" "$X/errors.txt"; sed -i "/^$k	/d" "$X/table.txt"
+    # MUT_RESCORE=1: the mutant's EQY run exists; only the pdr confirm and the table are redone
+    if [ "${MUT_RESCORE:-}" = 1 ] && [ -s "$X/$k/result.txt" ]; then mutant_finish "$k"; continue; fi
     case $k in
       core)   mutate_flop core core "${MUT_CORE_FLOP:-}" ;;
       syscon) mutate_flop syscon syscon "" ;;
@@ -532,8 +539,6 @@ stage_mutants() {
       kbuf)   mutate_flop kbuf core 'soc.cpu.if_kbuf[5]' 'soc.cpu.if_kbuf[6]' 'soc.cpu.if_kbuf[4]' 'soc.cpu.if_kbuf[7]' 'soc.cpu.if_kbuf[3]' ;;
     esac || { mutant_error "$k" "mutate_netlist.py failed for every candidate (see $X/$k.skipped.txt)"; continue; }
     cat "$X/$k.mutation.txt"
-    sed -i "/^$k /d" "$X/errors.txt" 2>/dev/null
-    sed -i "/^$k	/d" "$X/table.txt" 2>/dev/null
     flop=$(sed -n 's/^flop \(.*\)$/\1/p' "$X/$k.mutation.txt")
     NETLIST="$X/$k.nl.v" gate_final > "$X/$k.gate.ys"
     mutant_run "$k" "$X/$k.gate.ys" "$B/consts.txt" "$flop" || { mutant_error "$k" "$(cat "$X/$k/result.txt" 2>/dev/null)"; continue; }
@@ -542,6 +547,8 @@ stage_mutants() {
   done
   if want fliptie; then
     sed -i "/^fliptie	/d" "$X/table.txt"; sed -i "/^fliptie /d" "$X/errors.txt"
+    if [ "${MUT_RESCORE:-}" = 1 ] && [ -s "$X/fliptie/result.txt" ]; then mutant_finish fliptie
+    else
     # the 5 tie1 bits tied to 1'0 on the gold side (the q1 bug): a wrong tie value must FAIL
     local fb; fb=$(awk '$2 == 1 { printf "%s ", $1 }' "$B/consts.txt")
     awk '$2 == 1 { print $1, 0; next } { print }' "$B/consts.txt" > "$X/consts_flip.txt"
@@ -552,12 +559,14 @@ stage_mutants() {
       say "mutants: flipped-tie mutant: $(tail -1 "$X/fliptie/result.txt")"
       mutant_finish fliptie
     else mutant_error fliptie "$(cat "$X/fliptie/result.txt" 2>/dev/null)"; fi
+    fi
   fi
   local tag vfile
   for tag in qspi spi; do
     k=fsmtable; [ $tag = qspi ] || k=fsmtable_$tag
     want $k || continue
     sed -i "/^$k	/d" "$X/table.txt"; sed -i "/^$k /d" "$X/errors.txt"
+    if [ "${MUT_RESCORE:-}" = 1 ] && [ -s "$X/$k/result.txt" ]; then mutant_finish $k; continue; fi
     # a wrong enc/dec table in fsmcut_gate_<tag> (two codes swapped): the cut partition must FAIL
     vfile=fsmcut_neg.v; [ $tag = qspi ] || vfile=fsmcut_neg_$tag.v
     python3 "$HERE/mk_wrong_table.py" "$HERE/fsmcut.v" "$X/fsmcut_wrong_$tag.v" $tag || { mutant_error $k "could not build the wrong table"; continue; }
