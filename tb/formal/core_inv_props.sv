@@ -78,11 +78,12 @@ module core_inv_props (
             if (SEL[2]) assert (!(flush && muldiv_want));                                        // E-FC49a
             if (SEL[3]) assert (!(muldiv_ready || muldiv_busy || muldiv_done) || muldiv_want);  // E-FC49b
             if (SEL[4]) assert (!flush || !nxt_ready_noflush);                                   // E-FC49c
-            if (SEL[5]) assert (!csr_in_wb || (!exwb_memRD && !exwb_memWR && !exwb_isAmo && !wb_busy));        end
+            if (SEL[5]) assert (!csr_in_wb || (!exwb_memRD && !exwb_memWR && !exwb_isAmo && !wb_busy));
             if (SEL[6]) assert (!(muldiv_busy && muldiv_done) && !(muldiv_ready && muldiv_busy) && !(muldiv_ready && muldiv_done));  // S2 handshake exclusion
             if (SEL[7]) assert (!wb_busy || (exwb_valid && exwb_isAmo));                         // S3
             if (SEL[9]) assert (x_mst <= 3'd5 && muldiv_busy == (x_mst != 3'd0) && (!muldiv_done || x_mst == 3'd0));  // M1: unit busy iff not IDLE; done only in IDLE
             if (SEL[8]) assert (!ex_ph || ex_rf_ok);                                             // S4
+        end
     end
 
 `ifdef SBY_COVER
