@@ -35,7 +35,7 @@ MUL* k=39, DIV/REM k=41; depths are k+3.
 | Check | Solver | Depth | Seconds | Verdict |
 |---|---|---|---|---|
 | causal_ch0 | bmc3 | 30 | 7 | BOUNDED (BMC depth 30 from reset) |
-| cover | yices | 20 | 72 | BOUNDED (BMC depth 20 from reset) |
+| cover | yices | 20 | 72 | all covers REACHED by depth 20 |
 | fyra_imem | bmc3 | 22 | 262 | BOUNDED (BMC depth 22 from reset) |
 | ill_ch0 | yices | 20 | 4 | BOUNDED (BMC depth 20 from reset) |
 | insn_add_ch0 | yices | 20 | 33 | BOUNDED (BMC depth 20 from reset) |
@@ -135,15 +135,19 @@ Action: pc_bwd is kept in the batch for completeness; the matrix row for BC-PC1 
 **(b) RG05 on reg_ch0 PASS.** The matrix set RG05 against `reg_ch0` only (bmc3, depth 30). In WO-37's
 mutant test RG05 was killed by `insn_add_ch0`. Re-run in this matrix's setup (mutants.sh, yices,
 depth 20): `RG05 insn_add_ch0 FAIL`, so the matrix keeps its kill, and `RG05 reg_ch0` PASS was
-reproduced on a second run. The kill comes from the insn check (the add reads a register in the cycle
-after its write; with the bypass removed the macro's free collision answer reaches the ALU). reg_ch0
-watches one constant register through a write and a later read and, at depth 30, did not reach the
-colliding read. Not isolated further (no third probe; user budget). Residual: the reg check does not
-by itself see a lost port-1 bypass; the insn checks do.
+reproduced on a second run. The kill comes from the insn check. With the bypass removed the add consumes the macro's one-cycle
+collision value, but the port samples rs1/rs2_rdata when the instruction leaves EX
+(fyracore.v:1636-1640). By then the RF has re-read the correct value, so the reported operand is
+the architectural one and rd_wdata disagrees with it. The reg check compares reported operands with
+reported writes (rvfi_reg_check.sv:32-44, free register and order), so it cannot see this fault at
+any depth. This is not a depth gap. A review probe at `reg 1 20` was a TIMEOUT (inconclusive);
+FC56 FAILs at the same config. Residual: a transient operand error is caught only by the insn check
+of the consuming instruction. Consumers with no insn check (CSR write source, A) have no
+riscv-formal operand check.
 
 **Expected survivors (PASS, as documented).**
-* FC51 (data wait ignored) on insn_lw: riscv-formal has no bus model here (the wrapper frees memory
-  data every cycle and ready is free), so a core that ignores dmem wait is still a legal trace;
+* FC51 (data wait ignored) on insn_lw: the port does not implement the RVFI_BUS interface and checks.cfg
+  enables no bus_* check (the wrapper frees memory data every cycle and ready is free), so a core that ignores dmem wait is still a legal trace;
   core_hold bench and directed tests kill it (W-RVFI-3).
 * MD01 (MULHSU multiplicand unsigned), MD10 (MULHSU returns the low word), MD03 (negative / 0): the M
   arithmetic is replaced by riscv-formal's ALTOPS formulas (A-v3), so these faults live in logic that
@@ -219,7 +223,7 @@ M routing, reg, pc, causal, unique, liveness, ill, cover, fyra_imem) fails on at
 
 * **Environment (A-v1):** the wrapper forces M-mode, no PMP lock, no MPRV-to-U and misa.C = 1, so
   U-mode, MPRV and C toggling are not exercised (W-RVFI-2). Covered by tb_pmp, csr formal, directed.
-* **M arithmetic (A-v3):** replaced by ALTOPS; covered by tb_muldiv and directed. Only routing,
+* **M arithmetic (A-v3):** replaced by ALTOPS; covered by tb_muldiv and directed. Only M dispatch (isMulDiv),
   latency and writeback are checked.
 * **CSRs:** no csr checks (trap causes, mtval, mepc, interrupt causes included); covered by the
   CSR/trap benches and river_core.
@@ -229,8 +233,13 @@ M routing, reg, pc, causal, unique, liveness, ill, cover, fyra_imem) fails on at
 * **Interrupted WFI in EX** never occurs in the trace (liveness fairness assumption).
 * **Bounded history:** BMC from reset at depth 20-62, not a proof for all histories; PROVED is
   reserved for induction or a pdr PASS from a defined reset state.
-* **pc_bwd** is vacuous on an in-order core (triage (a)); **reg_ch0** does not see a lost port-1
-  bypass (triage (b)).
+* **pc_bwd** is vacuous on an in-order core. pc_fwd checks the same pc pairs, and liveness and
+  unique rule out order gaps and repeats (triage (a)). **reg_ch0** checks the operand the port
+  samples at EX exit, not the one consumed (triage (b)).
+* **Memory waits** are bounded at FYRA_MAX_WAIT = 2 cycles. Longer stalls are not explored.
+* **Illegal encodings:** the ill check covers only the all-zero parcel.
+* **Trap and mret targets** have no spec check (no csr/mret checks). pc_fwd checks continuity only.
+* **Not run:** hang, causal_mem, causal_io, bus_* (no RVFI_BUS port), fault, csrw/csr_ill.
 * The kv-held-across-an-M-stall fetch case (~45 cycles) is beyond fyra_imem depth 22 (core_fetch induction).
 
 ## For WO-39 (text to add to tb/VPLAN.md, riscv-formal rows)
@@ -240,7 +249,7 @@ M routing, reg, pc, causal, unique, liveness, ill, cover, fyra_imem) fails on at
 > pc_bwd, causal, unique 30; liveness 62; cover 20; fetch consistency fyra_imem 22), 0 FAIL, solvers
 > yices / bmc3 / boolector per family, pin c992aa61, about 47 min on 4 cores. Closes the insn
 > semantics of RV32I/M(routing)/C for retire-order histories from reset, reg/pc/order/liveness
-> consistency, and fetch-reuse consistency. Non-vacuity: 49 fault runs, 43 FAIL; the 4 expected
+> consistency, and fetch-reuse consistency. Non-vacuity: 49 fault runs plus 2 probes (51 matrix rows, 45 FAIL and 6 PASS); 43 of the 49 fault runs FAIL; the 4 expected
 > survivors are FC51 (no bus model) and MD01/MD03/MD10 (ALTOPS replaces M arithmetic); pc_bwd is
 > vacuous in-order (killed only by a reversed-order probe) and reg_ch0 misses RG05 (insn_add kills it).
 > Not covered: U-mode/PMP/MPRV/misa.C, CSRs and trap causes, A semantics, M arithmetic, data-memory
