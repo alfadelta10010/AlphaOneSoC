@@ -52,7 +52,7 @@ vd() { echo "$2${3:+ $3}" > "$OUT/$1.verdict"; }
 
 # ---- unit
 st_unit() {
-  local B=$OUT/unit
+  local B=build/va-unit   # relative: the Makefile prefixes $(CURDIR) to BUILD_DIR (test-soc-periph's FLASH_FILE)
   make BUILD_DIR="$B" test-all > "$OUT/unit.make.log" 2>&1; local rc1=$?
   make BUILD_DIR="$B" test-seeds SEEDS="1 2 3 4 5 6 7 8" > "$OUT/unit.seeds.log" 2>&1; local rc2=$?
   local np nf; np=$(cat "$B"/*.log 2>/dev/null | grep -c '^PASS'); nf=$(cat "$OUT"/unit.*.log | grep -cE '^FAIL|\*\*\* Error|Error [0-9]')
