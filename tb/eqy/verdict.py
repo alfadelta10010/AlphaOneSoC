@@ -19,6 +19,8 @@
 """
 import glob, json, os, re, sys
 
+EXPECT_PARTITIONS = 165   # rewritten by scripts/eqy-refit.sh after a harden
+
 
 def statuses(eqydir, only=None):
     res = {}
@@ -95,8 +97,7 @@ def verdict(eqydir, out, only=None, classes=None):
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(opened)} open (classed fail), {len(unproven)} unproven")
     lines.insert(1, "sat induction lengths: " + str(dict(sorted(lens.items(), key=lambda kv: (kv[0] is None, kv[0])))))
-    if only is None and len(parts) != 165:
-        lines.append(f"WARNING partition count {len(parts)}, expected 165")
+    count_bad = only is None and len(parts) != EXPECT_PARTITIONS
     lines.append("assumption: gold == gold' (clamp, the identity on valid FSM codes: lemma L2, PROVED once armed) "
                  "== gate' (enc/clamp/dec, the identity while each FSM holds one set bit: I_gate, PROVED by "
                  "temporal induction on the netlist, fsminv stage) == gate; the FSM cut partitions compare "
@@ -108,7 +109,9 @@ def verdict(eqydir, out, only=None, classes=None):
                  "compared as a partition. Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
                  "Every sat proof closed at induction length 1 (step from any state); longer sat proofs are not "
                  "accepted because the base case is vacuous under undefined init.")
-    if fail:
+    if count_bad:
+        lines.append(f"EQY FAIL partition-count {len(parts)} expected {EXPECT_PARTITIONS}")
+    elif fail:
         lines.append("EQY FAIL " + " ".join(fail))
     elif unproven or opened:
         o = unproven + opened
@@ -116,7 +119,7 @@ def verdict(eqydir, out, only=None, classes=None):
     else:
         lines.append("EQY PASS")
     open(out, "w").write("\n".join(lines) + "\n")
-    return 1 if fail else (2 if (unproven or opened) else 0)
+    return 1 if (fail or count_bad) else (2 if (unproven or opened) else 0)
 
 
 def partitions_of(name, eqydir):
