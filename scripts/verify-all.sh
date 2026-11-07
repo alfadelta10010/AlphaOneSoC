@@ -3,7 +3,7 @@
 # Run it ON THE SANDBOX from a frozen tree (git archive of the commit under test),
 # detached, under the thermal watchdog:
 #
-#   nice -n 10 setsid nohup bash scripts/verify-all.sh OUT=~/regr/vc/run1 [STAGES="..."] \
+#   nice -n 10 setsid nohup bash scripts/verify-all.sh OUT=~/regr/vc/run1 TREE=<commit> [STAGES="..."] [FORCE=1] \
 #        [BASE=<git rev>] [CHANGED="csr.v syscon.v"] [LAST=<results.tsv>] \
 #        [NETLIST=<nl.v>] [PNL=<pnl.v>] [SUITES=<river_core conf dir>] [SDFDIR=<work dir>] \
 #        [JOBS=4] > /dev/null 2>&1 &
@@ -24,6 +24,10 @@
 #   sdf       tb/gls_sdf/run_glitch.sh WORK=SDFDIR, all variants and corners
 # river_core is not run here (see docs/verification-runbook.md).
 #
+# TREE=<commit> (required) is the commit this frozen tree was archived from (git archive has no
+# .git). It is written to $OUT/TREE and printed in SUMMARY; relaunching with another TREE refuses
+# to reuse the done.<stage> markers (exit 2) unless FORCE=1 (then the markers are deleted).
+#
 # Every stage writes $OUT/<stage>.verdict (one line: PASS | FAIL | BOUNDED-OK | ERROR, then counts),
 # $OUT/<stage>.log and, unless ERROR, the marker $OUT/done.<stage>; relaunching with the same OUT
 # skips a stage with a marker (delete the marker to rerun it; ERROR leaves none).
@@ -32,9 +36,16 @@
 set -u
 for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; *) echo "verify-all.sh: unknown argument $a" >&2; exit 2;; esac; done
 : "${OUT:?OUT=<dir> is required}"
+: "${TREE:?TREE=<commit> is required (the commit this tree was archived from)}"
 R=$(cd "$(dirname "$0")/.." && pwd)
 JOBS=${JOBS:-4}; BASE=${BASE:-main}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+if [ -s "$OUT/TREE" ] && [ "$(cat "$OUT/TREE")" != "$TREE" ]; then
+  if [ "${FORCE:-}" = 1 ]; then rm -f "$OUT"/done.*
+  elif ls "$OUT"/done.* > /dev/null 2>&1; then
+    echo "verify-all.sh: $OUT holds stages of tree $(cat "$OUT/TREE"), not $TREE; use a new OUT or FORCE=1 to rerun them" >&2; exit 2; fi
+fi
+echo "$TREE" > "$OUT/TREE"
 if [ -z "${STAGES:-}" ]; then
   STAGES="unit directed formal rvfi mutation"
   [ -n "${NETLIST:-}" ] && STAGES="$STAGES eqy"
@@ -259,7 +270,7 @@ done
     printf '%-9s %s  [%ss]\n' "$s" "$(cat "$OUT/$s.verdict" 2>/dev/null || echo 'ERROR not run')" "$(cat "$OUT/$s.secs" 2>/dev/null || echo 0)"
     case "$(cut -d' ' -f1 "$OUT/$s.verdict" 2>/dev/null)" in PASS|BOUNDED-OK) ;; *) ALLOK=0;; esac
   done
-  echo "total wall (this launch) $((SECONDS - T0)) s; tree $(cat "$R/.git/HEAD" 2>/dev/null | head -1)"
+  echo "total wall (this launch) $((SECONDS - T0)) s; tree $TREE"
 } > "$OUT/SUMMARY.tmp"
 mv "$OUT/SUMMARY.tmp" "$OUT/SUMMARY"
 cat "$OUT/SUMMARY"
