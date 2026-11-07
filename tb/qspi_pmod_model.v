@@ -443,7 +443,8 @@ module qspi_pmod_model #(
     reg      tcheck;
     integer  chk_v;
     integer  chk_n, chk_viol, chk_abort;
-    real     mg [0:7];        // smallest margin: {flash, PSRAM} x {setup, hold, CS setup, CS hold}
+    real     mg [0:9];        // smallest margin: {flash, PSRAM} x {setup, hold, CS setup, CS hold}, then 8/9: output-enable release hold
+    realtime t_oe_off;        // last time the host stopped driving the IO lines
     realtime t_chg [0:3];     // last change of each IO line
     realtime t_rs, t_rise_any, t_cs_fall;
     reg [3:0] hold_pend;      // lines sampled at the last rise, not yet changed
@@ -456,7 +457,8 @@ module qspi_pmod_model #(
         tcheck = 1'b1;
         if ($value$plusargs("QSPI_TCHECK=%d", chk_v)) tcheck = (chk_v != 0);
         chk_n = 0; chk_viol = 0; chk_abort = 0; rises = 0;
-        for (ci = 0; ci < 8; ci = ci + 1) mg[ci] = 1.0e9;
+        for (ci = 0; ci < 10; ci = ci + 1) mg[ci] = 1.0e9;
+        t_oe_off = -1000.0;
         for (ci = 0; ci < 4; ci = ci + 1) t_chg[ci] = -1000.0;
         t_rs = -1000.0; t_rise_any = -1000.0; t_cs_fall = -1000.0;
         hold_pend = 4'b0; host_io_q = 4'bxxxx; host_oe_q = 1'bx;
@@ -481,7 +483,7 @@ module qspi_pmod_model #(
     // the single function of the phase to extend for a DTR phase).
     function [3:0] samp_mask;
         case (phase)
-            P_CMD:   samp_mask = (mixed || in_qpi) ? 4'hF : 4'h1;
+            P_CMD:   samp_mask = (mixed && n >= 2) ? 4'h1 : (mixed || in_qpi) ? 4'hF : 4'h1;
             P_ADDR, P_WDATA: samp_mask = 4'hF;
             P_DUMMY: samp_mask = (chip == 2'd0 && n < 2) ? 4'hF : 4'h0;   // flash mode byte
             P_MODE:  samp_mask = (n < 8) ? 4'hF : 4'h0;                   // address, mode byte
@@ -543,6 +545,11 @@ module qspi_pmod_model #(
                         if (d < r_su() - 0.0005) chk_fail_data(i, d, r_su(), 1'b0);
                         hold_pend[i] = 1'b1;
                     end
+            else if (m != 4'b0 && ($realtime - t_oe_off) < r_su() - 0.0005)
+                // The host stopped driving just before this rise: the lines
+                // were not held for the setup time.
+                for (i = 0; i < 4; i = i + 1)
+                    if (m[i]) chk_fail_data(i, $realtime - t_oe_off, r_su(), 1'b0);
         end
     endtask
 
@@ -562,6 +569,17 @@ module qspi_pmod_model #(
                     if (d < r_h() - 0.0005) chk_fail_data(i, d, r_h(), d >= 0.0005);
                 end
             end
+        end
+        if (host_oe_q === 1'b1 && host_oe !== 1'b1) begin
+            // A release changes every sampled line: hold-check the pending ones.
+            t_oe_off = $realtime;
+            for (i = 0; i < 4; i = i + 1)
+                if (hold_pend[i]) begin
+                    d = $realtime - t_rs;
+                    if (d - r_h() < mg[8 + dv()]) mg[8 + dv()] = d - r_h();
+                    chk_n = chk_n + 1;
+                    if (d < r_h() - 0.0005) chk_fail_data(i, d, r_h(), d >= 0.0005);
+                end
         end
         if (host_oe !== 1'b1) hold_pend = 4'b0;
         host_io_q = host_io;
@@ -620,6 +638,11 @@ module qspi_pmod_model #(
             if (mg[ci+4] > 1.0e8)   $write("-");
             else                    $write("%0.3f", mg[ci+4]);
         end
+        $write(", IO release hold ");
+        if (mg[8] > 1.0e8)      $write("-/");
+        else                    $write("%0.3f/", mg[8]);
+        if (mg[9] > 1.0e8)      $write("-");
+        else                    $write("%0.3f", mg[9]);
         $write(" (%0d selects released by a pin release, not checked)\n", chk_abort);
     end
 
