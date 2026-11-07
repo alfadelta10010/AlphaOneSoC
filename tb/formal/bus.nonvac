@@ -1,0 +1,5 @@
+cat SB01   # GPIO back-pressure ignored -> BA3
+cat SB02   # GPIO decoded at the syscon slot -> BA4
+cat SB03   # IO accesses also select the CLINT -> BA4
+sed uart.v s/ready = !(thr_sel [&][&] !tx_idle)/ready = tx_idle/   # ready low while not selected -> BA1
+sed gpio.v s/ready = !(req [&][&] stall)/ready = !stall/   # same for gpio -> BA2
