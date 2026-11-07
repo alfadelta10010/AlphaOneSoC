@@ -95,8 +95,8 @@ def verdict(eqydir, out, only=None, classes=None):
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(opened)} open (classed fail), {len(unproven)} unproven")
     lines.insert(1, "sat induction lengths: " + str(dict(sorted(lens.items(), key=lambda kv: (kv[0] is None, kv[0])))))
-    if only is None and len(parts) != 157:
-        lines.append(f"WARNING partition count {len(parts)}, expected 157")
+    if only is None and len(parts) != 165:
+        lines.append(f"WARNING partition count {len(parts)}, expected 165")
     lines.append("assumption: gold == gold' (clamp, the identity on valid FSM codes: lemma L2, PROVED once armed) "
                  "== gate' (enc/clamp/dec, the identity while each FSM holds one set bit: I_gate, PROVED by "
                  "temporal induction on the netlist, fsminv stage) == gate; the FSM cut partitions compare "
