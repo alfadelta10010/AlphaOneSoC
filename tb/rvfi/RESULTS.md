@@ -242,7 +242,7 @@ M routing, reg, pc, causal, unique, liveness, ill, cover, fyra_imem) fails on at
 * **Not run:** hang, causal_mem, causal_io, bus_* (no RVFI_BUS port), fault, csrw/csr_ill.
 * The kv-held-across-an-M-stall fetch case (~45 cycles) is beyond fyra_imem depth 22 (core_fetch induction).
 
-## For WO-39 (text to add to tb/VPLAN.md, riscv-formal rows)
+## VPLAN text (the riscv-formal rows of tb/VPLAN.md 4.5)
 
 > **VC-5 riscv-formal (RVFI port, tb/rvfi, results tb/rvfi/RESULTS.md).** 82 checks, all BOUNDED
 > (BMC depth 20 for the RV32I/C insn checks and ill; 41/42/44 for shifts, MUL*, DIV/REM; reg, pc_fwd,
