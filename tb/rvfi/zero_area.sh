@@ -44,12 +44,13 @@ done
 if [ "$(norm a)" = "$(norm d)" ]; then echo "ZA stat a=d IDENTICAL (unexpected: ALTOPS should replace the M result)"
 else echo "ZA stat a=d DIFFERS (expected: ALTOPS replaces the M result)"; fi
 # equivalence a vs c: gold = a, gate = c; module names differ by tag via rename
-yosys -l "$W/eq.log" -p "read_rtlil $W/a.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gold; design -stash g; read_rtlil $W/c.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gate; design -stash t; design -copy-from g -as gold gold; design -copy-from t -as gate gate; equiv_make gold gate eq; hierarchy -top eq; equiv_simple -seq 2; equiv_induct -seq 2; tee -o $W/eq.status equiv_status; equiv_status -assert" >/dev/null 2>&1
+yosys -l "$W/eq.log" -p "read_rtlil $W/a.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gold; design -stash g; read_rtlil $W/c.il; async2sync; rename tt_um_alfadelta10010_alphaone_soc gate; design -stash t; design -copy-from g -as gold gold; design -copy-from t -as gate gate; equiv_make gold gate eq; hierarchy -top eq; cd eq; equiv_add \\soc.cpu.wfi_active_gold \\soc.cpu.fv_wfi_active_gate; cd ..; equiv_simple -seq 2; equiv_induct -seq 2; tee -o $W/eq.status equiv_status; equiv_status -assert" >/dev/null 2>&1
 rc=$?
 if [ $rc -eq 0 ]; then echo "ZA equiv a=c PROVEN"
 elif grep -q "are proven and" "$W/eq.status" 2>/dev/null; then
   # equiv_status ran: report the leftover verbatim. Observed 2026-11-07: all
-  # outputs and 5015 of 5016 $equiv cells proven; the one left is the internal
-  # wire stall_nofetch (not inductive on its own). Z1 + Z2-stat then stand alone.
+  # outputs and 5015 of 5016 $equiv cells proven. The leftover was an artefact of
+  # equiv_make pairing: wfi_active keeps the alias name fv_wfi_active in build (c),
+  # so it got no $equiv; the explicit equiv_add above pairs it (5017/5017).
   echo "ZA equiv a=c NOTRUN $(grep -E 'are proven and' $W/eq.status | tr -s ' ' | head -1); unproven: $(grep -E 'Unproven' $W/eq.status | sed 's/.*find_same_wires[^:]*: //' | head -3 | tr '\n' ';')"
 else echo "ZA equiv a=c FAILED (rc=$rc; log $W/eq.log)"; fi
