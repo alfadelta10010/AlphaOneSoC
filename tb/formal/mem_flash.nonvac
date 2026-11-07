@@ -1,0 +1,2 @@
+cat QS01   # a write may select the flash -> MF1, MF2
+cat QS02   # mode byte 0xAA -> MF3
