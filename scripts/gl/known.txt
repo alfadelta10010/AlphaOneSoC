@@ -1,2 +1,1 @@
 rv32ui-ma_data-p ma_data (river_core conf known failure)
-tt_pins.1 (gate level only: unit-delay margin, QSPI_DELAY=19 leaves 1 ns of the 20 ns SCK period at the 10 ns bench clock and the pad-to-flop path is 2 cells = 2 ns at UNIT_DELAY=#1; PASS at 18 and 17 on fin-3x4, WO-40; STA is the input setup check. known.txt keys on the name only, so the RTL run carries this text too; the verdict word still shows an RTL FAIL)
