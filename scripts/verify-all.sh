@@ -13,8 +13,8 @@
 # NETLIST / PNL / SDFDIR that is given):
 #   unit      make test-all, then test-seeds with seeds 1..8
 #   directed  tests/directed/run.sh plain, with +RF_X +RF_COLLIDE_X, and soc
-#   formal    tb/formal/run.sh default list on both engines (verdicts compared with
-#             scripts/verify-all.expected), then --nonvac on every harness that has a .nonvac
+#   formal    tb/formal/run.sh default list on both engines (full verdict lines compared with
+#             scripts/verify-all.expected, depth/timeout env overrides unset), then --nonvac on every harness that has a .nonvac
 #   rvfi      tb/rvfi/run.sh, one run per solver family, then the fault matrix (mutants.sh)
 #   mutation  tb/mutate/run.py on the src files changed since BASE (default main); the
 #             kills are compared with LAST (an earlier results.tsv); without LAST the verdict is
@@ -89,12 +89,16 @@ st_directed() {
 # ---- formal
 st_formal() {
   if ! oss; then vd formal ERROR "no sby on PATH after sourcing $OSS"; return; fi
-  local eng bad=0 txt="" n
+  local eng bad=0 txt="" n nexp v
+  # depth/timeout overrides would change what a verdict line means: run the pinned defaults
+  for v in $(env | sed -n 's/^\([A-Za-z0-9_]*_\(DEPTH\|TIMEOUT\)\)=.*/\1/p') DEPTH BMC_DEPTH NVDEPTH; do unset "$v"; done
+  # the full verdict line minus any "(trace: ...; log: ...)" path
+  norm() { sed -E 's/ \((trace|log): [^)]*\)//g; s/ +$//' | sort; }
+  norm < scripts/verify-all.expected > "$OUT/formal.expected"; nexp=$(grep -c . "$OUT/formal.expected")
   for eng in sat sby; do
     FORMAL_ENGINE=$eng OUT_DIR="$OUT/formal_$eng" bash tb/formal/run.sh > "$OUT/formal.$eng.log" 2>&1
-    grep -E '^(PROVED|BOUNDED|COVERED|FAILED|ERROR) ' "$OUT/formal.$eng.log" | awk '{print $1" "$2}' | sort > "$OUT/formal.$eng.got"
-    awk '{print $1" "$2}' scripts/verify-all.expected | sort > "$OUT/formal.expected"
-    if diff "$OUT/formal.expected" "$OUT/formal.$eng.got" > "$OUT/formal.$eng.diff"; then txt="$txt $eng:39/39-match"
+    grep -E '^(PROVED|BOUNDED|COVERED|FAILED|ERROR) ' "$OUT/formal.$eng.log" | norm > "$OUT/formal.$eng.got"
+    if diff "$OUT/formal.expected" "$OUT/formal.$eng.got" > "$OUT/formal.$eng.diff"; then txt="$txt $eng:$nexp/$nexp-match"
     else bad=1; txt="$txt $eng:$(grep -c '^[<>]' "$OUT/formal.$eng.diff")-verdict-lines-differ(see formal.$eng.diff)"; fi
   done
   local names=""; for f in tb/formal/*.nonvac; do n=$(basename "$f" .nonvac); names="$names $n"; done
