@@ -463,7 +463,7 @@ re-score numbers (`tb/VPLAN.md` 4.6) and the residuals in 2.1. A re-harden
 needs the EQY, gate-level and SDF runs again (one netlist each).
 
 Next RTL change: QSPI streaming fetch and an optional DDR mode, after this
-branch merges (the verification runbook, when it lands, will describe how
+branch merges (docs/verification-runbook.md describes how
 to re-run the checks above).
 
 ## 3. Verilator port
