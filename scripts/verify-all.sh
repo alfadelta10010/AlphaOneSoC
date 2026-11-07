@@ -17,7 +17,8 @@
 #             scripts/verify-all.expected), then --nonvac on every harness that has a .nonvac
 #   rvfi      tb/rvfi/run.sh, one run per solver family, then the fault matrix (mutants.sh)
 #   mutation  tb/mutate/run.py on the src files changed since BASE (default main); the
-#             kills are compared with LAST (an earlier results.tsv) when given
+#             kills are compared with LAST (an earlier results.tsv); without LAST the verdict is
+#             NO-BASELINE (not PASS); an ERROR/TIMEOUT row or a partial run is FAIL
 #   eqy       tb/eqy/run.sh NETLIST=<nl.v>, all stages including the mutants
 #   gl        scripts/gl build_isa.sh + night.sh on PNL, parts A B C D (SUITES for A-C)
 #   sdf       tb/gls_sdf/run_glitch.sh WORK=SDFDIR, all variants and corners
@@ -180,8 +181,10 @@ st_mutation() {
   if [ -z "$files" ]; then vd mutation PASS "no src file changed since $BASE"; return; fi
   oss > /dev/null 2>&1
   local f
+  rm -f "$OUT/mutation.rc"
   for f in $files; do
-    python3 tb/mutate/run.py -j "$JOBS" --file "$f" --benches unit,dir,soc,dir-soc,formal --results "$res" >> "$OUT/mutation.log" 2>&1
+    python3 tb/mutate/run.py -j "$JOBS" --file "$f" --benches unit,dir,soc,dir-soc,formal --results "$res" >> "$OUT/mutation.log" 2>&1 \
+      || echo "$f:$?" >> "$OUT/mutation.rc"
   done
   python3 - "$res" "${LAST:-}" "$files" > "$OUT/mutation.report" <<'PY'
 import sys, collections
@@ -199,10 +202,18 @@ lost = sorted(k for k, v in old.items() if v.startswith("KILLED") and k in new a
 print("files: " + sys.argv[3]); print("rows: " + " ".join("%s=%d" % kv for kv in sorted(cnt.items())))
 print("lost kills vs LAST: %s" % (" ".join("%s/%s:%s" % (m, b, new[(m, b)]) for m, b in lost) or ("none" if old else "n/a (no LAST)")))
 print("LOST %d" % len(lost))
+print("BAD %d" % sum(1 for v in new.values() if v in ("ERROR", "TIMEOUT")))
 PY
-  local lost err; lost=$(sed -n 's/^LOST //p' "$OUT/mutation.report"); err=$(grep -c ' ERROR$\|=ERROR' "$OUT/mutation.report")
-  local sum; sum=$(sed -n 2p "$OUT/mutation.report")
-  if [ -s "$res" ] && [ "$lost" = 0 ]; then vd mutation PASS "$sum lost-kills=0"; else vd mutation FAIL "$sum lost-kills=${lost:-?}"; fi
+  local lost err miss="" sum; lost=$(sed -n 's/^LOST //p' "$OUT/mutation.report"); err=$(sed -n 's/^BAD //p' "$OUT/mutation.report")
+  sum=$(sed -n 2p "$OUT/mutation.report")
+  # a partial run: a listed file with no rows in results.tsv, or a run.py that did not exit 0
+  for f in $files; do grep -q "^[^	]*	$f	" "$res" 2>/dev/null || miss="$miss $f"; done
+  [ -s "$OUT/mutation.rc" ] && miss="$miss run.py-rc=$(tr '\n' ',' < "$OUT/mutation.rc")"
+  if [ ! -s "$res" ] || [ -n "$miss" ]; then vd mutation FAIL "partial run: no rows / non-zero run.py for:${miss:- all} $sum"
+  elif [ "${err:-?}" != 0 ]; then vd mutation FAIL "$sum error-or-timeout-rows=${err:-?} lost-kills=${lost:-?}"
+  elif [ -z "${LAST:-}" ]; then vd mutation NO-BASELINE "$sum (no LAST=<results.tsv>: lost kills cannot be checked)"
+  elif [ "${lost:-?}" = 0 ]; then vd mutation PASS "$sum lost-kills=0"
+  else vd mutation FAIL "$sum lost-kills=${lost:-?}"; fi
 }
 
 # ---- eqy / gl / sdf
