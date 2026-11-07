@@ -356,8 +356,9 @@ Open (2026-10-31):
      all pass; SA-008 is tested (K1-K4 in `tb_syscon`).
    * Mutation re-score of the formal benches: VPLAN 4.6. Residuals, listed
      in 2.1.
-   * The river_core regression of the combined tree has been run (no DUT
-     defect recorded against it).
+   * The river_core regression of the combined tree (2026-11-01, on
+     Verilator): compliance 175/176 (the known `rv32ui-ma_data`), three
+     random rounds 1076/1076 each, 0 DUT defects.
 4. Port the locked RTL to the submission repo (`localFiles/alphaOneSoC-sky26d`)
    and pass its CI. **Done for main `a2f7285`** (2026-11-01, ahead of the
    lock): one commit per block and one for item 2's build settings, up to
