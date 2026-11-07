@@ -31,6 +31,7 @@
 # write generated sources under $OUT only and prints their paths. A sidecar
 # that redefines a built-in harness, or names a harness with no props file,
 # gives ERROR (exit 2).
+# MODE sbmc is bmc that always runs through sby (a depth sat cannot reach in time).
 # Engines: FORMAL_ENGINE=sat (default, yosys's built-in solver) or sby (sby with
 # bitwuzla smtbmc, generated from the same tables; a pdr harness always uses
 # sby with `abc pdr`, and a pdr PASS counts as PROVED). `run.sh -e DIR names`
@@ -56,9 +57,9 @@ declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fe
                    [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_bb1]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" [spi_f12]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=pdr [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=pdr [syscon_gate]=induct [soc_rst_sync]=struct
-                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_bb1]=bmc [spi_cover]=cover [spi_f12]=struct )
-declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=24 [spi_bb1]=${BB1_DEPTH:-24} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
+declare -A MODE=( [csr]=pdr [core_hold]=induct [core_req]=sbmc [core_fetch]=induct [syscon_comb]=pdr [syscon_gate]=induct [soc_rst_sync]=struct
+                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=sbmc [spi_bb1]=sbmc [spi_cover]=cover [spi_f12]=struct )
+declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=${BB_DEPTH:-24} [spi_bb1]=${BB1_DEPTH:-24} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
 declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
@@ -185,6 +186,7 @@ guard_hit() { grep -E "is implicitly declared|is used but has no driver" "$1" | 
 # `chformal -lower` (sby wants the formal cells as they are).
 sby_harness() {
   local n=$1 m=${MODE[$1]} d="$OUT/sby_$1" top="${PROPN[$1]:-$1}_props" dfn="${DEFS[$1]:-} ${EXTRA_DEFS:-}" opts engines sf="" f st tr
+  [ "$m" = sbmc ] && m=bmc
   if ! command -v sby >/dev/null 2>&1; then echo "ERROR $n: sby not found on PATH (set FORMAL_BIN)"; err=1; return; fi
   mkdir -p "$d"
   case "$m" in
@@ -377,7 +379,7 @@ PYEOF
   # counterexample from reset, not merely "induction did not close")
   if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = induct ]; then MODE[$n]=bmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
-  if [ "${MODE[$n]}" = pdr ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
+  if [ "${MODE[$n]}" = pdr ] || [ "${MODE[$n]}" = sbmc ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
     sby_harness "$n"; continue
   fi
   if [ "${MODE[$n]}" = cover ]; then
