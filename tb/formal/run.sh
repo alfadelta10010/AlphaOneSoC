@@ -59,7 +59,7 @@ declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
 declare -A MODE=( [csr]=pdr [core_hold]=induct [core_req]=sbmc [core_fetch]=induct [syscon_comb]=pdr [syscon_gate]=induct [soc_rst_sync]=struct
                   [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=sbmc [spi_bb1]=sbmc [spi_cover]=cover [spi_f12]=struct )
-declare -A BDEPTH=( [core_req]=${CR_DEPTH:-150} [syscon_comb]=24 [spi_bb]=${BB_DEPTH:-24} [spi_bb1]=${BB1_DEPTH:-24} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
+declare -A BDEPTH=( [core_req]=${CR_DEPTH:-150} [syscon_comb]=24 [spi_bb]=${BB_DEPTH:-96} [spi_bb1]=${BB1_DEPTH:-24} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
 declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
