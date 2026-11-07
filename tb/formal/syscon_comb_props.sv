@@ -5,7 +5,9 @@
 // strap_rd_late, wdt_tap) are free and independent of a's; rst_soc must still
 // agree. A difference could only come from a combinational path from those
 // inputs to rst_soc. (The watchdog's fire feeds rq's D input, never rst_soc
-// directly.) Checked by bounded model checking from reset: tb/formal/run.sh.
+// directly.) The copies are equal only after a common reset, so the assert is
+// gated on `armed` (no reliance on a zero start state). Checked by bounded
+// model checking from reset: tb/formal/run.sh.
 module syscon_comb_props (
     input  wire        clk, rst,
     input  wire        split,
@@ -22,6 +24,8 @@ module syscon_comb_props (
     input  wire        b_strap_rd_late,
     input  wire [15:0] b_wdt_tap
 );
+    reg armed = 1'b0;               // a common reset has been applied (every syscon flop resets on rst or rst_soc)
+    always @(posedge clk) if (rst) armed <= 1'b1;
     reg split_q = 1'b0;             // split has been 1 on an earlier cycle
     always @(posedge clk) if (split) split_q <= 1'b1;
     wire diverge = split | split_q;
@@ -40,7 +44,7 @@ module syscon_comb_props (
               .rd_late(b_rd_late), .wdt_tap(diverge ? b_wdt_tap : wdt_tap));
 
     always @(*) begin
-        if (split && !split_q)
+        if (armed && split && !split_q)
             assert (a_rst_soc == b_rst_soc);
     end
 endmodule
