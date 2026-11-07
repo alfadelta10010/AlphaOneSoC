@@ -97,6 +97,7 @@ module glitch_mon;
     // the start of the X window
     always @(negedge tb_tt_um.rst_n) begin : xwin
         integer my, j;
+        #0;   // after the fall block of this same event has run (it increments k), whatever the scheduling order
         my = k;
         #(RST);
         if (open && k == my)
