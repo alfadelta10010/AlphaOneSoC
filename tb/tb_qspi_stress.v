@@ -261,6 +261,9 @@ module tb_qspi_stress;
         @(negedge clk); i_addr = 32'h8000_0000; i_req = 1; stream_on = 1;
         repeat (400000) @(posedge clk);
         stream_on = 0;
+        // Let a store still in flight finish, so the shadow has it too.
+        while (d_req) @(posedge clk);
+        repeat (4) @(posedge clk);
         // final memory compare
         for (k = 0; k < 16777216; k = k + 1)
             if (pmod.ram[k] !== shadow[k]) begin
