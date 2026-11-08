@@ -590,7 +590,34 @@ Before (old formal-only results):
 
 After (re-score on the final tree):
 
-<!-- MUTATION-RESCORE: after numbers pending -->
+Formal-only campaign over every file with a formal harness: 247 mutants, frozen tree `36d27ad`
+(the runner with the KILLED-NOCEX class), 2026-11-07 15:55 to 2026-11-08 01:39, resumed once with
+`--only` after a sandbox reboot. These are formal kills only; the kill matrix with every bench is 4.2.
+
+| file | mutants | KILLED (counterexample) | KILLED-NOCEX | SURVIVED | ERROR |
+|---|---|---|---|---|---|
+| spi.v | 20 | 20 | 0 | 0 | 0 |
+| gpio.v | 16 | 16 | 0 | 0 | 0 |
+| soc_bus.v | 3 | 3 | 0 | 0 | 0 |
+| mem_ctrl.v | 8 | 6 | 0 | 2 (MC05 MC06) | 0 |
+| qspi_ctrl.v | 8 | 3 | 0 | 5 (QS03 QS04 QS05 QS07 QS08) | 0 |
+| fyracore.v | 88 | 21 | 0 | 66 | 1 (FR14) |
+| csr.v | 29 | 6 | 0 | 23 | 0 |
+| syscon.v | 37 | 4 | 0 | 33 | 0 |
+| regFile.v | 5 | 1 | 0 | 4 | 0 |
+| muldiv.v | 16 | 0 | 0 | 15 | 1 (MD12) |
+| uart.v | 7 | 0 | 0 | 7 | 0 |
+| alphaone_soc.v | 8 | 0 | 0 | 8 | 0 |
+| tt_um_alfadelta10010_alphaone_soc.v | 2 | 0 | 0 | 2 | 0 |
+| **total** | **247** | **80 (32%)** | **0** | **165** | **2** |
+
+F-1 is settled: no formal kill in any file is a "did not close" without a counterexample. Every
+spi.v and gpio.v formal kill (20/20 and 16/16) is a real counterexample, so the earlier SPI
+"35/35" stands. The two ERROR rows are FR14 (equivalent, 4.2; core_fetch's induction does not
+close and its bounded rerun gave no verdict) and MD12 (md07 hit the 1800 s limit; under the
+current runner a formal TIMEOUT is an ERROR, never a kill). With the runner that honours a `.nonvac` `engine sby` line (`228a9f0`), spi_dc's own non-vacuity mutants SPI01 and SPI20 are KILLED by spi_dc as well (counterexample under sby's free start; the campaign's older runner scored them SURVIVED from the sat engine's zero start), so spi_dc kills 2 of 20 rather than 0.
+A formal survivor is not a test gap by itself: the formal benches check specific properties,
+and the survivors of every bench are listed in 4.2.
 
 ## 5. Not verified, and why
 
