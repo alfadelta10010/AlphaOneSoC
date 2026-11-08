@@ -651,9 +651,10 @@ module fyracore #(
     // A write to pmpcfg0 or pmpaddr0-3 changes the checks that the next
     // instruction's fetch and data access undergo, and both run in EX while
     // the write commits one stage later in WB. The 3-cycle EX (the next
-    // instruction is still in EX while the write commits) keeps the data check behind the write, but with a
-    // locked entry or in U-mode the next instruction's fetch verdict can be
-    // latched during that very stall cycle, against the old configuration.
+    // instruction is still in EX while the write commits) keeps the data
+    // check behind the write, but with a locked entry or in U-mode the next
+    // instruction's fetch verdict can be latched during that very cycle,
+    // against the old configuration.
     // So the write refetches the next instruction the way FENCE.I does,
     // and it reaches EX only after the write has committed. One fetch per
     // PMP write (tests/directed/pmp_refetch).
@@ -1122,8 +1123,9 @@ module fyracore #(
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    // No interrupt is injected while a CSR write is in WB (the next instruction is
-    // still in EX, held by ex_wait, which is part of stall_other), so there is no window where one slips in after
+    // No interrupt is injected while a CSR write is in WB (the next
+    // instruction is still in EX, held by ex_wait, which is part of
+    // stall_other), so there is no window where one slips in after
     // csrci mstatus,8 but before the write commits.
     wire irq_global_en     = !priv_mode || csr_mstatus_mie;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
@@ -1151,10 +1153,11 @@ module fyracore #(
     // another interrupt. It also tore down an in-flight memory access, because
     // the injection path overrides the EX/WB hold.
     //
-    // muldiv_want rather than muldiv_stall (or `stall`): muldiv_stall is
-    // low on the capture cycle and `stall` is not an input of irq_inject.
-    // Excluding any M instruction in EX -- before
-    // it starts, while it runs, and on the cycle its result is captured --
+    // muldiv_want rather than muldiv_stall (or `stall`, which is
+    // stall_other plus muldiv_stall): muldiv_stall is low on the capture
+    // cycle (muldiv_have), so either would let an interrupt in on that cycle
+    // and discard the finished result. Excluding any M instruction in EX --
+    // before it starts, while it runs, and on the cycle its result is captured --
     // means an interrupt never discards a finished or in-flight multiply;
     // it is taken at the next instruction instead.
     assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
