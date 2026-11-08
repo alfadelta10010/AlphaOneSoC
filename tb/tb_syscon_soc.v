@@ -54,6 +54,7 @@ module tb_syscon_soc;
 
     // ── The SoC and the QSPI Pmod ───────────────────────────────────────────
     reg        strap = 1'b0;                  // drives qspi_rd_late and gpio_in[0]
+    reg        strap_ns = 1'b0;               // drives qspi_no_stream and gpio_in[2] (+NO_STREAM: 1 through the pin reset)
     reg  [7:0] tb_in = 8'h00;
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
@@ -61,11 +62,11 @@ module tb_syscon_soc;
     wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'bxxxx);
     wire       uart_tx, uart_rts_n, uart_rx;
     wire [7:0] gpio_out;
-    wire [7:0] gpio_in = {tb_in[7:4], uart_rx, tb_in[2:1], strap};
+    wire [7:0] gpio_in = {tb_in[7:4], uart_rx, strap_ns, tb_in[1], strap};
 
     // No override of syscon's CHIP_ID: syscon_regs reads the one the chip ships.
     alphaone_soc #(.UART_DIV_RESET(UART_DIV)) soc (
-        .clk(clk), .rst(rst), .qspi_rd_late(strap),
+        .clk(clk), .rst(rst), .qspi_rd_late(strap), .qspi_no_stream(strap_ns),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
         .uart_rx(uart_rx), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),
@@ -126,6 +127,11 @@ module tb_syscon_soc;
     reg  [2:0]  m_cause = `RC_PIN;
     reg  [7:0]  m_bm    = 8'h00;
     reg         m_strap = 1'b0;
+    reg         m_ns = 1'b0;             // the no-stream strap as latched
+    reg         m_stream = 1'b1, m_ddr = 1'b0, m_valid = 1'b0;
+    reg  [2:0]  m_cap = `QCFG_CAP_RESET;
+    reg         no_stream_run;           // +NO_STREAM
+    integer     eb0 = 0;
     integer     m_hold  = 0;             // reboot edges left
     reg         m_off   = 1'b0;          // power-off / fail: held until rst
     reg         m_en    = 1'b0;          // watchdog
@@ -149,7 +155,8 @@ module tb_syscon_soc;
             if      (off == `SYS_CAUSE)    model_word = {29'b0, m_cause};
             else if (off == `SYS_BOOTMODE) model_word = {24'b0, m_bm};
             else if (off == `SYS_CHIPID)   model_word = `CHIP_ID_SPEC;
-            else if (off == `SYS_STRAPS)   model_word = {31'b0, m_strap};
+            else if (off == `SYS_STRAPS)   model_word = {30'b0, m_ns, m_strap};
+            else if (off == `SYS_QSPICFG)  model_word = {27'b0, m_cap, m_ddr, m_stream};
             else if (off == `WDT_CR)       model_word = {31'b0, m_en};
             else if (off == `WDT_TORR)     model_word = {24'b0, m_top, m_top};
             else if (off == `WDT_COMP1)    model_word = `WDT_COMP1_VAL;
@@ -192,6 +199,21 @@ module tb_syscon_soc;
             end else if (test == "syscon_pinreset") begin
                 if (e !== (n_events == 1 ? 32'h54 : n_events == 2 ? 32'h55 : 32'h57))
                     fail($sformatf("%s: EVENT %h, want %0s", test, e, n_events == 1 ? "54" : n_events == 2 ? "55" : "57"));
+            end else if (test == "syscon_cfg") begin
+                // the flash read commands (0xEB) between the cue pairs: 64 four-byte nops
+                case (e)
+                    32'h61, 32'h63: eb0 = pmod.n_eb;
+                    32'h62: begin
+                        $display("NOTE syscon_cfg: %0d flash commands for 64 nops with STREAM off", pmod.n_eb - eb0);
+                        if (pmod.n_eb - eb0 < 48) fail($sformatf("STREAM off: %0d flash commands for 64 sequential words, want one per fetch (>= 48)", pmod.n_eb - eb0));
+                    end
+                    32'h64: begin
+                        $display("NOTE syscon_cfg: %0d flash commands for 64 nops with STREAM on", pmod.n_eb - eb0);
+                        if (pmod.n_eb - eb0 > 8) fail($sformatf("STREAM on: %0d flash commands for 64 sequential words, want <= 8", pmod.n_eb - eb0));
+                    end
+                    32'h65: strap_ns <= #1 ~m_ns;   // the pin moves; the reboot must not re-read it
+                    default: fail($sformatf("syscon_cfg: EVENT %h", e));
+                endcase
             end else if (test == "syscon_reboot") begin
                 if (e !== 32'h51) fail($sformatf("%s: EVENT %h, want 51", test, e));
             end else if (test == "syscon_wdt") begin
@@ -216,6 +238,12 @@ module tb_syscon_soc;
                 // STRAPS as boot 1 read it is what the pin was at the pin reset
                 if (v !== {31'b0, rd_late_run})
                     fail($sformatf("syscon_strap: boot 1 read STRAPS %h, the pin was %b at the reset", v, rd_late_run));
+            end else if (test == "syscon_cfg") begin
+                // 1 and 3: QSPI_CFG at a reset (the strap's inverse, nothing else); 2 and 4: STRAPS
+                if ((n_values == 1 || n_values == 3) && v !== {31'b0, ~no_stream_run})
+                    fail($sformatf("syscon_cfg: boot %0d read QSPI_CFG %h, want %h", n_values == 1 ? 1 : 2, v, {31'b0, ~no_stream_run}));
+                if ((n_values == 2 || n_values == 4) && v !== {30'b0, no_stream_run, 1'b0})
+                    fail($sformatf("syscon_cfg: boot %0d read STRAPS %h, want %h", n_values == 2 ? 1 : 2, v, {30'b0, no_stream_run, 1'b0}));
             end else if (test == "syscon_reboot") begin
                 // mtime at the program's first instructions of each boot: the
                 // CLINT restarted at every reboot, so it is the same every time
@@ -317,6 +345,12 @@ module tb_syscon_soc;
             end
         end
 
+        // ---- QSPI_CFG outputs --------------------------------------------
+        if (m_valid && (soc.qspi_stream_en !== m_stream || soc.qspi_ddr !== m_ddr || soc.qspi_ddr_cap !== m_cap))
+            fail($sformatf("QSPI_CFG outputs stream/ddr/cap %b/%b/%b, model %b/%b/%b",
+                           soc.qspi_stream_en, soc.qspi_ddr, soc.qspi_ddr_cap, m_stream, m_ddr, m_cap));
+        if (m_valid && soc.qspi.stream_en !== m_stream) fail("qspi_ctrl stream_en is not QSPI_CFG.STREAM");
+
         // ---- ready: low only while its target is selected -----------------
         if (!s_rst && s_rsoc !== 1'b1) begin
             if (soc.uart_ready !== 1'b1 && !soc.uart_sel) fail("UART ready low while not selected");
@@ -339,11 +373,13 @@ module tb_syscon_soc;
         if (s_rst) begin
             // pin reset: PIN only, BOOT_MODE 0, strap re-latched, watchdog off
             m_cause = `RC_PIN; m_bm = 8'h00; m_strap = strap;
+            m_ns = strap_ns; m_stream = ~strap_ns; m_ddr = 1'b0; m_cap = `QCFG_CAP_RESET; m_valid = 1'b1;
             m_hold = 0; m_off = 1'b0; why = 0;
             m_en = 1'b0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1'b1; last_clear = cyc;
         end else if (held) begin
             // the SoC is held: no write takes effect; the watchdog is on rst_soc
             if (m_hold > 0) m_hold = m_hold - 1;
+            m_stream = ~m_ns; m_ddr = 1'b0; m_cap = `QCFG_CAP_RESET;
             m_en = 1'b0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1'b1; last_clear = cyc;
         end else begin
             w_off = soc.dmem_addr[15:2];
@@ -361,6 +397,7 @@ module tb_syscon_soc;
                     end
                     `SYS_CAUSE:    if (be[0]) m_cause = m_cause & ~wdat[2:0];
                     `SYS_BOOTMODE: if (be[0]) m_bm = wdat[7:0];
+                    `SYS_QSPICFG:  if (be[0]) begin m_stream = wdat[0]; m_ddr = wdat[1]; m_cap = wdat[4:2]; end
                     `WDT_CR:       w_cr = be[0] && wdat[0];
                     `WDT_TORR:     w_torr = be[0];
                     `WDT_CRR:      kick = be[0] && (wdat[7:0] == `WDT_KEY);
@@ -486,6 +523,8 @@ module tb_syscon_soc;
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 3_000_000;
         rd_late_run = $test$plusargs("RD_LATE");
         strap = rd_late_run;
+        no_stream_run = $test$plusargs("NO_STREAM");
+        strap_ns = no_stream_run;
         if (rd_late_run) TCLK = 10.0;
         clk_go = 1'b1;
         mb_div = UART_DIV;
@@ -503,6 +542,8 @@ module tb_syscon_soc;
             fail_expected = 1'b1; exp_fail_code = 16'h005A; min_loads = 2;
         end else if (test == "syscon_strap") begin
             exp_fin_reboots = 1; exp_events = 1; exp_values = 1; min_loads = 4;
+        end else if (test == "syscon_cfg") begin
+            exp_fin_reboots = 1; exp_events = 5; exp_values = 4; min_loads = 10;
         end else if (test == "syscon_poweroff") begin
             exp_events = 1; exp_prst = 1; min_loads = 7;
         end else if (test == "syscon_pinreset") begin
@@ -557,7 +598,7 @@ module tb_syscon_soc;
         if (rp.errors != 0) fail($sformatf("%s: %0d RP2350 UART errors", test, rp.errors));
         if (errors == 0)
             $display("PASS tb_syscon_soc %s%0s (%0d cycles, %0d syscon loads and %0d stores checked, %0d reboots, %0d watchdog reboots, resets on fetch/split-2nd/data/idle = %0d/%0d/%0d/%0d, %0d flash reads cut)",
-                     test, rd_late_run ? " +RD_LATE" : "", cyc, n_loads, n_stores, n_fin, n_wdt,
+                     test, rd_late_run ? " +RD_LATE" : no_stream_run ? " +NO_STREAM" : "", cyc, n_loads, n_stores, n_fin, n_wdt,
                      cls_all[0], cls_all[1], cls_all[2], cls_all[3], n_cut);
         else
             $display("FAIL tb_syscon_soc %s%0s: %0d errors", test, rd_late_run ? " +RD_LATE" : "", errors);

@@ -12,10 +12,11 @@
 `define SYS_CAUSE       16'h0004   // RESET_CAUSE: R, W1C on lane 0 [A6]
 `define SYS_BOOTMODE    16'h0008   // BOOT_MODE: R/W lane 0, [7:0] [A7]
 `define SYS_CHIPID      16'h000C   // CHIP_ID: R [A8]
-`define SYS_STRAPS      16'h0010   // STRAPS: R, [0] = rd_late as latched [A12]
+`define SYS_STRAPS      16'h0010   // STRAPS: R, [0] = rd_late, [1] = no-stream strap, as latched [A12]
 `define SYS_CLKGATE     16'h0014   // reserved, RAZ/WI [A9]
 `define SYS_POWER       16'h0018   // reserved, RAZ/WI [A9]
-`define SYS_RSVD1C      16'h001C   // reads 0, ignores writes
+`define SYS_QSPICFG     16'h001C   // QSPI_CFG: R/W lane 0, {27'b0, DDR_CAP, DDR, STREAM}; reset by rst_soc
+`define QCFG_CAP_RESET  3'd0                  // DDR_CAP after any reset (until WO-51)
 
 // FINISH status codes, wdata[15:0] (SYS-003, sifive_test convention) [A3, A4]
 `define FIN_REBOOT      16'h7777

@@ -124,9 +124,15 @@ module tb_tt_um;
     always @(posedge clk) cyc <= cyc + 1;
 
     reg        rst_n = 1'b1;
+    // The no-stream strap (ui_in[2]) must reach qspi_ctrl: QSPI_CFG.STREAM is
+    // its inverse from the first clocked reset on, through every later reset
+    // and reboot of these programs (none of them writes QSPI_CFG).
+    always @(posedge clk) if (cyc > 4 && dut.soc.qspi_stream_en !== ~no_stream)
+        $display("FAIL QSPI_CFG.STREAM = %b with ui_in[2] = %b through reset (cycle %0d)", dut.soc.qspi_stream_en, no_stream, cyc);
     reg        rd_late = 1'b0;        // +RD_LATE
     reg        strap = 1'b0;          // ui_in[0] until the program wants GPIO IN
     reg        strap_on = 1'b1;       // ui_in[0] is the strap, not tb_in[0]
+    reg        no_stream = 1'b0;      // +NO_STREAM: ui_in[2], the no-stream strap, is 1 while strap_on
     reg  [7:0] tb_in = 8'h00;
     wire       uart_rx;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted
@@ -134,7 +140,7 @@ module tb_tt_um;
     wire [3:0] kp_row;
     reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[7], SCK [3], MOSI [1], DO ui_in[1]
     wire       sd_do_in1;
-    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
+    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, strap_on ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
 `ifdef USE_POWER_PINS
@@ -1153,6 +1159,7 @@ module tb_tt_um;
 
     initial begin
         rd_late = $test$plusargs("RD_LATE");
+        no_stream = $test$plusargs("NO_STREAM");
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 400_000;
         if ($value$plusargs("TEST=%s", testname)) begin
             reboot_test = (testname == "reboot");

@@ -113,7 +113,7 @@ module tb_rivercore;
     ) soc (
         .clk        (clk),
         .rst        (rst),
-        .qspi_rd_late(rd_late),
+        .qspi_rd_late(rd_late), .qspi_no_stream(1'b0),
         .qspi_sck   (qspi_sck),
         .qspi_cs_n  (qspi_cs_n),
         .qspi_ctl_oe(qspi_ctl_oe),

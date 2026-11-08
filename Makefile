@@ -313,7 +313,7 @@ test-soc-spi: $(BUILD_DIR)
 # and the watchdog. Each run is "<program> [plusargs]"; +TEST= and +FLASH_FILE=
 # are added here. A run fails on a FAIL, ERROR or TIMEOUT line or a missing
 # PASS; all runs go first.
-SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
+SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
@@ -337,16 +337,17 @@ test-syscon-soc: $(BUILD_DIR)
 
 # The TinyTapeout top level through its pins alone (tb/tb_tt_um.v):
 # tests/soc/tt_pins.S boots from the QSPI Pmod model's flash and reports over
-# the UART. Three runs:
+# the UART. Four runs:
 #   default            2 ns device delay, ui_in[0] = 0 through reset
 #   QSPI_DELAY=19      just under one SCK period, which rd_late = 0 must take
 #   RD_LATE, 25 ns     ui_in[0] = 1 through reset: only rd_late = 1 reads this
+#   NO_STREAM          ui_in[2] = 1 through reset: QSPI_CFG.STREAM stays 0
 # then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
 # strap at 0 and at 1 (RD_LATE, 25 ns).
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
                 $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
-WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)"
+WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+NO_STREAM"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper
 test-wrapper: $(BUILD_DIR)
 	@echo "=== Testing the TinyTapeout top level ==="
