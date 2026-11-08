@@ -588,11 +588,14 @@ Before (old formal-only results):
 | spi.v | 20 | 20 | n/a | 0 | 0 |
 | mem_ctrl.v, qspi_ctrl.v, soc_bus.v, uart.v, muldiv.v | no formal harness mapped before | | | | |
 
-After (re-score on the final tree):
+After (re-score, catalogue and tree `36d27ad`):
 
 Formal-only campaign over every file with a formal harness: 247 mutants, frozen tree `36d27ad`
 (the runner with the KILLED-NOCEX class), 2026-11-07 15:55 to 2026-11-08 01:39, resumed once with
 `--only` after a sandbox reboot. These are formal kills only; the kill matrix with every bench is 4.2.
+The final tree's catalogue has 39 syscon.v mutants: SY-K1 and SY-K2 (`fac742d`) came later, test-syscon
+kills both, and no formal run scored them. Nothing else carries over: since `36d27ad`, src/ changed
+only by comments in mem_ctrl.v, and the formal harnesses only by the armed cover core_inv_armed_cov.
 
 | file | mutants | KILLED (counterexample) | KILLED-NOCEX | SURVIVED | ERROR |
 |---|---|---|---|---|---|
@@ -613,9 +616,10 @@ Formal-only campaign over every file with a formal harness: 247 mutants, frozen 
 
 F-1 is settled: no formal kill in any file is a "did not close" without a counterexample. Every
 spi.v and gpio.v formal kill (20/20 and 16/16) is a real counterexample, so the earlier SPI
-"35/35" stands. The two ERROR rows are FR14 (equivalent, 4.2; core_fetch's induction does not
-close and its bounded rerun gave no verdict) and MD12 (md07 hit the 1800 s limit; under the
-current runner a formal TIMEOUT is an ERROR, never a kill). With the runner that honours a `.nonvac` `engine sby` line (`228a9f0`), spi_dc's own non-vacuity mutants SPI01 and SPI20 are KILLED by spi_dc as well (counterexample under sby's free start; the campaign's older runner scored them SURVIVED from the sat engine's zero start), so spi_dc kills 2 of 20 rather than 0.
+"35/35" (spi.v 20, gpio.v 15) stands, and is 36/36 with the 16th gpio.v mutant scored. The two ERROR rows are FR14 (equivalent, 4.2; core_fetch's induction does not
+close and its bounded rerun gave no verdict; the campaign's core_inv and core_df ERROR rows for FR14 are
+a 1-3 s infra fault around the reboot, and the WO-45 rerun of FR14 has both SURVIVED) and MD12 (md07 hit the 1800 s limit; under the
+current runner a formal TIMEOUT is an ERROR, never a kill). With the runner that honours a `.nonvac` `engine sby` line (`228a9f0`), spi_dc's own non-vacuity mutants SPI01 and SPI20 are KILLED by spi_dc as well (counterexample under sby's free start, rescored on `7b08014`; the campaign's older runner scored them KILLED-NOCEX, "induction did not close by length 1", which is not a kill), so spi_dc kills 2 of 20 rather than 0.
 A formal survivor is not a test gap by itself: the formal benches check specific properties,
 and the survivors of every bench are listed in 4.2.
 
