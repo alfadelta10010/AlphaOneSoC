@@ -20,8 +20,9 @@ Exit status 1 if the counts differ from the work order's table.
 """
 import collections, json, re, sys
 
-EXPECT = dict(direct=1286, rename=5, recode=8, tied=184, unused=2, UNMATCHED=0)
-RECODE = {"soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state"}
+EXPECT = dict(direct=1323, rename=7, recode=10, tied=186, unused=2, UNMATCHED=0)
+RECODE = {"soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state",
+          "soc.gpio_inst.spi_inst.st"}
 UNUSED = {"soc.gpio_inst.out_r[4]", "soc.gpio_inst.out_r[5]"}
 
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")

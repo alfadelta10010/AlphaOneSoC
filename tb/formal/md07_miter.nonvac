@@ -1,0 +1,2 @@
+# md07_miter: the generator applies the killed shift mutant MD06 (shift amount bit 4 lost) instead of MD07, so done/busy timing differs
+def -DMITER_MUT=MD06

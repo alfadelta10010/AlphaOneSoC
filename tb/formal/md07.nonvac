@@ -1,0 +1,2 @@
+# md07: swap the arms of muldiv.v's divide step; a wrong restore leaves acc >= m, so I2 and E1 fail after a few loop steps (needs a trace through NEGA/NEGB/LOOP: NVDEPTH 48)
+sed muldiv.v s/sum\[33\] ? {1'b0, trial\[31:0\]} : {1'b0, sum\[31:0\]};/sum[33] ? {1'b0, sum[31:0]} : {1'b0, trial[31:0]};/

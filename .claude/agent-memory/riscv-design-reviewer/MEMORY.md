@@ -97,6 +97,11 @@ update after each review with confirmed decisions, findings, and recurring patte
   15.6 MHz MISO margin 2-12 ns -> cap BAUD 2; +1,150 um2, 3x4 ~69.9% w/ fetch reuse -- finding_spi_wo28_2026-10-29.md
 - 2026-10-30 WO-27 impl review f7f956b: RTL OK; BLOCK verif: fr_misa not RF_X-clean -> false FR12/FR14 kills, +rfx leg masks all
   survivors; core_fetch F1 32-bit clause vacuous (FR03 proves) -- finding_fetch_reuse_wo27_2026-10-29.md
+- 2026-10-30 WO-28 SPI impl review 42e2fec: RTL APPROVE, +24 flops exact, sample point probed (D<=2B); verif gap until WO-29
+  (no RX/modes 0-2/unit SPI bench; GP01-04 raise) -- finding_spi_wo28_2026-10-29.md
+
+- 2026-11-07 WO-36 RVFI port 8976278: APPROVE w/ non-blocking, port correct; zero_area stall_nofetch unproven = purge renamed
+  wfi_active->fv_wfi_active (equiv_add closes 5017/5017) -- finding_rvfi_wo36_2026-11-07.md
 
 ## Notes index
 
@@ -136,3 +141,4 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-23 syscon design](finding_syscon_design_2026-10-23.md) — WO-20/21 decisions, driver/QEMU facts, acceptance benches, review checklist
 - [2026-10-29 WO-28 SPI controller](finding_spi_wo28_2026-10-29.md) — tiny_spi semantics, sample-point table, area, D1-D9
 - [2026-10-29 WO-27 fetch reuse](finding_fetch_reuse_wo27_2026-10-29.md) — kv/kbuf rule, capture enable, measured saving, gaps, PicoRV32 precedent
+- [2026-11-07 WO-36 RVFI port](finding_rvfi_wo36_2026-11-07.md) — per-shape RVFI verdicts, equiv name-alias artefact + fix, WO-37 env gaps

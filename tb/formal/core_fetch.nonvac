@@ -1,0 +1,2 @@
+cat FR06   # the lower halfword is kept: C2 is replaced by C1 (F2 lemma)
+cat FR12   # killed by the core_fetch proof (mutants.py note)

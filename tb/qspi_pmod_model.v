@@ -99,6 +99,24 @@
 // that whole round trip: contention happens at the pins, and the host's next
 // drive and the chip select both reach them through the same output pads.
 //
+// Setup / hold (datasheet numbers, docs/qspi-memories.md, AC tables). On every
+// SCK rise the model checks that each IO line it samples held its value for the
+// setup time, and that the line then keeps it for the hold time; and that a chip
+// select falls tCSP / tSLCH before the first rise and rises tCHD / tCHSH after
+// the last. W25Q128JV: tDVCH 1, tCHDX 2, tSLCH 3, tCHSH 3 ns; APS6404L: tSP 2,
+// tHD 2, tCSP 2.5, tCHD 3 ns (the PSRAM numbers apply to a broadcast). The
+// times are measured on the pins ($realtime), so a data change on the very
+// edge the chip samples reads 0 ns -- the LISA item 34 bug class, which a
+// zero-delay run shows as long as nothing orders the two events: a change in
+// the time step of the rise, before or after it, is a setup violation. Lines
+// are sampled in the command (IO0, or IO[3:0] in QPI form), address, flash mode,
+// dual-mode and write-data phases; not in dummy clocks or read data. Each
+// device's smallest margins print at the end of the run, with the sample count
+// (+QSPI_TCHECK=0 turns the checks off, for diagnosis only).
+// Extension point (DTR / streaming reads): samp_mask is the one place that says which
+// lines a rise samples in a phase, and r_su / r_h / r_css / r_csh the one place for the
+// limits per device; a DTR phase adds a falling-edge mask and per-edge limits there.
+//
 // Memory: ram[] is the two PSRAMs back to back (A at 0, B at 8 MB).
 // flash[] is the whole 16 MB flash. Neither array is zero-filled -- that loop
 // would add about 6 s to every run -- so a byte never loaded is X in the array
@@ -121,7 +139,15 @@ module qspi_pmod_model #(
     parameter TSCK_CS_NS = 3,          // SCK driven low before chip select falls
     parameter TRST_NS    = 50,         // PSRAM: end of 99h to the next command
     parameter real TCLK_0B_NS = 15.1,  // PSRAM QPI 0Bh minimum SCK period (66 MHz)
-    parameter real TCLK_NS    = 7.5    // every other command, both devices (133 MHz)
+    parameter real TCLK_NS    = 7.5,   // every other command, both devices (133 MHz)
+    parameter real TDVCH_NS   = 1.0,   // flash data-in setup before SCK rise
+    parameter real TCHDX_NS   = 2.0,   // flash data-in hold after SCK rise
+    parameter real TSLCH_NS   = 3.0,   // flash CS active setup to the first SCK rise
+    parameter real TCHSH_NS   = 3.0,   // flash CS active hold after the last SCK rise
+    parameter real TSP_NS     = 2.0,   // PSRAM input setup (tSP)
+    parameter real THD_NS     = 2.0,   // PSRAM input hold (tHD)
+    parameter real TCSP_NS    = 2.5,   // PSRAM CE# setup to the first SCK rise
+    parameter real TCHD_NS    = 3.0    // PSRAM CE# hold after the last SCK rise
 )(
     input  wire       host_sck,
     input  wire [2:0] host_cs_n,
@@ -264,7 +290,7 @@ module qspi_pmod_model #(
         next_addr = (c != 2'd0 && psram_wrap) ? {a[23:10], a[9:0] + 10'd1} : a + 24'd1;
     endfunction
 
-    task fail(input [8*80-1:0] msg);
+    task fail(input [8*128-1:0] msg);
         begin
             $display("ERROR: qspi_pmod_model: %0s (cs_n=%b cmd=%02h addr=%06h t=%0t)",
                      msg, cs_n, cmd, addr, $time);
@@ -413,8 +439,216 @@ module qspi_pmod_model #(
         end
     endtask
 
+    // ---- Setup / hold checks (see the header) ------------------------------
+    reg      tcheck;
+    integer  chk_v;
+    integer  chk_n, chk_viol, chk_abort;
+    real     mg [0:9];        // smallest margin: {flash, PSRAM} x {setup, hold, CS setup, CS hold}, then 8/9: output-enable release hold
+    realtime t_oe_off;        // last time the host stopped driving the IO lines
+    realtime t_chg [0:3];     // last change of each IO line
+    realtime t_rs, t_rise_any, t_cs_fall;
+    reg [3:0] hold_pend;      // lines sampled at the last rise, not yet changed
+    reg [3:0] host_io_q;
+    reg       host_oe_q, cs_first, prev_sel;
+    integer   rises;
+    reg [8*128-1:0] cmsg;
+    integer ci;
+    initial begin
+        tcheck = 1'b1;
+        if ($value$plusargs("QSPI_TCHECK=%d", chk_v)) tcheck = (chk_v != 0);
+        chk_n = 0; chk_viol = 0; chk_abort = 0; rises = 0;
+        for (ci = 0; ci < 10; ci = ci + 1) mg[ci] = 1.0e9;
+        t_oe_off = -1000.0;
+        for (ci = 0; ci < 4; ci = ci + 1) t_chg[ci] = -1000.0;
+        t_rs = -1000.0; t_rise_any = -1000.0; t_cs_fall = -1000.0;
+        hold_pend = 4'b0; host_io_q = 4'bxxxx; host_oe_q = 1'bx;
+        cs_first = 1'b0; prev_sel = 1'b0;
+    end
+
+    // Device index and requirements: flash (chip 0) or PSRAM (also a broadcast).
+    function integer dv; dv = (chip == 2'd0) ? 0 : 1; endfunction
+    function real r_su;  r_su  = (chip == 2'd0) ? TDVCH_NS : TSP_NS;  endfunction
+    function real r_h;   r_h   = (chip == 2'd0) ? TCHDX_NS : THD_NS;  endfunction
+    function real r_css; r_css = (chip == 2'd0) ? TSLCH_NS : TCSP_NS; endfunction
+    function real r_csh; r_csh = (chip == 2'd0) ? TCHSH_NS : TCHD_NS; endfunction
+    function [8*6-1:0] pname(input [3:0] p);
+        case (p)
+            P_CMD: pname = "CMD";   P_ADDR: pname = "ADDR";  P_DUMMY: pname = "DUMMY";
+            P_WDATA: pname = "WDATA"; P_MODE: pname = "MODE"; P_DCRM: pname = "DCRM";
+            default: pname = "other";
+        endcase
+    endfunction
+
+    // The IO lines the chip samples on a rise in this phase (posedge only today;
+    // the single function of the phase to extend for a DTR phase).
+    function [3:0] samp_mask;
+        case (phase)
+            P_CMD:   samp_mask = (mixed && n >= 2) ? 4'h1 : (mixed || in_qpi) ? 4'hF : 4'h1;
+            P_ADDR, P_WDATA: samp_mask = 4'hF;
+            P_DUMMY: samp_mask = (chip == 2'd0 && n < 2) ? 4'hF : 4'h0;   // flash mode byte
+            P_MODE:  samp_mask = (n < 8) ? 4'hF : 4'h0;                   // address, mode byte
+            P_DCRM:  samp_mask = (n < 16) ? 4'h3 : 4'h0;
+            default: samp_mask = 4'h0;
+        endcase
+    endfunction
+
+    // d = measured time, need = required; kind 0 data setup, 1 data hold,
+    // 2 CS setup, 3 CS hold. Margins are d - need.
+    task chk_note(input integer kind, input real d, input real need);
+        integer k;
+        begin
+            k = dv() * 4 + kind;
+            chk_n = chk_n + 1;
+            if (d - need < mg[k]) mg[k] = d - need;
+        end
+    endtask
+
+    task chk_fail_data(input integer line, input real d, input real need, input hold);
+        begin
+            chk_viol = chk_viol + 1;
+            if (hold)
+                $sformat(cmsg, "%0s %0s: data-in hold violated on IO%0d: %0.3f ns after SCK rise (needs %0.1f ns)",
+                         chip == 2'd0 ? "flash" : "PSRAM", pname(phase), line, d, need);
+            else
+                $sformat(cmsg, "%0s %0s: data-in setup violated on IO%0d: %0.3f ns before SCK rise (needs %0.1f ns)",
+                         chip == 2'd0 ? "flash" : "PSRAM", pname(phase), line, d, need);
+            fail(cmsg);
+        end
+    endtask
+
+    // On a rising SCK of the transaction, before the phase moves on.
+    task chk_rise;
+        reg [3:0] m;
+        integer i;
+        real d;
+        begin
+            m = samp_mask();
+            t_rs = $realtime;
+            if (cs_first) begin
+                cs_first = 1'b0;
+                d = $realtime - t_cs_fall;
+                chk_note(2, d, r_css());
+                if (d < r_css() - 0.0005) begin
+                    chk_viol = chk_viol + 1;
+                    $sformat(cmsg, "%0s: chip select setup violated: %0.3f ns before the first SCK rise (needs %0.1f ns)",
+                             chip == 2'd0 ? "flash" : "PSRAM", d, r_css());
+                    fail(cmsg);
+                end
+            end
+            rises = rises + 1;
+            hold_pend = 4'b0;
+            if (host_oe === 1'b1)
+                for (i = 0; i < 4; i = i + 1)
+                    if (m[i]) begin
+                        d = $realtime - t_chg[i];
+                        chk_note(0, d, r_su());
+                        if (d < r_su() - 0.0005) chk_fail_data(i, d, r_su(), 1'b0);
+                        hold_pend[i] = 1'b1;
+                    end
+            else if (m != 4'b0 && ($realtime - t_oe_off) < r_su() - 0.0005)
+                // The host stopped driving just before this rise: the lines
+                // were not held for the setup time.
+                for (i = 0; i < 4; i = i + 1)
+                    if (m[i]) chk_fail_data(i, $realtime - t_oe_off, r_su(), 1'b0);
+        end
+    endtask
+
+    // A host line changes: setup bookkeeping, and the hold of a sampled one.
+    // A change in the time step of the rise, whichever block ran first, is a
+    // setup violation (0 ns), not a hold one.
+    always @(host_io or host_oe) if (tcheck) begin : io_chg
+        integer i;
+        real d;
+        for (i = 0; i < 4; i = i + 1) begin
+            if (host_oe === 1'b1 && (host_oe_q !== 1'b1 || host_io[i] !== host_io_q[i])) begin
+                t_chg[i] = $realtime;
+                if (host_oe_q === 1'b1 && hold_pend[i]) begin
+                    hold_pend[i] = 1'b0;
+                    d = $realtime - t_rs;
+                    chk_note(1, d, r_h());
+                    if (d < r_h() - 0.0005) chk_fail_data(i, d, r_h(), d >= 0.0005);
+                end
+            end
+        end
+        if (host_oe_q === 1'b1 && host_oe !== 1'b1) begin
+            // A release changes every sampled line: hold-check the pending ones.
+            t_oe_off = $realtime;
+            for (i = 0; i < 4; i = i + 1)
+                if (hold_pend[i]) begin
+                    d = $realtime - t_rs;
+                    if (d - r_h() < mg[8 + dv()]) mg[8 + dv()] = d - r_h();
+                    chk_n = chk_n + 1;
+                    if (d < r_h() - 0.0005) chk_fail_data(i, d, r_h(), d >= 0.0005);
+                end
+        end
+        if (host_oe !== 1'b1) hold_pend = 4'b0;
+        host_io_q = host_io;
+        host_oe_q = host_oe;
+    end
+
+    // A real rise: SCK going 0 -> 1, not the 0 -> X of the host releasing the pin.
+    reg sck_q = 1'bx;
+    always @(sck) begin
+        if (sck === 1'b1 && sck_q === 1'b0) t_rise_any = $realtime;
+        sck_q = sck;
+    end
+    always @(cs_n) if (tcheck) begin
+        if (cs_n != 3'b111) begin
+            if (!prev_sel) begin cs_first = 1'b1; rises = 0; end
+            t_cs_fall = $realtime;     // the later of a broadcast's two selects
+            prev_sel  = 1'b1;
+        end else if (prev_sel) begin
+            prev_sel = 1'b0;
+            fork chk_cs_hold($realtime); join_none
+        end
+    end
+    // Chip select rose at td: the last SCK rise must be tCHD / tCHSH before it.
+    // Looked at 1 ps later, once a rise in the same time step has landed. A
+    // select that rises because the host let go of its pins (a reset in the
+    // middle of a transaction: the select is pulled up) is not a controller's
+    // end of transaction and is only counted.
+    task automatic chk_cs_hold(input realtime td);
+        real d;
+        begin
+            #0.001;
+            if (rises > 0 && host_ctl_oe !== 1'b1) chk_abort = chk_abort + 1;
+            else if (rises > 0) begin
+                d = td - t_rise_any;
+                chk_note(3, d, r_csh());
+                if (d < r_csh() - 0.0005) begin
+                    chk_viol = chk_viol + 1;
+                    $sformat(cmsg, "%0s: chip select hold violated: %0.3f ns after the last SCK rise (needs %0.1f ns)",
+                             chip == 2'd0 ? "flash" : "PSRAM", d, r_csh());
+                    fail(cmsg);
+                end
+            end
+        end
+    endtask
+
+    final if (tcheck) begin
+        $display("qspi_pmod_model: setup/hold checks: %0d samples checked, %0d violations", chk_n, chk_viol);
+        $write("qspi_pmod_model: min margins ns (flash/PSRAM):");
+        for (ci = 0; ci < 4; ci = ci + 1) begin
+            case (ci)
+                0: $write(" data setup ");  1: $write(", data hold ");
+                2: $write(", CS setup ");   default: $write(", CS hold ");
+            endcase
+            if (mg[ci] > 1.0e8)     $write("-/");
+            else                    $write("%0.3f/", mg[ci]);
+            if (mg[ci+4] > 1.0e8)   $write("-");
+            else                    $write("%0.3f", mg[ci+4]);
+        end
+        $write(", IO release hold ");
+        if (mg[8] > 1.0e8)      $write("-/");
+        else                    $write("%0.3f/", mg[8]);
+        if (mg[9] > 1.0e8)      $write("-");
+        else                    $write("%0.3f", mg[9]);
+        $write(" (%0d selects released by a pin release, not checked)\n", chk_abort);
+    end
+
     // Host -> device, on rising SCK
     always @(posedge sck) if (any_sel) begin
+        if (tcheck && sck === 1'b1) chk_rise;
         case (phase)
             P_DCRM: begin
                 // Dual continuous-read: 12 address clocks, then M7-0 two bits

@@ -21,7 +21,29 @@
 # means yosys finished with a counterexample (or, for induct, hit the depth
 # limit); a yosys error or timeout gives no verdict and prints ERROR instead:
 # exit 2, which tb/mutate/run.py scores as ERROR, never as a kill.
+#
+# Sidecars: every tb/formal/*.conf (sorted) is sourced after the tables below.
+# A sidecar adds harnesses without editing this file: for its own name n it
+# sets FILES[n] and MODE[n] (induct, bmc, cover, pdr or struct), optionally
+# EXTRA PASSES PRE BDEPTH IDEPTH PROPN DEFS PDR_TIMEOUT GEN [n], and appends
+# n to ALL. <PROPN or n>_props.sv must exist in tb/formal. GEN[n] names a bash
+# function, called as `fn "$SRC" "$OUT"` before the sources are read; it may
+# write generated sources under $OUT only and prints their paths. A sidecar
+# that redefines a built-in harness, or names a harness with no props file,
+# gives ERROR (exit 2).
+# MODE sbmc is bmc that always runs through sby (a depth sat cannot reach in time).
+# Engines: FORMAL_ENGINE=sat (default, yosys's built-in solver) or sby (sby with
+# bitwuzla smtbmc, generated from the same tables; a pdr harness always uses
+# sby with `abc pdr`, and a pdr PASS counts as PROVED). `run.sh -e DIR names`
+# writes the generated DIR/sby_<n>.sby for a manual `sby -f` run (VCD traces).
+# --nonvac N...: runs the broken copies listed in tb/formal/N.nonvac, each of
+# which must FAIL (see the comment above that block).
+# Environment: FORMAL_BIN is prepended to PATH inside this script only (the
+# sandbox: $HOME/tools/oss-cad-suite/bin), so a campaign's simulators stay the
+# system ones. Every harness's yosys log is checked for an implicitly declared
+# or undriven wire (a hierarchical reference); a hit is ERROR, never a verdict.
 set -u
+[ -n "${FORMAL_BIN:-}" ] && export PATH="$FORMAL_BIN:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
 SRC="${FYRA_SRC:-$ROOT/src}"
@@ -35,9 +57,9 @@ declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fe
                    [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_bb1]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
 declare -A EXTRA=( [core_hold]="rf_top_stub.v" [core_req]="rf_top_stub.v" [core_fetch]="rf_top_stub.v" [soc_rst_sync]="rf_top_stub.v" [spi_f12]="rf_top_stub.v" )   # read from $HERE
 declare -A PASSES=( [core_hold]="memory_map; setundef -undriven -expose;" [core_req]="memory_map; setundef -undriven -expose;" [core_fetch]="memory_map; setundef -undriven -expose;" )
-declare -A MODE=( [csr]=induct [core_hold]=induct [core_req]=bmc [core_fetch]=induct [syscon_comb]=bmc [syscon_gate]=induct [soc_rst_sync]=struct
-                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=bmc [spi_bb1]=bmc [spi_cover]=cover [spi_f12]=struct )
-declare -A BDEPTH=( [syscon_comb]=24 [spi_bb]=24 [spi_bb1]=${BB1_DEPTH:-24} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
+declare -A MODE=( [csr]=pdr [core_hold]=induct [core_req]=sbmc [core_fetch]=induct [syscon_comb]=pdr [syscon_gate]=induct [soc_rst_sync]=struct
+                  [spi_core]=induct [spi_dc]=induct [spi_bus]=induct [spi_bb]=sbmc [spi_bb1]=sbmc [spi_cover]=cover [spi_f12]=struct )
+declare -A BDEPTH=( [core_req]=${CR_DEPTH:-150} [syscon_comb]=24 [spi_bb]=${BB_DEPTH:-96} [spi_bb1]=${BB1_DEPTH:-96} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
 declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
@@ -54,12 +76,173 @@ declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_
                  [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_bb1]="" [spi_cover]="$GPIO_PRE" )
 # spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
 declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
-names=("$@"); [ ${#names[@]} = 0 ] && names=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
+BUILTIN=(csr core_hold core_req core_fetch syscon_comb syscon_gate soc_rst_sync spi_core spi_dc spi_bus spi_bb spi_bb1 spi_cover spi_f12)
+declare -A PDR_TIMEOUT=() GEN=() NVDEPTH=() SBYOPT=()   # SBYOPT[n]: extra sby [options] lines (core_inv_armed_cov: vcd off)
 bad=0
 err=0
+ARRS=(FILES EXTRA PASSES MODE BDEPTH IDEPTH PRE PROPN DEFS PDR_TIMEOUT GEN NVDEPTH SBYOPT)
+sig() { local a n; for a in "${ARRS[@]}"; do for n in "${BUILTIN[@]}"; do eval "printf '%s\n' \"$a[$n]=\${$a[$n]-UNSET}\""; done; done; }
+SIDE=(); declare -A BROKEN=()
+for conf in $(ls "$HERE"/*.conf 2>/dev/null | sort); do
+  ALL=(); before=$(sig)
+  # shellcheck disable=SC1090
+  . "$conf"
+  after=$(sig)
+  if [ "$before" != "$after" ]; then
+    for n in "${BUILTIN[@]}"; do
+      if [ "$(diff <(echo "$before") <(echo "$after") | grep -c "\[$n\]")" != 0 ]; then
+        echo "ERROR $n: sidecar $(basename "$conf") redefines a built-in harness"; BROKEN[$n]=1; err=1
+      fi
+    done
+    continue
+  fi
+  for n in "${ALL[@]}"; do
+    case " ${BUILTIN[*]} " in *" $n "*) echo "ERROR $n: sidecar $(basename "$conf") redefines a built-in harness"; BROKEN[$n]=1; err=1; continue;; esac
+    if [ ! -f "$HERE/${PROPN[$n]:-$n}_props.sv" ] && [ "${MODE[$n]:-}" != struct ]; then
+      echo "ERROR $n: sidecar $(basename "$conf"): ${PROPN[$n]:-$n}_props.sv is missing"; err=1; continue
+    fi
+    if [ -z "${FILES[$n]:-}" ] || [ -z "${MODE[$n]:-}" ]; then
+      echo "ERROR $n: sidecar $(basename "$conf") sets no FILES or MODE"; err=1; continue
+    fi
+    SIDE+=("$n")
+  done
+done
+ENGINE="${FORMAL_ENGINE:-sat}"
+EDIR=""; NONVAC=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -e) EDIR="$2"; shift 2;;
+    --nonvac) NONVAC=1; shift;;
+    *) break;;
+  esac
+done
+if [ -n "$EDIR" ]; then OUT="$EDIR"; mkdir -p "$OUT"; ENGINE=sby; fi
+names=("$@"); [ ${#names[@]} = 0 ] && names=("${BUILTIN[@]}" "${SIDE[@]}")
+
+# --nonvac N...: tb/formal/N.nonvac lists broken copies, one per line, each of which
+# the harness must FAIL (a cover harness: anything but COVERED). Lines:
+#   cat <ID>             # why   catalogue mutant of tb/mutate/mutants.py
+#   sed <file> <expr>    # why   hand-made copy (must change the file)
+#   def <-DNAME ...>     # why   sources unchanged, harness built with these defines
+#   engine sat|sby       # why   the engine for the lines below (default: the current one);
+#                                for harnesses whose copies differ only through state that
+#                                sat starts at zero (spi_dc's unreset cc/bc)
+# Prints NONVAC-OK / NONVAC-MISS <name> <id>: <verdict line>; NONVAC-ERROR (exit 2)
+# when the copy cannot be made or the run gave no verdict; any MISS exits 1.
+if [ $NONVAC = 1 ]; then
+  nbad=0; nerr=0
+  for n in "${names[@]}"; do
+    nf="$HERE/$n.nonvac"
+    if [ ! -f "$nf" ]; then echo "NONVAC-ERROR $n: no $n.nonvac"; nerr=1; continue; fi
+    k=0; neng="$ENGINE"
+    while IFS= read -r line; do
+      case "$line" in ''|'#'*) continue;; 'engine '*) neng=$(echo "${line#engine }" | sed 's/ .*//'); continue;; esac
+      k=$((k+1)); kind=${line%% *}; rest=${line#* }; body=$(echo "$rest" | sed 's/  *# .*$//')
+      d="$OUT/nonvac_${n}_$k"; rm -rf "$d"; mkdir -p "$d"; cp -r "$SRC" "$d/src"; defs=""
+      id="$kind $body"
+      case "$kind" in
+        cat)
+          python3 - "$ROOT/tb/mutate" "$d/src" "$body" <<'PYEOF' || { echo "NONVAC-ERROR $n $id: catalogue mutant not applicable"; nerr=1; continue; }
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from mutants import M
+e = [x for x in M if x[0] == sys.argv[3]]
+if len(e) != 1: sys.exit("no such mutant %s" % sys.argv[3])
+mid, f, find, rep, why = e[0]
+p = os.path.join(sys.argv[2], f)
+t = open(p).read()
+if t.count(find) != 1: sys.exit("%s: find string occurs %d times in %s" % (mid, t.count(find), f))
+open(p, "w").write(t.replace(find, rep))
+PYEOF
+          ;;
+        sed)
+          f=${body%% *}; ex=${body#* }
+          sed -i -e "$ex" "$d/src/$f" 2>/dev/null
+          if cmp -s "$SRC/$f" "$d/src/$f"; then echo "NONVAC-ERROR $n $id: the sed expression did not change $f"; nerr=1; continue; fi;;
+        def) defs="$body";;
+        *) echo "NONVAC-ERROR $n $id: unknown line kind"; nerr=1; continue;;
+      esac
+      v=$(FYRA_SRC="$d/src" OUT_DIR="$d" EXTRA_DEFS="$defs" NONVAC_RUN=1 FORMAL_ENGINE="$neng" bash "$0" "$n" 2>&1 | head -1)
+      case "$v" in
+        *"did not close"*) echo "NONVAC-MISS $n $id: no counterexample ($v)"; nbad=1;;
+        FAILED*) echo "NONVAC-OK $n $id: $v";;
+        ERROR*|"") echo "NONVAC-ERROR $n $id: $v"; nerr=1;;
+        *) echo "NONVAC-MISS $n $id: $v"; nbad=1;;
+      esac
+    done < "$nf"
+  done
+  [ $nerr = 1 ] && exit 2
+  exit $nbad
+fi
+
+# guard_hit LOG: the log shows a hierarchical reference (an implicit, undriven wire)
+# The one allowed exception: rf_top_stub.v's wires free_a, free_b, ra_data and
+# rb_data are undriven on purpose (free register-file read data, turned into
+# inputs by `setundef -undriven -expose` in the core_* PASSES).
+guard_hit() { grep -E "is implicitly declared|is used but has no driver" "$1" | grep -vE 'Wire rf_top\.\\(free_a|free_b|ra_data|rb_data) ' | grep -q .; }
+
+# sby_harness N: run harness N through sby (needs $srcs $log $bd; sets bad/err).
+# The [script] is the sat path's read/PRE/prep/flatten/PASSES/opt, minus
+# `chformal -lower` (sby wants the formal cells as they are).
+sby_harness() {
+  local n=$1 m=${MODE[$1]} d="$OUT/sby_$1" top="${PROPN[$1]:-$1}_props" dfn="${DEFS[$1]:-} ${EXTRA_DEFS:-}" opts engines sf="" f st tr
+  [ "$m" = sbmc ] && m=bmc
+  if ! command -v sby >/dev/null 2>&1; then echo "ERROR $n: sby not found on PATH (set FORMAL_BIN)"; err=1; return; fi
+  mkdir -p "$d"
+  case "$m" in
+    induct) opts="mode prove
+depth ${IDEPTH[$n]:-1}"; engines="smtbmc bitwuzla";;
+    bmc)    opts="mode bmc
+depth $bd"; engines="smtbmc bitwuzla";;
+    cover)  opts="mode cover
+depth $bd"; engines="smtbmc bitwuzla"; dfn="$dfn -DSBY_COVER";;
+    pdr)    opts="mode prove
+depth 1
+timeout ${PDR_TIMEOUT[$n]:-1200}"; engines="abc pdr";;
+  esac
+  [ -n "${SBYOPT[$n]:-}" ] && opts="$opts
+${SBYOPT[$n]}"
+  { echo "[options]"; echo "$opts"; echo "[engines]"; echo "$engines"; echo "[script]"
+    echo "read_verilog -sv -formal$(for f in $srcs; do printf ' %s' "$(basename "$f")"; done)"
+    [ -n "${PRE[$n]:-}" ] && echo "${PRE[$n]}" | tr ';' '\n'
+    echo "read_verilog -sv -formal $dfn ${PROPN[$n]:-$n}_props.sv"
+    echo "prep -top $top"; echo "flatten"
+    [ -n "${PASSES[$n]:-}" ] && echo "${PASSES[$n]}" | tr ';' '\n'
+    echo "opt -fast"
+    echo "[files]"; for f in $srcs; do echo "$f"; done; echo "$HERE/${PROPN[$n]:-$n}_props.sv"
+  } | sed '/^ *$/d' > "$d.sby"
+  if [ -n "$EDIR" ]; then echo "WROTE $n: $d.sby (run: sby -f $d.sby)"; return; fi
+  rm -rf "$d"
+  timeout $(( ${PDR_TIMEOUT[$n]:-1200} + 600 )) sby -f -d "$d" "$d.sby" > "$log" 2>&1
+  for f in "$d"/model/*.log; do [ -f "$f" ] && cat "$f" >> "$log"; done 2>/dev/null
+  if [ -d "$d/model" ] && guard_hit "$d"/model/*.log; then
+    echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; return
+  fi
+  st=$(grep -oE "DONE \((PASS|FAIL|UNKNOWN|ERROR|TIMEOUT)" "$log" | tail -1 | grep -oE "[A-Z]+$")
+  tr=$(ls "$d"/engine_0/trace*.vcd 2>/dev/null | head -1)
+  case "$m:$st" in
+    induct:PASS) echo "PROVED $n (sby k-induction, length ${IDEPTH[$n]:-1})";;
+    induct:FAIL) echo "FAILED $n: a counterexample from reset (trace: ${tr:-none}; log: $log)"; bad=1;;
+    induct:UNKNOWN) echo "FAILED $n: induction did not close by length ${IDEPTH[$n]:-1} (log: $log)"; bad=1;;
+    bmc:PASS) echo "BOUNDED $n (no counterexample within $bd steps of reset)";;
+    bmc:FAIL) echo "FAILED $n: counterexample within $bd steps (trace: ${tr:-none}; log: $log)"; bad=1;;
+    pdr:PASS) echo "PROVED $n (pdr)";;
+    pdr:FAIL) echo "FAILED $n: a counterexample (trace: ${tr:-none}; log: $log)"; bad=1;;
+    cover:PASS) k=$(grep -c "Reached cover statement" "$log"); echo "COVERED $n ($k/$k)";;
+    cover:FAIL) k=$(grep -c "Reached cover statement" "$log"); u=$(grep -c "Unreached cover statement" "$log")
+                echo "FAILED $n: $k/$((k+u)) covered, unreachable within $bd steps (log: $log)"; bad=1;;
+    *) echo "ERROR $n: no verdict (${st:-no sby status}; log: $log)"; err=1;;
+  esac
+}
 for n in "${names[@]}"; do
+  if [ -n "${BROKEN[$n]:-}" ]; then continue; fi
+  if [ -z "${FILES[$n]:-}" ] || [ -z "${MODE[$n]:-}" ]; then echo "ERROR $n: no such harness"; err=1; continue; fi
   srcs=""; for f in ${FILES[$n]}; do srcs="$srcs $SRC/$f"; done
-  if [ "$n" = core_fetch ]; then
+  if [ -n "${GEN[$n]:-}" ]; then
+    gen=$(${GEN[$n]} "$SRC" "$OUT") || { echo "ERROR $n: generator ${GEN[$n]} failed"; err=1; continue; }
+    srcs="$srcs $gen"
+  fi
+  if [ "${PROPN[$n]:-$n}" = core_fetch ]; then
     # fyracore.v with the f_* observation ports (see core_fetch_props.sv)
     inst="$OUT/formal_core_fetch_fyracore.v"
     sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf,\n\1output wire        f_kv, f_exec, f_load/' \
@@ -76,6 +259,7 @@ for n in "${names[@]}"; do
     stop=alphaone_soc; [ "$n" = spi_f12 ] && stop=tt_um_alfadelta10010_alphaone_soc
     timeout 1800 yosys -p "read_verilog -sv $srcs; prep -top $stop; flatten; opt_clean; write_json $json" > "$log" 2>&1
     if [ ! -s "$json" ]; then echo "ERROR $n: yosys gave no netlist (log: $log)"; err=1; continue; fi
+    if guard_hit "$log"; then echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue; fi
     if [ "$n" = spi_f12 ]; then
     out=$(python3 - "$json" <<'PYEOF'
 # F12 (SPI-014): MOSI, SCK and the chip selects leave from flops.
@@ -193,16 +377,22 @@ PYEOF
     esac
     continue
   fi
+  # --nonvac child run: an induct harness runs as bmc (a broken copy must give a
+  # counterexample from reset, not merely "induction did not close")
+  if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = induct ]; then MODE[$n]=bmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
+  if [ "${MODE[$n]}" = pdr ] || [ "${MODE[$n]}" = sbmc ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
+    sby_harness "$n"; continue
+  fi
   if [ "${MODE[$n]}" = cover ]; then
     # one run per point (-D COVER_i); the point is assert(!cond), so "model found" = COVERED
     ncov=0; ntot=6; unr=""; ecov=0
     for i in 1 2 3 4 5 6; do
       clog="$OUT/formal_${n}_$i.log"
-      timeout 1800 yosys -p "read_verilog -sv -formal $srcs; ${PRE[$n]:-}; read_verilog -sv -formal -DCOVER_$i $HERE/${n}_props.sv; \
+      timeout 1800 yosys -p "read_verilog -sv -formal $srcs; ${PRE[$n]:-}; read_verilog -sv -formal -DCOVER_$i ${EXTRA_DEFS:-} $HERE/${n}_props.sv; \
           prep -top ${n}_props; chformal -lower; flatten; opt -fast; \
           sat -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq $bd" > "$clog" 2>&1
-      if grep -qE "is implicitly declared|is used but has no driver" "$clog"; then ecov=1
+      if guard_hit "$clog"; then ecov=1
       elif grep -q "SAT proof finished - model found: FAIL" "$clog"; then ncov=$((ncov+1))
       elif grep -q "SAT proof finished - no model found: SUCCESS" "$clog"; then unr="$unr $i"
       else ecov=1; fi
@@ -217,15 +407,13 @@ PYEOF
   else
     sat="sat -tempinduct -tempinduct-def -prove-asserts -set-assumes -set-init-zero -set-def-inputs -seq 1 -maxsteps ${IDEPTH[$n]:-$DEPTH}"
   fi
-  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal $HERE/${n}_props.sv"
-  else rd="read_verilog -sv -formal $srcs; read_verilog -sv -formal ${DEFS[$n]:-} $HERE/${PROPN[$n]:-$n}_props.sv"; fi
+  if [ -n "${PRE[$n]:-}" ]; then rd="read_verilog -sv -formal $srcs; ${PRE[$n]}; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${PROPN[$n]:-$n}_props.sv"
+  else rd="read_verilog -sv -formal $srcs; read_verilog -sv -formal ${DEFS[$n]:-} ${EXTRA_DEFS:-} $HERE/${PROPN[$n]:-$n}_props.sv"; fi
   timeout 1800 yosys -p "$rd; prep -top ${PROPN[$n]:-$n}_props; \
                chformal -lower; flatten; ${PASSES[$n]:-} opt -fast; $sat" > "$log" 2>&1
-  case "$n" in spi_*)
-    if grep -qE "is implicitly declared|is used but has no driver" "$log"; then
-      echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue
-    fi;;
-  esac
+  if guard_hit "$log"; then
+    echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue
+  fi
   if [ "${MODE[$n]}" = bmc ]; then
     if grep -q "SAT proof finished - no model found: SUCCESS" "$log"; then
       echo "BOUNDED $n (no counterexample within $bd steps of reset)"

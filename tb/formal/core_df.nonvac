@@ -1,0 +1,1 @@
+def -DDF_N=1   # one data access per fetch allowed: the counter counts, two accesses fail it

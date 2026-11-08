@@ -30,6 +30,7 @@ module tb_syscon;
     always @(posedge clk) tc <= tc + 1;
 
     integer checks = 0, fails = 0, cyc = 0, fires = 0;
+    integer n_kfire = 0, cv_kfire = 0;   // a kick or TORR write on the clock of a fire (SA-008): all run / random phase
     integer seed = 1, seed0 = 1, ncyc = 200000, gseed = 12345;
 
     // ------------------------------------------------------------ the model
@@ -167,6 +168,10 @@ module tb_syscon;
                     if (fr) cv_fires = cv_fires + 1;
                 end
                 // independent timing check of the stated bound (SYS-015)
+                if (fr && (kick || torr)) begin
+                    n_kfire = n_kfire + 1;
+                    if (cv_on) cv_kfire = cv_kfire + 1;
+                end
                 if (fr) begin
                     p = 1 << (m_top + 1);
                     d = cyc - lclr;
@@ -747,6 +752,63 @@ module tb_syscon;
         end
     endtask
 
+    // SA-008 (docs/soc-architecture.md, REQ-SYS-015/016): a kick or a TORR write in the very clock of
+    // the third tick does not stop the fire. Expected values below come from the specification, not
+    // from the model (which also checks every clock). K1 CRR 0x76, K2 TORR, K4 CRR != 0x76 in the
+    // fire clock: the fire happens; K3 a kick one clock before the fire clock: no fire, and the next
+    // one comes after three further tap edges, inside (2P, 3P+1] clocks of the kick.
+    integer sa_d, sa_f0, sa_lk;
+    task sa8_fired(input [8*10-1:0] nm);
+        begin
+            nxt; drv_idle;                                   // the clock after the fire edge
+            chk(nm, rst_soc, 1'b1);
+            nxt; drv_idle;
+            chk(nm, rst_soc, 1'b1);                          // two-edge reboot
+            idle(6);
+            chk(nm, rst_soc, 1'b0);
+            if (fires != sa_f0 + 1) xfail("SA-008: the fire did not happen once");
+            ld(`SYS_CAUSE); #4; chk(nm, rdata & 32'h4, 32'h4);        // RESET_CAUSE.WDT set
+            ld(`WDT_CR);    #4; chk(nm, rdata, 32'h0);                // watchdog disabled
+            ld(`WDT_TORR);  #4; chk(nm, rdata, 32'hFF);               // TOP 15 (REQ-SYS-016)
+            nxt; drv_idle;
+        end
+    endtask
+    task s_sa008;
+        integer q, tt, Pq;
+        begin
+            sec("SA-008: kick or TORR write in the fire clock");
+            for (q = 0; q < 4; q = q + 1) begin
+                for (tt = 1; tt <= 3; tt = tt + 2) begin
+                    Pq = 1 << (tt + 1);
+                    prs; wdt_arm(tt); if (q != 3) aim_fire(100); sa_f0 = fires;
+                    case (q)
+                        0: begin drv(1, 1, 4'h1, `WDT_CRR, 32'h76); sa8_fired("K1 kick"); end
+                        1: begin drv(1, 1, 4'h1, `WDT_TORR, tt);    sa8_fired("K2 torr"); end
+                        2: begin drv(1, 1, 4'h1, `WDT_CRR, 32'h75); sa8_fired("K4 nokick"); end
+                        3: begin
+                            // K3: one clock before the fire clock
+                            aim_pre_fire(100);
+                            drv(1, 1, 4'h1, `WDT_CRR, 32'h76);
+                            nxt; drv_idle;                       // the kick has been taken at the last edge
+                            sa_lk = lclr;
+                            nxt; drv_idle;
+                            chk("K3 nofire", rst_soc, 1'b0);
+                            while (fires == sa_f0 && cyc - sa_lk < 4 * Pq + 20) begin nxt; drv_idle; end
+                            sa_d = cyc - sa_lk;
+                            if (fires == sa_f0) xfail("K3: no fire after the kick");
+                            else begin
+                                checks = checks + 1;
+                                if (!(sa_d > 2 * Pq && sa_d <= 3 * Pq + 1)) xfail("K3: next fire outside (2P, 3P+1] of the kick");
+                            end
+                            idle(8);
+                        end
+                    endcase
+                end
+            end
+            prs;
+        end
+    endtask
+
     task s_sweep;
         integer a, n;
         begin
@@ -888,10 +950,12 @@ module tb_syscon;
         $display("TORR cells reached: %0d of %0d", cells, cells_want);
         if (cells != cells_want) xfail("TORR phase/count cells not all reached");
         s_same;
+        s_sa008;
         s_wdt_timing;
         s_sweep;
         s_random;
         idle(4);
+        $display("kick/TORR write in a fire clock: %0d in the run, %0d in the random phase", n_kfire, cv_kfire);
         $display("end time %0d ns", $time);
         if (fails == 0) $display("PASS tb_syscon (%0d checks, %0d watchdog fires, seed %0d)", checks, fires, seed0);
         else            $display("FAIL tb_syscon: %0d failures, %0d checks, seed %0d", fails, checks, seed0);

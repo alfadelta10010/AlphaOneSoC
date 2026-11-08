@@ -129,6 +129,35 @@ module fyracore #(
     output wire [31:0] dbg_instr,
     output wire        dbg_compressed,
     output wire        dbg_trap
+`ifdef RISCV_FORMAL
+    , output wire        rvfi_valid
+    , output wire [63:0] rvfi_order
+    , output wire [31:0] rvfi_insn
+    , output wire        rvfi_trap
+    , output wire        rvfi_halt
+    , output wire        rvfi_intr
+    , output wire [1:0]  rvfi_mode
+    , output wire [1:0]  rvfi_ixl
+    , output wire [4:0]  rvfi_rs1_addr
+    , output wire [4:0]  rvfi_rs2_addr
+    , output wire [31:0] rvfi_rs1_rdata
+    , output wire [31:0] rvfi_rs2_rdata
+    , output wire [4:0]  rvfi_rd_addr
+    , output wire [31:0] rvfi_rd_wdata
+    , output wire [31:0] rvfi_pc_rdata
+    , output wire [31:0] rvfi_pc_wdata
+    , output wire [31:0] rvfi_mem_addr
+    , output wire [3:0]  rvfi_mem_rmask
+    , output wire [3:0]  rvfi_mem_wmask
+    , output wire [31:0] rvfi_mem_rdata
+    , output wire [31:0] rvfi_mem_wdata
+    // Formal-only taps for the riscv-formal wrapper's environment
+    , output wire        fv_fetch_can_deny
+    , output wire        fv_data_priv_m
+    , output wire        fv_misa_c
+    , output wire        fv_wfi_active
+    , output wire        fv_wb_hit
+`endif
 );
 
     // ================================================================
@@ -515,6 +544,9 @@ module fyracore #(
     wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
     wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
 
+`ifdef RISCV_FORMAL_ALTOPS
+    wire [31:0] muldiv_result_raw;
+`endif
     muldiv muldiv_inst(
         .clk   (clk),
         .rst   (rst),
@@ -524,7 +556,11 @@ module fyracore #(
         .sra   (ctrl_aluOp[3]),
         .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
         .b     (alu_d2),             // rs2, or the immediate shift amount
+`ifdef RISCV_FORMAL_ALTOPS
+        .result(muldiv_result_raw),
+`else
         .result(muldiv_result),
+`endif
         .busy  (muldiv_busy),
         .done  (muldiv_done)
     );
@@ -1552,4 +1588,111 @@ module fyracore #(
         end
     end
 
+`ifdef RISCV_FORMAL
+    // ================================================================
+    //  RISC-V Formal Interface (RVFI), NRET = 1, XLEN = ILEN = 32
+    //  Formal-only: nothing here exists without RISCV_FORMAL.
+    // ================================================================
+    // An instruction retires in WB. Every synchronous exception is reported
+    // (trap = 1); the WB cycle of an interrupt is not an instruction.
+    wire fv_wb_ret = exwb_valid && !wb_busy && !wb_mem_stall;
+    assign rvfi_valid = !rst && fv_wb_ret && !(exwb_trap && exwb_trap_cause[31]);
+    assign rvfi_trap  = rvfi_valid && exwb_trap;
+    assign rvfi_halt  = 1'b0;
+    assign rvfi_ixl   = 2'b01;
+    assign rvfi_insn  = exwb_raw_instr;
+    assign rvfi_pc_rdata = exwb_trap_pc;
+
+    reg [63:0] fv_order;
+    reg        fv_intr_pend;
+    always @(posedge clk) begin
+        if (rst) begin
+            fv_order     <= 64'b0;
+            fv_intr_pend <= 1'b0;
+        end else begin
+            if (rvfi_valid) begin
+                fv_order     <= fv_order + 64'd1;
+                fv_intr_pend <= exwb_trap;
+            end else if (csr_trap_signal) begin
+                fv_intr_pend <= 1'b1;
+            end
+        end
+    end
+    assign rvfi_order = fv_order;
+    assign rvfi_intr  = rvfi_valid && fv_intr_pend;
+
+    // Fields captured when the instruction leaves EX: loaded on the edges
+    // where EX/WB loads from EX (the last arm of the EX/WB update).
+    reg [4:0]  fv_x_rs1_addr, fv_x_rs2_addr;
+    reg [31:0] fv_x_rs1_rdata, fv_x_rs2_rdata;
+    reg [31:0] fv_x_pc_wdata;
+    reg        fv_x_mode;
+    reg        fv_x_hit;
+    // and on the IF/EX load edges (the last arm of the IF/EX update)
+    reg        fv_ifex_hit;
+    always @(posedge clk) begin
+        if (!rst && !stall && !(flush || ex_nofetch))
+            fv_ifex_hit <= if_hit;
+        if (!rst && !wb_busy && !wb_mem_stall && !stall) begin
+            fv_x_rs1_addr  <= (ex_rs1 == ifex_rf_rs1) ? ex_rs1 : 5'b0;
+            fv_x_rs1_rdata <= (ex_rs1 == ifex_rf_rs1 && ex_rs1 != 5'b0) ? ex_rs1_val : 32'b0;
+            fv_x_rs2_addr  <= (ex_rs2 == ifex_rf_rs2) ? ex_rs2 : 5'b0;
+            fv_x_rs2_rdata <= (ex_rs2 == ifex_rf_rs2 && ex_rs2 != 5'b0) ? ex_rs2_val : 32'b0;
+            fv_x_pc_wdata  <= ex_trap                          ? trap_target :
+                              irq_inject                       ? trap_target :
+                              ex_is_mret                       ? mret_target :
+                              (ex_branch_taken && ifex_valid)  ? ex_branch_target :
+                                                                 pc;
+            fv_x_mode      <= priv_mode;
+            fv_x_hit       <= fv_ifex_hit;
+        end
+    end
+    assign rvfi_rs1_addr  = rvfi_valid ? fv_x_rs1_addr  : 5'b0;
+    assign rvfi_rs2_addr  = rvfi_valid ? fv_x_rs2_addr  : 5'b0;
+    assign rvfi_rs1_rdata = rvfi_valid ? fv_x_rs1_rdata : 32'b0;
+    assign rvfi_rs2_rdata = rvfi_valid ? fv_x_rs2_rdata : 32'b0;
+    assign rvfi_pc_wdata  = rvfi_valid ? fv_x_pc_wdata  : 32'b0;
+    assign rvfi_mode      = rvfi_valid ? (fv_x_mode ? 2'b11 : 2'b00) : 2'b00;
+    assign fv_wb_hit      = rvfi_valid && fv_x_hit;
+
+    // Register write: the register file's own enable and data
+    assign rvfi_rd_addr  = (rvfi_valid && wb_regWR && exwb_rd != 5'b0) ? exwb_rd : 5'b0;
+    assign rvfi_rd_wdata = (rvfi_rd_addr != 5'b0) ? wb_data : 32'b0;
+
+    // Memory access (none for a trap or a failing SC: dmem_req is low)
+    wire fv_m_ok    = rvfi_valid && !exwb_trap;
+    wire fv_m_load  = fv_m_ok && exwb_memRD && !exwb_memWR;
+    wire fv_m_store = fv_m_ok && exwb_memWR && !exwb_memRD && !exwb_isSC;
+    wire fv_m_sc    = fv_m_ok && exwb_isSC;
+    wire fv_m_amo   = fv_m_ok && exwb_isAmo;
+    assign rvfi_mem_rmask = (fv_m_load || fv_m_amo) ? access_be : 4'b0;
+    assign rvfi_mem_wmask = (fv_m_store || fv_m_amo || (fv_m_sc && sc_success)) ? access_be : 4'b0;
+    assign rvfi_mem_rdata = fv_m_amo ? amo_old_val : fv_m_load ? dmem_rdata : 32'b0;
+    assign rvfi_mem_wdata = (rvfi_mem_wmask != 4'b0) ? dmem_wdata : 32'b0;
+    assign rvfi_mem_addr  = ((rvfi_mem_rmask | rvfi_mem_wmask) != 4'b0) ? dmem_addr : 32'b0;
+
+    // Taps
+    assign fv_fetch_can_deny = fetch_can_deny;
+    assign fv_data_priv_m    = data_priv_mode;
+    assign fv_misa_c         = csr_misa_c;
+    assign fv_wfi_active     = wfi_active;
+`endif
+`ifdef RISCV_FORMAL_ALTOPS
+    // Replace the M result by riscv-formal's ALTOPS formulas (low 32 bits of
+    // each 64-bit bitmask), selected by funct3. Shifts keep the real result.
+    reg [31:0] fv_altop;
+    always @(*) begin
+        case (ex_funct3)
+            3'b000:  fv_altop = (alu_d1 + alu_d2) ^ 32'h5876063e; // MUL
+            3'b001:  fv_altop = (alu_d1 + alu_d2) ^ 32'hf6583fb7; // MULH
+            3'b010:  fv_altop = (alu_d1 - alu_d2) ^ 32'hecfbe137; // MULHSU
+            3'b011:  fv_altop = (alu_d1 + alu_d2) ^ 32'h949ce5e8; // MULHU
+            3'b100:  fv_altop = (alu_d1 - alu_d2) ^ 32'h7f8529ec; // DIV
+            3'b101:  fv_altop = (alu_d1 - alu_d2) ^ 32'h10e8fd70; // DIVU
+            3'b110:  fv_altop = (alu_d1 - alu_d2) ^ 32'h8da68fa5; // REM
+            default: fv_altop = (alu_d1 - alu_d2) ^ 32'h3138d0e1; // REMU
+        endcase
+    end
+    assign muldiv_result = ctrl_isMulDiv ? fv_altop : muldiv_result_raw;
+`endif
 endmodule

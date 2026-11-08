@@ -35,4 +35,11 @@ module syscon_gate_props (
         assert (!(armed && held_q && !rst && addr == 14'd1 && rdata[2]));   // P1
         assert (!(armed && hq2 && addr == 14'h40 && rdata[0]));             // P2
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (armed && held_q && !rst && addr == 14'd1); cover (armed && hq2 && addr == 14'h40);
+    end
+`endif
 endmodule

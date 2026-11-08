@@ -40,3 +40,15 @@
   is no longer exercised at div 27 / GL (uart.v reload = 16550 behaviour, < 1/16 bit shift).
 - syscon_regs: 336 syscon loads statically; 335 compared exactly by the program, 1 unchecked (step 7 RMW lw).
 - Payload strings cannot hold NUL: a spurious 0x00 byte is invisible to s_pay/mb_pay compares.
+
+## 2026-10-30 WO-29 SPI verification review (spi_alfadelta10010 @403e77c)
+- tb_spi floors count the whole run (directed + random), not the random phase as WO-29 5.4 says; only B bins 4-77 and 79-253 need the random phase. A degenerate random phase would still pass.
+- REQ-SPI-011 (idle load bb <= sr = the slow-CPU/interrupted driver path): no directed sim test. T05 is always the fast path and T12 overwrites bb. Covered by spi_core C13 (fails on SPI04a), spi_bb (CEX on SPI04a) and the random phase. No SoC run takes the path (SPI04a survives test-soc-spi).
+- spi_bb runs at BAUD 0 only (depth 24), so it cannot see phase-length faults: SPI08 passes it (measured). For B>=1 the only black-box checks are in simulation.
+- Formal mutants measured locally: spi_core fails on SPI01/04a/08/18/22; spi_bus on SPI18/21; spi_bb on SPI01/04a/18/21/22 (not 08). Times: core ~20 s, bus <1 s, bb ~1 s, cover ~4 min per point.
+- RVFI reporting hole (by design, 2026-11-07): an interrupt taken while a WFI is still in EX (mepc = pc+4) makes that WFI vanish from the RVFI trace (NRET=1). Not a pc-check problem; instret/Spike behaviour stays with the directed suite.
+- 2026-11-07: FC49 core_inv bmc 20 never reaches muldiv_done/ready (vacuous for FC49). mem_li LI 442/456 measured, not proved (needs depth 582; conditional on DF_N<=4, bounded only).
+- reg_ch0 is blind to transient operand faults (port samples at EX exit; WO-38 review 2026-11-07); CSR-write/A operands have no riscv-formal operand check. Also unexplored there: memory waits >2 cycles, illegal encodings other than 0, trap/mret targets.
+
+- 2026-11-07 VC-10: qspi_pmod_model does not hold-check a host IO output-enable drop (end of write, read
+  turnaround); measured 10 ns at RTL, unmeasured at SDF. Edit proposed in vc10/REVIEW.md. Untested, not unreachable.

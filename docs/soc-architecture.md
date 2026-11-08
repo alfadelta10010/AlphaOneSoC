@@ -101,7 +101,12 @@ Joins the core's two ports onto the one QSPI engine.
 
 * **Arbitration: data first.** When both ports are waiting, the data request
   goes first. The pipeline only issues a new data request on the cycle
-  *after* a fetch completes, so a fetch is never starved. Serving data first
+  *after* a fetch completes or after a fetch-word-reuse hit, so the core can
+  make up to 4 data handshakes between two fetches (two back-to-back AMOs: a
+  load and a store each), not one. The bound is what keeps a fetch from being
+  starved: the formal harness `core_df` checks at most 4 data handshakes per
+  held fetch (BOUNDED, 32 steps from reset), and the worst fetch latency of
+  442/456 clocks (`rd_late` 0/1) is stated for that bound. Serving data first
   also avoids reading the next instruction before a load and then losing it
   while the load stalls the pipeline; fetch-first would do that on every load.
 * **Chip select** from the address: flash if `addr[31]` is 0, otherwise PSRAM

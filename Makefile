@@ -40,7 +40,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
         test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
-        test-wrapper test-wrapper-soc test-gl asm \
+        test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test
 
 all: test-all
@@ -468,6 +468,13 @@ endif
 		$(if $(CYCLES),+MAX_CYCLES=$(CYCLES)) \
 		$(if $(TOHOST),+TOHOST_ADDR=$(TOHOST)) \
 		$(if $(START_PC),+START_PC=$(START_PC))
+
+# Latency bounds of mem_ctrl + qspi_ctrl by random simulation (LP LF S LD LI, rd_late 0 and 1;
+# the pdr/bmc proofs in tb/formal/mem_*.sv carry the proved ones). Not part of test-all.
+# Expect LP 40/41, LF 56/57, S 126, LD 182/183, LI 442/456 (DF_N=4).
+bounds-qspi: $(BUILD_DIR)
+	@$(IVERILOG) -g2012 -DDFN=$(or $(DF_N),4) -o $(BUILD_DIR)/bounds_tb $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v tb/formal/bounds_tb.v
+	@cd $(BUILD_DIR) && $(VVP) bounds_tb
 
 # ============================================================
 #  Full test suite

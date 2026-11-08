@@ -1,0 +1,6 @@
+# spi_dc compares two copies of spi that differ only through flops without a reset.
+# sat starts every flop at zero, so the copies never diverge there: a broken copy can
+# only give a counterexample with sby's free initial state.
+engine sby   # free initial state
+cat SPI01   # MISO sampled through an unreset flop: the copies differ
+cat SPI20   # sr and bb not reset

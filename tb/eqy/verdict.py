@@ -10,10 +10,16 @@
   verdict.py --partitions-of NAME EQYDIR
                                    print the partitions whose gold or gate design holds the
                                    net NAME (a flop's output), for the mutant runs
+  verdict.py --mutant-table NAME MUTDIR
+                                   print tab-separated rows NAME, partition, strategy, raw result, trace path
+                                   for every partition the mutant ran (MUTDIR/eqy, then MUTDIR/eqy_pdr, the
+                                   pdr confirm of the sat "vacuous base" partitions)
   verdict.py --only "P1 P2" EQYDIR OUT
                                    as the first form, over those partitions only
 """
 import glob, json, os, re, sys
+
+EXPECT_PARTITIONS = 165   # rewritten by scripts/eqy-refit.sh after a harden
 
 
 def statuses(eqydir, only=None):
@@ -91,8 +97,7 @@ def verdict(eqydir, out, only=None, classes=None):
     lines.insert(0, f"partitions {len(parts)}: {ok} proved ({', '.join(f'{k} {v}' for k, v in by.items())}), "
                     f"{len(fail)} fail, {len(opened)} open (classed fail), {len(unproven)} unproven")
     lines.insert(1, "sat induction lengths: " + str(dict(sorted(lens.items(), key=lambda kv: (kv[0] is None, kv[0])))))
-    if only is None and len(parts) != 157:
-        lines.append(f"WARNING partition count {len(parts)}, expected 157")
+    count_bad = only is None and len(parts) != EXPECT_PARTITIONS
     lines.append("assumption: gold == gold' (clamp, the identity on valid FSM codes: lemma L2, PROVED once armed) "
                  "== gate' (enc/clamp/dec, the identity while each FSM holds one set bit: I_gate, PROVED by "
                  "temporal induction on the netlist, fsminv stage) == gate; the FSM cut partitions compare "
@@ -104,7 +109,9 @@ def verdict(eqydir, out, only=None, classes=None):
                  "compared as a partition. Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
                  "Every sat proof closed at induction length 1 (step from any state); longer sat proofs are not "
                  "accepted because the base case is vacuous under undefined init.")
-    if fail:
+    if count_bad:
+        lines.append(f"EQY FAIL partition-count {len(parts)} expected {EXPECT_PARTITIONS}")
+    elif fail:
         lines.append("EQY FAIL " + " ".join(fail))
     elif unproven or opened:
         o = unproven + opened
@@ -112,7 +119,7 @@ def verdict(eqydir, out, only=None, classes=None):
     else:
         lines.append("EQY PASS")
     open(out, "w").write("\n".join(lines) + "\n")
-    return 1 if fail else (2 if (unproven or opened) else 0)
+    return 1 if (fail or count_bad) else (2 if (unproven or opened) else 0)
 
 
 def partitions_of(name, eqydir):
@@ -126,9 +133,35 @@ def partitions_of(name, eqydir):
     print(" ".join(hits))
 
 
+def mutant_table(name, mdir):
+    parts = [p for p in open(f"{mdir}/partitions.txt").read().split() if p]
+    for sub in ("eqy", "eqy_pdr"):
+        d = f"{mdir}/{sub}"
+        if not os.path.isdir(d):
+            continue
+        res = statuses(d)
+        for p in parts:
+            for strat, raw, cached in res.get(p, []):
+                if cached:
+                    continue
+                note = ""
+                if strat == "sat" and raw == "PASS":
+                    n = sat_length(d, p)
+                    if n != 1:
+                        note = f" (induction length {n}, vacuous base: not a proof)"
+                tr = ""
+                if raw == "FAIL":
+                    base = f"{d}/strategies/{p}/{strat}"
+                    found = sorted(glob.glob(f"{base}/**/*.vcd", recursive=True) + glob.glob(f"{base}/**/*.yw", recursive=True))
+                    tr = found[0] if found else f"{base}/run.log"
+                print(f"{name}\t{p}\t{strat} ({sub})\t{raw}{note}\t{tr}")
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
-    if a and a[0] == "--partitions-of":
+    if a and a[0] == "--mutant-table":
+        mutant_table(a[1], a[2])
+    elif a and a[0] == "--partitions-of":
         partitions_of(a[1], a[2])
     elif a and a[0] == "--only":
         sys.exit(verdict(a[2], a[3], set(a[1].split())))

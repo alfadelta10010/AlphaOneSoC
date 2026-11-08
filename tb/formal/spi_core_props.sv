@@ -182,4 +182,13 @@ module spi_core_props (
             if (!txe_q) assert (baud == baud_q && cpol == cpol_q && cpha == cpha_q);
         end
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (t_ok); cover (armed && load_now); cover (armed && st == A); cover (armed && st == B);
+        cover (armed && st == B && cc == 8'd0 && bc == 3'd0 && bba);
+        cover (armed && wr_tx); cover (armed && wr_ctl); cover (armed && wr_baud); cover (armed && wr_en); cover (armed && wr_out);
+    end
+`endif
 endmodule
