@@ -121,6 +121,8 @@ module tb_syscon_soc;
     integer max_cycles;
     integer min_loads = 1;           // floor on checked syscon loads
     integer mb_div;                  // +MB_UART +MB_DIV=n: the program's UART divisor (its frames follow)
+    integer half_ps;                 // +CLK_HALF_PS=<ps>: the clock's half period
+    integer want_k = -2;             // ddr_sweep: +WANT_K=<k>, the DDR_CAP the last UART line reports (-1 = "DDR off")
     reg     rd_late_run;             // +RD_LATE: the strap is 1 through the pin reset
 
     // ── Syscon model ────────────────────────────────────────────────────────
@@ -170,6 +172,10 @@ module tb_syscon_soc;
     reg     watch = 1'b0;                           // syscon_poweroff: the power-off watch starts
     reg     watch_on = 1'b0;                        // ... and is running
     reg     sck_ref = 1'b0;
+    integer n_xld = 0;                              // ddr_sweep: flash loads that returned X bits
+    always @(posedge clk)
+        if (soc.dmem_req === 1'b1 && soc.dmem_ready === 1'b1 && soc.dmem_we === 1'b0 &&
+            soc.dmem_addr[31:28] === 4'h2 && ^soc.dmem_rdata === 1'bx) n_xld = n_xld + 1;
     integer n_prst = 0;                             // pin resets the bench injected
     integer exp_prst = 0;
     reg [15:0] fail_code = 16'h0;
@@ -244,6 +250,8 @@ module tb_syscon_soc;
                     fail($sformatf("syscon_cfg: boot %0d read QSPI_CFG %h, want %h", n_values == 1 ? 1 : 2, v, {27'b0, `QCFG_CAP_RESET, 1'b0, ~no_stream_run}));
                 if ((n_values == 2 || n_values == 4) && v !== {30'b0, no_stream_run, 1'b0})
                     fail($sformatf("syscon_cfg: boot %0d read STRAPS %h, want %h", n_values == 2 ? 1 : 2, v, {30'b0, no_stream_run, 1'b0}));
+            end else if (test == "ddr_sweep") begin
+                $display("NOTE ddr_sweep value %0d: %h", n_values, v);
             end else if (test == "syscon_reboot") begin
                 // mtime at the program's first instructions of each boot: the
                 // CLINT restarted at every reboot, so it is the same every time
@@ -526,6 +534,7 @@ module tb_syscon_soc;
         no_stream_run = $test$plusargs("NO_STREAM");
         strap_ns = no_stream_run;
         if (rd_late_run) TCLK = 10.0;
+        if ($value$plusargs("CLK_HALF_PS=%d", half_ps)) TCLK = 2.0 * half_ps / 1000.0;   // 8333 = the chip's 60 MHz
         clk_go = 1'b1;
         mb_div = UART_DIV;
         if ($test$plusargs("MB_UART") && !$value$plusargs("MB_DIV=%d", mb_div)) mb_div = UART_DIV;   // the MB_UART build's divisor
@@ -548,6 +557,12 @@ module tb_syscon_soc;
             exp_events = 1; exp_prst = 1; min_loads = 7;
         end else if (test == "syscon_pinreset") begin
             exp_fin_reboots = 2; exp_wdt_reboots = 1; exp_events = 3; exp_prst = 2; min_loads = 9;
+        end else if (test == "ddr_sweep") begin
+            // WO-52: the boot-time DDR sweep; reboots come from its watchdog. +EXP_WDT=<n> watchdog
+            // reboots, +WANT_K=<k> the last UART line ("DDR on, cap k", or k = -1 "DDR off").
+            min_loads = 1; exp_values = 1000;
+            if (!$value$plusargs("EXP_WDT=%d", exp_wdt_reboots)) exp_wdt_reboots = 0;
+            if (!$value$plusargs("WANT_K=%d", want_k)) fail("ddr_sweep: no +WANT_K");
         end else if (test == "ddr_flash") begin
             min_loads = 1;      // QSPI_CFG at reset; the program checks the DDR reads itself
         end else begin
@@ -577,7 +592,7 @@ module tb_syscon_soc;
                 fail($sformatf("%s: %0d watchdog reboots, want %0d", test, n_wdt, exp_wdt_reboots));
             if (n_events != exp_events)
                 fail($sformatf("%s: %0d EVENT stores, want %0d", test, n_events, exp_events));
-            if (n_values != exp_values)
+            if (n_values != exp_values && test != "ddr_sweep")
                 fail($sformatf("%s: %0d VALUE stores, want %0d", test, n_values, exp_values));
             if (post_done < HOLD_CLOCKS || !m_off)
                 fail($sformatf("%s: the power-off hold was not observed", test));
@@ -596,6 +611,18 @@ module tb_syscon_soc;
                 fail("syscon_reboot: no reboot landed on a flash fetch in flight");
             if (test == "syscon_reboot" && n_cut < 1)
                 fail("syscon_reboot: no reboot cut a flash read (flash cs_n low at E1)");
+        end
+        if (test == "ddr_sweep" && done) begin : sweep_line
+            // the UART text: the whole of it as a NOTE, its last line against +WANT_K
+            string txt, want;
+            integer q;
+            txt = "";
+            for (q = 0; q < rp.rx_n && q < 16384; q = q + 1) txt = {txt, $sformatf("%c", rp.rx_buf[q] == 8'h0A ? 8'h7C : rp.rx_buf[q])};
+            $display("NOTE ddr_sweep UART (| = newline): %0s", txt);
+            $display("NOTE ddr_sweep: %0d flash loads returned X bits", n_xld);
+            if (want_k < 0) want = "DDR off|"; else want = $sformatf("DDR on, cap %0d|", want_k);
+            if (txt.len() < want.len() || txt.substr(txt.len() - want.len(), txt.len() - 1) != want)
+                fail($sformatf("ddr_sweep: UART text does not end in \"%0s\"", want));
         end
         if (rp.errors != 0) fail($sformatf("%s: %0d RP2350 UART errors", test, rp.errors));
         if (errors == 0)

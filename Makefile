@@ -341,7 +341,23 @@ test-soc-spi: $(BUILD_DIR)
 # ddr_flash@<n> is tests/soc/ddr_flash.S built for DDR_CAP point n (-DDDR_PT=n), run at device
 # delays that point reads at the bench's 20 ns clock (window [delay, 20 + hold), point n captures
 # at 10 * (n + 1) ns).
-SYSCON_SOC_RUNS := "ddr_flash@0" "ddr_flash@1 +QSPI_DELAY=12 +QSPI_HOLD=6" "ddr_flash@2 +QSPI_DELAY=22 +QSPI_HOLD=12" "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
+# ddr_sweep@<FLAG> is tests/soc/ddr_sweep.S (BASE = no flag). +CLK_HALF_PS=8333 is the chip's 60 MHz; a
+# round trip R is +QSPI_DELAY=R+7 +QSPI_HOLD=R+1 (WO-51); +WANT_K is the DDR_CAP the program must report
+# (DDR-CONTRACT 4 item 6 on the passing set of R: 11 -> 2, 17 -> 3, 23 -> 3, 29 -> 4). -1 = "DDR off":
+# +DTR_LAUNCH=1 (caught by the execute test's trap), a window no capture point lands in (+QSPI_DELAY=20
+# +QSPI_HOLD=8), a watchdog expiry after "DDR on" (WDT_AFTER: the next boot says "DDR off"), and the execute
+# test left out (NO_EXEC: the stream failure is caught by the watchdog instead).
+DDR_SWEEP_60 := +CLK_HALF_PS=8333
+SYSCON_SOC_RUNS := "ddr_flash@0" "ddr_flash@1 +QSPI_DELAY=12 +QSPI_HOLD=6" "ddr_flash@2 +QSPI_DELAY=22 +QSPI_HOLD=12" "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30 +WANT_K=4" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=20 +QSPI_HOLD=8 +WANT_K=-1" \
+	"ddr_sweep@WDT_AFTER $(DDR_SWEEP_60) +QSPI_DELAY=24 +QSPI_HOLD=18 +EXP_WDT=1 +WANT_K=-1" \
+	"ddr_sweep@NO_EXEC $(DDR_SWEEP_60) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +EXP_WDT=1 +WANT_K=-1"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
@@ -353,7 +369,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
 		set -- $$run; t=$$1; shift; n=$$((n+1)); \
 		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
-		case $$t in *@*) fl="$$fl -DDDR_PT=$${t#*@}"; t=$${t%@*};; esac; \
+		case $$t in ddr_sweep@*) f=$${t#*@}; [ "$$f" = BASE ] || fl="$$fl -D$$f"; t=ddr_sweep;; *@*) fl="$$fl -DDDR_PT=$${t#*@}"; t=$${t%@*};; esac; \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
