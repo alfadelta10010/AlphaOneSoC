@@ -38,7 +38,7 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uo_out[7]` | GPIO out 7: SD CS# (resets high) | out | SD CS# (DAT3), by a jumper wire; the 7-segment DP otherwise |
 | `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
 | `ui_in[1]` | GPIO in 1, and SPI MISO | in | SD DO (MISO); DIP 2 must be off with the SD fitted |
-| `ui_in[2]` | GPIO in 2 | in | DIP 3 |
+| `ui_in[2]` | the no-stream strap during the pin reset (held through reboots), then GPIO in 2. 1 = flash streaming off at reset | in | DIP 3 (off = RP2350 pull-down = streaming on) |
 | `ui_in[3]` | UART RX | in | RP2350 GPIO20 (UART1 TX) |
 | `ui_in[4..7]` | GPIO in 4..7 | in | keypad ROW4..ROW1, or DIP 5–8 |
 
@@ -147,7 +147,8 @@ columns).
   strap), since it chose the clock. It should also pull down `ui_in[1..2]`
   if they are used as inputs with their DIPs off, except `ui_in[1]` with the
   SD card fitted: the card drives MISO there, and the RP2350 pin must be an
-  input with no pull-down (see the SD notes below).
+  input with no pull-down (see the SD notes below). A floating `ui_in[2]`
+  can only make flash reads slower (streaming off), never unbootable.
 * **RP2350 UART.**
   * UART1 on GPIO20 (TX) and GPIO37 (RX), with **CTS** flow control on
     GPIO38.
@@ -225,10 +226,14 @@ about 0.4 tiles of that.
 * `ui_in` as in the pinout table. `qspi_rd_late` = `ui_in[0]`, straight from
   the pin; the QSPI engine samples it on every clock edge while `rst` is
   high, the last of them the second edge after `rst_n` rises. **Hold
-  `ui_in[0]` until then.** The whole `ui_in` byte also feeds GPIO IN.
+  `ui_in[0]` until then.** `ui_in[2]` is the no-stream strap, read the same
+  way (`qspi_no_stream`): 1 resets syscon's QSPI_CFG.STREAM to 0, 0 to 1. The
+  whole `ui_in` byte also feeds GPIO IN.
   syscon latches the strap while `rst` is high (the same window: every edge up
   to the second after `rst_n` rises) and the QSPI engine uses that copy
-  afterwards, so a reboot does not re-read the pin.
+  afterwards, so a reboot does not re-read the pin. The no-stream strap is
+  latched in the same window, and every reboot or watchdog reset restores
+  QSPI_CFG from that copy.
 * **A reboot or power-off is generated inside the SoC**, so the wrapper's
   `run` gating applies to `rst_n` only. The pins still go to their reset
   values: the QSPI pins are released by the engine's own registered output

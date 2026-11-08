@@ -279,10 +279,10 @@ into.
 | +0x04 | RESET_CAUSE | R / W1C, lane 0. [0] PIN, [1] SOFT, [2] WDT | `0x1` | SOFT set, PIN kept |
 | +0x08 | BOOT_MODE | R/W, lane 0, [7:0] | `0x00` | kept |
 | +0x0C | CHIP_ID | R, the `CHIP_ID` parameter | `0x4131_5301` | - |
-| +0x10 | STRAPS | R, [0] = `qspi_rd_late` as latched at the last pin reset | the pin | kept |
+| +0x10 | STRAPS | R, [0] = `qspi_rd_late`, [1] = the no-stream strap (`ui_in[2]`), as latched at the last pin reset | the pins | kept |
 | +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
 | +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
-| +0x1C | - | reads 0, writes ignored | - | - |
+| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR, DDR_CAP: stored, no effect until the DTR read path lands | STREAM = ~no-stream strap, DDR 0, DDR_CAP 0 | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
 | +0x20..+0xFC | - | read 0, writes ignored | - | - |
 | +0x100..+0x1FF | WDT | the watchdog, below | 0 (TOP 15) | disabled |
 | +0x200..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
@@ -422,6 +422,11 @@ its reset is high, but during a reboot it sees the latched value, not
 `ui_in[0]`, which is GPIO by then. A scratch run flipped the pin at a reboot
 and the second boot still read flash; a version that follows the pin hangs in
 the second boot.
+
+The no-stream strap (`ui_in[2]`, 1 = streaming off) is handled the same way:
+a flop loaded while `rst` is high, and QSPI_CFG.STREAM resets to the inverse of
+the pin while `rst` is high and of that flop otherwise, so a reboot does not
+re-read the pin.
 
 ### Area
 
