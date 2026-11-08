@@ -157,9 +157,37 @@ module qspi_pmod_model #(
     output reg  [3:0] dev_io,
     output reg        dev_oe
 );
+    // Host-side pin delays (see "Host-side pin delays" in the header): what the
+    // flash pins see is the host's pins a fixed time later. Transport delays
+    // (a nonblocking assignment with a delay), never `assign #`, which is
+    // inertial and swallows pulses shorter than the delay. A zero delay uses
+    // the undelayed wire: `<= #0` would move the update into the NBA region.
+    real    sck_dly, io_dly, cs_dly;   // ns
+    integer dly_ps;
+    initial begin
+        sck_dly = 0.0; io_dly = 0.0; cs_dly = 0.0;
+        if ($value$plusargs("QSPI_SCK_DLY_PS=%d", dly_ps)) sck_dly = dly_ps / 1000.0;
+        if ($value$plusargs("QSPI_IO_DLY_PS=%d",  dly_ps)) io_dly  = dly_ps / 1000.0;
+        if ($value$plusargs("QSPI_CS_DLY_PS=%d",  dly_ps)) cs_dly  = dly_ps / 1000.0;
+    end
+    reg       sck_d = 1'bx, coe_sd = 1'b0, coe_cd = 1'b0, oe_d = 1'b0;
+    reg [2:0] cs_d  = 3'b111;
+    reg [3:0] io_d  = 4'b0000;
+    always @(host_sck)    sck_d  <= #(sck_dly) host_sck;
+    always @(host_ctl_oe) coe_sd <= #(sck_dly) host_ctl_oe;
+    always @(host_ctl_oe) coe_cd <= #(cs_dly)  host_ctl_oe;
+    always @(host_cs_n)   cs_d   <= #(cs_dly)  host_cs_n;
+    always @(host_io)     io_d   <= #(io_dly)  host_io;
+    always @(host_oe)     oe_d   <= #(io_dly)  host_oe;
+    wire       h_sck   = (sck_dly == 0.0) ? host_sck    : sck_d;
+    wire       h_coe_s = (sck_dly == 0.0) ? host_ctl_oe : coe_sd;
+    wire       h_coe_c = (cs_dly  == 0.0) ? host_ctl_oe : coe_cd;
+    wire [2:0] h_cs    = (cs_dly  == 0.0) ? host_cs_n   : cs_d;
+    wire [3:0] h_io    = (io_dly  == 0.0) ? host_io     : io_d;
+    wire       h_oe    = (io_dly  == 0.0) ? host_oe     : oe_d;
     // The pins as the devices see them (see Pins above).
-    wire [2:0] cs_n = host_ctl_oe ? host_cs_n : 3'b111;
-    wire       sck  = host_ctl_oe ? host_sck  : 1'bx;
+    wire [2:0] cs_n = h_coe_c ? h_cs : 3'b111;
+    wire       sck  = h_coe_s ? h_sck : 1'bx;
 
     reg [7:0] flash [0:FLASH_SIZE-1];
     reg [7:0] ram   [0:RAM_SIZE-1];
@@ -361,6 +389,8 @@ module qspi_pmod_model #(
             both    = (cs_n == 3'b001);
             qpi_exit = 1'b0;
             t_sel   = $realtime;
+            t_edge  = -1.0;
+            min_sp  = 1.0e9;
             t_rise  = -1.0;
             t_fall  = -1.0;
             qpi_sel = psram_qpi;
@@ -537,7 +567,7 @@ module qspi_pmod_model #(
             end
             rises = rises + 1;
             hold_pend = 4'b0;
-            if (host_oe === 1'b1)
+            if (h_oe === 1'b1)
                 for (i = 0; i < 4; i = i + 1)
                     if (m[i]) begin
                         d = $realtime - t_chg[i];
@@ -556,11 +586,11 @@ module qspi_pmod_model #(
     // A host line changes: setup bookkeeping, and the hold of a sampled one.
     // A change in the time step of the rise, whichever block ran first, is a
     // setup violation (0 ns), not a hold one.
-    always @(host_io or host_oe) if (tcheck) begin : io_chg
+    always @(h_io or h_oe) if (tcheck) begin : io_chg
         integer i;
         real d;
         for (i = 0; i < 4; i = i + 1) begin
-            if (host_oe === 1'b1 && (host_oe_q !== 1'b1 || host_io[i] !== host_io_q[i])) begin
+            if (h_oe === 1'b1 && (host_oe_q !== 1'b1 || h_io[i] !== host_io_q[i])) begin
                 t_chg[i] = $realtime;
                 if (host_oe_q === 1'b1 && hold_pend[i]) begin
                     hold_pend[i] = 1'b0;
@@ -570,7 +600,7 @@ module qspi_pmod_model #(
                 end
             end
         end
-        if (host_oe_q === 1'b1 && host_oe !== 1'b1) begin
+        if (host_oe_q === 1'b1 && h_oe !== 1'b1) begin
             // A release changes every sampled line: hold-check the pending ones.
             t_oe_off = $realtime;
             for (i = 0; i < 4; i = i + 1)
@@ -581,9 +611,9 @@ module qspi_pmod_model #(
                     if (d < r_h() - 0.0005) chk_fail_data(i, d, r_h(), d >= 0.0005);
                 end
         end
-        if (host_oe !== 1'b1) hold_pend = 4'b0;
-        host_io_q = host_io;
-        host_oe_q = host_oe;
+        if (h_oe !== 1'b1) hold_pend = 4'b0;
+        host_io_q = h_io;
+        host_oe_q = h_oe;
     end
 
     // A real rise: SCK going 0 -> 1, not the 0 -> X of the host releasing the pin.
@@ -611,7 +641,7 @@ module qspi_pmod_model #(
         real d;
         begin
             #0.001;
-            if (rises > 0 && host_ctl_oe !== 1'b1) chk_abort = chk_abort + 1;
+            if (rises > 0 && h_coe_c !== 1'b1) chk_abort = chk_abort + 1;
             else if (rises > 0) begin
                 d = td - t_rise_any;
                 chk_note(3, d, r_csh());
@@ -655,7 +685,7 @@ module qspi_pmod_model #(
                 // a clock. Undriven mode bits are unknown, so they fail.
                 n = n + 1;
                 if (n > 12)
-                    mode = {mode[5:0], host_oe ? host_io[1:0] : 2'bxx};
+                    mode = {mode[5:0], h_oe ? h_io[1:0] : 2'bxx};
                 if (n == 16) begin
                     if (^mode[5:4] === 1'bx)
                         fail("flash in dual continuous-read mode got undriven mode bits");
@@ -668,7 +698,7 @@ module qspi_pmod_model #(
                 // clocks 7-8, then the dummy clocks (see the header).
                 n = n + 1;
                 if (n > 6 && n <= 8)
-                    mode = {mode[3:0], host_oe ? host_io : 4'bxxxx};
+                    mode = {mode[3:0], h_oe ? h_io : 4'bxxxx};
                 if (n == 8) begin
                     if (^mode[5:4] === 1'bx)
                         fail("flash in continuous-read mode got undriven mode bits");
@@ -678,12 +708,12 @@ module qspi_pmod_model #(
             end
             P_IGNORE: if (chip == 2'd0) qpi_exit = 1'b0;   // Exit QPI cancelled
             P_CMD: begin
-                if (!host_oe) fail("host not driving IO during the command");
+                if (!h_oe) fail("host not driving IO during the command");
                 if (mixed) begin
                     // Broadcast to PSRAMs in different modes: the QPI chip
                     // takes two nibbles, the SPI chip eight bits on IO0.
-                    cmd_q = {cmd_q[3:0], host_io};
-                    cmd   = {cmd[6:0], host_io[0]};
+                    cmd_q = {cmd_q[3:0], h_io};
+                    cmd   = {cmd[6:0], h_io[0]};
                     n     = n + 1;
                     if (n == 2) broadcast_cmd(cmd_q, qpi_sel, 1'b1);
                     if (n == 8) begin
@@ -692,7 +722,7 @@ module qspi_pmod_model #(
                     end
                 end else if (in_qpi) begin
                     // Two nibbles make the command.
-                    cmd = {cmd[3:0], host_io};
+                    cmd = {cmd[3:0], h_io};
                     n   = n + 1;
                     if (n == 2) begin
                         n     = 0;
@@ -713,7 +743,7 @@ module qspi_pmod_model #(
                             fail("unsupported QPI command for the PSRAM");
                     end
                 end else begin
-                    cmd = {cmd[6:0], host_io[0]};
+                    cmd = {cmd[6:0], h_io[0]};
                     n   = n + 1;
                     if (n == 8) begin
                         n = 0;
@@ -740,8 +770,8 @@ module qspi_pmod_model #(
                 end
             end
             P_ADDR: begin
-                if (!host_oe) fail("host not driving IO during the address");
-                addr = {addr[19:0], host_io};
+                if (!h_oe) fail("host not driving IO during the address");
+                addr = {addr[19:0], h_io};
                 n    = n + 1;
                 if (n == 6) begin
                     phase  = (cmd == 8'h38 || cmd == 8'h02) ? P_WDATA : P_DUMMY;
@@ -753,8 +783,8 @@ module qspi_pmod_model #(
             end
             P_DUMMY: begin
                 if (n < 2) begin
-                    if (chip == 2'd0 && !host_oe) fail("host not driving the flash mode byte");
-                    mode = {mode[3:0], host_io};
+                    if (chip == 2'd0 && !h_oe) fail("host not driving the flash mode byte");
+                    mode = {mode[3:0], h_io};
                 end
                 n = n + 1;
                 if (n == 2 && chip == 2'd0 && mode[5:4] == 2'b10)
@@ -766,10 +796,10 @@ module qspi_pmod_model #(
                 end
             end
             P_WDATA: begin
-                if (!host_oe) fail("host not driving IO during write data");
-                if (hi) wbyte[7:4] = host_io;
+                if (!h_oe) fail("host not driving IO during write data");
+                if (hi) wbyte[7:4] = h_io;
                 else begin
-                    wbyte[3:0] = host_io;
+                    wbyte[3:0] = h_io;
                     ram[ram_index(chip, addr)] = wbyte;
                     ram_w[ram_index(chip, addr) >> 5][ram_index(chip, addr) & 31] = 1'b1;
                     addr = next_addr(chip, addr);
@@ -812,29 +842,62 @@ module qspi_pmod_model #(
     // is deselected first; chip select rising turns it off after TCHZ_NS. So
     // the nibble launched by the falling edge that deselects the chip -- which
     // lands after the release -- changes dev_io but never drives the pins.
-    always @(negedge sck) if (any_sel && phase == P_RDATA) begin
-        if (first_nib)
-            fork output_on(sel_gen); join_none
-        // A forked task reads its arguments when it starts, after this block
-        // has moved hi and addr on, so they go through nib_k and nib_v, which
-        // hold until the next falling edge.
-        launch = launch + 1;
-        nib_k  = launch;
-        nib_v  = hi ? rd(chip, addr) >> 4 : rd(chip, addr) & 8'h0F;
-        fork
-            nibble_x(nib_k);
-            nibble_land(nib_k, nib_v);
-        join_none
-        if (!hi) addr = next_addr(chip, addr);
-        hi = !hi;
-        first_nib = 1'b0;
-    end
+    task launch_nib;
+        begin
+            if (first_nib)
+                fork output_on(sel_gen); join_none
+            // A forked task reads its arguments when it starts, after this block
+            // has moved hi and addr on, so they go through nib_k and nib_v, which
+            // hold until the next launch.
+            launch = launch + 1;
+            nib_k  = launch;
+            nib_v  = hi ? rd(chip, addr) >> 4 : rd(chip, addr) & 8'h0F;
+            fork
+                nibble_x(nib_k);
+                nibble_land(nib_k, nib_v);
+            join_none
+            if (!hi) begin
+                addr = next_addr(chip, addr);
+                if (chip == 2'd0) n_bytes = n_bytes + 1;
+            end
+            hi = !hi;
+            first_nib = 1'b0;
+        end
+    endtask
+    always @(negedge sck) if (any_sel && phase == P_RDATA) launch_nib;
 
     // Bus contention
-    always @(*) if (host_oe && dev_oe) fail("host and device both driving IO");
+    always @(*) if (h_oe && dev_oe) fail("host and device both driving IO");
 
-    // Flash read commands (0xEB) seen: a stream of sequential reads shows one.
-    integer n_eb = 0;
+    // Flash read counters, for benches (hierarchical) and the line printed at
+    // the end: n_eb (alias n_ebh) / n_edh = EBh / EDh commands (a stream of
+    // sequential reads shows one), n_resume = SCK edges after a pause in a
+    // flash read's data phase, n_bytes = flash bytes launched (both nibbles).
+    integer n_eb = 0, n_edh = 0, n_resume = 0, n_bytes = 0;
+    wire [31:0] n_ebh = n_eb;
+
+    // A resume is an SCK edge, in the data phase of a flash EBh / EDh, more
+    // than 1.5 times the shortest edge spacing seen so far in this select
+    // after the edge before it. SCK may stop at either level.
+    reg      sck_p = 1'bx;
+    realtime t_edge, min_sp, sp;
+    initial begin t_edge = -1.0; min_sp = 1.0e9; end
+    always @(sck) begin
+        if ((sck === 1'b0 || sck === 1'b1) && (sck_p === 1'b0 || sck_p === 1'b1) && any_sel) begin
+            if (t_edge >= 0.0) begin
+                sp = $realtime - t_edge;
+                if (phase == P_RDATA && chip == 2'd0 && (cmd == 8'hEB || cmd == 8'hED) &&
+                    sp > 1.5 * min_sp)
+                    n_resume = n_resume + 1;
+                if (sp < min_sp) min_sp = sp;
+            end
+            t_edge = $realtime;
+        end
+        sck_p = sck;
+    end
+
+    final $display("qspi_pmod_model: flash reads: EBh %0d, EDh %0d, resumes %0d, bytes %0d",
+                   n_eb, n_edh, n_resume, n_bytes);
 
 endmodule
 
