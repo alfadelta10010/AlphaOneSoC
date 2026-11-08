@@ -17,12 +17,14 @@
 `ifndef DF_N
 `define DF_N 4
 `endif
-// measured bounds (rd_late = 0 / 1), see localFiles/verif-close-2026-11-07/WO-31/bounds.txt
+// measured bounds (rd_late = 0 / 1), see localFiles/verif-close-2026-11-07/WO-31/bounds.txt and
+// `make bounds-qspi`, which FAILs if a define differs from the measured worst of streaming on and off.
+// With streaming on (the default) LI (442/456 -> 449/482) and LF (56/57 -> 57/58) moved; LF is the CS0-low run with the engine not idle
 `ifndef LP0
 `define LP0 40
 `define LP1 41
-`define LF0 56
-`define LF1 57
+`define LF0 57
+`define LF1 58
 `endif
 `ifndef S_MAX
 `define S_MAX 125
@@ -30,15 +32,16 @@
 `ifndef LD0
 `define LD0 182
 `define LD1 183
-`define LI0 442
-`define LI1 456
+`define LI0 449
+`define LI1 482
 `endif
 module mem_props (
     input  wire        clk, rst,
     input  wire        i_req, d_req, d_we,
     input  wire [31:0] i_addr, d_addr, d_wdata,
     input  wire [3:0]  d_be, io_in,
-    input  wire        rd_late
+    input  wire        rd_late,
+    input  wire        stream_en    // free: streaming on, off and toggling are all covered (WO-54a)
 );
     wire [31:0] i_rdata, d_rdata, q_wdata, q_rdata;
     wire        i_ready, d_ready, q_start, q_we, q_idle, q_done;
@@ -54,7 +57,7 @@ module mem_props (
         .q_idle(q_idle), .q_done(q_done), .q_rdata(q_rdata));
     qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late), .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata), .idle(q_idle), .done(q_done), .rdata(q_rdata),
-        .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in));
+        .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in), .stream_en(stream_en));
 
     reg armed = 1'b0;               // a reset has been applied; every assert is gated on it
     always @(posedge clk) if (rst) armed <= 1'b1;
@@ -150,7 +153,8 @@ module mem_props (
 
 `ifdef P_TCEM
     reg [7:0] pl = 8'd0, fl = 8'd0;         // clocks in the current CS low run before this one
-    wire pc = !cs_n[1] || !cs_n[2], fc = !cs_n[0];
+    wire pc = !cs_n[1] || !cs_n[2];
+    wire fc = !cs_n[0] && !q_idle;          // an open stream held idle (CS0 low, engine idle) has no bound by design: not a run
     wire [7:0] pl_now = pc ? pl + 8'd1 : 8'd0, fl_now = fc ? fl + 8'd1 : 8'd0;
     always @(posedge clk) if (rst) begin pl <= 8'd0; fl <= 8'd0; end else begin
         pl <= (pl_now == 8'd255) ? 8'd255 : pl_now; fl <= (fl_now == 8'd255) ? 8'd255 : fl_now;
