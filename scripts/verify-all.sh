@@ -92,8 +92,10 @@ st_formal() {
   local eng bad=0 txt="" n nexp v
   # depth/timeout overrides would change what a verdict line means: run the pinned defaults
   for v in $(env | sed -n 's/^\([A-Za-z0-9_]*_\(DEPTH\|TIMEOUT\)\)=.*/\1/p') DEPTH BMC_DEPTH NVDEPTH; do unset "$v"; done
-  # the full verdict line minus any "(trace: ...; log: ...)" path
-  norm() { sed -E 's/ \((trace|log): [^)]*\)//g; s/ +$//' | sort; }
+  # the full verdict line minus any "(trace: ...; log: ...)" path. The sat leg proves the
+  # induction harnesses with yosys sat ("k-induction"), the sby leg with sby ("sby k-induction"):
+  # one expected file serves both legs, so the engine word is dropped; the length is kept
+  norm() { sed -E 's/ \((trace|log): [^)]*\)//g; s/\(sby k-induction,/(k-induction,/; s/ +$//' | sort; }
   norm < scripts/verify-all.expected > "$OUT/formal.expected"; nexp=$(grep -c . "$OUT/formal.expected")
   for eng in sat sby; do
     FORMAL_ENGINE=$eng OUT_DIR="$OUT/formal_$eng" bash tb/formal/run.sh > "$OUT/formal.$eng.log" 2>&1
