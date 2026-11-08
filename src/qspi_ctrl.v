@@ -101,6 +101,28 @@
 //
 // Chip select is high for at least two clocks between transactions.
 //
+// Streaming. The flash keeps delivering the next bytes for as long as chip
+// select stays low and SCK keeps clocking, so a flash read that continues the
+// previous one need not send the command, address and dummy clocks again: 8 SCK
+// for 4 bytes instead of 28. After a 4-byte flash read, with `stream_en` set,
+// chip select stays low and SCK stays low and the bus is released (`strm`): the
+// flash holds the next nibble on its pins. `p` is the halfword address of the
+// next byte it will deliver. The next request:
+//   * a PSRAM access or a write: chip select rises at once (closing the stream);
+//   * a flash read, checked one clock later, when its address is valid
+//     (S_CHK): address == p continues the stream with 4 more bytes; address ==
+//     p - 2 bytes (the halfword just delivered) is a top-up of 2 bytes -- the
+//     shift register still holds the last 4 bytes of the stream, so the 4
+//     bytes at the address are its last 2 and the 2 new ones (the fetch reuse
+//     pattern: a kept halfword followed by a 32-bit instruction); anything
+//     else closes the stream and starts a normal read.
+// Closing raises chip select while SCK is low and keeps it high two clocks
+// before the next select falls (S_CLOSE, S_GO), as between any two
+// transactions. With `stream_en` low and the engine idle the stream closes too.
+// With `stream_en` tied low no stream ever opens and the pins behave as
+// without this section. Reset clears `strm` with everything else; the start-up
+// sequence never streams.
+//
 // A start-up window ends with chip select rising while SCK is still high,
 // and SCK falls a clock later. A flash in continuous-read mode starts
 // driving data on the falling edge after its address, mode and dummy clocks;
@@ -134,6 +156,7 @@ module qspi_ctrl (
     input  wire        clk,
     input  wire        rst,
     input  wire        rd_late,    // strap, sampled during reset: read data one clock later
+    input  wire        stream_en,  // 1 = flash reads may keep chip select low for the next one
     // Transaction request, held by the requester until done
     input  wire        start,
     input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2); taken at the start
@@ -153,15 +176,18 @@ module qspi_ctrl (
     input  wire [3:0]  io_in
 );
 
-    localparam [2:0] S_IDLE  = 3'd0,
-                     S_CMD   = 3'd1,
-                     S_ADDR  = 3'd2,
-                     S_DUMMY = 3'd3,
-                     S_DATA  = 3'd4,
-                     S_TAIL  = 3'd5,    // rd_late: CS held for the last nibble
-                     S_END   = 3'd6;
+    localparam [3:0] S_IDLE  = 4'd0,
+                     S_CMD   = 4'd1,
+                     S_ADDR  = 4'd2,
+                     S_DUMMY = 4'd3,
+                     S_DATA  = 4'd4,
+                     S_TAIL  = 4'd5,    // rd_late: CS held for the last nibble
+                     S_END   = 4'd6,
+                     S_CHK   = 4'd7,    // stream open, flash read requested: addr is valid now
+                     S_CLOSE = 4'd8,    // CS high, first clock (cnt[0]: a request waits)
+                     S_GO    = 4'd9;    // CS high, second clock; the request starts
 
-    reg [2:0]  state;
+    reg [3:0]  state;
     reg [2:0]  cnt;     // SCK cycles left in the current phase, counting down
     reg [31:0] sr;      // read data, shifted in a nibble at a time
     reg        init;    // start-up sequence still running
@@ -170,6 +196,11 @@ module qspi_ctrl (
     reg        again;   // start-up step 4: second 8 clocks of its 16
     reg        t_we;    // the transaction in flight: its `we`...
     reg        t_psram; // ...and whether its chip is a PSRAM
+    reg        strm;    // a stream is open: CS0 low, SCK low, bus released
+    reg [23:1] p;       // halfword address of the next byte the stream delivers (a 24-bit
+                        // address's bits 23:1; no reset: read only while strm)
+    reg        t_top;   // this transfer is a 2-byte top-up of the stream
+    reg [2:0]  t_sel;   // the chip selects of the request (for the close path)
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -206,7 +237,7 @@ module qspi_ctrl (
     // nibble on the wire is then number 7 - cnt of the transfer: byte
     // ~cnt[2:1], high half first, which is nibble {~cnt[2:1], cnt[0]} of
     // wdata.
-    wire [2:0] data_last = {~nbytes_m1, 1'b0};
+    wire [2:0] data_last = t_top ? 3'd4 : {~nbytes_m1, 1'b0};
     wire [2:0] wnib      = {~cnt[2:1], cnt[0]};
 
     always @(*) begin
@@ -231,6 +262,12 @@ module qspi_ctrl (
     wire [2:0] sel_now = init ? ((step == 3'd3 || step == 3'd4 || step == 3'd5) ? 3'b001 : 3'b110)
                               : ((3'b001 << cs_sel) & {2'b11, !we});
 
+    // A flash read that may leave a stream open (all flash reads are 4 bytes).
+    wire streamable = !t_psram && !t_we && nbytes_m1 == 2'd3 && stream_en && !init;
+    wire [23:1] a_hw = addr[23:1];
+    wire hit_cont = (a_hw == p);
+    wire hit_top  = (a_hw == p - 23'd1);
+
     always @(posedge clk) begin
         if (rst) begin
             state  <= S_IDLE;
@@ -243,6 +280,7 @@ module qspi_ctrl (
             step   <= 3'd0;
             late   <= rd_late;
             again  <= 1'b0;
+            strm   <= 1'b0;
         end else begin
             ctl_oe <= 1'b1;
             if (sample)
@@ -251,18 +289,59 @@ module qspi_ctrl (
                 // ctl_oe: the pins have been driven idle for a cycle. The
                 // start-up sequence waits 8 clocks after reset first (cnt
                 // counts them; see Start-up sequence).
-                S_IDLE: if (ctl_oe && (init ? (step != 3'd0 || cnt == 3'd7) : start)) begin
+                S_IDLE: if (ctl_oe && (init ? (step != 3'd0 || cnt == 3'd7) : (start && !strm))) begin
                     state <= S_CMD;
                     cnt   <= start_qpi ? 3'd1 : 3'd7;
                     cs_n  <= ~sel_now;
                     io_oe <= 1'b1;
                     t_we    <= we;
                     t_psram <= start_psram;
+                    t_sel   <= sel_now;
+                    t_top   <= 1'b0;
+                end else if (!init && strm && start) begin
+                    // A request while a stream is open: only cs_sel and we
+                    // are valid. Anything but a flash read closes it at once.
+                    t_we    <= we;
+                    t_psram <= start_psram;
+                    t_sel   <= sel_now;
+                    t_top   <= 1'b0;
+                    if (start_psram || we) begin
+                        state <= S_CLOSE;
+                        cnt   <= 3'd1;
+                        cs_n  <= 3'b111;
+                        strm  <= 1'b0;
+                    end else
+                        state <= S_CHK;
+                end else if (!init && strm && !stream_en) begin
+                    state <= S_CLOSE;       // nobody waiting: just close
+                    cnt   <= 3'd0;
+                    cs_n  <= 3'b111;
+                    strm  <= 1'b0;
                 end else if (init)
                     cnt <= cnt + 3'd1;
+                S_CHK: begin
+                    if (streamable && (hit_cont || hit_top)) begin
+                        state <= S_DATA;
+                        cnt   <= 3'd7;
+                        t_top <= !hit_cont;
+                    end else begin
+                        state <= S_CLOSE;
+                        cnt   <= 3'd1;
+                        cs_n  <= 3'b111;
+                        strm  <= 1'b0;
+                    end
+                end
+                S_CLOSE: state <= cnt[0] ? S_GO : S_IDLE;
+                S_GO: begin
+                    state <= S_CMD;
+                    cnt   <= t_psram ? 3'd1 : 3'd7;
+                    cs_n  <= ~t_sel;
+                    io_oe <= 1'b1;
+                end
                 S_TAIL: begin
                     state <= S_END;
-                    cs_n  <= 3'b111;
+                    if (!strm)
+                        cs_n <= 3'b111;
                 end
                 S_END: begin
                     state <= S_IDLE;
@@ -307,11 +386,14 @@ module qspi_ctrl (
                                 S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
                                 default: begin  // S_DATA
                                     io_oe <= 1'b0;
+                                    strm  <= streamable;    // leave the stream open
+                                    p     <= a_hw + 23'd2;
                                     if (late && !t_we)
                                         state <= S_TAIL;
                                     else begin
                                         state <= S_END;
-                                        cs_n  <= 3'b111;
+                                        if (!streamable)
+                                            cs_n <= 3'b111;
                                     end
                                 end
                             endcase

@@ -194,6 +194,7 @@ module alphaone_soc #(
         .clk      (clk),
         .rst      (rst_soc),
         .rd_late  (qspi_late),
+        .stream_en(1'b1),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
