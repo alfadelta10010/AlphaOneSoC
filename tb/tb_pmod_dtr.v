@@ -250,15 +250,33 @@ module tb_pmod_dtr #(
         end
     endtask
 
+    // The output hold: just after the resume edge, the nibble from before the pause is
+    // still on the pins (QSPI_HOLD is 1 ns by default).
+    task resume_hold_check(input [3:0] prev);
+        begin
+            at(t_last + 0.5);
+            cap_n = cap_n + 1;
+            if (!sweep && !(dev_oe === 1'b1 && dev_io === prev)) begin
+                cap_bad = cap_bad + 1;
+                $display("tb_pmod_dtr: pins 0.5 ns after a resume at %0t: oe=%b io=%b, want %h",
+                         $time, dev_oe, dev_io, prev);
+            end
+        end
+    endtask
+
     // Continue the read by nbytes, the first edge gap after the last (0: no pause).
+    reg [3:0] prev_nib;
     task cont_dtr(input realtime gap, input integer nbytes);
         begin
             if (gap > 0.0) begin
                 pause_check(gap);
                 if (gap > 1.5 * H) exp_resume = exp_resume + 1;
             end
-            for (k = 0; k < 2 * nbytes; k = k + 1)
+            for (k = 0; k < 2 * nbytes; k = k + 1) begin
+                prev_nib = last_exp;
                 half(0, 0, 4'h0, 1, (k == 0 && gap > 0.0) ? gap : H);
+                if (k == 0 && gap > 0.0) resume_hold_check(prev_nib);
+            end
         end
     endtask
 
@@ -300,7 +318,9 @@ module tb_pmod_dtr #(
             pause_check(gap);
             if (gap > 1.5 * H) exp_resume = exp_resume + 1;
             for (i = 0; i < 2 * nbytes; i = i + 1) begin
+                prev_nib = last_exp;
                 half(0, 0, 4'h0, 0, (i == 0) ? gap : H);
+                if (i == 0) resume_hold_check(prev_nib);
                 half(0, 0, 4'h0, 1, H);
             end
         end
