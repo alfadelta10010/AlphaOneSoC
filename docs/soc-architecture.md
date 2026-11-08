@@ -403,6 +403,62 @@ handler. `reboot-mode.c` never writes a magic of 0, so the device tree's modes
 are 1 and 2: BOOT_MODE 0 then means "pin reset, or no mode written", and a
 "normal" reboot after a "bootloader" one does overwrite it.
 
+### DDR bring-up (`tests/soc/ddr_sweep.S`)
+
+The chip always boots in SDR with streaming on, because QSPI_CFG resets on every
+reset. DDR flash reads (`EDh`, QSPI_CFG.DDR) are switched on by software after
+it has proved, on this board and at this temperature, that they work. The
+reference routine does that in six steps and falls back to SDR whenever one
+fails:
+
+1. **Reboot check.** It reads RESET_CAUSE and BOOT_MODE. BOOT_MODE `0xDF` ("DDR
+   failed") or `0xD8 + k` with RESET_CAUSE.WDT (a crash while DDR was on at
+   capture point k) keeps SDR and skips the sweep; BOOT_MODE is set to `0xDF`.
+   The routine consumes the WDT bit (W1C `0x4`) so a later, unrelated reboot
+   does not fall back.
+2. **PSRAM.** A position-independent copy of the sweep and a trap handler goes to
+   PSRAM, mtvec points there, and the routine jumps to it. No instruction is
+   fetched from flash again until step 5.
+3. **Reference.** With DDR = 0 it copies a 64-word block of flash (walking
+   bits, 0/F nibbles, pseudo-random words) into PSRAM.
+4. **Load sweep.** For DDR_CAP 1..6 it writes QSPI_CFG = {cap, DDR = 1,
+   STREAM = 1}, reads the block 3 times with loads and compares with the
+   reference; a point passes with zero mismatches over all passes. QSPI_CFG goes
+   back to SDR after each point. Loads are a new `EDh` read each (PSRAM
+   fetches close the stream), so this tests the capture window, never a stream
+   continuation. **Choice:** no passing point: stay SDR. Otherwise the longest
+   run of adjacent passing points (ties go to the later run), and in it the
+   point `start + length / 2`: 1 pass, that one; 2 adjacent, the later; 3, the
+   middle; 4, the upper middle. Later because the die warms after boot and
+   delays grow.
+5. **Execute test.** A stream framing error (the device launching half an SCK
+   late) is invisible to loads, so the routine runs flash code in DDR at the
+   chosen point with the watchdog armed: BOOT_MODE = `0xD8 + k`, WDT_TORR TOP 1
+   (131 072 to 196 608 clocks, about 2.2 to 3.3 ms at 60 MHz, written first so
+   the write kicks) and WDT_CR.EN, then QSPI_CFG DDR on at k, then a call to a
+   straight-line flash routine (300+ instructions from immediates, then a short
+   loop) whose checksum is compared with the SDR one. A trap during the test:
+   the PSRAM handler writes SDR and BOOT_MODE `0xDF` and resumes in SDR. A
+   wrong checksum does the same. A hang ends in the watchdog reboot and step 1.
+6. **Pass.** QSPI_CFG stays {k, DDR, STREAM} and BOOT_MODE stays `0xD8 + k`, so
+   a later watchdog reset (a crash in DDR) comes back in SDR. mtvec is restored
+   and the routine returns to flash. Reported over the UART: `DDR on, cap k` or
+   `DDR off`.
+
+**BOOT_MODE codes `0xD0`..`0xDF` are reserved for this routine.** `0xD8 + k`
+(k = 0..7): DDR is on at capture point k and the execute test passed. `0xDF`:
+DDR failed or was refused; stay in SDR until the next pin reset. The others
+are spare. Linux's reboot-mode magics must stay out of that range.
+
+**Watchdog rule.** The execute test enables the watchdog and nothing can
+disable it again. After "DDR on" the application must service it (WDT_CRR
+`0x76`, or the Linux `dw_wdt` driver) within the TOP-1 timeout, or the
+next reset clears it and that reset comes back in SDR (BOOT_MODE `0xD8 + k` with
+WDT). After "DDR off" the watchdog is still armed if the failure came after step
+5 began (trap, wrong checksum), and a reboot lies ahead unless it is serviced.
+TOP 1 is a compromise: well above the 300-instruction test (a few thousand
+clocks), short enough that a hang is caught in a few ms.
+
 ### CLK_GATE and POWER
 
 Reserved: they read 0 and ignore writes, instead of the R/W registers
