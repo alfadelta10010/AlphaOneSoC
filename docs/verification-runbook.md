@@ -13,20 +13,20 @@ under test, detached, under the thermal watchdog (a CPU above 80 C kills the run
 ```
 git archive <commit> | ssh <box> "mkdir -p regr/run1/tree && tar -x -C regr/run1/tree"
 # on the box, in regr/run1/tree:
-nice -n 10 setsid nohup bash scripts/verify-all.sh OUT=$HOME/regr/run1/out \
+nice -n 10 setsid nohup bash scripts/verify-all.sh OUT=$HOME/regr/run1/out TREE=<commit> [FORCE=1] \
     [STAGES="unit directed formal rvfi mutation"] [BASE=main] [CHANGED="csr.v"] [LAST=<old results.tsv>] \
     [NETLIST=<nl.v>] [PNL=<pnl.v>] [SUITES=<river_core conf dir>] [SDFDIR=<work dir>] [JOBS=4] \
     > /dev/null 2>&1 < /dev/null &
 M=$HOME/regr/run1/out setsid nohup bash <thermal-watch.sh> > /dev/null 2>&1 &
 ```
 
-The driver writes `OUT/driver.sid` (the watchdog reads it), then one `OUT/<stage>.verdict` per
-stage (one line: PASS, FAIL, BOUNDED-OK or ERROR, then counts), `OUT/<stage>.log`, and a marker
+`TREE=<commit>` is required: pass the commit you archived. The driver records it in `OUT/TREE` and prints it in `OUT/SUMMARY`. A relaunch with the same OUT and a different TREE refuses to reuse the `done.<stage>` markers and exits 2, so a stale PASS cannot survive an RTL change; `FORCE=1` deletes the markers and reruns everything. The driver writes `OUT/driver.sid` (the watchdog reads it), then one `OUT/<stage>.verdict` per
+stage (one line: PASS, FAIL, BOUNDED-OK, NO-BASELINE or ERROR, then counts), `OUT/<stage>.log`, and a marker
 `OUT/done.<stage>`. A relaunch with the same OUT skips every stage that has a marker; delete the
 marker to rerun that stage (an ERROR stage leaves none). `OUT/SUMMARY` is the last file written:
 one line per stage and the wall time of the launch. Do not poll with `tail -f` or sleep loops:
 look at `ls OUT` and `cat OUT/*.verdict` when you come back. Exit status 0 means every stage is
-PASS or BOUNDED-OK. After a reboot of the box (`uptime -s` changed) checksum-rsync the tree
+PASS or BOUNDED-OK; a mutation stage without LAST reports NO-BASELINE, which is not PASS, so a first run that includes mutation never exits 0 (record its results.tsv and pass it as LAST next time). After a reboot of the box (`uptime -s` changed) checksum-rsync the tree
 before trusting it, because recently written files can be zeroed.
 
 Stages default to `unit directed formal rvfi mutation`, plus `eqy` if NETLIST is given, `gl` if
@@ -40,9 +40,9 @@ stage.
 |---|---|---|
 | unit | `make test-all`, then `test-seeds` with seeds 1 to 8 | Each block and the core against its self-checking bench; the seeded random benches over eight seeds. Simulation: it finds bugs, it does not prove their absence. |
 | directed | `tests/directed/run.sh` plain, with `+RF_X +RF_COLLIDE_X`, and `soc` | The directed programs against Spike, on the core alone, with the register file starting at X and colliding reads at X, and through the whole SoC (fabric, memory controller, QSPI engine, Pmod model). Gate: no X in a dump, the tohost store reached. |
-| formal | `tb/formal/run.sh` (default list) on the `sat` and `sby` engines, then `--nonvac` on every harness | The invariants of VPLAN 4.3; see the verdict words. The verdicts (word and harness name) are compared with `scripts/verify-all.expected`: a changed word fails the stage, and so does a harness that is missing. Every harness must also have its broken copies FAIL. |
+| formal | `tb/formal/run.sh` (default list, 40 harnesses) on the `sat` and `sby` engines, then `--nonvac` on every default-list harness | The invariants of VPLAN 4.3; see the verdict words. Each full verdict line (minus trace and log paths) is compared with `scripts/verify-all.expected`, with every `*_DEPTH`/`*_TIMEOUT` override unset: a changed word, depth or cover count fails the stage, and so does a missing harness. Every default-list harness must also have its broken copies FAIL; opt-in harnesses (mem_li, mem_li_cov, mem_ld_cov, md07_miter) are not run. |
 | rvfi | `tb/rvfi/run.sh` once per solver family (yices, bmc3, boolector), then the fault matrix `tb/rvfi/mutants.sh` | riscv-formal consistency and instruction checks on the core, bounded from reset (VPLAN 4.5). The matrix injects one fault per row; every row must FAIL some check except the known blind spots (FC51, MD01, MD03, MD10, RG05). |
-| mutation | `tb/mutate/run.py` on the `src/` files changed since BASE | Every mutant of a changed file is run against the benches; the kills are compared with `LAST` and a kill that is lost fails the stage. `BASE` defaults to `main`; in a tree without `.git` pass `CHANGED="a.v b.v"`. |
+| mutation | `tb/mutate/run.py` on the `src/` files changed since BASE | Every mutant of a changed file is run against the benches. FAIL on any ERROR or TIMEOUT row (a formal TIMEOUT is an ERROR, never a kill), on a partial run (a listed file with no rows, or a run.py that did not exit 0), or on a kill lost against `LAST`; without `LAST` the verdict is NO-BASELINE (lost kills cannot be checked). `BASE` defaults to `main`; in a tree without `.git` pass `CHANGED="a.v b.v"`. |
 | eqy | `tb/eqy/run.sh NETLIST=<nl.v>`, all stages and mutants | The RTL and the hardened netlist have the same next-state function for every flop and the same outputs (VPLAN 4.4). Needs the refit below when the netlist is new. |
 | gl | `scripts/gl/build_isa.sh`, `scripts/gl/night.sh` parts A B C D | The same programs run through the pins of the post-PnR netlist match the RTL run, and a mutated netlist fails. Known failures carry a `known:` label. |
 | sdf | `tb/gls_sdf/run_glitch.sh` all variants and corners | The reset and pin behaviour at the first clock edge on the SDF-annotated netlist (TT01), with the Pmod timing checks. |
@@ -101,7 +101,7 @@ the unit, directed and seed runs take minutes; mutation depends on the number of
 
 ## What to update when the netlist changes
 
-Run `scripts/eqy-refit.sh NETLIST=<nl.v>`. It prints the new md5, runs the read, lemma and
+**`scripts/eqy-refit.sh` has not been validated on a real netlist yet** (written after the 2026-11-01 netlist was removed from the sandbox): check its output by hand on its first run. Run `scripts/eqy-refit.sh NETLIST=<nl.v>`. It prints the new md5, runs the read, lemma and
 fsminv stages on a scratch copy, prints the flop accounting (gold, gate, direct, rename, recode,
 removed) and the partition count of the EQY setup, and writes `refit.patch` with:
 
@@ -150,7 +150,7 @@ reads as the default and an optional DDR/DTR mode. Checklist:
 2. `make test-qspi` with its `QSPI_RUNS` sweep, and the SoC directed suite at the `rd_late` and
    `QSPI_DELAY` corners.
 3. Formal: mem_flash (the CS0 command set), mem_arb (a stream yields to a data access),
-   mem_ld and mem_li (measure LD and LI again with `bounds_tb.v`), mem_tcem (if PSRAM streams),
+   mem_ld and mem_li (measure LD and LI again with `make bounds-qspi` and compare the printed LP/LF/S/LD/LI with the `define values in `tb/formal/mem_props.sv` by hand: the target compares nothing itself), mem_tcem (if PSRAM streams),
    qspi_strap.
 4. EQY refit: new FSM states are expected, so this one is manual.
 5. GL parts A to D and SDF, with the Pmod checks at every corner.
