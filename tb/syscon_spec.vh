@@ -16,7 +16,7 @@
 `define SYS_CLKGATE     16'h0014   // reserved, RAZ/WI [A9]
 `define SYS_POWER       16'h0018   // reserved, RAZ/WI [A9]
 `define SYS_QSPICFG     16'h001C   // QSPI_CFG: R/W lane 0, {27'b0, DDR_CAP, DDR, STREAM}; reset by rst_soc
-`define QCFG_CAP_RESET  3'd0                  // DDR_CAP after any reset (until WO-51)
+`define QCFG_CAP_RESET  3'd2                  // DDR_CAP after any reset (DDR-CONTRACT 4 item 3)
 
 // FINISH status codes, wdata[15:0] (SYS-003, sifive_test convention) [A3, A4]
 `define FIN_REBOOT      16'h7777

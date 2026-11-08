@@ -92,7 +92,7 @@
 
 module syscon #(
     parameter [31:0] CHIP_ID = 32'h4131_5301,  // "A1S", revision 0x01
-    parameter [2:0]  DDR_CAP_RESET = 3'd0      // QSPI_CFG.DDR_CAP after any reset
+    parameter [2:0]  DDR_CAP_RESET = 3'd2      // QSPI_CFG.DDR_CAP after any reset
 )(
     input  wire        clk,
     input  wire        rst,            // the chip's reset (rst_n): sticky state

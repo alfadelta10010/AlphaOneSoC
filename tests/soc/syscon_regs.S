@@ -73,7 +73,7 @@ _start:
     RD   0x10, 0, 0x105              # STRAPS
     RD   0x14, 0, 0x106
     RD   0x18, 0, 0x107
-    RD   0x1C, 1, 0x108              # QSPI_CFG: STREAM on (strap pin 0), DDR 0, CAP 0
+    RD   0x1C, 0x9, 0x108            # QSPI_CFG: STREAM on (strap pin 0), DDR 0, CAP 2
     RD   0x100, 0, 0x110             # CR
     RD   0x104, 0xFF, 0x111          # TORR: TOP 15
     RD   0x108, 0, 0x112             # CCVR
@@ -85,7 +85,7 @@ _start:
     RD   0x1FC, 0, 0x118
 
     # ---- 2. read-only and reserved words ----
-    li   t1, -1
+    li   t1, -3
     sw   t1, 0x0C(s11)
     sw   t1, 0x10(s11)
     sw   t1, 0x14(s11)
@@ -95,8 +95,9 @@ _start:
     RD   0x10, 0, 0x202
     RD   0x14, 0, 0x203
     RD   0x18, 0, 0x204
-    RD   0x1C, 0x1F, 0x205           # QSPI_CFG takes lane 0: bits [4:0], the rest reads 0
-    li   t1, 0x7777
+    RD   0x1C, 0x1D, 0x205           # QSPI_CFG takes lane 0: bits [4:0], the rest reads 0 (DDR is bit 1:
+                                     # the -1 stored above is 0xFFFFFFFD, as DDR on would stop the flash fetches)
+    li   t1, 0x7775
     sw   t1, 0x0C(s11)
     sw   t1, 0x10(s11)
     sw   t1, 0x14(s11)
@@ -108,12 +109,12 @@ _start:
     sw   t1, 0x14(s11)
     sw   t1, 0x18(s11)
     sw   t1, 0x1C(s11)
-    li   t1, 0x3333
+    li   t1, 0x3331
     sw   t1, 0x14(s11)
     sw   t1, 0x1C(s11)
     RD   0x0C, 0x41315301, 0x206
     RD   0x10, 0, 0x207
-    RD   0x1C, 0x13, 0x209           # QSPI_CFG kept the last store's low five bits (0x3333)
+    RD   0x1C, 0x11, 0x209           # QSPI_CFG kept the last store's low five bits (0x3331)
     RD   0x04, 0x1, 0x208            # still alive, cause untouched
 
     # ---- 3. BOOT_MODE: lane 0 only ----
@@ -181,7 +182,7 @@ _start:
     RD   0x04, 0x1, 0x401
     RD   0x08, 0x3C, 0x402
     RD   0x10, 0, 0x403
-    RD   0x1C, 0x13, 0x40B           # no alias store reached QSPI_CFG
+    RD   0x1C, 0x11, 0x40B           # no alias store reached QSPI_CFG
     RD   0x0C, 0x41315301, 0x404
     RD   0x100, 0, 0x405
     RD   0x104, 0xFF, 0x406

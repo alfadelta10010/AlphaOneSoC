@@ -240,8 +240,8 @@ module tb_syscon_soc;
                     fail($sformatf("syscon_strap: boot 1 read STRAPS %h, the pin was %b at the reset", v, rd_late_run));
             end else if (test == "syscon_cfg") begin
                 // 1 and 3: QSPI_CFG at a reset (the strap's inverse, nothing else); 2 and 4: STRAPS
-                if ((n_values == 1 || n_values == 3) && v !== {31'b0, ~no_stream_run})
-                    fail($sformatf("syscon_cfg: boot %0d read QSPI_CFG %h, want %h", n_values == 1 ? 1 : 2, v, {31'b0, ~no_stream_run}));
+                if ((n_values == 1 || n_values == 3) && v !== {27'b0, `QCFG_CAP_RESET, 1'b0, ~no_stream_run})
+                    fail($sformatf("syscon_cfg: boot %0d read QSPI_CFG %h, want %h", n_values == 1 ? 1 : 2, v, {27'b0, `QCFG_CAP_RESET, 1'b0, ~no_stream_run}));
                 if ((n_values == 2 || n_values == 4) && v !== {30'b0, no_stream_run, 1'b0})
                     fail($sformatf("syscon_cfg: boot %0d read STRAPS %h, want %h", n_values == 2 ? 1 : 2, v, {30'b0, no_stream_run, 1'b0}));
             end else if (test == "syscon_reboot") begin

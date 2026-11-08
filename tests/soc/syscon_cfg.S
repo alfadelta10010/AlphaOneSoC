@@ -9,7 +9,9 @@
 #           the bench counts the flash read commands in between -- one per
 #           fetch); STREAM set, 64 nops again (EVENT 0x63 / 0x64: the commands
 #           of a sequential run share one); DDR and DDR_CAP written and read
-#           back; QSPI_CFG left at 0x1E (STREAM off, DDR on) and a reboot
+#           back (DDR on only at capture point 0, which the bench's device
+#           and clock read; the other points are written with DDR off);
+#           QSPI_CFG left at 0x2 (STREAM off, DDR on, CAP 0) and a reboot
 #   boot 2  cause 0x3: QSPI_CFG is back at the strap's value although the pin
 #           has moved (not re-read), DDR 0; STRAPS unchanged -- VALUE x2
 #
@@ -37,7 +39,7 @@ _start:
     lw   t0, 0x1C(s11)               # QSPI_CFG at reset
     VALUE t0
     andi t1, t0, -2
-    CHECK t1, 0, 0x102               # DDR and DDR_CAP reset to 0
+    CHECK t1, 0x8, 0x102             # DDR 0, DDR_CAP resets to 2
     lw   t0, 0x10(s11)               # STRAPS
     VALUE t0
     sw   zero, 0x1C(s11)             # STREAM off, running from flash
@@ -53,16 +55,20 @@ _start:
     EVENT 0x63
     NOPS64
     EVENT 0x64
-    li   t1, 0x1F
+    li   t1, 0x1D
     sw   t1, 0x1C(s11)
     lw   t0, 0x1C(s11)
-    CHECK t0, 0x1F, 0x105            # all fields stored
+    CHECK t0, 0x1D, 0x105            # STREAM, CAP 7 stored (DDR off: CAP 7 cannot read flash here)
+    li   t1, 0x3
+    sw   t1, 0x1C(s11)
+    lw   t0, 0x1C(s11)
+    CHECK t0, 0x3, 0x107             # STREAM, DDR on at CAP 0: this fetch and the next are EDh reads
     li   t1, 0xFFFFFFE0
     sw   t1, 0x1C(s11)
     lw   t0, 0x1C(s11)
     CHECK t0, 0, 0x106               # bits [31:5] are not storage
-    li   t1, 0x1E
-    sw   t1, 0x1C(s11)               # STREAM off, DDR on, CAP 7
+    li   t1, 0x2
+    sw   t1, 0x1C(s11)               # STREAM off, DDR on, CAP 0
     EVENT_P 0x65
     li   t1, 0x7777
     sw   t1, 0(s11)                  # reboot
