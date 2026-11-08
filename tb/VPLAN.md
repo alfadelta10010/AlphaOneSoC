@@ -96,7 +96,7 @@ E = eventual, A = architectural (no clock count).
 | REQ-QSPI-001 | PSRAM QPI 0x0B/0x38, flash 0xEB mode 0xFF, no flash write, tCPH/tCEM/tRST, SCK limits (soc-arch, datasheets) | C | tb_qspi, tb_qspi_stress; formal mem_flash (PROVED, pdr: flash never selected for a write, CS0 sees only EB/FF), mem_tcem (PROVED, pdr: PSRAM tCEM, tCPH), qspi_strap (PROVED, pdr: `rd_late` strap held after reset); Pmod model setup/hold checks (section 4.3) | Pmod model |
 | REQ-QSPI-002 | the start-up sequence undoes every hand-over state | B | tb_qspi hand-over runs, +RESETS | Pmod model |
 | REQ-MEMC-001 | data-first; split PSRAM fetch at 1 KB pages; whole-word loads; enabled bytes only stored | A | tb_qspi, tb_qspi_stress; formal mem_arb (PROVED, pdr: data first, split halves consecutive) | shadow memory |
-| REQ-MEMC-002 | every request is served within a bound; no starvation | B | tb_qspi_stress; formal mem_ld (BOUNDED 366: a held data request is served within LD = 182/183, measured S = 126 start-up cycles), core_df (BOUNDED 32: at most DF_N = 4 data handshakes per held fetch); LI = 442/456 for a held fetch is measured by simulation, not proved (section 4.3) | per-request wait bound + traffic floor (new) |
+| REQ-MEMC-002 | every request is served within a bound; no starvation | B | tb_qspi_stress; formal mem_ld (BOUNDED 366: a held data request is served within LD = 182/183, measured S = 126 start-up cycles), core_df (BOUNDED 32: at most DF_N = 4 data handshakes per held fetch); LI = 449/482 (streaming on, the default; 442/456 off) for a held fetch is measured by simulation, not proved (section 4.3); `make bounds-qspi` fails if a measured bound differs from the `mem_props.sv` defines | per-request wait bound + traffic floor (new) |
 | REQ-UART-* | 16550 subset (pins-and-peripherals 2) | C | tb_uart | spec models |
 | REQ-GPIO-* | GPIO + SPI mode 3 (pins-and-peripherals 3-4) | C | tb_gpio | spec models |
 | REQ-BUS-001 | an IO target drops ready only while selected; only a CLINT store writes the CLINT | C | tb_soc_periph; formal bus (PROVED, sby k-induction, length 1) | per-clock checks, clint_decode |
@@ -431,9 +431,9 @@ Every harness has a non-vacuity sidecar (`.nonvac`) and most have a cover (`_cov
 | spi_bb, spi_bb1 | bit-bang SPI | BOUNDED 96 each | NONVAC-OK | spi_cover COVERED 6/6 |
 | spi_f12 | SPI12 (F1/F2 structure) | PROVED (structural) | SPI12 | - |
 | bus | an IO target drops ready only while selected; decode; read mux | PROVED (sby k-induction, length 1) | SB01-03, uart and gpio ready seds | bus_cov 2/2 |
-| qspi_strap | `rd_late` strap sampled in reset and held (miter) | PROVED (pdr, free init 25 `$anyinit`) | QS06 | qspi_strap_cov 1/1 |
-| mem_flash | flash never selected for a write; CS0 sees only EB/FF | PROVED (pdr, 14 `$anyinit`) | QS01, QS02 | mem_flash_cov 4/4 |
-| mem_tcem | PSRAM tCEM, tCPH | PROVED (pdr, 13 `$anyinit`) | two seds (MT1, MT2) | mem_tcem_cov 5/5 |
+| qspi_strap | `rd_late` strap sampled in reset and held (miter; `stream_en` one free input shared by both copies, the streaming flops strm, p, t_top, t_sel in the lemma) | PROVED (pdr, free init 25 `$anyinit`) | QS06 | qspi_strap_cov 1/1 |
+| mem_flash | flash never selected for a write; CS0 sees only EB/FF (`stream_en` a free input) | PROVED (pdr, 14 `$anyinit`) | QS01, QS02 | mem_flash_cov 4/4 |
+| mem_tcem | PSRAM tCEM, tCPH; flash CS0-low run with the engine not idle <= LF = 57/58 (an idle open stream has no bound, by design) | PROVED (pdr, 13 `$anyinit`) | two seds (MT1, MT2) | mem_tcem_cov 5/5 |
 | mem_arb | data first, split atomicity | PROVED (pdr, 12 `$anyinit`) | MC01-04, MC07, MC08 | mem_arb_cov 5/5 |
 | mem_ld | held data request is served within LD = 182/183 | BOUNDED 366 (>= S 126 + LD) | reduced-LD copy | opt-in (3/5 at 330; reached once at 480) |
 | core_df | data handshakes per held fetch <= DF_N = 4 (mem's assumption M-A4) | BOUNDED 32 | DF_N = 1, 2, 3 FAIL | core_df_cov 2/2 |
@@ -446,9 +446,10 @@ md07_miter (not run to a verdict) and md07_miter_cov (1/1).
 
 Residuals:
 
-- mem_li: the worst fetch latency LI = 442 (`rd_late` 0) and 456 (`rd_late` 1) is
-  measured by simulation (3000 runs, both `rd_late`), not proved. A proof needs a depth
-  of at least S + LI = 582 and the engines did not close it. It is also conditional on
+- mem_li: the worst fetch latency LI = 449 (`rd_late` 0) and 482 (`rd_late` 1) with
+  streaming on (442 and 456 with it off) is
+  measured by simulation (3000 runs, both `rd_late`, both `stream_en` values), not proved. A proof needs a depth
+  of at least S + LI = 608 and the engines did not close it. It is also conditional on
   DF_N <= 4, which core_df bounds to 32 steps only.
 - mem_ld, core_req, spi_bb, spi_bb1, core_df: bounded, not proved. md07_miter is
   an opt-in cross-check of md07 only.
@@ -634,7 +635,7 @@ and the survivors of every bench are listed in 4.2.
   mem_ld (366). csr's outcome: PROVED by pdr (it was
   bounded 24 before). core_df is a bounded discharge of mem's assumption
   M-A4 (at most DF_N = 4 data handshakes per held fetch), so the fetch-latency
-  bound LI is "measured by simulation (442/456), conditional on DF_N <= 4,
+  bound LI is "measured by simulation (449/482 streaming on, 442/456 off), conditional on DF_N <= 4,
   which is itself checked only to 32 steps"; mem_li is not proved and is not
   in the default list. The register file is a stub with free read data in
   the core harnesses, so nothing is proved about its contents. The core's

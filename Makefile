@@ -473,10 +473,18 @@ endif
 
 # Latency bounds of mem_ctrl + qspi_ctrl by random simulation (LP LF S LD LI, rd_late 0 and 1;
 # the pdr/bmc proofs in tb/formal/mem_*.sv carry the proved ones). Not part of test-all.
-# Expect LP 40/41, LF 56/57, S 126, LD 182/183, LI 442/456 (DF_N=4).
+# Streaming on: LP 40/41, LF 57/58, S 126, LD 182/183, LI 449/482; off: LF 56/57, LI 442/456 (DF_N=4). FAILs if
+# the worst of the two differs from the defines in tb/formal/mem_props.sv.
 bounds-qspi: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -DDFN=$(or $(DF_N),4) -o $(BUILD_DIR)/bounds_tb $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v tb/formal/bounds_tb.v
-	@cd $(BUILD_DIR) && $(VVP) bounds_tb
+	@cd $(BUILD_DIR) && $(VVP) bounds_tb +SE=1 | grep '^stream_en' > bounds_se1.txt; $(VVP) bounds_tb +SE=0 | grep '^stream_en' > bounds_se0.txt; cat bounds_se1.txt bounds_se0.txt
+	@# F-17: the measured numbers (worst of streaming on and off) must equal the mem_props.sv defines (S = S_MAX + 1)
+	@cat $(BUILD_DIR)/bounds_se1.txt $(BUILD_DIR)/bounds_se0.txt | awk -v pf=tb/formal/mem_props.sv \
+	  'BEGIN { while ((getline l < pf) > 0) if (l ~ /^`define (LP|LF|LD|LI)[01] |^`define S_MAX /) { split(l, a, " "); d[a[2]] = a[3] } } \
+	   { r = ""; for (i = 2; i <= NF; i++) { split($$i, kv, "="); if (kv[1] == "rd_late") r = kv[2]; else if (r != "") m[kv[1] r] = (kv[2] > m[kv[1] r] ? kv[2] : m[kv[1] r]) } } \
+	   END { bad = 0; for (k in m) { n = k; sub(/[01]$$/, "", n); e = (n == "S") ? d["S_MAX"] + 1 : d[k]; \
+	           if (e == "" || m[k] + 0 != e + 0) { printf "FAIL bounds %s: measured %s, mem_props.sv define %s\n", k, m[k], e; bad = 1 } } \
+	         if (bad) exit 1; print "OK bounds: measured (streaming on/off, worst) equal the mem_props.sv defines" }'
 
 # ============================================================
 #  Full test suite
