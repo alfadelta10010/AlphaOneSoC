@@ -21,6 +21,14 @@
 //     at every point of a continuing read. Pin invariants every clock
 //     (qspi_pin_inv in the model).
 //
+// DDR (EDh): +DDR sets qspi_ctrl's ddr input, +DDR_CAP=<n> its capture point (default
+// 2). The default delays (2 ns, hold 1) suit DDR_CAP 0 and 1 at the 10 ns clock. +CLK_HALF_PS=<ps>
+// sets the clock's half period (default 5000; 8333 is the SoC's 60 MHz). +MODESW adds a
+// run of mode switches (ddr 0 -> 1 -> 0, ddr_cap changes) while a stream is open.
+// +SWEEP runs only the flash-only suite in the selected mode and prints one
+// "SWEEP PASS|FAIL" line (tests the capture point for the round trip the model's
+// +QSPI_DELAY/+QSPI_HOLD stand for; see the test-qspi-ddr-sweep target).
+//
 // Plusargs: +NOSTREAM ties stream_en low, +STREAM_TOGGLE flips it at random
 // clocks; +QSPI_DELAY=<ns> device + pad delay; +RD_LATE drives the
 // controller's rd_late strap; and the model's +PSRAM_WRAP, +PSRAM_QPI,
@@ -32,7 +40,12 @@
 
 module tb_qspi;
     reg clk = 0, rst = 1;
-    always #5 clk = ~clk;
+    real half = 5.0;
+    integer half_ps;
+    initial begin
+        if ($value$plusargs("CLK_HALF_PS=%d", half_ps)) half = half_ps / 1000.0;
+        forever #(half) clk = ~clk;
+    end
 
     reg         i_req = 0;
     reg  [31:0] i_addr = 0;
@@ -78,8 +91,19 @@ module tb_qspi;
     integer    tseed = 7;
     always @(negedge clk) if (toggle && ($random(tseed) & 15) == 0) stream_en <= ~stream_en;
 
+    reg        ddr_v;
+    reg [2:0]  cap_v;
+    reg        sweep;
+    initial begin
+        ddr_v = $test$plusargs("DDR");
+        cap_v = 3'd2;
+        if ($value$plusargs("DDR_CAP=%d", cap_v)) ;
+        sweep = $test$plusargs("SWEEP");
+    end
+
     qspi_ctrl qspi (
         .clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en),
+        .ddr(ddr_v), .ddr_cap(cap_v),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),
@@ -176,8 +200,8 @@ module tb_qspi;
     // one command with streaming (stream_en steady at 1), one each without.
     integer n0, nrun;
     task cmds_since(input [8*24-1:0] what, input integer want_stream, input integer want_plain);
-        if (!toggle && (pmod.n_eb - n0) != (stream_en ? want_stream : want_plain)) begin
-            $display("FAIL %0s: %0d flash read commands, want %0d", what, pmod.n_eb - n0,
+        if (!toggle && ((pmod.n_eb + pmod.n_edh) - n0) != (stream_en ? want_stream : want_plain)) begin
+            $display("FAIL %0s: %0d flash read commands, want %0d", what, (pmod.n_eb + pmod.n_edh) - n0,
                      stream_en ? want_stream : want_plain);
             errors = errors + 1;
         end
@@ -197,11 +221,85 @@ module tb_qspi;
         end
     endtask
 
+    // The flash-only suite: every flash read shape (open, continue, top-up,
+    // skip, back, a 6-byte open at addr[1] = 1, loads), no PSRAM traffic.
+    task flash_suite;
+        begin
+            for (k = 0; k < 8; k = k + 1) fetch(32'h2000_0200 + 4 * k);
+            fetch(32'h2000_0240); fetch(32'h2000_0242); fetch(32'h2000_0244);
+            fetch(32'h2000_0248); fetch(32'h2000_024C); fetch(32'h2000_024E);
+            fetch(32'h2000_0280); load(32'h2000_0284); fetch(32'h2000_0288);
+            load(32'h2000_028C); load(32'h2000_0290);
+            fetch(32'h2000_0302); fetch(32'h2000_0306); fetch(32'h2000_030A);
+            fetch(32'h2000_0308); fetch(32'h2000_0300); fetch(32'h2000_02FC);
+            fetch(32'h2000_0402); fetch(32'h2000_0406);
+            load(32'h2000_0000); load(32'h2000_0010);
+            fetch(32'h2000_0020); fetch(32'h2000_0022);
+        end
+    endtask
+
+    // Mode switches with a stream open. Each fetch that cannot continue the
+    // stream (a mode change) is a new command; one that can is not.
+    integer ne0;
+    task mode_switch_suite;
+        begin
+            ddr_v = 0; cap_v = 3'd1;
+            fetch(32'h2000_0600); fetch(32'h2000_0604);          // an SDR stream is open
+            ne0 = pmod.n_edh; n0 = (pmod.n_eb + pmod.n_edh);
+            ddr_v = 1;
+            fetch(32'h2000_0608);                                // mode change: close, EDh open
+            fetch(32'h2000_060C);                                // DDR continuation
+            fetch(32'h2000_060E);                                // DDR top-up
+            if (!toggle && ((pmod.n_eb + pmod.n_edh) - n0 != (stream_en ? 1 : 3) || pmod.n_edh - ne0 != (stream_en ? 1 : 3))) begin
+                $display("FAIL ddr switch 0->1: %0d commands, %0d EDh", (pmod.n_eb + pmod.n_edh) - n0, pmod.n_edh - ne0);
+                errors = errors + 1;
+            end
+            n0 = (pmod.n_eb + pmod.n_edh);
+            cap_v = 3'd0;                                        // capture point change
+            fetch(32'h2000_0614); fetch(32'h2000_0618);
+            if (!toggle && (pmod.n_eb + pmod.n_edh) - n0 != (stream_en ? 1 : 2)) begin
+                $display("FAIL ddr_cap change: %0d commands", (pmod.n_eb + pmod.n_edh) - n0);
+                errors = errors + 1;
+            end
+            n0 = (pmod.n_eb + pmod.n_edh); ne0 = pmod.n_edh;
+            ddr_v = 0;                                           // back to SDR
+            fetch(32'h2000_061C); fetch(32'h2000_0620);
+            if (!toggle && ((pmod.n_eb + pmod.n_edh) - n0 != (stream_en ? 1 : 2) || pmod.n_edh != ne0)) begin
+                $display("FAIL ddr switch 1->0: %0d commands, %0d EDh", (pmod.n_eb + pmod.n_edh) - n0, pmod.n_edh - ne0);
+                errors = errors + 1;
+            end
+            // A mode change with nobody waiting closes the stream by itself.
+            repeat (10) @(negedge clk);
+            ddr_v = 1; cap_v = 3'd1;
+            repeat (10) @(negedge clk);
+            if (cs_n[0] !== 1'b1) begin
+                $display("FAIL ddr change did not close the idle stream (cs_n=%b)", cs_n);
+                errors = errors + 1;
+            end
+            fetch(32'h2000_0624); fetch(32'h2000_0628);          // DDR again
+            cap_v = 3'd0; repeat (10) @(negedge clk);
+            if (cs_n[0] !== 1'b1) begin
+                $display("FAIL ddr_cap change did not close the idle stream (cs_n=%b)", cs_n);
+                errors = errors + 1;
+            end
+            fetch(32'h2000_062C);
+        end
+    endtask
+
     initial begin
         for (k = 0; k < 256; k = k + 1) pmod.flash[k] = k ^ 8'h5A;
         for (k = 512; k < 2048; k = k + 1) pmod.flash[k] = (k * 37) ^ (k >> 3);
         repeat (3) @(posedge clk);
         rst = 0;
+
+        if (sweep) begin
+            // The init sequence is SDR whatever the round trip; wait for it.
+            while (!q_idle) @(posedge clk);
+            flash_suite;
+            if (errors == 0) $display("SWEEP PASS (cap %0d, ddr %0d, delay %0d hold %0d)", cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns);
+            else             $display("SWEEP FAIL (cap %0d, ddr %0d, delay %0d hold %0d): %0d errors", cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns, errors);
+            $finish;
+        end
 
         // Stores in every shape, both chips, then read back through loads.
         for (k = 0; k < 2; k = k + 1) begin
@@ -242,35 +340,41 @@ module tb_qspi;
         // Streaming. Sequential flash fetches in 4-byte steps and 2-byte
         // steps (the top-up, then the continue behind it), loads at the
         // stream address, a jump, and PSRAM accesses that close the stream.
-        n0 = pmod.n_eb;
+        n0 = (pmod.n_eb + pmod.n_edh);
         for (k = 0; k < 6; k = k + 1) fetch(32'h2000_0200 + 4 * k);
         cmds_since("sequential fetches", 1, 6);
-        n0 = pmod.n_eb;
+        n0 = (pmod.n_eb + pmod.n_edh);
         fetch(32'h2000_0240); fetch(32'h2000_0242); fetch(32'h2000_0244);   // two top-ups in a row
         fetch(32'h2000_0248); fetch(32'h2000_024C); fetch(32'h2000_024E);   // continues, then a top-up
         cmds_since("top-up run", 1, 6);
-        n0 = pmod.n_eb;
+        n0 = (pmod.n_eb + pmod.n_edh);
         fetch(32'h2000_0280); load(32'h2000_0284); fetch(32'h2000_0288);    // loads at the stream address
         load(32'h2000_028C); load(32'h2000_0290);
         cmds_since("fetch and load run", 1, 5);
-        n0 = pmod.n_eb;
+        n0 = (pmod.n_eb + pmod.n_edh);
         fetch(32'h2000_0300); fetch(32'h2000_0308);                         // a skip: close and reopen
         fetch(32'h2000_02FC); fetch(32'h2000_0300);                         // back (then a continue)
         fetch(32'h2000_02F0);                                               // well before p
         cmds_since("non-sequential", 4, 5);
-        n0 = pmod.n_eb;
+        n0 = (pmod.n_eb + pmod.n_edh);
         fetch(32'h2000_0340); load(32'h8000_0100); fetch(32'h2000_0344);    // PSRAM read closes the stream
         store(32'h8000_0108, 4'b1111, 32'h0BAD_F00D); fetch(32'h2000_0348); // so does a PSRAM write
         fetch(32'h8080_0100); fetch(32'h2000_034C);
         check("write after stream", 32'h8000_0108, mem_word(32'h8000_0108), 32'h0BAD_F00D);
         cmds_since("psram between", 4, 4);
-        n0 = pmod.n_eb;
+        n0 = (pmod.n_eb + pmod.n_edh);
         fetch(32'h2000_0380); fetch(32'h2000_0384);
         flash_wr = 1;
         store(32'h2000_0388, 4'b1111, 32'hDEAD_BEEF);                       // a flash store closes it too
         flash_wr = 0;
         fetch(32'h2000_0388); fetch(32'h2000_038C);
         cmds_since("flash store between", 2, 4);
+
+        // Halfword-aligned opens: a jump to addr[1] = 1 opens (a DDR open reads 6 bytes
+        // from the word below, the shift register keeping the last 4), then a continue.
+        n0 = (pmod.n_eb + pmod.n_edh);
+        fetch(32'h2000_0702); fetch(32'h2000_0706); fetch(32'h2000_0782); fetch(32'h2000_0786);
+        cmds_since("halfword opens", 2, 4);
 
         // Reset with a stream open (the pins are released and the start-up
         // sequence runs again), and at every clock of a continuing read.
@@ -284,6 +388,8 @@ module tb_qspi;
             reset_in_fetch(32'h2000_0502, rk);                              // top-up, cut at clock rk
             fetch(32'h2000_0504);
         end
+
+        if ($test$plusargs("MODESW")) mode_switch_suite;
 
         // A store to flash. Flash 0x100 reads 0; PSRAM A 0x100, the same chip
         // address, holds the word stored above.
@@ -316,13 +422,13 @@ module tb_qspi;
         end
 
         errors = errors + pins.errs;
-        if (errors == 0) $display("PASS tb_qspi (QSPI_DELAY=%0d ns, rd_late=%0d)", pmod.delay_ns, rd_late);
+        if (errors == 0) $display("PASS tb_qspi (QSPI_DELAY=%0d ns, rd_late=%0d, ddr=%0d cap=%0d)", pmod.delay_ns, rd_late, ddr_v, cap_v);
         else             $display("FAIL tb_qspi: %0d errors", errors);
         $finish;
     end
 
     initial begin
-        #2000000;
+        #8000000;
         $display("TIMEOUT tb_qspi");
         $finish;
     end

@@ -81,7 +81,15 @@ module tb_qspi_stress;
     integer    tseed = 11;
     always @(negedge clk) if (toggle && ($random(tseed) & 15) == 0) stream_en <= ~stream_en;
 
+    reg        ddr_v;
+    reg [2:0]  cap_v;
+    initial begin
+        ddr_v = $test$plusargs("DDR");
+        cap_v = 3'd1;
+        if ($value$plusargs("DDR_CAP=%d", cap_v)) ;
+    end
     qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en),
+        .ddr(ddr_v), .ddr_cap(cap_v),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),

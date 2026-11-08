@@ -39,7 +39,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
-        test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
+        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test
 
@@ -194,12 +194,16 @@ QSPI_LATE := +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12
 QSPI_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+PSRAM_WRAP" \
              "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI" "+FLASH_QPI +FLASH_CRM" "+FLASH_DCRM" \
              "+PSRAM_A_QPI +FLASH_DCRM" "+PSRAM_B_QPI +FLASH_QPI"
-QSPI_STRESS_RUNS := "" "$(QSPI_LATE) +PSRAM_WRAP" "+RESETS +QSPI_DELAY=19" "+RESETS $(QSPI_LATE) +PSRAM_WRAP +SEED=2"
+# DDR flash reads (EDh), the 10 ns clock: capture points 0 and 1 suit the default 2 ns delay,
+# point 2 needs the slower device; +MODESW adds the mode switches with a stream open.
+QSPI_DDR_RUNS := "+DDR +DDR_CAP=0" "+DDR +DDR_CAP=1" "+DDR +DDR_CAP=2 +QSPI_DELAY=12 +QSPI_HOLD=6" \
+                 "+DDR +DDR_CAP=1 +PSRAM_WRAP" "+DDR +DDR_CAP=1 +PSRAM_QPI +FLASH_CRM" "+MODESW"
+QSPI_STRESS_RUNS := "+DDR +DDR_CAP=1" "+DDR +DDR_CAP=0 +RESETS" "" "$(QSPI_LATE) +PSRAM_WRAP" "+RESETS +QSPI_DELAY=19" "+RESETS $(QSPI_LATE) +PSRAM_WRAP +SEED=2"
 test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
-	@cd $(BUILD_DIR) && for sv in "" +NOSTREAM +STREAM_TOGGLE; do for args in $(QSPI_RUNS); do \
+	@cd $(BUILD_DIR) && for sv in "" +NOSTREAM +STREAM_TOGGLE; do for args in $(QSPI_RUNS) $(QSPI_DDR_RUNS); do \
 		$(VVP) tb_qspi $$args $$sv > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
 		grep -q '^PASS' tb_qspi.log || exit 1; \
 	done; done
@@ -209,6 +213,27 @@ test-qspi: $(BUILD_DIR)
 		$(VVP) tb_qspi_stress $$args $$sv > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
 	done; done
+
+# DDR capture-point sweep (DDR-CONTRACT 3.3): the 60 MHz clock, a device whose flash output is
+# valid from R + 7 ns after the SCK edge to R + 16.67 + 1 ns (tCLQV 6, a 2 ns spread around it),
+# for round trips R, every DDR_CAP. The passing set is printed per R (c = DDR_CAP + 1). The
+# same with +DTR_LAUNCH=1 (a device that launches the first nibble half an SCK late) must pass
+# no capture point at all: a streamed run detects it.
+SWEEP_R := 8 11 14 17 20 23 26 29 32
+test-qspi-ddr-sweep: $(BUILD_DIR)
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_sweep $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
+	@cd $(BUILD_DIR) && for la in 0 1; do echo "DTR_LAUNCH=$$la"; for r in $(SWEEP_R); do \
+		pass=""; for cap in 0 1 2 3 4 5 6 7; do \
+			$(VVP) tb_qspi_sweep +SWEEP +DDR +DDR_CAP=$$cap +CLK_HALF_PS=8333 +QSPI_DELAY=$$((r+7)) \
+				+QSPI_HOLD=$$((r+1)) +DTR_LAUNCH=$$la > sweep.log 2>&1; \
+			grep -q '^SWEEP PASS' sweep.log && pass="$$pass c=$$((cap+1))"; \
+		done; echo "  R=$$r ns: passing c:$${pass:- none}"; done; done
+
+# The Pmod model's DTR (EDh) unit bench: pass, expected-fail and limit-raise cases.
+test-pmod-dtr:
+	@echo "=== Testing the QSPI Pmod model's DTR read ==="
+	@BUILD_DIR=$(BUILD_DIR)/pmod_dtr bash $(TB_DIR)/pmod_dtr_run.sh
 
 # The UART against spec-derived models: register/lane scoreboard, a
 # reference receiver on TX, an asynchronous reference transmitter on RX
@@ -408,7 +433,7 @@ test-gl:
 	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
 	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-pmod-dtr test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
