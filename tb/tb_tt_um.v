@@ -512,7 +512,7 @@ module tb_tt_um;
             s_div = 1; s_exp_re = 0; s_exp_po = 1; s_exp_cut = 0;
             case (pid)
                 ID_uart_hello: begin
-                    s_div = 27; s_want = "Hello, world!\015\nHello, world!\015\n";
+                    s_div = 33; s_want = "Hello, world!\015\nHello, world!\015\n";
                 end
                 ID_uart_echo: begin
                     s_div = 4; s_want = "The quick brown fox jumps over the lazy dog, 0123456789!\015\n";
@@ -549,7 +549,7 @@ module tb_tt_um;
                     for (k = 0; k < 16; k = k + 1) begin push_oled(1'b0, 8'h55); push_oled(1'b0, 8'hAA); end
                 end
                 ID_periph_access: begin
-                    s_div = 27; s_want = "ABq";
+                    s_div = 33; s_want = "ABq";
                     s_n_ev = 12;
                     s_ev[0] = 'h10; s_ev[1] = 'h10; s_ev[2] = 'h20; s_ev[3] = 'h20; s_ev[4] = 'h20;
                     s_ev[5] = 'h21; s_ev[6] = 'h20; s_ev[7] = 'h20; s_ev[8] = 'h20; s_ev[9] = 'h20;
@@ -562,7 +562,7 @@ module tb_tt_um;
                 ID_clint_decode: s_div = 1;
                 ID_syscon_regs: s_div = 1;
                 ID_syscon_reboot: begin
-                    s_div = 27; s_n_val = 5; s_exp_re = 4;
+                    s_div = 33; s_n_val = 5; s_exp_re = 4;
                 end
                 ID_syscon_strap: begin
                     // (with rd_late = 1 the cue changes nothing: the strap pin is already 0 from the second edge on. The run is
