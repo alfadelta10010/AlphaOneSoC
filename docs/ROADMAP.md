@@ -23,6 +23,7 @@ been synthesised; nothing here is measured unless it cites a run.
 | (2026-10-31) **The RTL freezes once basic functionality works**, not at the shuttle's close. Software climbs from easy goals up: **FreeRTOS first, then Linux** in the next few PRs. Most of this roadmap stays in scope. | Section 9, the software ladder. |
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
+| (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33. | Branch `qspi-stream_alfadelta10010`; plan, DDR timing contract and work orders outside the repo. |
 | (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. The tree with all three blocks misses 16 ns by 0.303 ns at the slowest corner, so the clock is documented as **60 MHz** (16.67 ns, met at every corner). | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 60 MHz; 1.7 is the way back to 62.5 MHz. |
 
 The limits every item is judged against:
@@ -46,10 +47,13 @@ The limits every item is judged against:
   60 MHz that is about 1.4 million instructions per second. The QSPI clock
   is the core clock / 2 = 30 MHz, and TT's pads toggle at about 33 MHz, so
   a faster core clock does not make memory faster. Speed comes only from
-  fewer or cheaper bus transactions.
+  fewer or cheaper bus transactions. Streaming (2026-11-08) makes a
+  sequential flash fetch 18 clocks instead of 57 (start to done, rd_late 0);
+  the pins-only wrapper programs run in 18,898 clocks instead of 30,896.
 * **Pins.** 24 in total. `uio[7:0]` belong to the QSPI Pmod. `uo_out[7]` is
   now the SD card's CS# (PR #14), so no output is spare. `ui_in[1]` is MISO
-  when the SD card is fitted; `ui_in[2,4..7]` are GPIO, DIP switches or
+  when the SD card is fitted; `ui_in[2]` is also the no-stream strap, read
+  during reset (1 = streaming off); `ui_in[2,4..7]` are GPIO, DIP switches or
   keypad rows.
 
 ## 1. RTL work before the lock
@@ -281,8 +285,8 @@ All small; together they could pay for most of 1.1-1.3.
 
 | Candidate | Saving | Status |
 |---|---|---|
-| FC02: `csr_wb_hazard` is a dead stall term under the 3-cycle EX | small | proved equivalent (VPLAN 4.2) |
-| FC49: the three `flush` gates on the M handshake are dead | small | proved equivalent (VPLAN 4.2); needs STA |
+| FC02: `csr_wb_hazard` is a dead stall term under the 3-cycle EX | -10 cells with FC49 (synthesis) | **removed** (2026-11-08) |
+| FC49: the three `flush` gates on the M handshake are dead | (with FC02) | **removed** (2026-11-08); STA at the next harden |
 | UART 8-bit divisor | -16 flops, about -680 µm² | no rates below 12.2 kbaud at 50 MHz |
 | UART fixed divisor | -24 flops, about -1,000 µm² | software cannot change the baud rate |
 
@@ -301,13 +305,9 @@ Open (2026-10-31):
 
 * **What "basic functionality" means for the freeze** (section 0). The
   user's call; section 9's lower rungs are candidate checkpoints.
-* **The UART's reset divisor.** `UART_DIV_RESET` is 27: 115,200 baud at
-  50 MHz, but 138,889 baud at the 60 MHz clock the chip is documented for.
-  The divisor is a software register, so this matters only for output sent
-  before software writes it; the boot contract (9.1) writes 33 (113,636
-  baud) first. Changing the parameter to 33 would make the reset rate right
-  too; the benches and gate-level programs that assume 27 (WO-26) would
-  follow.
+* ~~**The UART's reset divisor.**~~ Decided 2026-11-08: `UART_DIV_RESET`
+  is 33, 113,636 baud (115,200 - 1.4%) at 60 MHz from reset; the benches and
+  gate-level lists follow.
 
 ### 1.6 The lock gate
 
@@ -463,9 +463,9 @@ mutation survivor has a verdict (`tb/VPLAN.md` 4.2). Owed: the mutation
 re-score numbers (`tb/VPLAN.md` 4.6) and the residuals in 2.1. A re-harden
 needs the EQY, gate-level and SDF runs again (one netlist each).
 
-Next RTL change: QSPI streaming fetch and an optional DDR mode, after this
-branch merges (docs/verification-runbook.md describes how
-to re-run the checks above).
+Next RTL change: QSPI streaming fetch and switchable DDR, in progress on
+`qspi-stream_alfadelta10010` (docs/verification-runbook.md describes how to
+re-run the checks above).
 
 ## 3. Verilator port
 
@@ -570,9 +570,9 @@ core's clock is off) and the CLINT compare.
 
 Considered on 2026-10-22, kept for later:
 
-* **Keep the fetch stream open:** leave CS# low and keep clocking while
-  fetches are sequential. About 1.6x (review estimate), about 0.5-0.7 kGE;
-  must close at each 1 KB PSRAM page and within tCEM; the heaviest to verify.
+* **Keep the fetch stream open:** being done for the flash (2026-11-08,
+  `qspi-stream_alfadelta10010`, see section 0). Left for later: PSRAM fetch
+  streaming, which must close at each 1 KB page and within tCEM.
 * **Instruction cache:** 256 B direct-mapped from two more RF macros plus
   tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. Needs
   the 4x4 slot that was not taken.
@@ -640,10 +640,10 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 
 1. **Set `mtvec` before anything can trap.** It resets to 0, which is
    outside flash and PSRAM, so a trap before it is set faults again at 0.
-2. **Set the UART divisor before the first character:** set LCR.DLAB, write
-   DLL = 33 and DLM = 0, clear DLAB. That is 113,636 baud at 60 MHz
-   (115,200 - 1.4%); at 62.5 MHz it would be 34 (114,890 baud, -0.27%). The
-   reset divisor, 27, gives 138,889 baud at 60 MHz (1.5).
+2. **Set the UART divisor before the first character** if the clock is not
+   60 MHz: set LCR.DLAB, write DLL and DLM, clear DLAB. The reset divisor is
+   33: 113,636 baud at 60 MHz (115,200 - 1.4%); at 62.5 MHz write 34 (114,890
+   baud, -0.27%).
 3. **Read RESET_CAUSE and BOOT_MODE, then write `0x7` to RESET_CAUSE** so that
    the next boot sees only its own cause (`docs/soc-architecture.md`,
    syscon).
