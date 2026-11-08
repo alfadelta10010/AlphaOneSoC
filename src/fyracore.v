@@ -850,9 +850,9 @@ module fyracore #(
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
     // !ex_trap_iter: a trapping M instruction (a fetch fault whose garbage
-    // word decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
-    // flush, which contains ex_trap -- so without this muldiv_stall would
-    // wait for a result that never comes and the trap would never commit.
+    // word decodes as MUL/DIV, say) never starts -- without this
+    // exclusion muldiv_stall would wait for a result that never comes and the
+    // trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
     // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
@@ -883,7 +883,13 @@ module fyracore #(
     // *next* M instruction, which then captured the previous result.
     wire muldiv_have = muldiv_ready || muldiv_done;
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
+    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other;
+    // No `!flush` on capture or start, and no flush term in the muldiv_ready
+    // reset: flush and muldiv_want are never both 1 (a flush source in EX
+    // means the EX instruction is not an M op, and a trapping M op is
+    // excluded by ex_trap_iter), so a flush never meets a live M operation.
+    // If an M op could ever be in EX together with a flush source, restore
+    // all three.
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
@@ -891,15 +897,13 @@ module fyracore #(
     // completed, and muldiv_stall then dropped that fetch and fetched the
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_nofetch && !flush;
+                          && !stall_nofetch;
     assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin
-        // flush first: the operation's instruction is being discarded, so the
-        // result must not survive to be captured by its own re-execution.
         // capture before done: a result taken on its own done cycle must not
         // be left sticky for the next M instruction.
-        if (rst || flush)        muldiv_ready <= 1'b0;
+        if (rst)                 muldiv_ready <= 1'b0;
         else if (muldiv_capture) muldiv_ready <= 1'b0;
         else if (muldiv_done)    muldiv_ready <= 1'b1;
     end
@@ -1147,9 +1151,9 @@ module fyracore #(
     // another interrupt. It also tore down an in-flight memory access, because
     // the injection path overrides the EX/WB hold.
     //
-    // muldiv_want rather than muldiv_stall (or `stall`): muldiv_stall feeds
-    // muldiv_start through flush, which contains irq_inject, so it would
-    // close a combinational loop. Excluding any M instruction in EX -- before
+    // muldiv_want rather than muldiv_stall (or `stall`): muldiv_stall is
+    // low on the capture cycle and `stall` is not an input of irq_inject.
+    // Excluding any M instruction in EX -- before
     // it starts, while it runs, and on the cycle its result is captured --
     // means an interrupt never discards a finished or in-flight multiply;
     // it is taken at the next instruction instead.
