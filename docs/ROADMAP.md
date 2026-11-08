@@ -571,8 +571,12 @@ core's clock is off) and the CLINT compare.
 Considered on 2026-10-22, kept for later:
 
 * **Keep the fetch stream open:** being done for the flash (2026-11-08,
-  `qspi-stream_alfadelta10010`, see section 0). Left for later: PSRAM fetch
-  streaming, which must close at each 1 KB page and within tCEM.
+  `qspi-stream_alfadelta10010`, see section 0). Not for the PSRAM: its refresh
+  needs CE# high, a read must be ended by CE# high "immediately afterwards",
+  CE# may stay low at most tCEM = 8 µs, and a burst crosses a 1 KB page once
+  at most (RBX parts; others wrap in the page). A stream left open while the
+  core runs breaks that; only short bounded bursts are allowed, which is what
+  the PSRAM gets today.
 * **Instruction cache:** 256 B direct-mapped from two more RF macros plus
   tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. Needs
   the 4x4 slot that was not taken.
