@@ -40,7 +40,7 @@ stage.
 |---|---|---|
 | unit | `make test-all`, then `test-seeds` with seeds 1 to 8 | Each block and the core against its self-checking bench; the seeded random benches over eight seeds. Simulation: it finds bugs, it does not prove their absence. |
 | directed | `tests/directed/run.sh` plain, with `+RF_X +RF_COLLIDE_X`, and `soc` | The directed programs against Spike, on the core alone, with the register file starting at X and colliding reads at X, and through the whole SoC (fabric, memory controller, QSPI engine, Pmod model). Gate: no X in a dump, the tohost store reached. |
-| formal | `tb/formal/run.sh` (default list, 40 harnesses) on the `sat` and `sby` engines, then `--nonvac` on every default-list harness | The invariants of VPLAN 4.3; see the verdict words. Each full verdict line (minus trace and log paths) is compared with `scripts/verify-all.expected`, with every `*_DEPTH`/`*_TIMEOUT` override unset: a changed word, depth or cover count fails the stage, and so does a missing harness. Every default-list harness must also have its broken copies FAIL; opt-in harnesses (mem_li, mem_li_cov, mem_ld_cov, md07_miter) are not run. |
+| formal | `tb/formal/run.sh` (default list, 37 harnesses) on the `sat` and `sby` engines, then `--nonvac` on every default-list harness | The invariants of VPLAN 4.3; see the verdict words. Each full verdict line (minus trace and log paths) is compared with `scripts/verify-all.expected`, with every `*_DEPTH`/`*_TIMEOUT` override unset: a changed word, depth or cover count fails the stage, and so does a missing harness. Every default-list harness must also have its broken copies FAIL; opt-in harnesses (mem_li, mem_li_cov, mem_ld_cov, md07_miter) are not run. |
 | rvfi | `tb/rvfi/run.sh` once per solver family (yices, bmc3, boolector), then the fault matrix `tb/rvfi/mutants.sh` | riscv-formal consistency and instruction checks on the core, bounded from reset (VPLAN 4.5). The matrix injects one fault per row; every row must FAIL some check except the known blind spots (FC51, MD01, MD03, MD10, RG05). |
 | mutation | `tb/mutate/run.py` on the `src/` files changed since BASE | Every mutant of a changed file is run against the benches. FAIL on any ERROR or TIMEOUT row (a formal TIMEOUT is an ERROR, never a kill), on a partial run (a listed file with no rows, or a run.py that did not exit 0), or on a kill lost against `LAST`; without `LAST` the verdict is NO-BASELINE (lost kills cannot be checked). `BASE` defaults to `main`; in a tree without `.git` pass `CHANGED="a.v b.v"`. |
 | eqy | `tb/eqy/run.sh NETLIST=<nl.v>`, all stages and mutants | The RTL and the hardened netlist have the same next-state function for every flop and the same outputs (VPLAN 4.4). Needs the refit below when the netlist is new. |
@@ -72,8 +72,8 @@ divergence is real.
   simulation, not proved; it also depends on at most four data handshakes between fetches
   (core_df, bounded to 32 steps).
 - Bounded, not proved: mem_ld (366), core_req (150), spi_bb and spi_bb1 (96), core_df (32),
-  core_inv (80), and all of riscv-formal. md07_miter is an opt-in cross-check of md07 only.
-- FC02 and FC49: equivalence by argument plus a bounded check.
+  and all of riscv-formal. md07_miter is an opt-in cross-check of md07 only.
+- FC02 and FC49: removed from the RTL (2026-11-08), and core_inv with them.
 - riscv-formal does not cover U-mode, PMP, MPRV, misa.C, CSRs and trap causes and targets,
   atomics, M arithmetic, illegal encodings other than the all-zero parcel, memory waits over two
   cycles, data-memory consistency, or unbounded histories.
@@ -124,7 +124,7 @@ it, which is what you want.
 | Touched | Rerun |
 |---|---|
 | any `src/*.v` | `verify-all.sh` unit, directed, mutation (the file), formal, rvfi if the core changed |
-| `fyracore.v` | formal core_hold, core_req, core_fetch, core_df, core_inv, md07; riscv-formal on `fyracore.v` (all families and the fault matrix); mutation for the file |
+| `fyracore.v` | formal core_hold, core_req, core_fetch, core_df, md07; riscv-formal on `fyracore.v` (all families and the fault matrix); mutation for the file |
 | `csr.v`, `clint.v`, `pmp.v` | formal csr; directed; mutation for the file; riscv-formal only if the retire interface changed |
 | `muldiv.v`, `alu.v`, `branchCtrl.v`, `decoder.v`, `controller.v`, `compressed_decoder.v` | unit and seeds; directed; riscv-formal insn families; mutation for the file |
 | `syscon.v` | formal syscon_comb, syscon_gate, soc_rst_sync; test-syscon and test-syscon-soc; mutation |

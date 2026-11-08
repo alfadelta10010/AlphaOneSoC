@@ -132,8 +132,8 @@ module csr #(
     // *_next is both the register's next value and what the EX read port
     // returns, so the increment is suppressed at its enable.
     //
-    // fyracore holds the instruction after a CSR write in EX for one cycle
-    // (csr_wb_hazard), so an rdcycle right after `csrw mcycle` reads a cycle
+    // fyracore's instruction after a CSR write is still in EX for that cycle
+    // (its 3-cycle EX), so an rdcycle right after `csrw mcycle` reads a cycle
     // later than the write, where the cycle count has moved on by one. The
     // reference model counts instructions, not clocks, and reads the written
     // value there. mcycle_wr_q skips the one increment in between, so that
@@ -152,7 +152,7 @@ module csr #(
     // mstatus as it will stand after a CSR write in WB commits this cycle:
     // the legal value the write stores. A trap or an MRET never coincides
     // with that write -- the instruction behind a CSR write waits in EX until
-    // it has committed (fyracore's csr_wb_hazard) -- so they always see the
+    // it has committed (fyracore's 3-cycle EX) -- so they always see the
     // stored mstatus.
     // M+U only: MPP's legal values are 00 (U) and 11 (M). A write of 01 (S,
     // absent) or 10 (reserved) is legalised to U, the least-privileged
@@ -177,7 +177,7 @@ module csr #(
     // Zicsr requires a write's effects to be visible to the very next
     // instruction (`csrw mstatus, <MPP=M>; mret` returns to M-mode), and
     // fyracore provides that by holding the next instruction in EX until the
-    // write has committed (csr_wb_hazard), so the stored value is exported.
+    // write has committed (its 3-cycle EX), so the stored value is exported.
     assign mstatus_mie  = mstatus[3];
     assign mstatus_mpp  = mstatus[12:11];  // MPP field (11=M, 00=U)
     assign mstatus_mprv = mstatus[17];
