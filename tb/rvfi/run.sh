@@ -5,6 +5,9 @@
 #   bash tb/rvfi/run.sh [--list] [ONLY="regex ..."] [FYRA_SRC=<dir>] [OUT=<dir>]
 #                       [JOBS=4] [SOLVER=...] [TIMEOUT=7200] [RVFORMAL=<dir>]
 #
+# ONLY patterns are full-match regexes against the check names (`--list`): `insn_mul_ch0`
+# selects one check, `insn_mul_.*` all of them. A selection that is empty is an ERROR
+# (exit 2), never a green "0 checks".
 # Each KEY=value may also come from the environment (ONLY="..." bash run.sh).
 # A PASS is BMC: "BOUNDED (BMC depth N from reset)", never PROVED.
 # $OUT/done/<check> = "PASS|FAIL|TIMEOUT|ERROR <seconds> <depth>". A check with a
@@ -92,6 +95,7 @@ if [ -n "$ONLY" ]; then
   SEL=""; for c in $ALL; do for p in $ONLY; do [[ $c =~ ^($p)$ ]] && { SEL="$SEL $c"; break; }; done; done
 else SEL=$ALL; fi
 if [ $LIST = 1 ]; then for c in $ALL; do echo "$c"; done; echo "$(echo $ALL | wc -w)"; exit 0; fi
+if [ -z "${SEL// /}" ]; then echo "run.sh: ERROR: ONLY=\"$ONLY\" selects no check (patterns are full-match regexes, see --list)" >&2; exit 2; fi
 
 one() {
   c=$1; d=$OUT/done/$c
