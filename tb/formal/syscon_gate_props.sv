@@ -7,9 +7,10 @@
 //       edge: seen at the port as WDT clear in a held cycle and set in the
 //       next, with the same word (RESET_CAUSE) addressed.
 //   P2  after any held edge the watchdog is disabled: CR reads EN = 0.
-//   P3  after any held edge QSPI_CFG (+0x1C) has DDR = 0 and DDR_CAP = 0:
+//   P3  after any held edge QSPI_CFG (+0x1C) has DDR = 0 and DDR_CAP = DDR_CAP_RESET (the harness parameter, 2 since 6dee0f1;
+//       syscon keeps its own default, so a changed reset value is a FAIL here until this follows):
 //       every reset, reboot and watchdog expiry returns to SDR.
-module syscon_gate_props (
+module syscon_gate_props #(parameter [2:0] DDR_CAP_RESET = 3'd2) (
     input  wire        clk, rst,
     input  wire        sel, we,
     input  wire [3:0]  be,
@@ -37,7 +38,7 @@ module syscon_gate_props (
     always @(*) begin
         assert (!(armed && held_q && !rst && addr == 14'd1 && rdata[2]));   // P1
         assert (!(armed && hq2 && addr == 14'h40 && rdata[0]));             // P2
-        assert (!(armed && hq2 && addr == 14'd7 && (rdata[1] || rdata[4:2] != 3'd0)));   // P3
+        assert (!(armed && hq2 && addr == 14'd7 && (rdata[1] || rdata[4:2] != DDR_CAP_RESET)));   // P3
     end
 
 `ifdef SBY_COVER
