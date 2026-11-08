@@ -2,9 +2,12 @@
 // the board wiring and the reasons for both are in
 // docs/pins-and-peripherals.md.
 //
-//   ui_in[7:0]   GPIO IN, all eight pins. Three of them have a second job:
+//   ui_in[7:0]   GPIO IN, all eight pins. Four of them have a second job:
 //   ui_in[1]       SPI MISO (the SD card's DO)
 //   ui_in[0]       the qspi_rd_late strap, read during reset (see below)
+//   ui_in[2]       the no-stream strap, read during reset: 1 = flash streaming
+//                  off after reset (QSPI_CFG.STREAM = 0); 0 (the board's default)
+//                  = on
 //   ui_in[3]       UART RX
 //   uo_out[3:0]  GPIO OUT 3:0 ([1] / [3] are MOSI / SCK while the SPI
 //                controller is on, both straight from flops)
@@ -29,7 +32,7 @@
 //   * all eight bidirectional pins are inputs. Whoever holds the chip in
 //     reset owns the QSPI bus and can program the flash through it;
 //   * uo_out shows the SoC's reset values: TX and RTS# high, GPIO OUT 0x89.
-// The strap on ui_in[0] is read on every clock edge while rst is high, the
+// The straps on ui_in[0] and ui_in[2] are read on every clock edge while rst is high, the
 // last of them the second edge after rst_n rises: hold it until then.
 //
 // ena is high whenever the design is powered, and is not used.
@@ -84,6 +87,7 @@ module tt_um_alfadelta10010_alphaone_soc (
     alphaone_soc soc (
         .clk         (clk),
         .rst         (rst),
+        .qspi_no_stream(ui_in[2]),
         .qspi_rd_late(ui_in[0]),
         .qspi_sck    (qspi_sck),
         .qspi_cs_n   (qspi_cs_n),

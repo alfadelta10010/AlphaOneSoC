@@ -23,6 +23,9 @@
 // clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick
 // it from the clock frequency and the measured pad round trip. syscon latches
 // it at the pin reset and hands qspi_ctrl the latched value during a reboot.
+// qspi_no_stream is read the same way: 1 resets QSPI_CFG.STREAM to 0 (every
+// flash read its own command), 0 to 1 (streaming); software can change it
+// afterwards, and any reboot returns to the strap's value, held from the pin reset.
 //
 // Two resets: `rst` (the chip's reset) resets only syscon's sticky state
 // (RESET_CAUSE, BOOT_MODE, the strap, the reboot / power-off flops); syscon's
@@ -53,6 +56,7 @@ module alphaone_soc #(
 )(
     input  wire       clk,
     input  wire       rst,
+    input  wire       qspi_no_stream, // strap: 1 = flash streaming off at reset
     input  wire       qspi_rd_late,  // strap: sample QSPI read data a clock later
     // QSPI Pmod
     output wire       qspi_sck,
@@ -120,7 +124,8 @@ module alphaone_soc #(
     wire [31:0] clint_rdata;
     wire        uart_sel, uart_ready, gpio_sel, gpio_ready;
     wire [31:0] uart_rdata, gpio_rdata;
-    wire        syscon_sel, qspi_late;
+    wire        syscon_sel, qspi_late, qspi_stream_en, qspi_ddr;
+    wire [2:0]  qspi_ddr_cap;
     wire [31:0] syscon_rdata;
 
     soc_bus bus (
@@ -155,7 +160,11 @@ module alphaone_soc #(
         .wdata        (dmem_wdata),
         .rdata        (syscon_rdata),
         .strap_rd_late(qspi_rd_late),
+        .strap_no_stream(qspi_no_stream),
         .rd_late      (qspi_late),
+        .qspi_stream_en(qspi_stream_en),
+        .qspi_ddr     (qspi_ddr),
+        .qspi_ddr_cap (qspi_ddr_cap),
         .wdt_tap      (mtime[29:14])
     );
 
@@ -194,7 +203,7 @@ module alphaone_soc #(
         .clk      (clk),
         .rst      (rst_soc),
         .rd_late  (qspi_late),
-        .stream_en(1'b1),
+        .stream_en(qspi_stream_en),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
@@ -258,5 +267,8 @@ module alphaone_soc #(
         .in   (gpio_in),
         .out  (gpio_out)
     );
+
+    // DDR and DDR_CAP have no qspi_ctrl port yet.
+    wire _unused = &{qspi_ddr, qspi_ddr_cap, 1'b0};
 
 endmodule
