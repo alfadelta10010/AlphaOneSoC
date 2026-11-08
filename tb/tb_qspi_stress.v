@@ -30,8 +30,9 @@
 //     once instead of running out the clock; and at the end a floor on the
 //     traffic served (about half of what an unbroken run serves), so a path
 //     that slowed to a crawl fails too.
-// Plusargs as tb_qspi (+QSPI_DELAY, +RD_LATE, the model's), plus +SEED=n and
-// +RESETS.
+// Plusargs as tb_qspi (+QSPI_DELAY, +RD_LATE, +NOSTREAM, +STREAM_TOGGLE, the
+// model's), plus +SEED=n and +RESETS. Flash fetches mostly continue the last
+// one (4 or 2 bytes on), so the stream hits, top-ups and closes all happen.
 // Written by the 2026-09-26 RTL review; it caught both deliberate breakages
 // tried on mem_ctrl (arbitration ignoring a pending split, and splitting only
 // at the A/B boundary).
@@ -71,11 +72,24 @@ module tb_qspi_stress;
     reg        rd_late;
     initial    rd_late = $test$plusargs("RD_LATE");
 
-    qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late),
+    reg        stream_en;
+    reg        toggle;
+    initial begin
+        stream_en = !$test$plusargs("NOSTREAM");
+        toggle    = $test$plusargs("STREAM_TOGGLE");
+    end
+    integer    tseed = 11;
+    always @(negedge clk) if (toggle && ($random(tseed) & 15) == 0) stream_en <= ~stream_en;
+
+    qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),
         .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in));
+
+    qspi_pin_inv pins (.clk(clk), .ctl_oe(ctl_oe), .cs_n(cs_n), .sck(sck), .io_oe(io_oe),
+        .quiet(qspi.strm && qspi.state != 4'd1 && qspi.state != 4'd2 && qspi.state != 4'd3 &&
+               qspi.state != 4'd4 && qspi.state != 4'd8 && qspi.state != 4'd9));
 
     qspi_pmod_model pmod (.host_sck(sck), .host_cs_n(cs_n), .host_ctl_oe(ctl_oe),
         .host_io(io_out), .host_oe(io_oe), .dev_io(dev_io), .dev_oe(dev_oe));
@@ -139,7 +153,9 @@ module tb_qspi_stress;
             // core: pc advances on the ready edge; maybe a data request the cycle after
             si = si + 1;
             if (rand_mode) begin
-                i_addr <= #1 ((($random(seed) & 7) == 0) ? (32'h2000_0000 | ($random(seed) & 32'hFFFE))
+                i_addr <= #1 (i_addr[31:28] == 4'h2 && ($random(seed) & 3) != 0) ?
+                              (32'h2000_0000 | ((i_addr + (($random(seed) & 1) ? 32'd2 : 32'd4)) & 32'hFFFE)) :
+                            ((($random(seed) & 7) == 0) ? (32'h2000_0000 | ($random(seed) & 32'hFFFE))
                             : (32'h8000_0000 | ($random(seed) & 32'h00FF_FFFE) | ((($random(seed) & 3) == 0) ? 32'h3FE : 0)));
                 if (($random(seed) & 1) && !d_req) begin
                     pick_d;
@@ -260,6 +276,8 @@ module tb_qspi_stress;
             $display("FAIL tb_qspi_stress: only %0d fetches and %0d data accesses served", n_i, n_d);
             errors = errors + 1;
         end
+        errors = errors + pins.errs;
+        $display("flash read commands: %0d", pmod.n_eb);
         $display("longest wait for ready: fetch %0d, data %0d clocks", max_i_wait, max_d_wait);
         if (errors == 0) $display("PASS tb_qspi_stress fetches=%0d data=%0d resets=%0d (%0d in start-up, %0d in step 4) (rd_late=%0d delay=%0d)",
                                   n_i, n_d, nrst, nrst_init, nrst_step4, rd_late, pmod.delay_ns);

@@ -188,6 +188,8 @@ test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-mul
 #                     has to undo
 # then tb_qspi_stress, with core-shaped request streams: plain, late and
 # wrapping, and twice more with resets dropped into the traffic.
+# Every run is made three times: streaming flash reads on (stream_en 1),
+# +NOSTREAM (0) and +STREAM_TOGGLE (flipped at random clocks).
 QSPI_LATE := +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12
 QSPI_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+PSRAM_WRAP" \
              "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI" "+FLASH_QPI +FLASH_CRM" "+FLASH_DCRM" \
@@ -197,16 +199,16 @@ test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
-	@cd $(BUILD_DIR) && for args in $(QSPI_RUNS); do \
-		$(VVP) tb_qspi $$args > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
+	@cd $(BUILD_DIR) && for sv in "" +NOSTREAM +STREAM_TOGGLE; do for args in $(QSPI_RUNS); do \
+		$(VVP) tb_qspi $$args $$sv > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
 		grep -q '^PASS' tb_qspi.log || exit 1; \
-	done
+	done; done
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_stress $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi_stress.v
-	@cd $(BUILD_DIR) && for args in $(QSPI_STRESS_RUNS); do \
-		$(VVP) tb_qspi_stress $$args > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
+	@cd $(BUILD_DIR) && for sv in "" +NOSTREAM +STREAM_TOGGLE; do for args in $(QSPI_STRESS_RUNS); do \
+		$(VVP) tb_qspi_stress $$args $$sv > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
-	done
+	done; done
 
 # The UART against spec-derived models: register/lane scoreboard, a
 # reference receiver on TX, an asynchronous reference transmitter on RX

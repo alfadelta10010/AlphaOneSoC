@@ -14,7 +14,15 @@
 //     must complete without selecting any chip -- qspi_ctrl's backstop, as
 //     0x38 is Enter QPI on the W25Q128JV-DTR -- and change nothing.
 //
-// Plusargs: +QSPI_DELAY=<ns> device + pad delay; +RD_LATE drives the
+//   * streaming flash reads (stream_en): sequential fetches and loads keep CS0
+//     low and send data clocks only (the model counts the read commands: one
+//     for a whole run); the 2-byte top-up; a non-sequential read; PSRAM reads
+//     and writes while a stream is open; a reset while a stream is open and
+//     at every point of a continuing read. Pin invariants every clock
+//     (qspi_pin_inv in the model).
+//
+// Plusargs: +NOSTREAM ties stream_en low, +STREAM_TOGGLE flips it at random
+// clocks; +QSPI_DELAY=<ns> device + pad delay; +RD_LATE drives the
 // controller's rd_late strap; and the model's +PSRAM_WRAP, +PSRAM_QPI,
 // +FLASH_CRM, +FLASH_QPI (see tb/qspi_pmod_model.v). With rd_late = 0 the
 // controller samples two clocks after the launching edge, so any delay below
@@ -61,9 +69,17 @@ module tb_qspi;
     wire [3:0] io_in = dev_oe ? dev_io : (io_oe ? io_out : 4'bxxxx);
     reg        rd_late;
     initial    rd_late = $test$plusargs("RD_LATE");
+    reg        stream_en;
+    reg        toggle;
+    initial begin
+        stream_en = !$test$plusargs("NOSTREAM");
+        toggle    = $test$plusargs("STREAM_TOGGLE");
+    end
+    integer    tseed = 7;
+    always @(negedge clk) if (toggle && ($random(tseed) & 15) == 0) stream_en <= ~stream_en;
 
     qspi_ctrl qspi (
-        .clk(clk), .rst(rst), .rd_late(rd_late),
+        .clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),
@@ -75,6 +91,10 @@ module tb_qspi;
         .host_sck(sck), .host_cs_n(cs_n), .host_ctl_oe(ctl_oe),
         .host_io(io_out), .host_oe(io_oe), .dev_io(dev_io), .dev_oe(dev_oe)
     );
+
+    qspi_pin_inv pins (.clk(clk), .ctl_oe(ctl_oe), .cs_n(cs_n), .sck(sck), .io_oe(io_oe),
+        .quiet(qspi.strm && qspi.state != 4'd1 && qspi.state != 4'd2 && qspi.state != 4'd3 &&
+               qspi.state != 4'd4 && qspi.state != 4'd8 && qspi.state != 4'd9));
 
     // mem_ctrl's side of the QSPI engine's request (tb/req_hold_check.v).
     req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1), .LATE(1)) chk_qspi (
@@ -139,17 +159,47 @@ module tb_qspi;
     integer    lane;
     time       t_d, t_i;
 
-    // Any chip select low while flash_wr is set is a failure.
+    // Any chip select falling while flash_wr is set is a failure (an open
+    // stream's CS0 is already low, and rises to close it).
     reg        flash_wr = 0;
-    always @(posedge clk)
-        if (flash_wr && ctl_oe && cs_n != 3'b111) begin
+    reg [2:0]  cs_prev = 3'b111;
+    always @(posedge clk) begin
+        cs_prev <= cs_n;
+        if (flash_wr && ctl_oe && (~cs_n & cs_prev) != 3'b000) begin
             $display("FAIL flash store selected a chip (cs_n=%b)", cs_n);
             errors   = errors + 1;
             flash_wr = 0;
         end
+    end
+
+    // Flash reads the model saw since `n0`; a run of sequential reads must be
+    // one command with streaming (stream_en steady at 1), one each without.
+    integer n0, nrun;
+    task cmds_since(input [8*24-1:0] what, input integer want_stream, input integer want_plain);
+        if (!toggle && (pmod.n_eb - n0) != (stream_en ? want_stream : want_plain)) begin
+            $display("FAIL %0s: %0d flash read commands, want %0d", what, pmod.n_eb - n0,
+                     stream_en ? want_stream : want_plain);
+            errors = errors + 1;
+        end
+    endtask
+
+    // A reset `k` clocks after a flash fetch is raised, with a stream open
+    // beforehand (a hit at the next halfword/word): every k from the start
+    // (S_IDLE, S_CHK) through the data phase and past it.
+    integer rk;
+    task reset_in_fetch(input [31:0] a, input integer k);
+        begin
+            @(negedge clk); i_req = 1; i_addr = a;
+            repeat (k) @(posedge clk);
+            @(negedge clk); rst = 1; i_req = 0;
+            repeat (2) @(negedge clk);
+            rst = 0;
+        end
+    endtask
 
     initial begin
         for (k = 0; k < 256; k = k + 1) pmod.flash[k] = k ^ 8'h5A;
+        for (k = 512; k < 2048; k = k + 1) pmod.flash[k] = (k * 37) ^ (k >> 3);
         repeat (3) @(posedge clk);
         rst = 0;
 
@@ -189,6 +239,52 @@ module tb_qspi;
         load(32'h2000_0000); load(32'h2000_0010);
         fetch(32'h2000_0020); fetch(32'h2000_0022);
 
+        // Streaming. Sequential flash fetches in 4-byte steps and 2-byte
+        // steps (the top-up, then the continue behind it), loads at the
+        // stream address, a jump, and PSRAM accesses that close the stream.
+        n0 = pmod.n_eb;
+        for (k = 0; k < 6; k = k + 1) fetch(32'h2000_0200 + 4 * k);
+        cmds_since("sequential fetches", 1, 6);
+        n0 = pmod.n_eb;
+        fetch(32'h2000_0240); fetch(32'h2000_0242); fetch(32'h2000_0244);   // two top-ups in a row
+        fetch(32'h2000_0248); fetch(32'h2000_024C); fetch(32'h2000_024E);   // continues, then a top-up
+        cmds_since("top-up run", 1, 6);
+        n0 = pmod.n_eb;
+        fetch(32'h2000_0280); load(32'h2000_0284); fetch(32'h2000_0288);    // loads at the stream address
+        load(32'h2000_028C); load(32'h2000_0290);
+        cmds_since("fetch and load run", 1, 5);
+        n0 = pmod.n_eb;
+        fetch(32'h2000_0300); fetch(32'h2000_0308);                         // a skip: close and reopen
+        fetch(32'h2000_02FC); fetch(32'h2000_0300);                         // back (then a continue)
+        fetch(32'h2000_02F0);                                               // well before p
+        cmds_since("non-sequential", 4, 5);
+        n0 = pmod.n_eb;
+        fetch(32'h2000_0340); load(32'h8000_0100); fetch(32'h2000_0344);    // PSRAM read closes the stream
+        store(32'h8000_0108, 4'b1111, 32'h0BAD_F00D); fetch(32'h2000_0348); // so does a PSRAM write
+        fetch(32'h8080_0100); fetch(32'h2000_034C);
+        check("write after stream", 32'h8000_0108, mem_word(32'h8000_0108), 32'h0BAD_F00D);
+        cmds_since("psram between", 4, 4);
+        n0 = pmod.n_eb;
+        fetch(32'h2000_0380); fetch(32'h2000_0384);
+        flash_wr = 1;
+        store(32'h2000_0388, 4'b1111, 32'hDEAD_BEEF);                       // a flash store closes it too
+        flash_wr = 0;
+        fetch(32'h2000_0388); fetch(32'h2000_038C);
+        cmds_since("flash store between", 2, 4);
+
+        // Reset with a stream open (the pins are released and the start-up
+        // sequence runs again), and at every clock of a continuing read.
+        for (rk = 0; rk < 14; rk = rk + 1) begin
+            fetch(32'h2000_0500); fetch(32'h2000_0504);                     // the stream is open
+            reset_in_fetch(32'h2000_0508, rk);                              // continue, cut at clock rk
+            fetch(32'h2000_0508); fetch(32'h2000_050C);
+        end
+        for (rk = 0; rk < 14; rk = rk + 1) begin
+            fetch(32'h2000_0500);
+            reset_in_fetch(32'h2000_0502, rk);                              // top-up, cut at clock rk
+            fetch(32'h2000_0504);
+        end
+
         // A store to flash. Flash 0x100 reads 0; PSRAM A 0x100, the same chip
         // address, holds the word stored above.
         flash_wr = 1;
@@ -219,6 +315,7 @@ module tb_qspi;
             errors = errors + 1;
         end
 
+        errors = errors + pins.errs;
         if (errors == 0) $display("PASS tb_qspi (QSPI_DELAY=%0d ns, rd_late=%0d)", pmod.delay_ns, rd_late);
         else             $display("FAIL tb_qspi: %0d errors", errors);
         $finish;

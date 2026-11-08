@@ -731,6 +731,7 @@ module qspi_pmod_model #(
                             fail("both PSRAMs selected for a read or write");
                         else if (cmd == 8'hEB || (cmd == 8'h38 && chip != 2'd0)) begin
                             if (chip != 2'd0) need_reset(psel);
+                            if (chip == 2'd0) n_eb = n_eb + 1;
                             phase = P_ADDR;
                         end
                         else
@@ -832,4 +833,46 @@ module qspi_pmod_model #(
     // Bus contention
     always @(*) if (host_oe && dev_oe) fail("host and device both driving IO");
 
+    // Flash read commands (0xEB) seen: a stream of sequential reads shows one.
+    integer n_eb = 0;
+
+endmodule
+
+// Pin invariants of the QSPI engine, checked on every clock (sampled just
+// before the edge, so the pins as the last edge left them):
+//   * CS0 is never low together with CS1 or CS2;
+//   * chip select is high for at least two clocks between two low periods;
+//   * `quiet` (the engine holds a stream open and is between transfers): CS0
+//     is low, SCK is low and the bus is released.
+module qspi_pin_inv (
+    input wire       clk,
+    input wire       ctl_oe,
+    input wire [2:0] cs_n,
+    input wire       sck,
+    input wire       io_oe,
+    input wire       quiet
+);
+    integer errs = 0;
+    integer hi_run = 0;
+    always @(posedge clk) begin
+        if (!ctl_oe) hi_run = 0;
+        else begin
+            if (!cs_n[0] && cs_n[2:1] != 2'b11) begin
+                $display("FAIL pins: CS0 low together with CS1/CS2 (cs_n=%b) t=%0t", cs_n, $time);
+                errs = errs + 1;
+            end
+            if (cs_n == 3'b111) hi_run = hi_run + 1;
+            else begin
+                if (hi_run > 0 && hi_run < 2) begin
+                    $display("FAIL pins: chip select high for %0d clock between transactions t=%0t", hi_run, $time);
+                    errs = errs + 1;
+                end
+                hi_run = 0;
+            end
+            if (quiet && (cs_n[0] !== 1'b0 || sck !== 1'b0 || io_oe !== 1'b0)) begin
+                $display("FAIL pins: open stream not quiet (cs_n=%b sck=%b io_oe=%b) t=%0t", cs_n, sck, io_oe, $time);
+                errs = errs + 1;
+            end
+        end
+    end
 endmodule
