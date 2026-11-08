@@ -351,7 +351,8 @@ Open (2026-10-31):
      margin at the 10 ns bench clock; STA is the setup check).
    * TT01 on the SDF-annotated netlist (24 runs, 9 corners): no observable
      difference at SDF gate level. The pins' glitch check is done.
-   * Formal: 39 harnesses in the default list, rc 0 (VPLAN 4.3, 2.1 below).
+   * Formal: 40 harnesses in the default list (39 in the final run at `7a66221`,
+     rc 0, plus core_inv_armed_cov since) (VPLAN 4.3, 2.1 below).
    * Seeds 1-8 on the 12 seeded benches, `tb_uart` and `tb_spi` over 1-32:
      all pass; SA-008 is tested (K1-K4 in `tb_syscon`).
    * Mutation re-score of the formal benches: VPLAN 4.6. Residuals, listed
@@ -382,8 +383,8 @@ does not make memory faster (section 0).
 
 ### 2.1 Formal coverage
 
-`tb/formal/run.sh` runs 39 harnesses by default (final run at `7a66221`,
-sby engine, rc 0, no FAILED or ERROR), through yosys's SAT solver or
+`tb/formal/run.sh` runs 40 harnesses by default (39 in the final run at
+`7a66221`, sby engine, rc 0, no FAILED or ERROR; core_inv_armed_cov added since), through yosys's SAT solver or
 SymbiYosys (bitwuzla and yices smtbmc, `abc pdr`; the OSS CAD Suite, yosys
 0.70, named by `FORMAL_BIN` on the sandbox). Verdict words as in
 `tb/VPLAN.md` 4.3: PROVED (k-induction at length 1, or pdr from a free
