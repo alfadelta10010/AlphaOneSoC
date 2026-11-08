@@ -404,11 +404,11 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
 
 ### 4.3 Formal harnesses (tb/formal)
 
-`tb/formal/run.sh` runs the default list of 37 harnesses (the 40 of the earlier runs minus core_inv, core_inv_cov
+`tb/formal/run.sh` runs the default list of 39 harnesses (the 37 before qspi_pins and qspi_pins_cov, WO-54b; the 40 of the earlier runs minus core_inv, core_inv_cov
 and core_inv_armed_cov, retired 2026-11-08 with FC02 and FC49). The 39 of the final run at
 7a66221 (sby engine, rc 0, no FAILED or ERROR; the sat leg gave the same 39 verdict words)
 included core_inv and core_inv_cov. The two legs differ only for the induction harnesses: pdr, sbmc and
-cover harnesses (about 25 of the 37) run on sby in both. Verdict
+cover harnesses (about 27 of the 39) run on sby in both. Verdict
 words, as the logs print them: PROVED (pdr) = sby `abc pdr`, unbounded; PROVED (sby
 k-induction, length 1) = the step starts from any state (a longer induction does not
 count); PROVED (structural) = a netlist walk; BOUNDED n = no counterexample within n
@@ -431,8 +431,9 @@ Every harness has a non-vacuity sidecar (`.nonvac`) and most have a cover (`_cov
 | spi_bb, spi_bb1 | bit-bang SPI | BOUNDED 96 each | NONVAC-OK | spi_cover COVERED 6/6 |
 | spi_f12 | SPI12 (F1/F2 structure) | PROVED (structural) | SPI12 | - |
 | bus | an IO target drops ready only while selected; decode; read mux | PROVED (sby k-induction, length 1) | SB01-03, uart and gpio ready seds | bus_cov 2/2 |
-| qspi_strap | `rd_late` strap sampled in reset and held (miter; `stream_en` one free input shared by both copies, the streaming flops strm, p, t_top, t_sel in the lemma) | PROVED (pdr, free init 25 `$anyinit`) | QS06 | qspi_strap_cov 1/1 |
-| mem_flash | flash never selected for a write; CS0 sees only EB/FF (`stream_en` a free input) | PROVED (pdr, 14 `$anyinit`) | QS01, QS02 | mem_flash_cov 4/4 |
+| qspi_strap | `rd_late` strap sampled in reset and held (miter; `stream_en` one free input shared by both copies, the streaming flops strm, p, t_top, t_sel in the lemma) | PROVED (pdr; SDR copy of the engine, ddr = 0, DDR flops t_ddr, t_cap, dq in the lemma, nib_p exported but not compared: WO-54b) | QS06 | qspi_strap_cov 1/1 |
+| qspi_pins | pin rules of the real engine, free inputs, ddr and ddr_cap free, through clk2fflogic (WO-54b): (a) CS0 never low with CS1/CS2; (b) CS all high >= 2 clocks between low periods, no direct chip-to-chip move; (c) idle with CS0 low (open stream): SCK low, io_oe 0; (d) no EDh command byte unless ddr was high | PROVED (pdr) | four seds: CS0+PSRAM select, 1-clock gap (MT2's), bus driven in an idle stream, EDh without DDR | qspi_pins_cov 4/4 |
+| mem_flash | flash never selected for a write; CS0 sees only EB/FF (`stream_en` a free input; SDR copy of the engine with ddr = 0, argument in tb/formal/mem.conf: clk2fflogic measured 15x/19x slower on mem_flash/mem_arb) | PROVED (pdr, 14 `$anyinit`) | QS01, QS02 | mem_flash_cov 4/4 |
 | mem_tcem | PSRAM tCEM, tCPH; flash CS0-low run with the engine not idle <= LF = 57/58 (an idle open stream has no bound, by design) | PROVED (pdr, 13 `$anyinit`) | two seds (MT1, MT2) | mem_tcem_cov 5/5 |
 | mem_arb | data first, split atomicity | PROVED (pdr, 12 `$anyinit`) | MC01-04, MC07, MC08 | mem_arb_cov 5/5 |
 | mem_ld | held data request is served within LD = 182/183 | BOUNDED 366 (>= S 126 + LD) | reduced-LD copy | opt-in (3/5 at 330; reached once at 480) |
@@ -625,7 +626,7 @@ and the survivors of every bench are listed in 4.2.
 
 ## 5. Not verified, and why
 
-- Formal: `tb/formal/run.sh` runs 37 harnesses by default, through yosys `sat`
+- Formal: `tb/formal/run.sh` runs 39 harnesses by default, through yosys `sat`
   (the default engine) or sby (`FORMAL_ENGINE=sby`: smtbmc with bitwuzla or
   yices, abc pdr, abc bmc3), with yosys 0.70 from the OSS CAD Suite named by
   `FORMAL_BIN`. PROVED means an unbounded result: k-induction at length 1, or
