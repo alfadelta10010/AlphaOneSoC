@@ -204,6 +204,8 @@ module alphaone_soc #(
         .rst      (rst_soc),
         .rd_late  (qspi_late),
         .stream_en(qspi_stream_en),
+        .ddr      (qspi_ddr),
+        .ddr_cap  (qspi_ddr_cap),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
@@ -267,8 +269,5 @@ module alphaone_soc #(
         .in   (gpio_in),
         .out  (gpio_out)
     );
-
-    // DDR and DDR_CAP have no qspi_ctrl port yet.
-    wire _unused = &{qspi_ddr, qspi_ddr_cap, 1'b0};
 
 endmodule

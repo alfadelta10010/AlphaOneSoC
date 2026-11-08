@@ -123,6 +123,43 @@
 // without this section. Reset clears `strm` with everything else; the start-up
 // sequence never streams.
 //
+// DDR. With `ddr` set (QSPI_CFG.DDR) every flash read is an EDh DTR read
+// (W25Q128JV-DTR 8.2.14, docs/qspi-memories.md; the wire protocol is derived
+// in DDR-CONTRACT):
+//
+//   flash read   0xED SPI   8 cmd + 4 addr/mode (6 + 2 nibbles, both SCK edges)
+//                           + 7 dummy + 1 per byte (SCK); 4 bytes = 23 SCK, or
+//                           6 bytes = 25 when addr[1] is set
+//
+// The command is sent as for EBh. The address goes out a nibble per SCK edge
+// with A1:A0 forced to 00 (the open is word aligned), then the mode byte FFh.
+// A read at addr[1] = 1 therefore reads 6 bytes, the shift register keeping the
+// last 4. The bus is released on the clock after the last mode nibble's
+// falling edge. Data nibbles come out at every SCK edge from the falling edge
+// of the last dummy cycle on, so the last falling edge of a read launches the
+// first nibble of the next one, which the flash holds on the pins while SCK
+// is paused (the held nibble). Streaming works as in SDR: a continuation of
+// 4 bytes is 4 SCK, a top-up of 2 bytes is 2 SCK; the held nibble is shifted
+// in on the clock that accepts a continuation (S_CHK), never before, since
+// `sr` still holds the last 4 bytes of the stream.
+//
+// Pins. SCK keeps its flop and pin path. A DDR transaction drives IO[3:0]
+// from four negedge flops (nib_n), loaded from four posedge flops (nib_p,
+// loaded one clock earlier), so every host nibble changes at a falling clk
+// edge, half a clock from the SCK edges on either side of it. The pin select
+// (t_ddr) is constant through a transaction: it changes only on the clock
+// that takes the bus.
+//
+// Capture. A nibble launched by an SCK edge E (a rising clk edge) is
+// captured c = ddr_cap + 1 half clocks later: even c at the rising clk edge
+// c/2 clocks after E straight from io_in, odd c in four negedge flops (cap_n)
+// c/2 clocks after E and taken at the following rising edge. dq[3:0] is the
+// launch mark pipeline (dq[k-1]: the launch k clocks ago); `sr` shifts when
+// the mark at stage m1 = (ddr_cap + 2) / 2 is set. `done` comes after the
+// last capture (S_TAIL waits for the marks still in flight). ddr and ddr_cap
+// are latched per transaction; a change while a stream is open closes it.
+// Writes, PSRAM traffic and the start-up sequence are always SDR.
+//
 // A start-up window ends with chip select rising while SCK is still high,
 // and SCK falls a clock later. A flash in continuous-read mode starts
 // driving data on the falling edge after its address, mode and dummy clocks;
@@ -157,6 +194,8 @@ module qspi_ctrl (
     input  wire        rst,
     input  wire        rd_late,    // strap, sampled during reset: read data one clock later
     input  wire        stream_en,  // 1 = flash reads may keep chip select low for the next one
+    input  wire        ddr,        // 1 = flash reads are EDh DTR reads (QSPI_CFG.DDR)
+    input  wire [2:0]  ddr_cap,    // DDR capture point: half clocks after the launching edge, minus 1
     // Transaction request, held by the requester until done
     input  wire        start,
     input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2); taken at the start
@@ -171,7 +210,7 @@ module qspi_ctrl (
     output reg         sck,
     output reg  [2:0]  cs_n,
     output reg         ctl_oe,     // output enable for SCK and the chip selects
-    output reg  [3:0]  io_out,
+    output wire [3:0]  io_out,
     output reg         io_oe,      // output enable for IO[3:0]
     input  wire [3:0]  io_in
 );
@@ -201,6 +240,12 @@ module qspi_ctrl (
                         // address's bits 23:1; no reset: read only while strm)
     reg        t_top;   // this transfer is a 2-byte top-up of the stream
     reg [2:0]  t_sel;   // the chip selects of the request (for the close path)
+    reg        t_ddr;   // this transaction (or the open stream) is an EDh DTR read
+    reg [2:0]  t_cap;   // ddr_cap, as latched with it
+    reg [3:0]  nib_p;   // DDR host nibble, one clock ahead of the pins
+    reg [3:0]  nib_n;   // ...on the pins: changes at a falling clk edge
+    reg [3:0]  cap_n;   // DDR odd-c capture, at a falling clk edge
+    reg [3:0]  dq;      // DDR launch marks
 
     assign idle  = (state == S_IDLE) && !init;
     assign done  = (state == S_END)  && !init;
@@ -230,7 +275,7 @@ module qspi_ctrl (
                 default: cmd = 8'hFF;
             endcase
         else
-            cmd = t_we ? 8'h38 : psram ? 8'h0B : 8'hEB;
+            cmd = t_we ? 8'h38 : psram ? 8'h0B : t_ddr ? 8'hED : 8'hEB;
     end
 
     // The data phase counts cnt down from 7 and stops at 8 - 2*nbytes. The
@@ -240,21 +285,45 @@ module qspi_ctrl (
     wire [2:0] data_last = t_top ? 3'd4 : {~nbytes_m1, 1'b0};
     wire [2:0] wnib      = {~cnt[2:1], cnt[0]};
 
+    reg [3:0] io_sdr;
     always @(*) begin
         case (state)
             // QPI form: high nibble first. SPI form: MSB first on IO0, with
             // IO1-IO3 held high (on a flash with QE = 0 they are /WP, /HOLD).
-            S_CMD:   io_out = qpi_form ? (cnt[0] ? cmd[7:4] : cmd[3:0])
+            S_CMD:   io_sdr = qpi_form ? (cnt[0] ? cmd[7:4] : cmd[3:0])
                                        : {3'b111, cmd[cnt]};
-            S_ADDR:  io_out = addr[{cnt, 2'b00} +: 4];
-            S_DATA:  io_out = wdata[{wnib, 2'b00} +: 4];
-            default: io_out = 4'b1111;       // mode byte 0xFF, and idle
+            S_ADDR:  io_sdr = addr[{cnt, 2'b00} +: 4];
+            S_DATA:  io_sdr = wdata[{wnib, 2'b00} +: 4];
+            default: io_sdr = 4'b1111;       // mode byte 0xFF, and idle
         endcase
+    end
+    assign io_out = t_ddr ? nib_n : io_sdr;
+
+    // DDR host nibble for the pins from the next falling clk edge on, i.e. what
+    // the next SCK edge samples. Command: IO0 bits as in SDR, A23-20 on the
+    // last command clock; then addr[19:16] ... addr[3:0] with A1:A0 = 00, then
+    // the mode byte FFh.
+    wire [3:0] aidx = {cnt, 1'b0} - 4'd2 - {3'b0, sck};
+    reg  [3:0] nib_next;
+    always @(*) begin
+        case (state)
+            S_CMD:   nib_next = (sck && cnt == 3'd0) ? addr[23:20]
+                                                     : {3'b111, cmd[sck ? cnt - 3'd1 : cnt]};
+            S_ADDR:  nib_next = aidx[3] ? 4'hF
+                              : aidx == 4'd0 ? {addr[3:2], 2'b00}
+                              : addr[{aidx[2:0], 2'b00} +: 4];
+            default: nib_next = 4'hF;
+        endcase
+    end
+    always @(posedge clk) nib_p <= nib_next;
+    always @(negedge clk) begin
+        nib_n <= nib_p;
+        cap_n <= io_in;
     end
 
     // Where a read nibble is captured (see Timing above). Late: on each
     // rising-edge clock of the data phase but the first, and in S_TAIL.
-    wire sample = !t_we && (late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
+    wire sample = !t_we && !t_ddr && (late ? ((state == S_DATA && !sck && cnt != 3'd7) || state == S_TAIL)
                                :  (state == S_DATA &&  sck));
 
     // Chip selects for a transaction starting now. A write never selects
@@ -268,6 +337,20 @@ module qspi_ctrl (
     wire hit_cont = (a_hw == p);
     wire hit_top  = (a_hw == p - 23'd1);
 
+    // DDR: the dq stage that shifts a captured nibble in, the marks still in
+    // flight (stages before it), a mode change of an open stream, the held
+    // nibble taken at a continuation, and a launch: every SCK edge of the data
+    // phase but the last falling one (it launches the held nibble), and the
+    // falling edge that ends the dummies.
+    wire [2:0] m1        = (t_cap + 3'd2) >> 1;
+    wire       dq_hit    = dq[m1 - 3'd1];
+    wire       dq_pend   = |(dq & ((4'd1 << (m1 - 3'd1)) - 4'd1));
+    wire       mode_chg  = (t_ddr != ddr) || (t_ddr && t_cap != ddr_cap);
+    wire       take_cont = (state == S_CHK) && t_ddr && streamable && !mode_chg && (hit_cont || hit_top);
+    wire       ddr_sh    = t_ddr && !t_we && dq_hit;
+    wire       launch    = t_ddr && ((state == S_DATA && !(sck && cnt == 3'd0)) ||
+                                     (state == S_DUMMY && sck && cnt == 3'd0));
+
     always @(posedge clk) begin
         if (rst) begin
             state  <= S_IDLE;
@@ -279,12 +362,17 @@ module qspi_ctrl (
             init   <= 1'b1;
             step   <= 3'd0;
             late   <= rd_late;
+            t_ddr  <= 1'b0;
+            dq     <= 4'b0;
             again  <= 1'b0;
             strm   <= 1'b0;
         end else begin
             ctl_oe <= 1'b1;
-            if (sample)
+            dq <= {dq[2:0], launch};
+            if (sample || take_cont)
                 sr <= {sr[27:0], io_in};
+            else if (ddr_sh)
+                sr <= {sr[27:0], t_cap[0] ? io_in : cap_n};
             case (state)
                 // ctl_oe: the pins have been driven idle for a cycle. The
                 // start-up sequence waits 8 clocks after reset first (cnt
@@ -298,6 +386,8 @@ module qspi_ctrl (
                     t_psram <= start_psram;
                     t_sel   <= sel_now;
                     t_top   <= 1'b0;
+                    t_ddr   <= ddr && !we && cs_sel == 2'd0 && !init;
+                    t_cap   <= ddr_cap;
                 end else if (!init && strm && start) begin
                     // A request while a stream is open: only cs_sel and we
                     // are valid. Anything but a flash read closes it at once.
@@ -312,7 +402,7 @@ module qspi_ctrl (
                         strm  <= 1'b0;
                     end else
                         state <= S_CHK;
-                end else if (!init && strm && !stream_en) begin
+                end else if (!init && strm && (!stream_en || mode_chg)) begin
                     state <= S_CLOSE;       // nobody waiting: just close
                     cnt   <= 3'd0;
                     cs_n  <= 3'b111;
@@ -320,9 +410,9 @@ module qspi_ctrl (
                 end else if (init)
                     cnt <= cnt + 3'd1;
                 S_CHK: begin
-                    if (streamable && (hit_cont || hit_top)) begin
+                    if (streamable && !mode_chg && (hit_cont || hit_top)) begin
                         state <= S_DATA;
-                        cnt   <= 3'd7;
+                        cnt   <= t_ddr ? (hit_cont ? 3'd3 : 3'd1) : 3'd7;
                         t_top <= !hit_cont;
                     end else begin
                         state <= S_CLOSE;
@@ -337,8 +427,10 @@ module qspi_ctrl (
                     cnt   <= t_psram ? 3'd1 : 3'd7;
                     cs_n  <= ~t_sel;
                     io_oe <= 1'b1;
+                    t_ddr <= ddr && !t_we && !t_psram;
+                    t_cap <= ddr_cap;
                 end
-                S_TAIL: begin
+                S_TAIL: if (!t_ddr || !dq_pend) begin
                     state <= S_END;
                     if (!strm)
                         cs_n <= 3'b111;
@@ -356,10 +448,14 @@ module qspi_ctrl (
                     // SCK toggles every clock of an active phase; everything
                     // else happens on the clock that drives it low.
                     sck <= ~sck;
+                    // DDR: the bus is released the clock after the last mode
+                    // nibble's falling edge (the flash holds it 2 ns past it)
+                    if (state == S_DUMMY && t_ddr && cnt == 3'd6 && !sck)
+                        io_oe <= 1'b0;
                     if (sck) begin
-                        if (state == S_DUMMY && cnt == 3'd4)
+                        if (state == S_DUMMY && cnt == 3'd4 && !t_ddr)
                             io_oe <= 1'b0;      // mode byte done: release the bus
-                        if (state == S_DATA ? (cnt == data_last) : (cnt == 3'd0)) begin
+                        if (state == S_DATA ? (cnt == (t_ddr ? 3'd0 : data_last)) : (cnt == 3'd0)) begin
                             case (state)
                                 S_CMD: if (init && step == 3'd4 && !again) begin
                                     cnt   <= 3'd7;      // 8 more clocks of 1111
@@ -372,23 +468,26 @@ module qspi_ctrl (
                                     sck   <= 1'b1;      // SCK falls in S_END
                                 end else begin
                                     state <= S_ADDR;
-                                    cnt   <= 3'd5;
+                                    cnt   <= t_ddr ? 3'd3 : 3'd5;
                                 end
                                 // Reads: the PSRAM's 4 wait cycles are all
                                 // released; the flash's 6 start with its
                                 // driven mode byte (released at cnt 4 below).
                                 S_ADDR: begin
                                     state <= t_we ? S_DATA : S_DUMMY;
-                                    cnt   <= t_we ? 3'd7 : psram ? 3'd3 : 3'd5;
+                                    cnt   <= t_we ? 3'd7 : psram ? 3'd3 : t_ddr ? 3'd6 : 3'd5;
                                     if (!t_we && psram)
                                         io_oe <= 1'b0;
                                 end
-                                S_DUMMY: begin state <= S_DATA; cnt <= 3'd7; end
+                                S_DUMMY: begin
+                                    state <= S_DATA;
+                                    cnt   <= t_ddr ? (addr[1] ? 3'd5 : 3'd3) : 3'd7;
+                                end
                                 default: begin  // S_DATA
                                     io_oe <= 1'b0;
                                     strm  <= streamable;    // leave the stream open
                                     p     <= a_hw + 23'd2;
-                                    if (late && !t_we)
+                                    if (t_ddr ? dq_pend : (late && !t_we))
                                         state <= S_TAIL;
                                     else begin
                                         state <= S_END;
