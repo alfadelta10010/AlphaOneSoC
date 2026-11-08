@@ -338,7 +338,10 @@ test-soc-spi: $(BUILD_DIR)
 # and the watchdog. Each run is "<program> [plusargs]"; +TEST= and +FLASH_FILE=
 # are added here. A run fails on a FAIL, ERROR or TIMEOUT line or a missing
 # PASS; all runs go first.
-SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
+# ddr_flash@<n> is tests/soc/ddr_flash.S built for DDR_CAP point n (-DDDR_PT=n), run at device
+# delays that point reads at the bench's 20 ns clock (window [delay, 20 + hold), point n captures
+# at 10 * (n + 1) ns).
+SYSCON_SOC_RUNS := "ddr_flash@0" "ddr_flash@1 +QSPI_DELAY=12 +QSPI_HOLD=6" "ddr_flash@2 +QSPI_DELAY=22 +QSPI_HOLD=12" "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
@@ -350,6 +353,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
 		set -- $$run; t=$$1; shift; n=$$((n+1)); \
 		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
+		case $$t in *@*) fl="$$fl -DDDR_PT=$${t#*@}"; t=$${t%@*};; esac; \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \

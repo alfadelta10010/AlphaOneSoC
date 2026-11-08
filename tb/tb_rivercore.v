@@ -96,6 +96,13 @@ module tb_rivercore;
     // model) sets the device + pad delay it has to cover.
     reg rd_late;
     initial rd_late = $test$plusargs("RD_LATE");
+    // +SOC_DDR=<n>: QSPI_CFG forced to DDR on at capture point n (the syscon
+    // register is not written), for the DDR run of tests/directed/run.sh soc.
+    integer soc_ddr_cap;
+    initial if ($value$plusargs("SOC_DDR=%d", soc_ddr_cap)) begin
+        force soc.qspi_ddr     = 1'b1;
+        force soc.qspi_ddr_cap = soc_ddr_cap[2:0];
+    end
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
     wire [3:0] qspi_io_out, pmod_io;

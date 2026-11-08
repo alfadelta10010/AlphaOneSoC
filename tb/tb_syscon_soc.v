@@ -548,6 +548,8 @@ module tb_syscon_soc;
             exp_events = 1; exp_prst = 1; min_loads = 7;
         end else if (test == "syscon_pinreset") begin
             exp_fin_reboots = 2; exp_wdt_reboots = 1; exp_events = 3; exp_prst = 2; min_loads = 9;
+        end else if (test == "ddr_flash") begin
+            min_loads = 1;      // QSPI_CFG at reset; the program checks the DDR reads itself
         end else begin
             fail($sformatf("unknown +TEST=%0s", test));
         end
