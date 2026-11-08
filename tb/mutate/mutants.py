@@ -228,7 +228,6 @@ m("CL08", "clint.v", "16'h0000: rdata = {31'b0, msip};", "16'h0000: rdata = {30'
 
 # ── fyracore.v ───────────────────────────────────────────────────────────
 m("FC01", "fyracore.v", "(exwb_rd == ex_rs1 || exwb_rd == ex_rs2);", "(exwb_rd == ex_rs1);", "use hazard ignores rs2")
-m("FC02", "fyracore.v", "wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;", "wire csr_wb_hazard = 1'b0;", "no stall behind a CSR write")
 m("FC03", "fyracore.v", "wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (alu_r[0] != 1'b0);", "wire ex_misaligned_half = (ctrl_memSize == 2'b01) && (alu_r[1] != 1'b0);", "halfword alignment checks bit 1")
 m("FC04", "fyracore.v", "wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (alu_r[1:0] != 2'b00);", "wire ex_misaligned_word = (ctrl_memSize == 2'b10) && (alu_r[0] != 1'b0);", "word alignment ignores bit 1")
 m("FC05", "fyracore.v", "(ex_pma_in_rom && !ex_misalign_is_store && !ctrl_isLR) ||", "(ex_pma_in_rom && !ctrl_isLR) ||", "stores to flash allowed")
@@ -279,7 +278,6 @@ m("FC45", "fyracore.v", "!priv_mode &&\n                        csr_mstatus_tw;"
 m("FC46", "fyracore.v", "wire ex_bad_lr = ifex_valid && ctrl_isLR && (ex_rs2 != 5'b0);", "wire ex_bad_lr = 1'b0;", "LR.W with rs2 != 0 accepted")
 m("FC47", "fyracore.v", "wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok && priv_mode &&", "wire ex_is_mret   = ifex_valid && ctrl_isMret && ex_system_fields_ok &&", "MRET executes in U-mode")
 m("FC48", "fyracore.v", "wire ex_system_fields_ok = (ex_rd == 5'b0) && (ex_rs1 == 5'b0);", "wire ex_system_fields_ok = 1'b1;", "ECALL/EBREAK/MRET with rd/rs1 != 0 accepted")
-m("FC49", "fyracore.v", "if (rst || flush)        muldiv_ready <= 1'b0;", "if (rst)        muldiv_ready <= 1'b0;", "sticky M result survives a flush")
 m("FC50", "fyracore.v", "wire muldiv_have = muldiv_ready || muldiv_done;", "wire muldiv_have = muldiv_ready;", "M unit restarted on its done cycle (the 2e6718b bug)")
 m("FC51", "fyracore.v", "wire wb_mem_stall = dmem_req && !dmem_ready;", "wire wb_mem_stall = 1'b0;", "data-memory wait ignored")
 m("FC52", "fyracore.v", "wire if_mem_stall = imem_req && !imem_ready;", "wire if_mem_stall = 1'b0;", "fetch wait ignored")

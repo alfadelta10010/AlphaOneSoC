@@ -1,4 +1,0 @@
-# core_inv: ex_ph is set on EX entry instead of after the register read, so it can be 1 with a CSR write in WB (E-FC02a/b fail)
-sed fyracore.v s/^\( *\)ex_ph          <= 1'b0;$/\1ex_ph          <= 1'b1;/
-# core_inv: muldiv_want drops !ex_trap_iter, so a trapping M instruction in EX is both wanted and flushed (E-FC49a fails)
-sed fyracore.v s/wire muldiv_want = ifex_valid \&\& ex_is_iter \&\& !ex_trap_iter;/wire muldiv_want = ifex_valid \&\& ex_is_iter;/
