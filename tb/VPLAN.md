@@ -385,8 +385,8 @@ touches behaviour nothing specifies (section 5).
 | SE04 | equivalent in the core | SRLI/SRAI immediate sign-extended: only shamt, imm[4:0], is used |
 | SE05 | equivalent in the core | the CSR-immediate zimm taken from the wrong field: fyracore takes zimm from rs1 |
 | MD07 | equivalent | PROVED (formal md07, sat and sby k-induction, length 1): in the divide loop acc < m when m != 0 (I2, entered with acc = 0 through NEGA/NEGB, I1), so sum[33] == sum[32], and with m == 0 both arms are equal (E1); the arm-swap copy fails at depth 48. Cross-check: md07_miter (the original muldiv against MD07) is opt-in and not run to a verdict (a bounded run reached step 29 of 40 in 76 min); its cover (1/1) and the MD06 miter non-vacuity run (counterexample within 40) hold |
-| FC02 | equivalent (argument + BOUNDED 80) | csr_wb_hazard implies !ex_ph and another stall_nofetch term (E-FC02a/b), so stall_nofetch never changes when the term is dropped; checked in every state within 80 steps of reset (formal core_inv, bmc), not proved: the length-1 induction does not close (the muldiv unit's latched kind versus the EX instruction is a necessary invariant but not a sufficient one). A dead stall term, removable (an area decision) |
-| FC49 | equivalent (argument + BOUNDED 80) | !(flush && muldiv_want) and ready/busy/done imply muldiv_want (E-FC49a/b), so the next muldiv_ready is 0 on any flush cycle without the flush terms (E-FC49c); the 80 steps include a finished M operation (an armed cover, `core_inv_armed_cov` (in the default list, COVERED 5/5), reaches the done of a real M operation at step 38 after reset, 38 + 12 <= 80; the default `core_inv_cov` done point is also met by a short shift, so it does not show this); not proved (as FC02). Non-vacuity: copies that reset ex_ph or drop muldiv_want both give a counterexample within 80 |
+| FC02 | removed from the RTL (2026-11-08, qspi-stream branch) | the `csr_wb_hazard` stall term was equivalent (it implied EX was already stalled by the 3-cycle EX; the former core_inv harness, bounded 80), so it was deleted for area. If EX ever gets shorter than 3 cycles the stall must return (Zicsr) |
+| FC49 | removed from the RTL (2026-11-08, qspi-stream branch) | the three `flush` gates on the M handshake were equivalent (flush and muldiv_want are never both 1; the former core_inv harness, bounded 80), so they were deleted for area |
 | QS06 | killed by qspi_strap at the unit contract; equivalent in the SoC | the `rd_late` strap not held after reset. It survives every other bench; qspi_strap (PROVED, pdr) fails on it with a counterexample. In the SoC syscon holds the strap, so the SoC cannot see it |
 | FR14 | equivalent (argument) | FENCE.I and a PMP write in the flush term never meet a set if_kv: if_kv is set only behind a compressed instruction, and no compressed encoding decodes as FENCE.I or a CSR write (illegal ones become NOPs). Consistent with every bench run: it survives core_hold, core_req, core_inv, core_df and the directed core suite; formal core_fetch finds no counterexample (its induction does not close at length 12 and the bounded rerun gave no verdict, scored ERROR, not a kill) |
 | FC27 | equivalent | argument: garbage rd writes during a load wait are unobservable, EX is held by use_hazard until the final write, and after a reset x1-x31 are unspecified (Priv 3.4) |
@@ -404,10 +404,11 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
 
 ### 4.3 Formal harnesses (tb/formal)
 
-`tb/formal/run.sh` runs the default list of 40 harnesses: the 39 of the final run at
-7a66221 (sby engine, rc 0, no FAILED or ERROR; the sat leg of the same tree gave the same
-39 verdict words) plus core_inv_armed_cov, added afterwards (COVERED 5/5). The two legs differ only for the induction harnesses: pdr, sbmc and
-cover harnesses (about 27 of the 40) run on sby in both. Verdict
+`tb/formal/run.sh` runs the default list of 37 harnesses (the 40 of the earlier runs minus core_inv, core_inv_cov
+and core_inv_armed_cov, retired 2026-11-08 with FC02 and FC49). The 39 of the final run at
+7a66221 (sby engine, rc 0, no FAILED or ERROR; the sat leg gave the same 39 verdict words)
+included core_inv and core_inv_cov. The two legs differ only for the induction harnesses: pdr, sbmc and
+cover harnesses (about 25 of the 37) run on sby in both. Verdict
 words, as the logs print them: PROVED (pdr) = sby `abc pdr`, unbounded; PROVED (sby
 k-induction, length 1) = the step starts from any state (a longer induction does not
 count); PROVED (structural) = a netlist walk; BOUNDED n = no counterexample within n
@@ -437,7 +438,6 @@ Every harness has a non-vacuity sidecar (`.nonvac`) and most have a cover (`_cov
 | mem_ld | held data request is served within LD = 182/183 | BOUNDED 366 (>= S 126 + LD) | reduced-LD copy | opt-in (3/5 at 330; reached once at 480) |
 | core_df | data handshakes per held fetch <= DF_N = 4 (mem's assumption M-A4) | BOUNDED 32 | DF_N = 1, 2, 3 FAIL | core_df_cov 2/2 |
 | md07 | MD07 equivalent (4.2) | PROVED (sby k-induction, length 1) | arm-swap copy | md07_cov 3/3 |
-| core_inv | FC02, FC49 equivalent (4.2) | BOUNDED 80 | ex_ph-reset and muldiv_want copies | core_inv_cov 4/4, core_inv_armed_cov 5/5 (a real M-op done at step 38) |
 
 The mem_* and qspi_strap verdicts hold under `tb/formal/mem_props.sv`'s environment assumptions, so "PROVED" there is conditional on how each is discharged: M-A1 (a request not yet answered is held) by core_hold, PROVED; M-A2 (the PMA window and alignment of requests) by core_req, BOUNDED 150 only; M-A3 (`rd_late` stable while out of reset) by syscon holding the strap, checked in simulation only (tb_syscon, tb_qspi); M-A4 (at most DF_N = 4 data handshakes per fetch, mem_li only) by core_df, BOUNDED 32.
 
@@ -450,9 +450,8 @@ Residuals:
   measured by simulation (3000 runs, both `rd_late`), not proved. A proof needs a depth
   of at least S + LI = 582 and the engines did not close it. It is also conditional on
   DF_N <= 4, which core_df bounds to 32 steps only.
-- mem_ld, core_req, spi_bb, spi_bb1, core_df, core_inv: bounded, not proved. md07_miter is
+- mem_ld, core_req, spi_bb, spi_bb1, core_df: bounded, not proved. md07_miter is
   an opt-in cross-check of md07 only.
-- FC02 and FC49: equivalence by argument plus a bounded check (4.2).
 - The core can make up to 4 data handshakes between fetches (two back-to-back AMOs);
   `docs/soc-architecture.md` previously said one (finding F-8, doc fixed), and core_df is
   the check that bounds it.
@@ -625,14 +624,14 @@ and the survivors of every bench are listed in 4.2.
 
 ## 5. Not verified, and why
 
-- Formal: `tb/formal/run.sh` runs 40 harnesses by default, through yosys `sat`
+- Formal: `tb/formal/run.sh` runs 37 harnesses by default, through yosys `sat`
   (the default engine) or sby (`FORMAL_ENGINE=sby`: smtbmc with bitwuzla or
   yices, abc pdr, abc bmc3), with yosys 0.70 from the OSS CAD Suite named by
   `FORMAL_BIN`. PROVED means an unbounded result: k-induction at length 1, or
   pdr from a free power-up state. BOUNDED n means no counterexample within n
   steps of reset. riscv-formal results are BOUNDED, never PROVED (4.5).
   BOUNDED harnesses: core_req (150), spi_bb and spi_bb1 (96), core_df (32),
-  core_inv (80), mem_ld (366). csr's outcome: PROVED by pdr (it was
+  mem_ld (366). csr's outcome: PROVED by pdr (it was
   bounded 24 before). core_df is a bounded discharge of mem's assumption
   M-A4 (at most DF_N = 4 data handshakes per held fetch), so the fetch-latency
   bound LI is "measured by simulation (442/456), conditional on DF_N <= 4,
