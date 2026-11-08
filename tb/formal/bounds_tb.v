@@ -22,7 +22,8 @@ module bounds_tb;
         .q_idle(q_idle), .q_done(q_done), .q_rdata(q_rdata));
     qspi_ctrl q (.clk(clk), .rst(rst), .rd_late(rd_late), .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata), .idle(q_idle), .done(q_done), .rdata(q_rdata),
-        .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in), .stream_en(stream_en));
+        .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in), .stream_en(stream_en),
+        .ddr(1'b0), .ddr_cap(3'd0));   // DDR latency is measured by the soc benches (WO-51), not here
     always #5 clk = ~clk;
     integer seed, cyc, pl, fl, dw, iw, nd, sc, seen_idle;
     integer mLP[0:1], mLF[0:1], mS[0:1], mLD[0:1], mLI[0:1];
