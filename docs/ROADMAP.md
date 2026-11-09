@@ -364,8 +364,9 @@ Open (2026-10-31):
      margin at the 10 ns bench clock; STA is the setup check).
    * TT01 on the SDF-annotated netlist (24 runs, 9 corners): no observable
      difference at SDF gate level. The pins' glitch check is done.
-   * Formal: 40 harnesses in the default list (39 in the final run at `7a66221`,
-     rc 0, plus core_inv_armed_cov since) (VPLAN 4.3, 2.1 below).
+   * Formal: 40 harnesses in the default list at the time (39 in the final run at
+     `7a66221`, rc 0, plus core_inv_armed_cov since); 39 now, after core_inv and
+     its covers were retired with FC02/FC49 and qspi_pins came in (VPLAN 4.3, 2.1 below).
    * Seeds 1-8 on the 12 seeded benches, `tb_uart` and `tb_spi` over 1-32:
      all pass; SA-008 is tested (K1-K4 in `tb_syscon`).
    * Mutation re-score of the formal benches: VPLAN 4.6. Residuals, listed
@@ -396,8 +397,9 @@ at about 61 MHz.
 
 ### 2.1 Formal coverage
 
-`tb/formal/run.sh` runs 40 harnesses by default (39 in the final run at
-`7a66221`, sby engine, rc 0, no FAILED or ERROR; core_inv_armed_cov added since), through yosys's SAT solver or
+`tb/formal/run.sh` runs 39 harnesses by default (2026-11-09: the 40 of main less
+core_inv, core_inv_cov and core_inv_armed_cov, retired with FC02/FC49, plus qspi_pins
+and qspi_pins_cov; VPLAN 4.3), through yosys's SAT solver or
 SymbiYosys (bitwuzla and yices smtbmc, `abc pdr`; the OSS CAD Suite, yosys
 0.70, named by `FORMAL_BIN` on the sandbox). Verdict words as in
 `tb/VPLAN.md` 4.3: PROVED (k-induction at length 1, or pdr from a free
@@ -412,7 +414,6 @@ results are BOUNDED only.
 | `core_req` | BOUNDED 150 | Every request is legal: alignment, mapped window, byte lanes, replicated store data, no store to flash |
 | `core_fetch` | PROVED (k-induction, length 1) | Fetch word reuse against a symbolic code memory |
 | `core_df` | BOUNDED 32 | At most 4 data handshakes per held fetch (the assumption the memory-latency bound rests on) |
-| `core_inv` | BOUNDED 80 | FC02 and FC49 equivalence checks (argument plus bounded) |
 | `syscon_comb` | PROVED (pdr) | No combinational path from the bus to `rst_soc` |
 | `syscon_gate` | PROVED (k-induction, length 1) | No watchdog fire while the SoC is held in reset |
 | `soc_rst_sync` | PROVED (structural) | `rst_soc` reaches no asynchronous reset, set or load |
@@ -422,6 +423,7 @@ results are BOUNDED only.
 | `spi_f12` | PROVED (structural) | GPIO's pin outputs come straight from flops (finding F12) |
 | `bus` | PROVED (k-induction, length 1) | An IO target drops ready only while selected; decode; read mux |
 | `qspi_strap` | PROVED (pdr) | The `rd_late` strap is held after reset |
+| `qspi_pins` | PROVED (pdr) | The real engine, DDR free (clk2fflogic): CS0 never low with CS1/CS2, CS high >= 2 clocks between selects, an idle open stream has SCK low and the pins released, no EDh command without DDR |
 | `mem_flash` | PROVED (pdr) | Flash never selected for a write; CS0 sees only EB/FF |
 | `mem_tcem` | PROVED (pdr) | PSRAM tCEM and tCPH |
 | `mem_arb` | PROVED (pdr) | Data first, split atomicity |
@@ -438,10 +440,12 @@ memory waits over 2 cycles, data-memory consistency).
 
 Residuals, none a defect:
 
-* `mem_li`: the worst fetch latency (442/456 clocks) is measured by
-  simulation, not proved, and rests on the bounded `core_df`. Opt-in.
-* FC02 and FC49 are equivalent by argument plus BOUNDED 80 (`core_inv`); the
-  length-1 induction does not close. MD07 is PROVED.
+* `mem_li`: the worst fetch latency (449/482 clocks with streaming on,
+  442/456 off; `rd_late` 0/1) is measured by simulation, not proved, and rests
+  on the bounded `core_df`. Opt-in.
+* MD07 is PROVED. FC02 and FC49 are no longer residuals: the logic was removed
+  (2026-11-08) and `core_inv` retired with it; `tb_rivercore` still checks the
+  two invariants on every cycle.
 * `md07_miter`, the cross-check of `md07`, is opt-in and was not run to a
   verdict.
 * The RVFI not-covered list above.
@@ -466,7 +470,8 @@ bounded riscv-formal checks and simulation, not proofs.
 4. ~~**SoC properties:**~~ done: `bus`, `mem_arb`, `mem_flash`, `mem_tcem`,
    `qspi_strap` PROVED; `mem_ld` BOUNDED. Residual: `mem_li` (2.1).
 5. ~~Turn the MD07/FC02/FC49 equivalence proofs into `run.sh` harnesses~~:
-   done (`md07`, `core_inv`); FC02 and FC49 stay at argument plus BOUNDED 80.
+   done (`md07`, `core_inv`); FC02 and FC49 have since been removed from the RTL
+   (2026-11-08), and `core_inv` with them.
 
 ### 2.3 Other verification still owed
 
