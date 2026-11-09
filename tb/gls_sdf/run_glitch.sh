@@ -20,6 +20,7 @@ for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; esac; done
 R=$(cd "$(dirname "$0")/../.." && pwd); G=$R/tb/gls_sdf
 VARIANTS=${VARIANTS:-"D D2 N2 N1"}; JOBS=${JOBS:-1}
 PDKV=8afc8346a57fe1ab7934ba5a6056ea8b43078e71
+# qsd-84c878f: the harden of d75cb5c, named by that commit's hash before a history reorder (same RTL)
 NLDIR=/home/mempool/tt/projects/qsd-84c878f/runs/wokwi/final
 NL=$NLDIR/pnl/tt_um_alfadelta10010_alphaone_soc.pnl.v
 NLMD5=5b2270d55facb1be258577bbae2f6d6e

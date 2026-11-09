@@ -29,7 +29,8 @@ been synthesised; nothing here is measured unless it cites a run.
 The limits every item is judged against:
 
 * **Area.** The last harden (2026-11-09, `qspi-stream_alfadelta10010` at
-  `84c878f`: streaming, switchable DDR, QSPI_CFG, FC02/FC49 removed, reset
+  `d75cb5c`, hardened as `qsd-84c878f` under its hash before a history reorder
+  that left the RTL unchanged: streaming, switchable DDR, QSPI_CFG, FC02/FC49 removed, reset
   divisor 34) is 12 tiles as 3x4, with **70.9% area utilisation** (164,798 µm²
   of standard cells) and **71.8% routing density** (global-route usage,
   overflow 117), DRC, LVS and antenna clean, precheck passed; at 16 ns
