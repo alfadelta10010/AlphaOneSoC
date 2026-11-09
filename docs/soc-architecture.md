@@ -180,6 +180,14 @@ enters continuous-read mode) and releases the bus for the other four.
   the pin reset and holds it through reboots and power-off (a reboot does not
   re-read `ui_in[0]`, which is GPIO by then); software reads it in STRAPS. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
   1 passes 12–29 ns.
+  At 62.5 MHz (T = 16 ns, SCK 31.25 MHz) with R the pad round trip excluding the flash
+  [datasheet audit 3.1, tier 3]: `rd_late` = 1 captures 48 ns after the launching edge, setup is
+  at least 12 ns and hold at least 5.5 ns for R of 20 to 30 ns (hold needs R of about 15 ns or
+  more; the window is about 15 to 41.5 ns). `rd_late` = 0 captures at 32 ns and fails above
+  R of about 25.5 ns. **Silicon precedent (tier 1):** TinyQV's latency 2 at 64 MHz is the same
+  capture, three clocks after the launching edge (its latency L captures L + 1 clocks after;
+  `docs/info.md:158`: "at the target 64MHz clock a read latency of 2 is required"), and latency 1
+  (`rd_late` = 0) was not enough there. The mapping comes from reading TinyQV's RTL, not a simulation.
 * **Writes never select the flash.** `0x38` is the PSRAM's quad write, but
   on the W25Q128JV-DTR it is Enter QPI. The PMA already faults stores to
   flash; this is the backstop.
