@@ -119,7 +119,17 @@ module tb_tt_um;
 
     reg clk = 1'b0;
     reg clk_on = 1'b0;                // the board's clock is running
-    always #(TCLK / 2.0) if (clk_on) clk = ~clk;
+    // +CLK_HALF_PS=<ps> (as tb_syscon_soc): the clock's half period; 8333 is the chip's 60 MHz. Absent, TCLK / 2.
+    function automatic real clk_half_ns(input integer dummy);
+        integer ps;
+        begin
+            clk_half_ns = TCLK / 2.0;
+            if ($value$plusargs("CLK_HALF_PS=%d", ps)) clk_half_ns = ps / 1000.0;
+        end
+    endfunction
+    real tclk_half = clk_half_ns(0);
+    real tclk_run  = 2.0 * clk_half_ns(0);          // the clock period the run uses (TCLK without the plusarg)
+    always #(tclk_half) if (clk_on) clk = ~clk;
     integer cyc = 0;
     always @(posedge clk) cyc <= cyc + 1;
 
@@ -404,8 +414,11 @@ module tb_tt_um;
     localparam integer ID_syscon_wdt_split = 14;
     localparam integer ID_syscon_poweroff = 15;
     localparam integer ID_syscon_pinreset = 16;
+    localparam integer ID_ddr_flash = 18;    // WO-55b: tests/soc/ddr_flash.S
+    localparam integer ID_ddr_sweep = 19;    // tests/soc/ddr_sweep.S, +WANT_K=<k> (-1 = "DDR off", -2 = any point 1..6), no watchdog reboot
     localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
     integer pid = 0;
+    integer s_want_k = 0, s_exp_wdt = 0;
     function automatic integer prog_id(input string p);
         begin
             prog_id = 0;
@@ -426,6 +439,8 @@ module tb_tt_um;
             if (p == "syscon_poweroff") prog_id = ID_syscon_poweroff;
             if (p == "syscon_pinreset") prog_id = ID_syscon_pinreset;
             if (p == "sd_init") prog_id = ID_sd_init;
+            if (p == "ddr_flash") prog_id = ID_ddr_flash;
+            if (p == "ddr_sweep") prog_id = ID_ddr_sweep;
         end
     endfunction
     // ── +TEST=soc +PROG=<name>: the mailbox programs of tests/soc ───────────
@@ -594,6 +609,17 @@ module tb_tt_um;
                     s_div = 1; s_n_val = 3; s_val_known = 1'b1;
                     s_val[0] = 32'd2048; s_val[1] = 32'd4; s_val[2] = 32'd2;
                 end
+                ID_ddr_flash: s_div = 1;
+                ID_ddr_sweep: begin
+                    // the boot-time DDR sweep: its UART text is the verdict (the last line against +WANT_K), the VALUE
+                    // stores are plain mailbox writes
+                    s_div = 1;
+                    if (!$value$plusargs("WANT_K=%d", s_want_k)) fail("ddr_sweep: no +WANT_K");
+                    if ($value$plusargs("EXP_WDT=%d", s_exp_wdt) && s_exp_wdt != 0) fail("ddr_sweep at the pins: +EXP_WDT is not supported");
+                    if (s_want_k == -2) s_want = "DDR on, cap ?\n";   // any point 1..6, checked in soc_final
+                    else if (s_want_k < 0) s_want = "DDR off\n";
+                    else s_want = $sformatf("DDR on, cap %0d\n", s_want_k);
+                end
                 default: fail($sformatf("+PROG=%s: not a program of this bench", prog));
             endcase
             // no payload byte may look like a frame tag
@@ -615,7 +641,7 @@ module tb_tt_um;
                     if (code == 3) rp.set_flow(1'b1);
                 end
                 ID_uart_linux: begin
-                    if (code == 4) rp.set_baud(16.0 * 3 * TCLK);
+                    if (code == 4) rp.set_baud(16.0 * 3 * tclk_run);
                     if (code == 5) begin rp.set_flow(1'b1); rp.send_str("ls -l /dev\015"); end
                 end
                 ID_oled_spi: begin
@@ -786,6 +812,9 @@ module tb_tt_um;
     task automatic soc_final;
         integer k;
         begin
+            if (pid == ID_ddr_sweep && s_want_k == -2)      // +WANT_K=-2: any capture point the sweep picks (an SDF-timed run)
+                for (k = 1; k < 7; k = k + 1) if (s_pay == $sformatf("DDR on, cap %0d\n", k)) s_want = s_pay;
+            if (pid == ID_ddr_sweep) $display("NOTE ddr_sweep UART: %0d bytes, last line \"%0s\"", s_pay.len(), s_pay.substr(0, (s_pay.len() > 0) ? s_pay.len() - 2 : 0));
             if (s_pay != s_want)
                 fail($sformatf("the RP2350 received \"%s\" (%0d characters), want \"%s\" (%0d)", s_pay, s_pay.len(), s_want, s_want.len()));
             if (s_ev_i != s_n_ev) fail($sformatf("%0d cues, want %0d", s_ev_i, s_n_ev));
@@ -855,7 +884,7 @@ module tb_tt_um;
         end
     endtask
 
-    initial begin #1; if (soc_test) rp.set_baud(16.0 * s_div * TCLK); end
+    initial begin #1; if (soc_test) rp.set_baud(16.0 * s_div * tclk_run); end
 
     task automatic on_byte_isa(input [7:0] b);
         begin
@@ -1106,7 +1135,7 @@ module tb_tt_um;
     // starts.
     initial begin
         #1;
-        #(1.0 * (max_cycles + 1000) * TCLK);
+        #(1.0 * (max_cycles + 1000) * tclk_run);
         $display("TIMEOUT tb_tt_um: stuck at cycle %0d, %0d bytes seen", cyc, seen);
         $finish;
     end
