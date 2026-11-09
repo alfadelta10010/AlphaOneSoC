@@ -812,7 +812,9 @@ module tb_tt_um;
                 mepc = ram_word('hFFF004 + 4 * n);
                 tot[part] = tot[part] + 1;
                 if (mepc == x) hits[part] = hits[part] + 1;
-                if (mepc + 32'h30 < x || mepc > x + 32'h10)
+                // after the store, the latest point is the part's wait loop (blt s5, s8):
+                // A and B at x + 2, C at x + 0x2c, after its two checks
+                if (mepc + 32'h30 < x || mepc > x + 32'h30)
                     fail($sformatf("irq_stall part %0d: interrupt %0d taken at mepc %h, the part's store completes at %h", part, n, mepc, x));
             end
             $display("NOTE irq_stall: interrupts taken right after the held store (mepc = its next instruction): THR %0d of %0d, SPI DATA %0d of %0d, amoswap %0d of %0d",
