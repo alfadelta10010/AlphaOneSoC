@@ -137,7 +137,16 @@ module tb_tt_um;
     reg        rd_late = 1'b0;        // +RD_LATE
     reg        strap = 1'b0;          // ui_in[0] until the program wants GPIO IN
     reg        strap_on = 1'b1;       // ui_in[0] is the strap, not tb_in[0]
-    reg        no_stream = 1'b0;      // +NO_STREAM: ui_in[2], the no-stream strap, is 1 while strap_on
+    reg        no_stream = 1'b0;      // +NO_STREAM: ui_in[2], the no-stream strap, is 1 through each reset
+    // The wrapper reads the straps while rst_n is low and up to the second
+    // clock edge after it rises. ui_in[2] carries no_stream from rst_n low
+    // through the fourth edge after it rises, then tb_in[2] (a GPIO input
+    // like the others: periph_access drives 0xA4 on it).
+    reg  [2:0] ns_edges = 3'd0;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) ns_edges <= 3'd0;
+        else if (ns_edges != 3'd4) ns_edges <= #(`IN_DLY_NS) ns_edges + 3'd1;
+    wire       ns_hold = (ns_edges != 3'd4);
     // The no-stream strap (ui_in[2]) must reach qspi_ctrl: QSPI_CFG.STREAM is
     // its inverse from the first clocked reset on, through every later reset
     // and reboot of these programs (none of them writes QSPI_CFG).
@@ -153,7 +162,7 @@ module tb_tt_um;
     wire [3:0] kp_row;
     reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[7], SCK [3], MOSI [1], DO ui_in[1]
     wire       sd_do_in1;
-    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, strap_on ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
+    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, ns_hold ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
 `ifdef USE_POWER_PINS
