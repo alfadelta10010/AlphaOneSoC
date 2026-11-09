@@ -297,7 +297,11 @@ module qspi_ctrl (
             default: io_sdr = 4'b1111;       // mode byte 0xFF, and idle
         endcase
     end
-    assign io_out = t_ddr ? nib_n : io_sdr;
+    // Each input of the pin mux is constant while it is not the selected one:
+    // nib_n sits at 1111 in SDR (nib_p is held at 1111 below) and the SDR
+    // nibble is forced to 1111 in DDR, so a change of one never reaches the
+    // pins through the other.
+    assign io_out = nib_n & (io_sdr | {4{t_ddr}});
 
     // DDR host nibble for the pins from the next falling clk edge on, i.e. what
     // the next SCK edge samples. Command: IO0 bits as in SDR, A23-20 on the
@@ -315,7 +319,7 @@ module qspi_ctrl (
             default: nib_next = 4'hF;
         endcase
     end
-    always @(posedge clk) nib_p <= nib_next;
+    always @(posedge clk) nib_p <= t_ddr ? nib_next : 4'hF;
     always @(negedge clk) begin
         nib_n <= nib_p;
         cap_n <= io_in;
