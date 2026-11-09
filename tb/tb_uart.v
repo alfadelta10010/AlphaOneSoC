@@ -457,8 +457,14 @@ module tb_uart;
                 if (old_dlab && (b[0] || b[1])) begin
                     // A divisor latch write restarts the baud generator: the
                     // receiver's samples may come up to a tick early too.
-                    if (dr_pend) begin dr_lo = dr_lo - cur_div() * T; fr_hi_to = fr_hi_to - cur_div() * T; end
+                    // The stop bit's sample moves for a kept frame (DR), a
+                    // dropped one (OE) and a break (BI) alike, and with it the
+                    // end of RTS#'s held-high window (after a break: its half
+                    // bit of high line).
+                    if (dr_pend) dr_lo = dr_lo - cur_div() * T;
                     if (oe_pend) oe_lo = oe_lo - cur_div() * T;
+                    if (bi_pend) bi_lo = bi_lo - cur_div() * T;
+                    if ($realtime <= fr_hi_to && fr_hi_to < 1.0e17) fr_hi_to = fr_hi_to - cur_div() * T;
                 end
                 if (b[0]) begin
                     if (old_dlab) m_dll = wd[7:0];
