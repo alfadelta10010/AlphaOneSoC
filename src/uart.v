@@ -21,8 +21,8 @@
 //
 // Fixed 8N1. baud = clk / (16 x divisor). The divisor resets to DIV_RESET,
 // non-zero, so a THR write can never stall forever before software sets it;
-// the default, 33, is 113,636 baud (-1.4% from 115200) at the documented
-// 60 MHz core clock (115200 +0.5% at the old 50 MHz), so a
+// the default, 34, is 114,890 baud (-0.27% from 115200) at the documented
+// 62.5 MHz core clock (115200 +0.5% at the old 50 MHz), so a
 // program in flash can print before it programs the divisor. A divisor of 0
 // counts as 1.
 //
@@ -90,7 +90,7 @@
 // hold those values while rst is high and never glitch. RBR resets to 0.
 
 module uart #(
-    parameter [15:0] DIV_RESET = 16'd33    // 113,636 baud at 60 MHz
+    parameter [15:0] DIV_RESET = 16'd34    // 114,890 baud at 62.5 MHz
 )(
     input  wire        clk,
     input  wire        rst,

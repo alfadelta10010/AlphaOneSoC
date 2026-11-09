@@ -643,7 +643,7 @@ module tb_uart;
     // Model reset, for a reset released on the edge after this is called.
     task automatic model_reset;
         begin
-            m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd33; m_dlm = 8'd0;
+            m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd34; m_dlm = 8'd0;
             m_sbc = 1'b0; m_sbc_old = 1'b0; sbc_edge = -1;
             if (dr_val || dr_pend) rx_kept = rx_kept - 1;  // a byte reset threw away
             rxm_reset;
@@ -848,7 +848,7 @@ module tb_uart;
         rd8(7, v8); chk("SCR after reset", v8, 8'h00);
         rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
         wr8(3, 8'h80);
-        rd8(0, v8); chk("DLL after reset", v8, 8'd33);
+        rd8(0, v8); chk("DLL after reset", v8, 8'd34);
         rd8(1, v8); chk("DLM after reset", v8, 8'd0);
         for (bi = 0; bi < 16; bi = bi + 1) begin
             bus(1'b0, bi, 1'b0, $random(seed));
@@ -1457,10 +1457,10 @@ module tb_uart;
         rd8(1, v8); chk("IER after reset", v8, 8'h00);
         rd8(3, v8); chk("LCR after reset", v8, 8'h00);
         rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
-        wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd33); wr8(3, 8'h00);
-        wr8(0, 8'h3E);                                            // at divisor 33
+        wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd34); wr8(3, 8'h00);
+        wr8(0, 8'h3E);                                            // at divisor 34
         fork
-            begin wait_cts; rx_frame(8'h4F, bit_ns(33, 0.01), 33, 1'b1, 0.0); end
+            begin wait_cts; rx_frame(8'h4F, bit_ns(34, 0.01), 34, 1'b1, 0.0); end
             get_byte;
         join
         wait_tx_idle;

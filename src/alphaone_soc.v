@@ -51,8 +51,8 @@ module alphaone_soc #(
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
     parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,
     parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF,
-    // UART divisor out of reset: 33 = 113,636 baud at the documented 60 MHz clock
-    parameter [15:0] UART_DIV_RESET = 16'd33
+    // UART divisor out of reset: 34 = 114,890 baud at the documented 62.5 MHz clock
+    parameter [15:0] UART_DIV_RESET = 16'd34
 )(
     input  wire       clk,
     input  wire       rst,

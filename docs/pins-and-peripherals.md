@@ -370,10 +370,10 @@ As built (`src/uart.v`):
   expects. The transmitter keeps shifting underneath.
 * **RBR resets to 0.** Linux's startup reads it before any byte has
   arrived, and an X there would spread in an X-accurate simulation.
-* **The divisor resets to 33**, 113,636 baud (-1.4% from 115200) at the
-  documented 60 MHz clock, so a program in flash can print before it sets
-  the divisor (`alphaone_soc`'s `UART_DIV_RESET`). At 50 MHz 33 gives
-  94,697 baud and 27 would be 115200 (+0.5%). A divisor of 0 behaves as 1.
+* **The divisor resets to 34**, 114,890 baud (-0.27% from 115200) at the
+  documented 62.5 MHz clock, so a program in flash can print before it sets
+  the divisor (`alphaone_soc`'s `UART_DIV_RESET`). At 60 MHz 34 gives
+  110,294 baud (-4.3%, 33 would be -1.4%) and at 50 MHz 27 would be 115200 (+0.5%). A divisor of 0 behaves as 1.
 * Every register write waits for `ready`, so a word store that writes THR
   and LCR together while the transmitter is busy writes LCR once, when THR
   is taken, and cannot flip DLAB under its own THR write.
@@ -389,9 +389,9 @@ Early console: `earlycon=uart8250,mmio,0x10000000,115200,<core clock in Hz>`,
 or `earlycon=uart8250,mmio,0x10000000` with no baud at all. The clock
 matters: given a baud and no clock, `drivers/tty/serial/earlycon.c` assumes
 `BASE_BAUD * 16` = 1.8432 MHz and `8250_early.c` programs divisor
-1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.75 Mbaud at
-60 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
-UART runs at whatever it holds -- 113,636 baud at 60 MHz straight out of reset,
+1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.906 Mbaud at
+62.5 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
+UART runs at whatever it holds -- 114,890 baud at 62.5 MHz straight out of reset,
 or whatever the boot loader set. A plain `earlycon` with `stdout-path` in
 the device tree takes `clock-frequency` from the node and is also right.
 

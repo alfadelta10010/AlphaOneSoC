@@ -9,7 +9,7 @@
 # Writes under OUT: elf/<name>.elf, hex/<name>.hex (flash image at 0), and the
 # lists list.A, list.B, list.C, list.D10, list.D20 of `name|hex|plusargs` lines
 # (run_gl.sh LIST=). Part D is the 16 mailbox programs of tests/soc built with
-# -DMB_UART (they report over the UART as well) and the chip's divisor 33; the
+# -DMB_UART (they report over the UART as well) and the chip's divisor 34; the
 # three that drive the SSD1331 (D20) run with a 20 ns clock, the rest (D10)
 # with 10 ns: run_gl.sh TCLK=.
 # Nothing from the suites is copied; they are read from SUITES' yaml paths.
@@ -35,7 +35,7 @@ case " $PARTS " in *" D "*)
   # program MB_DIV image (T10: 10 ns clock, T20: 20 ns): the table of WO-26
   late='+RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'
   while read -r t div img; do
-    df="-DMB_UART -DUART_DIV_RESET=33"; [ "$div" != - ] && df="$df -DMB_DIV=$div"
+    df="-DMB_UART -DUART_DIV_RESET=34"; [ "$div" != - ] && df="$df -DMB_DIV=$div"
     $CC $FLAGS $df -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/$t.S -o "$OUT/elf/$t.elf" || exit 1
     $OC -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 "$OUT/elf/$t.elf" "$OUT/hex/$t.hex"
     if [ "$t" = syscon_strap ]; then
