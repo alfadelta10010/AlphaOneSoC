@@ -26,7 +26,7 @@
 // sets the clock's half period (default 5000; 8000 is the SoC's 62.5 MHz). +MODESW adds a
 // run of mode switches (ddr 0 -> 1 -> 0, ddr_cap changes) while a stream is open.
 // +SWEEP runs only the flash-only suite in the selected mode and prints one
-// "SWEEP PASS|FAIL" line (tests the capture point for the round trip the model's
+// "SWEEP PASS|FAIL|ERROR" line (FAIL: data mismatches only; ERROR: pin checker or protocol errors too) (tests the capture point for the round trip the model's
 // +QSPI_DELAY/+QSPI_HOLD stand for; see the test-qspi-ddr-sweep target).
 //
 // Plusargs: +NOSTREAM ties stream_en low, +STREAM_TOGGLE flips it at random
@@ -127,6 +127,7 @@ module tb_qspi;
         .payload({q_cs, q_addr, q_we, q_nbytes_m1, q_we ? q_wdata : 32'h0}));
 
     integer errors = 0;
+    integer dmis   = 0;     // the data mismatches among `errors` (check() only)
     integer k;
 
     // Interface assertions (REVIEW-53 m-1, m-2).
@@ -168,6 +169,7 @@ module tb_qspi;
         if (got !== want) begin
             $display("FAIL %0s @%08h: got %08h want %08h", what, a, got, want);
             errors = errors + 1;
+            dmis   = dmis + 1;
         end
     endtask
 
@@ -322,8 +324,16 @@ module tb_qspi;
             // The init sequence is SDR whatever the round trip; wait for it.
             while (!q_idle) @(posedge clk);
             flash_suite;
-            if (errors == 0) $display("SWEEP PASS (cap %0d, ddr %0d, delay %0d hold %0d)", cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns);
-            else             $display("SWEEP FAIL (cap %0d, ddr %0d, delay %0d hold %0d): %0d errors", cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns, errors);
+            // SWEEP FAIL = read data wrong and nothing else (a capture point outside the window).
+            // Pin-checker, command-byte, nbytes_m1 and model errors are SWEEP ERROR: the sweep
+            // script treats those as a failure of the sweep, not as an expected failure.
+            if (errors + pins.errs == 0)
+                $display("SWEEP PASS (cap %0d, ddr %0d, delay %0d hold %0d)", cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns);
+            else if (errors == dmis && pins.errs == 0)
+                $display("SWEEP FAIL (cap %0d, ddr %0d, delay %0d hold %0d): %0d data mismatches", cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns, dmis);
+            else
+                $display("SWEEP ERROR (cap %0d, ddr %0d, delay %0d hold %0d): %0d data mismatches, %0d other errors, %0d pin-check errors",
+                         cap_v, ddr_v, pmod.delay_ns, pmod.hold_ns, dmis, errors - dmis, pins.errs);
             $finish;
         end
 

@@ -9,6 +9,9 @@
 # exclusive); the expected passing set per R is every c with that holding. (docs/qspi-ddr.md 3.3's
 # budget is being redone at 16 ns, so its rule is not restated here.)
 # The sets are written out below and any difference from the measured set exits 1.
+# Only a data-mismatch `SWEEP FAIL` is an expected failure (a capture point outside the window);
+# a `SWEEP ERROR` (pin checker, protocol or command-byte error), a model ERROR/$fatal, a TIMEOUT
+# or a run with no verdict line at all fails the sweep.
 # c = 8 needs R = 50 or 53 ([57,67) and [60,70) hold X = 64 only), so the sweep runs on to 53,
 # which is what makes DDR_CAP 6 and 7 (the m1 index width) part of the check.
 # With +DTR_LAUNCH=1 (a device launching the first nibble half an SCK late) the streamed suite must
@@ -30,7 +33,13 @@ for la in 0 1; do
     for cap in 0 1 2 3 4 5 6 7; do
       $VVP "$BIN" +SWEEP +DDR +DDR_CAP=$cap +CLK_HALF_PS=8000 +QSPI_DELAY=$((r+7)) \
           +QSPI_HOLD=$((r+1)) +DTR_LAUNCH=$la > "$LOG" 2>&1
-      grep -q '^SWEEP PASS' "$LOG" && got="$got $((cap+1))"
+      if grep -q '^SWEEP PASS' "$LOG"; then got="$got $((cap+1))"
+      elif grep -q '^SWEEP FAIL' "$LOG" && ! grep -qE '^(SWEEP ERROR|ERROR|TIMEOUT|FAIL pins)|\$fatal' "$LOG"; then :
+      else
+        bad=$((bad+1))
+        echo "  HARD ERROR (R=$r cap=$cap la=$la): $(grep -m2 -E 'SWEEP ERROR|ERROR|TIMEOUT|FAIL' "$LOG" | tr '\n' ' ')"
+        [ -z "$(grep -m1 -E 'SWEEP|ERROR|TIMEOUT' "$LOG")" ] && echo "  (no verdict line)"
+      fi
     done
     got=${got# }
     if [ "$la" = 0 ]; then want=${EXP[$r]}; else want=""; fi
@@ -38,5 +47,5 @@ for la in 0 1; do
     printf '  R=%-2s ns: passing c: %-6s expected: %-6s %s\n' "$r" "${got:-none}" "${want:-none}" "$v"
   done
 done
-if [ $bad -ne 0 ]; then echo "SWEEP FAIL: $bad rows differ from the expected passing set"; exit 1; fi
+if [ $bad -ne 0 ]; then echo "SWEEP FAIL: $bad rows differ or runs errored (see MISMATCH / HARD ERROR lines)"; exit 1; fi
 echo "SWEEP OK: every row matches"
