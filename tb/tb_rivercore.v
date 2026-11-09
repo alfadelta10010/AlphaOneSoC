@@ -756,6 +756,38 @@ module tb_rivercore;
     end
 
     // ================================================================
+    //  FC02 / FC49 invariants (REVIEW-53 V-3), every clock
+    //
+    //  FC49: a flush and a live M operation (muldiv_want) are never both
+    //  there, so capture and start need no !flush term.
+    //  FC02: while a CSR write sits in WB (not trapped), the instruction in
+    //  EX is held by ex_wait, so nothing it decides sees the write half done.
+    //  Both counts of the antecedent are printed at the end, so a run can
+    //  show the check was exercised.
+    // ================================================================
+    integer inv_cycles = 0, inv_flush = 0, inv_muldiv = 0, inv_csrwb = 0, inv_fail = 0;
+    always @(posedge clk) begin
+        if (!rst) begin
+            inv_cycles = inv_cycles + 1;
+            if (`CPU.flush)       inv_flush  = inv_flush  + 1;
+            if (`CPU.muldiv_want) inv_muldiv = inv_muldiv + 1;
+            if (`CPU.flush && `CPU.muldiv_want) begin
+                $display("FAIL FC49: flush together with muldiv_want at pc 0x%08h cycle %0d", `CPU.ifex_pc, cycle_count);
+                inv_fail = inv_fail + 1;
+                emit_abort_marker; $fclose(dump_fd); $finish;
+            end
+            if (`CPU.exwb_valid && `CPU.exwb_csrWR && !`CPU.exwb_trap && `CPU.ifex_valid) begin
+                inv_csrwb = inv_csrwb + 1;
+                if (!`CPU.ex_wait) begin
+                    $display("FAIL FC02: CSR write in WB while EX runs (ex_wait 0) at pc 0x%08h cycle %0d", `CPU.ifex_pc, cycle_count);
+                    inv_fail = inv_fail + 1;
+                    emit_abort_marker; $fclose(dump_fd); $finish;
+                end
+            end
+        end
+    end
+
+    // ================================================================
     //  Bus transaction check
     //
     //  The trace prints an access as the instruction sees it -- its
@@ -1048,6 +1080,8 @@ module tb_rivercore;
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
             $display("  Register-file reads checked: %0d", rf_chk_n);
             $display("  Bus transactions checked: %0d", bus_chk_n);
+            $display("  FC02/FC49 checks: %0d cycles, flush %0d, muldiv_want %0d, CSR-write-in-WB with EX valid %0d, %0d FAIL",
+                     inv_cycles, inv_flush, inv_muldiv, inv_csrwb, inv_fail);
             $display("  fetch-reuse: hits %0d fetches %0d loads %0d", fr_hits, fr_fetches, fr_loads);
             $display("  Dump: %0s", dump_file_str);
         end
