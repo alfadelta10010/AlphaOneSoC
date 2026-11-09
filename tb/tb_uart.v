@@ -502,11 +502,13 @@ module tb_uart;
                   for (bh = 0; bh < 2; bh = bh + 1) begin
                     mt[dh*4+oh*2+bh] = 1'b0;
                     // A pending break's BI rises on the same edge as the DR or
-                    // OE it brings, when that one is still pending too.
+                    // OE it brings, when that one is still pending too --
+                    // unless BI is still set from an earlier break that no LSR
+                    // read has cleared: BI is sticky, so it is 1 throughout.
                     if ((dpos == 2 || dpos == dh) && (opos == 2 || opos == oh) &&
                         (bpos == 2 || bpos == bh) &&
-                        !(rxm_on && bi_pend && bi_link == 1 && dr_pend && bh != dh) &&
-                        !(rxm_on && bi_pend && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
+                        !(rxm_on && bi_pend && !bi_val && bi_link == 1 && dr_pend && bh != dh) &&
+                        !(rxm_on && bi_pend && !bi_val && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
                         if (a2) begin
                             e = {8'h00, 8'hB0, 1'b0, thre[0], thre[0], bh[0], 2'b00, oh[0], dh[0], 8'h00};
                             m = 32'hFFFF_FFFF;
