@@ -128,6 +128,31 @@ module tb_qspi;
     integer errors = 0;
     integer k;
 
+    // Interface assertions (REVIEW-53 m-1, m-2).
+    // Flash reads are 4 bytes: the DDR read ignores nbytes_m1.
+    // nbytes_m1 is valid from the cycle after the start cycle (see qspi_ctrl.v, Interface).
+    reg fl_rd_st = 0;
+    always @(posedge clk) begin
+        fl_rd_st <= !rst && q_idle && q_start && q_cs == 2'd0 && !q_we;
+        if (fl_rd_st && q_nbytes_m1 != 2'd3) begin
+            $display("FAIL flash read with nbytes_m1 = %0d (must be 3)", q_nbytes_m1);
+            errors = errors + 1;
+        end
+    end
+    // The command byte of every DDR open, rebuilt from IO0 at the SCK rises:
+    // its first bit comes from the idle nibble, so it must equal cmd[7] of EDh.
+    integer cmd_n = 8;
+    reg [7:0] cmd_b = 8'h00;
+    always @(negedge cs_n[0]) begin cmd_n = 0; cmd_b = 8'h00; end
+    always @(posedge sck) if (ctl_oe && !cs_n[0] && cmd_n < 8) begin
+        cmd_b = {cmd_b[6:0], io_out[0]};
+        cmd_n = cmd_n + 1;
+        if (cmd_n == 8 && qspi.t_ddr && cmd_b !== 8'hED) begin
+            $display("FAIL DDR command byte on IO0 is %h, not ED (first bit %b)", cmd_b, cmd_b[7]);
+            errors = errors + 1;
+        end
+    end
+
     // Byte at a system address, straight from the model's arrays.
     function [7:0] mem_byte(input [31:0] a);
         if (a[31]) mem_byte = pmod.ram_rd(a[23:0]);

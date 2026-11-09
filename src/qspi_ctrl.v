@@ -179,9 +179,11 @@
 // valid in that cycle. `start` is taken only on a cycle `idle` is high, and
 // `idle` is never high on the cycle `done` is, so a requester's request is
 // never sampled on its own ready cycle, when it may still show the request
-// being completed. Read data is shifted in at the bottom of a 32-bit
-// register that is *not* cleared between transactions, so two 2-byte reads in
-// a row assemble one 4-byte word (mem_ctrl's split fetch relies on this).
+// being completed. Flash reads must be 4 bytes (nbytes_m1 = 3): the DDR read
+// takes its length from addr[1] and ignores nbytes_m1. Read data is shifted in
+// at the bottom of a 32-bit register that is *not* cleared between
+// transactions, so two 2-byte (PSRAM) reads in a row assemble one 4-byte word
+// (mem_ctrl's split fetch relies on this).
 //
 // While rst is high every pin is released (ctl_oe and io_oe low), so another
 // master -- the TinyTapeout demo board's RP2040 -- can program the flash or
@@ -316,6 +318,9 @@ module qspi_ctrl (
             S_ADDR:  nib_next = aidx[3] ? 4'hF
                               : aidx == 4'd0 ? {addr[3:2], 2'b00}
                               : addr[{aidx[2:0], 2'b00} +: 4];
+            // The first bit on the wire (SCK rise 0) is the nibble left by S_IDLE
+            // and S_GO, 1111, not cmd[7]: right only because EDh's MSB is 1. A
+            // DTR command with MSB 0 would need its own first nibble here.
             default: nib_next = 4'hF;
         endcase
     end
