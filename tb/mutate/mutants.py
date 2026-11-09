@@ -325,6 +325,12 @@ m("QS05", "qspi_ctrl.v", "3'd2:    cmd = 8'h99;", "3'd2:    cmd = 8'h98;", "star
 m("QS06", "qspi_ctrl.v", "ctl_oe <= 1'b1;\n            dq <= {dq[2:0], launch};", "ctl_oe <= 1'b1;\n            late <= rd_late;\n            dq <= {dq[2:0], launch};", "rd_late strap followed after reset")
 m("QS07", "qspi_ctrl.v", "wire [2:0] wnib      = {~cnt[2:1], cnt[0]};", "wire [2:0] wnib      = {~cnt[2:1], ~cnt[0]};", "write nibbles low half first")
 m("QS08", "qspi_ctrl.v", "S_CMD: if (init && step == 3'd4 && !again) begin", "S_CMD: if (1'b0) begin", "start-up step 4 sends 8 clocks, not 16")
+m('QS09', 'qspi_ctrl.v', 'end else if (!init && strm && (!stream_en || mode_chg)) begin', 'end else if (!init && strm && (mode_chg)) begin', 'an idle open stream is not closed when stream_en falls (REVIEW-6a QX1)')
+m('QS10', 'qspi_ctrl.v', "wire hit_top  = (a_hw == p - 23'd1);", "wire hit_top  = 1'b0;", 'the 2-byte top-up never recognised: a read at p-2 closes and reopens (QX2)')
+m('QS11', 'qspi_ctrl.v', 'wire       mode_chg  = (t_ddr != ddr) || (t_ddr && t_cap != ddr_cap);', 'wire       mode_chg  = (t_ddr != ddr);', 'a DDR_CAP change with ddr = 1 does not close an open stream (QX3)')
+m('QS12', 'qspi_ctrl.v', 'wire       mode_chg  = (t_ddr != ddr) || (t_ddr && t_cap != ddr_cap);', "wire       mode_chg  = 1'b0;", 'no QSPI_CFG change ever closes an open stream (QX4)')
+m('QS13', 'qspi_ctrl.v', 't_ddr <= ddr && !t_we && !t_psram;\n                    t_cap <= ddr_cap;', 't_ddr <= t_ddr && !t_we && !t_psram;\n                    t_cap <= t_cap;', 'the new mode is never latched at the request (QX6; only same-clock change differs from idle-close)')
+m('QS14', 'qspi_ctrl.v', 'if (streamable && !mode_chg && (hit_cont || hit_top)) begin', 'if (streamable && (hit_cont || hit_top)) begin', 'a continuation ignores a mode change on its own clock (QX7)')
 
 # ── uart.v / gpio.v / tt_um ──────────────────────────────────────────────
 m("UA01", "uart.v", "assign ready = !(thr_sel && !tx_idle);", "assign ready = 1'b1;", "no THR back-pressure")
@@ -367,6 +373,9 @@ m("SY18", "syscon.v", ": idx == 3'd4  ? {30'b0, strap_ns_q, strap_q}", ": idx ==
 m("SY19", "syscon.v", "wire       w_mode  = wr & (idx == 3'd2) & be[0];", "wire       w_mode  = wr & (idx == 3'd2) & (|be);", "BOOT_MODE written by any lane")
 m("SY20", "syscon.v", "assign rst_soc = rst | rq | off;", "assign rst_soc = rst | rq | off | (sel & we & (addr == 14'd0) & (wdata[15:0] == 16'h7777));", "rst_soc has a combinational term from the bus")
 m("SY21", "syscon.v", "            rq        <= 1'b0;\n            rq2       <= 1'b0;\n            off       <= 1'b0;", "            rq        <= (rq === 1'b1);\n            rq2       <= (rq2 === 1'b1);\n            off       <= 1'b0;", "a pin reset does not end a reboot in progress: rq / rq2 hold their value through rst (=== turns the power-up X into 0, so only a hold already running survives)")
+m('SY22', 'syscon.v', "wire       w_cfg   = wr & (idx == 3'd7) & be[0];", "wire       w_cfg   = wr & (idx == 3'd7);", 'QSPI_CFG written by any byte lane (SX1)')
+m('SY23', 'syscon.v', 'cfg_stream <= ~ns_now;', "cfg_stream <= 1'b1;", 'QSPI_CFG.STREAM resets to 1 whatever the no-stream strap (SX2)')
+m('SY24', 'syscon.v', 'wire       ns_now  = rst ? strap_no_stream : strap_ns_q;', 'wire       ns_now  = strap_no_stream;', 'the QSPI_CFG.STREAM reset follows the live no-stream pin, not the latched strap (SX3)')
 # ── syscon.v (watchdog)
 m("WD01", "syscon.v", "if (w_cr & wdata[0]) en <= 1'b1;", "if (w_cr) en <= wdata[0];", "watchdog EN clearable")
 m("WD02", "syscon.v", "wire       kick    = wwr & (widx == 6'd3) & (wdata[7:0] == 8'h76);", "wire       kick    = wwr & (widx == 6'd3);", "any CRR value kicks")
