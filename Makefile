@@ -216,19 +216,13 @@ test-qspi: $(BUILD_DIR)
 
 # DDR capture-point sweep (DDR-CONTRACT 3.3): the 60 MHz clock, a device whose flash output is
 # valid from R + 7 ns after the SCK edge to R + 16.67 + 1 ns (tCLQV 6, a 2 ns spread around it),
-# for round trips R, every DDR_CAP. The passing set is printed per R (c = DDR_CAP + 1). The
-# same with +DTR_LAUNCH=1 (a device that launches the first nibble half an SCK late) must pass
-# no capture point at all: a streamed run detects it.
-SWEEP_R := 8 11 14 17 20 23 26 29 32
+# for round trips R, every DDR_CAP. tb/qspi_ddr_sweep.sh compares the passing set per R
+# (c = DDR_CAP + 1) with the expected one and exits 1 on a difference; with +DTR_LAUNCH=1 (a
+# device that launches the first nibble half an SCK late) no capture point may pass.
 test-qspi-ddr-sweep: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_sweep $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
-	@cd $(BUILD_DIR) && for la in 0 1; do echo "DTR_LAUNCH=$$la"; for r in $(SWEEP_R); do \
-		pass=""; for cap in 0 1 2 3 4 5 6 7; do \
-			$(VVP) tb_qspi_sweep +SWEEP +DDR +DDR_CAP=$$cap +CLK_HALF_PS=8333 +QSPI_DELAY=$$((r+7)) \
-				+QSPI_HOLD=$$((r+1)) +DTR_LAUNCH=$$la > sweep.log 2>&1; \
-			grep -q '^SWEEP PASS' sweep.log && pass="$$pass c=$$((cap+1))"; \
-		done; echo "  R=$$r ns: passing c:$${pass:- none}"; done; done
+	@bash $(TB_DIR)/qspi_ddr_sweep.sh $(BUILD_DIR)/tb_qspi_sweep $(VVP)
 
 # The Pmod model's DTR (EDh) unit bench: pass, expected-fail and limit-raise cases.
 test-pmod-dtr:
