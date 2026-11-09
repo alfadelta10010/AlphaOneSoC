@@ -125,7 +125,7 @@
 //
 // DDR. With `ddr` set (QSPI_CFG.DDR) every flash read is an EDh DTR read
 // (W25Q128JV-DTR 8.2.14, docs/qspi-memories.md; the wire protocol is derived
-// in DDR-CONTRACT):
+// in docs/qspi-ddr.md):
 //
 //   flash read   0xED SPI   8 cmd + 4 addr/mode (6 + 2 nibbles, both SCK edges)
 //                           + 7 dummy + 1 per byte (SCK); 4 bytes = 23 SCK, or

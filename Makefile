@@ -214,7 +214,7 @@ test-qspi: $(BUILD_DIR)
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
 	done; done
 
-# DDR capture-point sweep (DDR-CONTRACT 3.3): the 60 MHz clock, a device whose flash output is
+# DDR capture-point sweep (docs/qspi-ddr.md 3.3): the 60 MHz clock, a device whose flash output is
 # valid from R + 7 ns after the SCK edge to R + 16.67 + 1 ns (tCLQV 6, a 2 ns spread around it),
 # for round trips R, every DDR_CAP. tb/qspi_ddr_sweep.sh compares the passing set per R
 # (c = DDR_CAP + 1) with the expected one and exits 1 on a difference; with +DTR_LAUNCH=1 (a
@@ -336,8 +336,8 @@ test-soc-spi: $(BUILD_DIR)
 # delays that point reads at the bench's 20 ns clock (window [delay, 20 + hold), point n captures
 # at 10 * (n + 1) ns).
 # ddr_sweep@<FLAG> is tests/soc/ddr_sweep.S (BASE = no flag). +CLK_HALF_PS=8333 is the chip's 60 MHz; a
-# round trip R is +QSPI_DELAY=R+7 +QSPI_HOLD=R+1 (WO-51); +WANT_K is the DDR_CAP the program must report
-# (DDR-CONTRACT 4 item 6 on the passing set of R: 11 -> 2, 17 -> 3, 23 -> 3, 29 -> 4). -1 = "DDR off":
+# round trip R is +QSPI_DELAY=R+7 +QSPI_HOLD=R+1; +WANT_K is the DDR_CAP the program must report
+# (docs/qspi-ddr.md 4 and 6, on the passing set of R: 11 -> 2, 17 -> 3, 23 -> 3, 29 -> 4). -1 = "DDR off":
 # +DTR_LAUNCH=1 (caught by the execute test's trap), a window no capture point lands in (+QSPI_DELAY=20
 # +QSPI_HOLD=8), a watchdog expiry after "DDR on" (WDT_AFTER: the next boot says "DDR off"), and the execute
 # test left out (NO_EXEC: the stream failure is caught by the watchdog instead).

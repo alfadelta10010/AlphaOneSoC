@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# DDR capture-point sweep with a verdict (DDR-CONTRACT 3.3, REVIEW-53 V-2).
+# DDR capture-point sweep with a verdict (docs/qspi-ddr.md 3.3).
 #
 # The 60 MHz clock (CLK_HALF_PS=8333), a device whose flash output is valid from R + 7 ns after the
 # SCK edge to R + 17.67 ns (the model's +QSPI_DELAY=R+7 and +QSPI_HOLD=R+1: valid after R + tCLQV,
 # held R + tCLQX past the next launch, one clock T = 16.67 ns later), for the round trips R below and every DDR_CAP 0..7 (capture point
 # c = DDR_CAP + 1 half clocks after the launch edge, X_c = c * 8.333 ns). The expected passing set
-# per R follows from the window rule: R + 7 <= X_c < R + 17.67. (DDR-CONTRACT 3.3 gives
+# per R follows from the window rule: R + 7 <= X_c < R + 17.67. (docs/qspi-ddr.md 3.3 gives
 # R + 17.17: its 2 ns spread Delta is 1 ns tighter at that edge than the model, and the two rules differ only at
-# R = 41, c = 7, X = 58.33 ns.) The sets are written out below (they match the WO-51 report for R = 8..32) and any difference from the measured set exits 1.
+# R = 41, c = 7, X = 58.33 ns.) The sets are written out below and any difference from the measured set exits 1.
 # R = 35, 38 and 41 give c = 6 only; c = 7 and 8 need R = 44..53, so the sweep runs on to 53,
-# which is what makes DDR_CAP 6 and 7 (REVIEW-53 M-1) part of the check.
+# which is what makes DDR_CAP 6 and 7 (the m1 index width) part of the check.
 # With +DTR_LAUNCH=1 (a device launching the first nibble half an SCK late) the streamed suite must
 # pass at no capture point, for every R.
 #
