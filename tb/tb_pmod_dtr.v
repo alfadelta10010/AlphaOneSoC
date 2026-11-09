@@ -20,6 +20,8 @@
 //                          launched it; +SWEEP samples at every 500 ps from 0 to 60 ns and
 //                          prints the offsets at which every nibble was right
 //   +HOST_LAUNCH=0|1       the edge the host believes launches nibble 1 (fall 18 / rise 19)
+//   +DROP_K=<k> +DROP_PS=<ps>   the host releases IO this long before the edge of address
+//                          or mode nibble k (0..7; even k is a rise) instead of driving it
 //   +FLASH_QPI             send EDh in QPI form (the model is told the same plusarg)
 // The model's own plusargs (+QSPI_DELAY, +QSPI_HOLD, +DTR_LAUNCH, +DTR_DUMMY, +QSPI_*_DLY_PS,
 // +QSPI_DTR_UNALIGNED_OK) pass straight through.
@@ -54,7 +56,8 @@ module tb_pmod_dtr #(
     realtime P, H, SU_R, SU_F, SU_C, CS_SU, CS_H, REL, CAP;
     reg [23:0] open_a;
     reg [7:0]  mode_hex;
-    integer    open_n, host_launch;
+    integer    open_n, host_launch, drop_k;
+    realtime   drop_t;
     reg        no_rel, sweep, qpi_form;
     reg [8*16-1:0] seq;
 
@@ -75,6 +78,9 @@ module tb_pmod_dtr #(
         open_n = 4;          if ($value$plusargs("OPEN_N=%d", open_n)) ;
         mode_hex = 8'hFF;    if ($value$plusargs("MODE_HEX=%h", mode_hex)) ;
         host_launch = 0;     if ($value$plusargs("HOST_LAUNCH=%d", host_launch)) ;
+        drop_k = -1;         if ($value$plusargs("DROP_K=%d", drop_k)) ;
+        pa = 500;            if ($value$plusargs("DROP_PS=%d", pa)) ;
+        drop_t = pa / 1000.0;
         no_rel = $test$plusargs("NO_REL");
         sweep  = $test$plusargs("SWEEP");
         qpi_form = $test$plusargs("FLASH_QPI");
@@ -233,7 +239,12 @@ module tb_pmod_dtr #(
             // address and mode: one nibble per edge, rise first (fall 7 was the fall above)
             nibs = {a, mode_hex};
             for (k = 0; k < 8; k = k + 1)
-                half((k % 2 == 0) ? SU_R : SU_F, 1, nibs[31 - 4 * k -: 4], 0, H);
+                if (k == drop_k) begin
+                    at(t_last + H - drop_t);
+                    io_oe = 1'b0;
+                    half(0, 0, 4'h0, 0, H);
+                end else
+                    half((k % 2 == 0) ? SU_R : SU_F, 1, nibs[31 - 4 * k -: 4], 0, H);
             at(t_last + REL);
             if (!no_rel) io_oe = 1'b0;
             // dummy cycles (7), the last fall launches nibble 1 (host_launch 0)

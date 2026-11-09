@@ -119,6 +119,8 @@ fail_case F7 "host and device both driving IO" +NO_REL
 fail_case F8 "something other than its Exit QPI" +FLASH_QPI
 fail_case F9 "A1:A0 != 00" +OPEN_A=000102
 fail_case F10 "IO release hold violated" +REL_PS=1500
+# F11: IO released 0.5 ns before the rise that samples address nibble 2: the lines were not held for the setup time.
+fail_case F11 "DTR_AD: data-in setup violated.*before SCK rise" +DROP_K=2 +DROP_PS=500
 
 # Limit-raise cases: limit + measured margin + 0.1 ns must fail with that check's message.
 fl=$B/P1.log

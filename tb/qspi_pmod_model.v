@@ -651,7 +651,7 @@ module qspi_pmod_model #(
             end
             if (!fall) rises = rises + 1;
             hold_pend = 4'b0;
-            if (h_oe === 1'b1)
+            if (h_oe === 1'b1) begin
                 for (i = 0; i < 4; i = i + 1)
                     if (m[i]) begin
                         d = $realtime - t_chg[i];
@@ -660,7 +660,7 @@ module qspi_pmod_model #(
                         if (d < need - 0.0005) chk_fail_data(i, d, need, 1'b0, fall, 1'b0);
                         hold_pend[i] = 1'b1;
                     end
-            else if (m != 4'b0 && ($realtime - t_oe_off) < need - 0.0005)
+            end else if (m != 4'b0 && ($realtime - t_oe_off) < need - 0.0005)
                 // The host stopped driving just before this edge: the lines
                 // were not held for the setup time.
                 for (i = 0; i < 4; i = i + 1)
