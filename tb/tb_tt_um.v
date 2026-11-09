@@ -1134,11 +1134,16 @@ module tb_tt_um;
         end
     end
 
-    // RTS# while a received byte waits: the program cannot have read RBR
-    // within the half bit since the stop bit was sampled.
+    // RTS# while a received byte waits: it must be high at some point of
+    // the stop bit, from the UART's stop-bit sample on. A program that polls
+    // LSR fast (streaming fetch) can read RBR within that half bit and drop
+    // it again before the stop bit ends, so the end alone is not the test.
+    reg rts_hi_stop = 1'b0;
+    always @(rp.tx_stops) rts_hi_stop = (uo_out[5] === 1'b1);
+    always @(posedge uo_out[5]) rts_hi_stop = 1'b1;
     always @(rp.tx_sent)
-        if (rp.tx_sent > 0 && uo_out[5] !== 1'b1)
-            fail("RTS# low at the end of a received byte, before the program read it");
+        if (rp.tx_sent > 0 && !rts_hi_stop && uo_out[5] !== 1'b1)
+            fail("RTS# low through the stop bit of a received byte: never raised for it");
 
     // ── Run ─────────────────────────────────────────────────────────────────
     integer max_cycles = 0;
