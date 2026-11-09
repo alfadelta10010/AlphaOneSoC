@@ -19,7 +19,7 @@
 """
 import glob, json, os, re, sys
 
-EXPECT_PARTITIONS = 165   # rewritten by scripts/eqy-refit.sh after a harden
+EXPECT_PARTITIONS = 179   # rewritten by scripts/eqy-refit.sh after a harden
 
 
 def statuses(eqydir, only=None):

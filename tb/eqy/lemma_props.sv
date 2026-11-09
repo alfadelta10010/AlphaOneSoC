@@ -40,7 +40,7 @@ module lemma_props (
     wire [1:0]  spi_st;
     wire [31:0] pc, ifex_pc;
     wire [1:0]  exwb_memSize;
-    wire [2:0]  muldiv_st, qspi_state;
+    wire [2:0]  muldiv_st; wire [3:0] qspi_state;
 
     tt_um_alfadelta10010_alphaone_soc dut (
         .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in), .uio_out(uio_out),
@@ -85,7 +85,7 @@ module lemma_props (
     wire ok_spi_st        = !armed || (spi_st != 2'b11);                       // L2
     wire ok_memSize       = !armed || (exwb_memSize != 2'b11);                 // L2
     wire ok_st            = !armed || (muldiv_st != 3'b110 && muldiv_st != 3'b111);   // L2
-    wire ok_state         = !armed || (qspi_state != 3'b111);                  // L2
+    wire ok_state         = !armed || (qspi_state <= 4'd9);                // L2
     // Supporting invariant (H1): the pc is halfword-aligned. mepc[0] and
     // trap_pc[0] load from it, and induction cannot see that without it.
     // It is proved here like the rest; it is not an assumption.

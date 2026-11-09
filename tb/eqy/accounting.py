@@ -19,10 +19,10 @@ Exit status 1 if a count differs from the table of the work order.
 """
 import collections, json, re, sys
 
-EXPECT = dict(direct=1323, rename=7, recode_gold=10, recode_gate=19, removed=188,
-              gold=1528, gate=1349)
+EXPECT = dict(direct=1377, rename=7, recode_gold=11, recode_gate=22, removed=188,
+              gold=1583, gate=1406)
 RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, 6),
-          "soc.qspi.state": (3, 7), "soc.gpio_inst.spi_inst.st": (2, 3)}
+          "soc.qspi.state": (4, 10), "soc.gpio_inst.spi_inst.st": (2, 3)}
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
 # gold bit -> gate Q net, for a rename that no alias of the gold bit shows. In
 # the RTL if_pc_next[0] = (pc + 2 or 4)[0] = pc[0], a combinational copy of the
