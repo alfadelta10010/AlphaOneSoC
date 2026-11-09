@@ -23,7 +23,7 @@ been synthesised; nothing here is measured unless it cites a run.
 | (2026-10-31) **The RTL freezes once basic functionality works**, not at the shuttle's close. Software climbs from easy goals up: **FreeRTOS first, then Linux** in the next few PRs. Most of this roadmap stays in scope. | Section 9, the software ladder. |
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
-| (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33. | Branch `qspi-stream_alfadelta10010`; plan, DDR timing contract and work orders outside the repo. |
+| (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33. | Built on branch `qspi-stream_alfadelta10010`: streaming and `EDh` DDR are in `qspi_ctrl`, DDR is off at reset and selected by QSPI_CFG (syscon +0x1C, reset by every reset). A boot-time sweep over `DDR_CAP` picks the capture point and falls back to SDR (9.1 item 8). Wire protocol, timing budget and the measured sweep: `docs/qspi-ddr.md`. |
 | (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. The tree with all three blocks misses 16 ns by 0.303 ns at the slowest corner, so the clock is documented as **60 MHz** (16.67 ns, met at every corner). | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 60 MHz; 1.7 is the way back to 62.5 MHz. |
 
 The limits every item is judged against:
@@ -463,9 +463,9 @@ mutation survivor has a verdict (`tb/VPLAN.md` 4.2). Owed: the mutation
 re-score numbers (`tb/VPLAN.md` 4.6) and the residuals in 2.1. A re-harden
 needs the EQY, gate-level and SDF runs again (one netlist each).
 
-Next RTL change: QSPI streaming fetch and switchable DDR, in progress on
+Latest RTL change: QSPI streaming fetch and switchable DDR, on
 `qspi-stream_alfadelta10010` (docs/verification-runbook.md describes how to
-re-run the checks above).
+re-run the checks above, and what to run after a QSPI change).
 
 ## 3. Verilator port
 
@@ -612,7 +612,7 @@ a PLIC (all devices are polled).
    three. The harden is done (2026-11-01, 1.6 item 2).
 4. The software ladder's bare-metal rungs and FreeRTOS (9.2, rungs 1-5), on
    the current benches; they can start before the lock and become its
-   checkpoints.
+   checkpoints. The boot-time DDR sweep (9.1 item 8) belongs to the loader.
 5. Solver stack and riscv-formal (2.2 items 1-2), in parallel with step 6.
 6. Verilator port (3), then the upper rungs: Zephyr or NuttX, and Linux
    bring-up (4).
@@ -665,6 +665,19 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
    (section 0).
    FreeRTOS's RISC-V port computes its tick from `configCPU_CLOCK_HZ`, and
    Linux reads `timebase-frequency`: both take that value.
+8. **QSPI_CFG (syscon +0x1C: STREAM bit 0, DDR bit 1, DDR_CAP bits 4:2) is
+   reset by every reset** (pin, reboot, watchdog expiry): the boot always
+   starts in SDR, `DDR_CAP` 2, STREAM on unless the `ui_in[2]` strap is high.
+   Flash reads stream by default. DDR is switched on only after the boot-time
+   capture sweep (`docs/qspi-ddr.md`, section 6): write `DDR_CAP` in the same
+   store as `DDR` or before it, and **arm the watchdog before setting DDR from
+   flash-resident code**, since a bad point or a framing error in a stream
+   crashes and the watchdog reboot, with a BOOT_MODE note, is the way back to
+   SDR. BOOT_MODE `0xD8 + k` means "DDR tried at point k" (a watchdog reset
+   with it keeps SDR), `0xDF` means "DDR failed", and the range `0xD0` to
+   `0xDF` is reserved for this. Once enabled the watchdog must be serviced
+   (item 6). No fence or jump is needed after writing QSPI_CFG: a read in
+   flight finishes in its old mode and the next one reopens in the new.
 
 ### 9.2 Rungs
 
