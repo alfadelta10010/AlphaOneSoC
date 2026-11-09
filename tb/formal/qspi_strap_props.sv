@@ -46,7 +46,7 @@ module qspi_strap_props (
         if (armed) begin
             assert (a_idle == b_idle); assert (a_done == b_done); assert (a_rdata == b_rdata);
             assert (a_sck == b_sck);   assert (a_cs == b_cs);     assert (a_ctl == b_ctl);
-            assert (a_io == b_io);     assert (a_oe == b_oe);
+            assert (!a_oe || a_io == b_io); assert (a_oe == b_oe);   // io_out is a pin value only while io_oe (nib_n has no reset)
             assert (a_all == b_all);    // the control flops, the read register and the write-direction flops agree:
             assert (a_sr == b_sr);      // helper lemmas that make the miter 1-inductive
             assert (a_tt == b_tt);
