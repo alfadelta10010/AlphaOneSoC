@@ -829,6 +829,12 @@ module tb_tt_um;
             if (pid == ID_ddr_sweep && s_want_k == -2)      // +WANT_K=-2: any capture point the sweep picks (an SDF-timed run)
                 for (k = 1; k < 7; k = k + 1) if (s_pay == $sformatf("DDR on, cap %0d\n", k)) s_want = s_pay;
             if (pid == ID_ddr_sweep) $display("NOTE ddr_sweep UART: %0d bytes, last line \"%0s\"", s_pay.len(), s_pay.substr(0, (s_pay.len() > 0) ? s_pay.len() - 2 : 0));
+            // F8 (WO-64): a run that is to have used DDR must show EDh reads at the Pmod, or the
+            // DDR checksums (compared only with the SDR ones) pass with DDR never taking effect
+            if (pid == ID_ddr_flash || (pid == ID_ddr_sweep && (s_want_k > 0 || s_want_k == -2))) begin
+                $display("NOTE DDR run: %0d EDh flash reads at the Pmod", pmod.n_edh);
+                if (pmod.n_edh == 0) fail("DDR run: no EDh read reached the Pmod, DDR never took effect");
+            end
             if (s_pay != s_want)
                 fail($sformatf("the RP2350 received \"%s\" (%0d characters), want \"%s\" (%0d)", s_pay, s_pay.len(), s_want, s_want.len()));
             if (s_ev_i != s_n_ev) fail($sformatf("%0d cues, want %0d", s_ev_i, s_n_ev));

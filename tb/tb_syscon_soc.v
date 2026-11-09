@@ -594,6 +594,12 @@ module tb_syscon_soc;
                 fail($sformatf("%s: %0d EVENT stores, want %0d", test, n_events, exp_events));
             if (n_values != exp_values && test != "ddr_sweep")
                 fail($sformatf("%s: %0d VALUE stores, want %0d", test, n_values, exp_values));
+            // F8 (WO-64): a run that is to have used DDR must show EDh reads at the Pmod, or the
+            // DDR checksums (compared only with the SDR ones) pass with DDR never taking effect
+            if (test == "ddr_flash" || (test == "ddr_sweep" && want_k > 0)) begin
+                $display("NOTE %0s: %0d EDh flash reads at the Pmod", test, pmod.n_edh);
+                if (pmod.n_edh == 0) fail($sformatf("%s: no EDh read reached the Pmod, DDR never took effect", test));
+            end
             if (post_done < HOLD_CLOCKS || !m_off)
                 fail($sformatf("%s: the power-off hold was not observed", test));
             if (n_prst != exp_prst)
