@@ -137,8 +137,11 @@ module tb_tt_um;
     // The no-stream strap (ui_in[2]) must reach qspi_ctrl: QSPI_CFG.STREAM is
     // its inverse from the first clocked reset on, through every later reset
     // and reboot of these programs (none of them writes QSPI_CFG).
+    // RTL only: a gate-level netlist has no dut.soc hierarchy.
+`ifndef GL_TEST
     always @(posedge clk) if (cyc > 4 && dut.soc.qspi_stream_en !== ~no_stream)
         $display("FAIL QSPI_CFG.STREAM = %b with ui_in[2] = %b through reset (cycle %0d)", dut.soc.qspi_stream_en, no_stream, cyc);
+`endif
     reg        rd_late = 1'b0;        // +RD_LATE
     reg        strap = 1'b0;          // ui_in[0] until the program wants GPIO IN
     reg        strap_on = 1'b1;       // ui_in[0] is the strap, not tb_in[0]
