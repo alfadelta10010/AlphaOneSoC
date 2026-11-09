@@ -96,8 +96,9 @@ module tb_qspi_stress;
         .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in));
 
     qspi_pin_inv pins (.clk(clk), .ctl_oe(ctl_oe), .cs_n(cs_n), .sck(sck), .io_oe(io_oe),
-        .quiet(qspi.strm && qspi.state != 4'd1 && qspi.state != 4'd2 && qspi.state != 4'd3 &&
-               qspi.state != 4'd4 && qspi.state != 4'd8 && qspi.state != 4'd9));
+        .quiet(qspi.strm && qspi.state != qspi.S_CMD && qspi.state != qspi.S_ADDR &&
+               qspi.state != qspi.S_DUMMY && qspi.state != qspi.S_DATA &&
+               qspi.state != qspi.S_CLOSE && qspi.state != qspi.S_GO));
 
     qspi_pmod_model pmod (.host_sck(sck), .host_cs_n(cs_n), .host_ctl_oe(ctl_oe),
         .host_io(io_out), .host_oe(io_oe), .dev_io(dev_io), .dev_oe(dev_oe));
