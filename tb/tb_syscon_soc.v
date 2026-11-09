@@ -534,7 +534,7 @@ module tb_syscon_soc;
         no_stream_run = $test$plusargs("NO_STREAM");
         strap_ns = no_stream_run;
         if (rd_late_run) TCLK = 10.0;
-        if ($value$plusargs("CLK_HALF_PS=%d", half_ps)) TCLK = 2.0 * half_ps / 1000.0;   // 8333 = the chip's 60 MHz
+        if ($value$plusargs("CLK_HALF_PS=%d", half_ps)) TCLK = 2.0 * half_ps / 1000.0;   // 8000 = the chip's 62.5 MHz, 8333 = 60 MHz
         clk_go = 1'b1;
         mb_div = UART_DIV;
         if ($test$plusargs("MB_UART") && !$value$plusargs("MB_DIV=%d", mb_div)) mb_div = UART_DIV;   // the MB_UART build's divisor

@@ -23,7 +23,7 @@
 //
 // DDR (EDh): +DDR sets qspi_ctrl's ddr input, +DDR_CAP=<n> its capture point (default
 // 2). The default delays (2 ns, hold 1) suit DDR_CAP 0 and 1 at the 10 ns clock. +CLK_HALF_PS=<ps>
-// sets the clock's half period (default 5000; 8333 is the SoC's 60 MHz). +MODESW adds a
+// sets the clock's half period (default 5000; 8000 is the SoC's 62.5 MHz). +MODESW adds a
 // run of mode switches (ddr 0 -> 1 -> 0, ddr_cap changes) while a stream is open.
 // +SWEEP runs only the flash-only suite in the selected mode and prints one
 // "SWEEP PASS|FAIL" line (tests the capture point for the round trip the model's

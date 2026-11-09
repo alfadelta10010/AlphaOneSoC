@@ -119,7 +119,7 @@ module tb_tt_um;
 
     reg clk = 1'b0;
     reg clk_on = 1'b0;                // the board's clock is running
-    // +CLK_HALF_PS=<ps> (as tb_syscon_soc): the clock's half period; 8333 is the chip's 60 MHz. Absent, TCLK / 2.
+    // +CLK_HALF_PS=<ps> (as tb_syscon_soc): the clock's half period; 8000 is the chip's 62.5 MHz (8333 = 60 MHz). Absent, TCLK / 2.
     function automatic real clk_half_ns(input integer dummy);
         integer ps;
         begin
