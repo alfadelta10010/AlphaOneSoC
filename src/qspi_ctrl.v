@@ -24,6 +24,12 @@
 // must already be set (it is non-volatile; TinyTapeout's QA sets it on the
 // Pmods it ships).
 //
+// Streaming and DDR reads sample a nibble the flash launched at the last
+// falling SCK edge before a pause, when the next request continues the burst,
+// possibly long after the launch. That rests on the datasheet's static clock
+// rating (fC min D.C., 9.6) alone (tier 3: TinyQV and LISA capture early, see
+// docs/qspi-ddr.md 1.2); the boot sweep's execute test covers it on silicon.
+//
 // Writes never select the flash. 0x38 is the PSRAM's quad write, but on the
 // W25Q128JV-DTR it is Enter QPI, which would leave the flash deaf to every
 // SPI read until a power cycle. The core's PMA check already faults stores

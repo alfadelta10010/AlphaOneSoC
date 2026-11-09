@@ -1,7 +1,7 @@
 # DDR (DTR) flash reads: `EDh` on the TT QSPI Pmod
 
 This document describes the switchable double-data-rate flash read in `src/qspi_ctrl.v`: the wire
-protocol, the datasheet numbers it relies on, the timing budget at 60 MHz, how a nibble is captured,
+protocol, the datasheet numbers it relies on, the timing budget at 62.5 MHz, how a nibble is captured,
 what the clock duty cycle does to it, and what is still open. The flash is the Winbond W25Q128JV
 (the `-IM` part has no DTR command; use the `-DTR` datasheet, see `docs/qspi-memories.md`).
 
@@ -18,10 +18,21 @@ Sources named in the text:
   "Read latency"; `docs/qspi-memories.md`, section 10).
 - **[EST]** an estimate. Each should be replaced by a measurement when one exists.
 - **[SIM]** measured in simulation with the Pmod model (`tb/qspi_pmod_model.v`).
+- **[AUDIT]** `localFiles/qspi-stream-ddr/FLASH-DATASHEET-AUDIT.md` (2026-11-09; row ids such as D13).
 
-Clock: clk = 60 MHz, T = 16.667 ns, SCK = clk / 2 = 30 MHz. "Rise n / fall n" are the SCK edges of
+Evidence rule for every claim here: silicon proven (tier 1: TinyQV, same Pmod and flash) > FPGA proven
+with the real part (tier 2: LISA rev 3 on an Arty A7, 2026-10-25, `RESPIN.md:1407-1412`) > datasheet
+(tier 3). A claim says its tier; none of the DDR numbers below is tier 1, because no silicon has run
+`EDh` yet.
+
+Clock: clk = 62.5 MHz, T = 16.0 ns, SCK = clk / 2 = 31.25 MHz. "Rise n / fall n" are the SCK edges of
 SCK cycle n as numbered in Figure 27a (cycle 0 carries the first command bit). d is the clk duty
 cycle (fraction high); TT gives no guarantee on it.
+
+**Also valid at 60 MHz** (the earlier build clock, T = 16.667 ns, SCK 30 MHz): window W = 12.17 - Delta =
+10.17 ns at Delta 2, grid step 8.33 ns, guaranteed margin 0.92 ns per side at 50 % duty (0.42 at Delta 3),
+duty cutoff about d = 0.39, host-to-device 6.83 / 6.00 / 5.17 ns at d = 0.50 / 0.45 / 0.40 before the
+0.8 ns ss correction of section 3.1. Every 60 MHz figure that this document used is one of these.
 
 ## 1. Wire protocol (SPI-mode `EDh`, 1-4-4 DTR, as the host drives it)
 
@@ -48,11 +59,13 @@ cycle (fraction high); TT gives no guarantee on it.
   unchanged.
 - **SCK count of an open:** 8 command + 3 address + 1 mode + 7 dummy + N data = 19 + N cycles:
   23 for 4 bytes, 25 for 6 bytes (the open at `addr[1] = 1`, 1.4).
-- **SCK frequency:** the DTR limit is 66 MHz at 3.0 to 3.6 V [DS 9.6]. We run 30 MHz.
+- **SCK frequency:** the DTR limit is 66 MHz at 3.0 to 3.6 V [DS 9.6] and applies to the whole
+  instruction, command clocks included (the Pmod model checks it from rise 0, `tb_pmod_dtr` F12). We run
+  31.25 MHz (tier 3; LISA ran 25 MHz, tier 2).
 - **SCK high and low** must each be at least 45 % of the minimum period [DS 9.6 note 1]. Ours are
-  16.67 ns each, at any clk duty (3.4).
+  16.0 ns each, at any clk duty (3.4).
 - **Output toggle rate:** in DDR the address nibbles and the returned data change every T, the same
-  rate as SCK (30 MHz): inside TT's roughly 33 MHz rating [TT], with no headroom.
+  rate as SCK (31.25 MHz): about 5 % under TT's roughly 33 MHz rating [TT] [AUDIT 3.3].
 
 ### 1.2 Streaming (CS0 held, SCK paused low)
 
@@ -60,6 +73,17 @@ cycle (fraction high); TT gives no guarantee on it.
   launched the next byte's high nibble, the **held nibble**. The flash keeps it on the pins for the
   whole pause, however long (the device is static: minimum fC is DC [DS 9.6]). This is the same
   structure as SDR streaming, where nibble 8 is launched by the falling edge before the pause.
+- **What this relies on (tier 3 only).** The continuation samples the nibble the flash launched at the
+  last falling edge before the pause, possibly long after it was launched. Nothing but the datasheet's
+  static clock rating (fC min D.C., 9.6) says the flash holds it that long. Pause and resume themselves
+  are tier 1 (TinyQV stalls with CS held and SCK forced low, `cpu/qspi_ctrl.v:153-164, 172-174`) and tier 2
+  (LISA stops SCK with CS low, `lisa_qqspi.v:209, 520-531`); but TinyQV buffers the held nibble at its
+  normal latency, early in the stall (`qspi_ctrl.v:243`), and LISA captures DDR nibbles at their normal
+  capture point while SCK is paused, so neither captures a nibble after a long hold [AUDIT T1, D14, 2.6].
+  Our boot sweep's execute test (section 6, step 4) runs a straight-line block from flash in DDR, which
+  continues streams across pauses, so it covers this on our own silicon. This flash has no auto-sleep
+  while CS is low, so the risk is low; the cheapest hedge (a 4-flop buffer at the normal capture point) is
+  not built.
 - During a pause: CS0 low, SCK low, io_oe = 0.
 - A continuation of M bytes (4, or 2 for a top-up) is M SCK cycles. Its 2M nibbles are the held
   nibble plus 2M-1 launched by its own edges.
@@ -85,9 +109,15 @@ cycle (fraction high); TT gives no guarantee on it.
 
 ### 1.4 Datasheet ambiguities and the choices made
 
-- **Dummy count.** The 8.2.14 text says "four Dummy clocks are required in SPI mode" (wording copied
-  from `EBh`); Figure 27a draws **7** (cycles 12 to 18). We use 7. Another design read a real
-  W25Q128JV-DTR correctly with 7 on an FPGA with the same Pmod.
+- **Dummy count (SA-DDR-1, closed).** The 8.2.14 text (p.48) says "four Dummy clocks are required in
+  SPI mode" (wording copied from `EBh`: the same paragraph says it "does not require the EBh instruction
+  code"). Against it: instruction Table 4 (p.28) gives "Number of Clock(1-4-4)" 8 for the `EDh` M7-M0/dummy
+  field, which is the mode byte (1 DTR clock for 2 nibbles) plus **7 dummy** (M + 7 = 8); and Figures
+  27a/b/c all say "7 Dummy Clocks" (cycles 12 to 18). We use 7. **Tier 2:** LISA uses 7
+  (`lisa_qqspi.v:70, 507`; `docs/info.md:291`) and read the real W25Q128JV-DTR on the same Pmod correctly
+  in DDR on the Arty (capture points 2 and 3 matched SDR, the REV3 suite 27/27, NuttX boots,
+  `RESPIN.md:1407-1412`); a count of 4 would shift every word by 3 SCK. The sentence in 8.2.14 is an
+  erratum [AUDIT D5, 2.3].
 - **First data edge.** Figure 27a puts it at fall 18. A device that launched at rise 19 (half an SCK
   later) would move the single-read passing points two half clocks later, which the sweep absorbs.
   In a stream it changes which read the held nibble belongs to: nothing would be held during a pause,
@@ -108,8 +138,8 @@ cycle (fraction high); TT gives no guarantee on it.
 
 | Symbol | Meaning | Value | Status |
 |---|---|---|---|
-| fC (DTR, 3.0-3.6 V) | SCK for DTR instructions | at most 66 MHz | 30 MHz meets it |
-| tCLH, tCLL | SCK high / low | at least 45 % of Pc | 16.7 ns meets it |
+| fC (DTR, 3.0-3.6 V) | SCK for DTR instructions | at most 66 MHz | 31.25 MHz meets it |
+| tCLH, tCLL | SCK high / low | at least 45 % of Pc | 16.0 ns meets it |
 | tSLCH / tCHSH | CS active setup to / hold after SCK rise | 3 / 3 ns | at least 1.5 T meets it |
 | tCHSL / tSHCH | CS not-active hold / setup re SCK rise | 3 / 3 ns | met |
 | tSHSL1 | CS high between reads | 10 ns | 2 clocks meets it |
@@ -125,7 +155,7 @@ rising and falling edges", and Figure 27a. The assumption is that the rising-edg
 to falling edges and tCLQV / tCLQX apply to rising-edge launches. The model's DTR checks use those
 numbers and are listed in `tb/tb_pmod_dtr.v`.
 
-## 3. Timing budget at 60 MHz
+## 3. Timing budget at 62.5 MHz
 
 ### 3.1 Inputs
 
@@ -151,8 +181,8 @@ the min analysis with derate 0.95, "late" the max analysis with 1.05. The contra
 
 - **Half-cycle paths** (setup / hold slack at T = 16.0, ns, ss to ff over min/nom/max): `nib_p` to
   `nib_n` setup >= +6.42 (ss) and >= +7.30 (ff), hold >= +8.03; `cap_n` to `sr` setup >= +6.02,
-  hold >= +8.01; pin to `cap_n` (TT's 3.2 ns input delay) setup >= +5.01, hold >= +9.10. The 6.83 ns of the
-  d = 0.5 table in 3.2 was 0.8 ns too high for setup at ss; no half-cycle path is a limit.
+  hold >= +8.01; pin to `cap_n` (TT's 3.2 ns input delay) setup >= +5.01, hold >= +9.10. The 60 MHz table's
+  6.83 ns (d = 0.5) was 0.8 ns too high for setup at ss; no half-cycle path is a limit.
 - **Negedge mapping:** all eight negedge flops (`nib_n[3:0]`, `cap_n[3:0]`) are posedge cells
   (`dfxtp_2`) behind a private `inv_2` on the clock (cloned from one inverter, hung off the ordinary
   clock leaves). At max_ss they see the falling edge 2.201 to 2.218 ns after the clk-port fall (17 ps
@@ -184,45 +214,45 @@ change. Variants considered:
 
 | Quantity (as built) | d = 0.50 | d = 0.45 | d = 0.40 |
 |---|---|---|---|
-| setup, need 1.0 ns | 6.83 | 6.00 | 5.17 |
-| hold, need 2.0 ns (mirrored: d = 0.50 / 0.55 / 0.60) | 6.83 | 6.00 | 5.17 |
+| setup, need 1.0 ns | 6.50 | 5.70 | 4.90 |
+| hold, need 2.0 ns (mirrored: d = 0.50 / 0.55 / 0.60) | 6.50 | 5.70 | 4.90 |
 
-(setup = hold = d.T - 1.5 ns and (1-d).T - 1.5 ns, with 1.5 ns for the skew between the two flop
-types [EST]).
+(setup = hold = d.T - 1.5 ns and (1-d).T - 1.5 ns at T = 16.0 ns, with 1.5 ns for the skew between the
+two flop types [EST]). With the 3x4 STA numbers of 3.1 (T/2 - 0.59, |a_dat - a_sck| <= 0.92, sigma 1.0)
+the setup is about 5.5 ns and the hold about 6.1 ns; both margins are at least 4 ns [AUDIT 3.2]. The
+60 MHz figures were 6.83 / 6.00 / 5.17.
 
 The pin select (`t_ddr`) is constant through a transaction and changes only on the clock that takes
 the bus. SCK has no mux, so it cannot glitch.
 
-The command phase of an `EDh` (SDR on IO0) is driven as for `EBh`, from the posedge flops: setup
-1.5 T, hold well above 2 ns.
+The command phase of an `EDh` (SDR on IO0) is **also driven from `nib_n`**, not from the posedge
+flops (`src/qspi_ctrl.v:306`, `io_out = nib_n & (io_sdr | {4{t_ddr}})`: in DDR the SDR term is forced to
+1111, so the pins carry `nib_n`; its next value is `nib_next` for `S_CMD`, 281-301, loaded at 329). Each
+command bit changes on a falling clk edge, T/2 before the SCK rise that samples it, and holds until T/2
+before the next sampled rise, two SCK edges later: **setup T/2 (8 ns), hold 1.5 T (24 ns)**, against
+1 / 2 ns. The earlier text here said "from the posedge flops: setup 1.5 T", which is backwards (the audit's
+D13 "doc error"). Tier 2: LISA's `EDh` command on IO0 at 25 MHz read the real part [AUDIT D1, D13].
 
 ### 3.3 Device to host capture window
 
 A nibble launched at the SCK flop edge E is valid at the capture flop from E + R + tCLQV + Delta/2
 until E + T + R + tCLQX - Delta/2 (the next launch is one T later). Its width is
-**W = T - (tCLQV - tCLQX) - Delta = 12.17 - Delta ns** (10.2 at Delta = 2). SDR has 2T - 4.5 - Delta,
-about 26.8 ns, for comparison. Capture points sit on a half-clock grid, X_c = c.T/2 after E
-(8.33 ns steps). A whole-clock grid (16.67 ns) is wider than W at any Delta, so some R would have no
-capture point at all: **half-clock capture is required.**
+**W = T - (tCLQV - tCLQX) - Delta = 11.5 - Delta ns** at T = 16.0 (9.5 at Delta = 2; 10.17 at 60 MHz),
+over [R+7, R+16.5). SDR has 2T - 4.5 - Delta, about 27.5 ns, for comparison. Capture points sit on a
+half-clock grid, X_c = c.T/2 = 8c ns after E (8.0 ns steps). A whole-clock grid (16 ns) is wider than W at
+any Delta, so some R would have no capture point at all: **half-clock capture is required.**
 
-Derived table, d = 0.5, Delta = 2 (window [R+7, R+17.17)):
+Derived table, d = 0.5, Delta = 2, T = 16.0 [AUDIT 3.2] (c = DDR_CAP + 1, X_c = 8c ns):
 
-| R (ns) | passing c (margin ns) | best c |
-|---|---|---|
-| 8 | 2 (1.67), 3 (0.17) | 2 |
-| 11 | 3 (3.17) | 3 |
-| 14 | 3 (4.00) | 3 |
-| 17 | 3 (1.00), 4 (0.83) | 3 (the straddling worst case) |
-| 20 | 4 (3.83) | 4 |
-| 23 | 4 (3.33) | 4 |
-| 26 | 4 (0.33), 5 (1.50) | 5 |
-| 29 | 5 (4.50) | 5 |
-| 32 | 5 (2.67) | 5 |
+| R (ns) | 8 | 11 | 14 | 17 | 20 | 23 | 26 | 29 | 32 |
+|---|---|---|---|---|---|---|---|---|---|
+| passing c (margin ns) | 2 (1.0), 3 (0.5) | 3 (3.5) | 3 (3.0) | 3 (0.0), **4 (1.5)** | 4 (4.5) | 4 (2.0) | 5 (2.5) | 5 (4.0) | 5 (1.0), 6 (0.5) |
 
-The guaranteed margin at the worst R is (W - step) / 2 = (3.83 - Delta) / 2 per side at 50 % duty:
-0.92 ns at Delta = 2, 0.42 at Delta = 3, none at 3.8 or more. The datasheet's spread tCLQV - tCLQX
+The guaranteed margin at the worst R is (W - step) / 2 = (3.5 - Delta) / 2 per side at 50 % duty:
+**+0.75 ns at Delta = 2** (0.92 at 60 MHz), +0.25 at Delta = 3, none at Delta 3.5 or more. The worst R is
+about 16.25 ns, where c = 3 and c = 4 both have 0.75 ns. This is positive but thinner than at 60 MHz. The datasheet's spread tCLQV - tCLQX
 (4.5 ns, across parts and conditions) is pessimistic; one part at one temperature spreads less, and
-the sweep measures the real eye. DDR at 60 MHz on TT pads is marginal by construction, which is why
+the sweep measures the real eye. DDR at 62.5 MHz on TT pads is marginal by construction, which is why
 it is off at reset and software-switched.
 
 **Measured in simulation [SIM]** (`make test-qspi-ddr-sweep`, `tb/qspi_ddr_sweep.sh`, at the 62.5 MHz
@@ -236,8 +266,8 @@ difference fails the target:
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | passing c | 2 3 | 3 | 3 | 3 4 | 4 | 4 | 5 | 5 | 5 6 | 6 | 6 | 6 7 | 7 | 7 | 8 | 8 |
 
-The budget text above (sections 3.1 to 3.3, derived at 60 MHz) is being redone at 16 ns by the datasheet
-audit; the derived table is still the 60 MHz one. With `+DTR_LAUNCH=1` (a device that launches the first
+The simulated table equals the audit's expectation for T = 16 [AUDIT 3.2]; four points sit exactly on a
+window edge (R = 17 / c = 3, 23 / 5, 41 / 6, 47 / 8) and are simulation ties, not margin. With `+DTR_LAUNCH=1` (a device that launches the first
 nibble half an SCK late) the streamed suite passes at no capture point, for every R. The SoC runs
 (`ddr_sweep` in `SYSCON_SOC_RUNS`) pick DDR_CAP 2, 3, 3, 4 at R = 11, 17, 23, 29 at both 62.5 and 60 MHz.
 
@@ -246,31 +276,31 @@ nibble half an SCK late) the streamed suite passes at no capture point, for ever
 - **SCK itself does not care.** Every SCK edge comes from a rising clk edge, so high = low = T at any
   duty.
 - **Host to device:** setup scales with d.T and hold with (1-d).T. As built the margins stay at least
-  4 ns down to d = 0.40 and up to 0.60.
+  4 ns (4.90 ns) down to d = 0.40 and up to 0.60.
 - **Capture grid:** the points that capture on a falling clk edge move by (d - 0.5).T against the
   rising-edge ones, so the steps become alternately d.T and (1-d).T and the worst-case margin is
-  (W - max(d, 1-d).T) / 2. At Delta = 2 that is 0.50 ns at d = 0.45, 0.08 ns at d = 0.40, and below
-  d of about 0.39 some R has no point. DDR then simply does not come up: the sweep finds nothing and
+  (W - max(d, 1-d).T) / 2. At Delta = 2 and T = 16.0 that is **+0.35 ns at d = 0.45, -0.05 ns at
+  d = 0.40**, and below d of about **0.406** (0.39 at 60 MHz) some R has no point. DDR then simply does not come up: the sweep finds nothing and
   the SoC stays in SDR (the safe direction).
-- The demo board's clock at 60 MHz: whether it is an integer divider of its PLL or a fractional one
+- The demo board's clock at 62.5 MHz: whether it is an integer divider of its PLL or a fractional one
   (alternating periods) and what duty it has is open (section 6). A fractional divider would hurt
   the core's own STA, not only DDR.
 
 ## 4. Capture points and the registers
 
 `DDR_CAP[2:0]` selects the capture point: a nibble is captured **c = DDR_CAP + 1 half clocks** after
-the clk edge that toggles the SCK flop (8.33 to 66.7 ns).
+the clk edge that toggles the SCK flop (8 to 64 ns at T = 16.0).
 
-| DDR_CAP | c | Captured by | Time after the launching edge |
+| DDR_CAP | c | Captured by | Time after the launching edge (c * 8 ns) |
 |---|---|---|---|
-| 0 | 1 | negedge flops `cap_n`, taken at the next rising edge | 8.33 ns |
-| 1 | 2 | the pins, at a rising clk edge | 16.67 ns |
-| **2 (reset)** | **3** | **negedge flops `cap_n`** | **25.0 ns** |
-| 3 | 4 | the pins, at a rising clk edge | 33.3 ns |
-| 4 | 5 | negedge flops | 41.7 ns |
-| 5 | 6 | the pins | 50.0 ns |
-| 6 | 7 | negedge flops | 58.3 ns |
-| 7 | 8 | the pins | 66.7 ns |
+| 0 | 1 | negedge flops `cap_n`, taken at the next rising edge | 8 ns |
+| 1 | 2 | the pins, at a rising clk edge | 16 ns |
+| **2 (reset)** | **3** | **negedge flops `cap_n`** | **24 ns** |
+| 3 | 4 | the pins, at a rising clk edge | 32 ns |
+| 4 | 5 | negedge flops | 40 ns |
+| 5 | 6 | the pins | 48 ns |
+| 6 | 7 | negedge flops | 56 ns |
+| 7 | 8 | the pins | 64 ns |
 
 Odd c captures in four negedge flops on IO[3:0] (`cap_n`), which posedge logic takes half a clock
 later; even c captures at a rising clk edge straight from the pins. **The default, `DDR_CAP = 2`, is a
@@ -322,6 +352,7 @@ moves later.
 |---|---|---|
 | Does TinyQV's "a little over 20 ns" include the flash's clock-to-output (reading A) or not (B)? | TinyQV's author, TT forum | `DDR_CAP` reset 2 (A) or 3 (B) |
 | TT mux and pad delays per corner, rise and fall separately, for the SCK output and the IO pins. SCK comes back on `uio_in[3]` (loopback, `docs/qspi-memories.md` section 10), so it can be measured | TT, or measure | replaces every [EST] in 3.1 |
-| The demo board's clock at 60 MHz: integer divider, duty, jitter | TT, board firmware | 3.4 |
+| The demo board's clock at 62.5 MHz: integer divider, duty, jitter | TT, board firmware | 3.4 |
 | Does note 6 (alignment) cover `EDh`? | Winbond | moot while opens are aligned |
+| Does the held nibble survive a long pause (section 1.2)? | the boot sweep's execute test on silicon, or an FPGA stream with delays between fetches | tier 3 only today |
 | No falling-edge setup/hold rows and no rising-edge output rows | Winbond | covered by the 6.8 ns margin of 3.2 and measured by the sweep |
