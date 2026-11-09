@@ -71,6 +71,7 @@ pass_case P5 c_p5 +SEQ=stream
 pass_case P6 c_p5 +SEQ=stream +DTR_LAUNCH=1 +HOST_LAUNCH=1
 pass_case P12 c_p12 +SEQ=p12
 pass_case P13 c_p13 +OPEN_A=FFFFFC +OPEN_N=8
+pass_case P15 c_p14 +SCK_PS=15200 +SU_C_PS=3000 +REL_PS=3000 +CAP_PS=3000
 pass_case P14 c_p14 +SCK_PS=33334 +QSPI_DELAY=22 +QSPI_HOLD=17 +CAP_PS=25000
 
 # P11: same data, same margins as without delay (SCK 20 ns).
@@ -118,6 +119,8 @@ fail_case F6 "SCK period below the minimum" +SCK_PS=15000
 fail_case F7 "host and device both driving IO" +NO_REL
 fail_case F8 "something other than its Exit QPI" +FLASH_QPI
 fail_case F9 "A1:A0 != 00" +OPEN_A=000102
+# F12: only the eight command clocks are faster than 66 MHz (14 ns, high/low 7 ns pass the 45 % rule); the rest is at 40 ns.
+fail_case F12 "SCK period below the minimum for the EDh command" +CMD_SCK_PS=14000 +SU_C_PS=3000
 fail_case F10 "IO release hold violated" +REL_PS=1500
 # F11: IO released 0.5 ns before the rise that samples address nibble 2: the lines were not held for the setup time.
 fail_case F11 "DTR_AD: data-in setup violated.*before SCK rise" +DROP_K=2 +DROP_PS=500

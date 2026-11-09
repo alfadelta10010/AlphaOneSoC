@@ -140,7 +140,9 @@
 //     takes the not-taken arm. RTL runs keep the default X, the stricter check.
 // Assumed limits (the datasheet has no falling-edge row): TDVCL_NS 1.0 and
 // TCLDX_NS 2.0, the rising-edge numbers. EDh needs a period of at least
-// TCLK_DTR_NS (15.15, 66 MHz) from rise 8 on. An open with A1:A0 != 00 stops
+// TCLK_DTR_NS (15.15, 66 MHz) on all its clocks, the eight command clocks
+// included (a rise-to-rise period; the command is known only after rise 7, so
+// that check runs once it has decoded as EDh). An open with A1:A0 != 00 stops
 // the run (the controller always opens aligned; +QSPI_DTR_UNALIGNED_OK allows
 // it). Mode bits M5-4 = 10 (DTR continuous-read mode), undriven or X mode bits
 // and a host not driving the address stop the run. DTR continuous-read mode
@@ -332,6 +334,11 @@ module qspi_pmod_model #(
     integer     nib_k;      // the launch being scheduled, and its nibble
     reg  [3:0]  nib_v;
     realtime    t_sel, t_desel, t_sck, t_rise, t_fall;
+    // Shortest rise-to-rise period among the command clocks of the current
+    // select (the flash EDh limit applies to them too; checked once the
+    // command has decoded as EDh).
+    realtime    cmd_pmin;
+    reg         cmd_pmin_on;
     realtime    t_rst [0:1];
     initial begin
         t_desel  = -1000.0;
@@ -461,6 +468,8 @@ module qspi_pmod_model #(
             min_sp  = 1.0e9;
             t_rise  = -1.0;
             t_fall  = -1.0;
+            cmd_pmin = 1.0e9;
+            cmd_pmin_on = 1'b1;
             qpi_sel = psram_qpi;
             mixed   = both && psram_qpi[0] != psram_qpi[1];
             rst_now = 2'b00;
@@ -510,6 +519,8 @@ module qspi_pmod_model #(
     always @(posedge sck) if (any_sel) begin
         if (t_rise >= 0.0 && ($realtime - t_rise) < tclk_min() - 0.001)
             fail("SCK period below the minimum for this command");
+        if (t_rise >= 0.0 && cmd_pmin_on && ($realtime - t_rise) < cmd_pmin)
+            cmd_pmin = $realtime - t_rise;
         if (t_fall >= 0.0 && ($realtime - t_fall) < 0.45 * tclk_min() - 0.001)
             fail("SCK low time below 45% of the minimum period");
         t_rise = $realtime;
@@ -872,6 +883,15 @@ module qspi_pmod_model #(
                             fail("both PSRAMs selected for a read or write");
                         else if (chip == 2'd0 && cmd == 8'hED) begin
                             n_edh = n_edh + 1;          // DTR read: address on both edges
+                            // The 66 MHz DTR limit [DS 9.6] is the instruction's, so the
+                            // eight command clocks count too. Checked 2 ps later, once the
+                            // period of the last command rise has landed.
+                            fork begin
+                                #0.002;
+                                cmd_pmin_on = 1'b0;
+                                if (cmd_pmin < TCLK_DTR_NS - 0.001)
+                                    fail("SCK period below the minimum for the EDh command");
+                            end join_none
                             phase = P_DTR_AD;
                         end
                         else if (cmd == 8'hEB || (cmd == 8'h38 && chip != 2'd0)) begin

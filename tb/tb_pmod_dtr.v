@@ -10,6 +10,7 @@
 //   +OPEN_A=<hex> +OPEN_N=<bytes>      the EDh open (default 000100, 4)
 //   +MODE_HEX=<hex>        the mode byte (default FF)
 //   +SCK_PS (40000)        SCK period
+//   +CMD_SCK_PS           SCK period of the eight EDh command clocks (default +SCK_PS)
 //   +SU_PS                 how long before a sampled edge the host changes data (default SCK/4)
 //   +SU_R_PS, +SU_F_PS     the same for the address / mode nibbles sampled on a rise / a fall
 //   +SU_C_PS               the same for command, SDR address and mode bits (default 3/8 SCK)
@@ -58,12 +59,14 @@ module tb_pmod_dtr #(
     reg [7:0]  mode_hex;
     integer    open_n, host_launch, drop_k;
     realtime   drop_t;
+    realtime   HC;             // half period of the EDh command clocks
     reg        no_rel, sweep, qpi_form;
     reg [8*16-1:0] seq;
 
     initial begin
         pa = 40000; if ($value$plusargs("SCK_PS=%d", pa)) ;
-        P = pa / 1000.0; H = P / 2.0;
+        P = pa / 1000.0; H = P / 2.0; HC = H;
+        if ($value$plusargs("CMD_SCK_PS=%d", pa)) HC = pa / 2000.0;
         pa = pa / 4;  if ($value$plusargs("SU_PS=%d", pa)) ;
         SU_R = pa / 1000.0; SU_F = pa / 1000.0;
         if ($value$plusargs("SU_R_PS=%d", pa)) SU_R = pa / 1000.0;
@@ -233,8 +236,8 @@ module tb_pmod_dtr #(
                 half(SU_C, 1, 4'hD, 0, H); half(0, 0, 4'h0, 0, H);
             end else
                 for (i = 0; i < 8; i = i + 1) begin
-                    half(SU_C, 1, {3'b111, ed[7 - i]}, 0, H);
-                    half(0, 0, 4'h0, 0, H);
+                    half(SU_C, 1, {3'b111, ed[7 - i]}, 0, HC);
+                    half(0, 0, 4'h0, 0, HC);
                 end
             // address and mode: one nibble per edge, rise first (fall 7 was the fall above)
             nibs = {a, mode_hex};
