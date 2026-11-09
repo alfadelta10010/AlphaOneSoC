@@ -28,8 +28,19 @@ been synthesised; nothing here is measured unless it cites a run.
 
 The limits every item is judged against:
 
-* **Area.** The last harden (2026-11-01, main `a2f7285` with syscon, fetch
-  reuse and SPI; `localFiles/harden-2026-11-01`) is 12 tiles as 3x4, with
+* **Area.** The last harden (2026-11-09, `qspi-stream_alfadelta10010` at
+  `84c878f`: streaming, switchable DDR, QSPI_CFG, FC02/FC49 removed, reset
+  divisor 34) is 12 tiles as 3x4, with **70.9% area utilisation** (164,798 µm²
+  of standard cells) and **71.8% routing density** (global-route usage,
+  overflow 117), DRC, LVS and antenna clean, precheck passed; at 16 ns
+  (62.5 MHz) setup +0.647 ns at max_ss and hold +0.091 ns at min_ff, every
+  corner met. The QSPI work added about 57 flops and ~4,000 µm²; the routing
+  density fell because placement came out tighter and half the hold buffers
+  went (525 -> 242): run-to-run variation, not headroom to bank. A trial that
+  lets synthesis use the `_1` cells (2026-11-09, on main) cut placed area 15%
+  but raised routing to 77.6% with overflow 316 and left hold at +0.025 ns:
+  it does not buy routing room. The previous harden (2026-11-01, main
+  `a2f7285` with syscon, fetch reuse and SPI; `localFiles/harden-2026-11-01`) was 12 tiles as 3x4, with
   **67.3% area utilisation** (160,752 µm² of standard cells) and **75.8%
   routing density**, DRC, LVS and antenna clean (1.6 item 2). Against the
   PR #12 tree's harden (2026-10-25, `localFiles/harden-2026-10-25`: 68.8% and

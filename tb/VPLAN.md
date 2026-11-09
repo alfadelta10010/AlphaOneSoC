@@ -468,11 +468,14 @@ Residuals:
 
 ### 4.4 Equivalence, gate level, pins, the Pmod model
 
-EQY (`tb/eqy/run.sh`): RTL main a2f7285 is equivalent to the fin-3x4 post-PnR netlist
-(nl.v, md5 4d861ceb16f49fcadb0e55cf65d6e26d). **EQY PASS: 165 of 165 partitions, all by
-sat at induction length 1.** 186 bits removed by synthesis (184 CSR + gpio out_r[1], [3])
-are proved constant on the RTL and tied (181 to 0, 5 to 1). Four FSMs recoded one-hot
-(exwb_memSize, muldiv st, qspi state, spi st) are compared through the FSM cut point, with
+EQY (`tb/eqy/run.sh`): RTL `qspi-stream_alfadelta10010` at 84c878f is equivalent to its
+3x4 post-PnR netlist (nl.v, md5 71d75961e9e64b995d551afdec157aff, 2026-11-09). **EQY PASS:
+179 of 179 partitions, all by sat at induction length 1.** (Main a2f7285 against the
+fin-3x4 netlist of 2026-11-01, md5 4d861ceb...: 165 of 165.) `ns_now` is left unmatched so
+strap_ns_q's partition sees its whole D cone. 186 bits removed by synthesis (184 CSR + gpio
+out_r[1], [3]) are proved constant on the RTL and tied (181 to 0, 5 to 1). Four FSMs recoded
+one-hot (exwb_memSize, muldiv st, qspi state -- 4 bits, 10 states with streaming -- and spi
+st) are compared through the FSM cut point, with
 the netlist's one-hot invariant proved (k = 1; the negative control fails). 7 of 7 mutants
 are caught by a pdr counterexample: netlist gates in the D cones of ifex_pc[4], syscon
 cause, spi cc[5] and if_kbuf[5], the five misa tie-1 bits tied to 0, and wrong qspi and spi
