@@ -22,9 +22,9 @@
 // Fixed 8N1. baud = clk / (16 x divisor). The divisor resets to DIV_RESET,
 // non-zero, so a THR write can never stall forever before software sets it;
 // the default, 34, is 114,890 baud (-0.27% from 115200) at the documented
-// 62.5 MHz core clock (115200 +0.5% at the old 50 MHz), so a
-// program in flash can print before it programs the divisor. A divisor of 0
-// counts as 1.
+// 62.5 MHz core clock (at the old 50 MHz the reset divisor was 27, 115,741
+// baud), so a program in flash can print before it programs the divisor. A
+// divisor of 0 counts as 1.
 //
 // What is kept of each register:
 //   IER  bits 0 (ERBFI) and 1 (ETBEI); the rest read 0.

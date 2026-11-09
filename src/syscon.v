@@ -24,9 +24,9 @@
 //   +0x18  POWER        reserved: reads 0, writes ignored.
 //   +0x1C  QSPI_CFG     R/W (lane 0), reads {27'b0, DDR_CAP, DDR, STREAM}.
 //                       [0] STREAM: 1 = streaming flash reads allowed (qspi_ctrl
-//                       stream_en). [1] DDR: 1 = DTR flash reads (stored only
-//                       until qspi_ctrl uses it). [4:2] DDR_CAP: DDR capture
-//                       point (stored only). Reset by rst_soc -- every reset,
+//                       stream_en). [1] DDR: 1 = DTR flash reads (qspi_ctrl
+//                       ddr). [4:2] DDR_CAP: the DDR capture point (qspi_ctrl
+//                       ddr_cap). Reset by rst_soc -- every reset,
 //                       reboot and watchdog expiry included: STREAM to the
 //                       inverse of the no-stream strap, DDR to 0, DDR_CAP to
 //                       DDR_CAP_RESET. So any reboot comes back in SDR, which is
