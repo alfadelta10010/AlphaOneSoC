@@ -134,6 +134,10 @@ module tb_tt_um;
     always @(posedge clk) cyc <= cyc + 1;
 
     reg        rst_n = 1'b1;
+    reg        rd_late = 1'b0;        // +RD_LATE
+    reg        strap = 1'b0;          // ui_in[0] until the program wants GPIO IN
+    reg        strap_on = 1'b1;       // ui_in[0] is the strap, not tb_in[0]
+    reg        no_stream = 1'b0;      // +NO_STREAM: ui_in[2], the no-stream strap, is 1 while strap_on
     // The no-stream strap (ui_in[2]) must reach qspi_ctrl: QSPI_CFG.STREAM is
     // its inverse from the first clocked reset on, through every later reset
     // and reboot of these programs (none of them writes QSPI_CFG).
@@ -142,10 +146,6 @@ module tb_tt_um;
     always @(posedge clk) if (cyc > 4 && dut.soc.qspi_stream_en !== ~no_stream)
         $display("FAIL QSPI_CFG.STREAM = %b with ui_in[2] = %b through reset (cycle %0d)", dut.soc.qspi_stream_en, no_stream, cyc);
 `endif
-    reg        rd_late = 1'b0;        // +RD_LATE
-    reg        strap = 1'b0;          // ui_in[0] until the program wants GPIO IN
-    reg        strap_on = 1'b1;       // ui_in[0] is the strap, not tb_in[0]
-    reg        no_stream = 1'b0;      // +NO_STREAM: ui_in[2], the no-stream strap, is 1 while strap_on
     reg  [7:0] tb_in = 8'h00;
     wire       uart_rx;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted

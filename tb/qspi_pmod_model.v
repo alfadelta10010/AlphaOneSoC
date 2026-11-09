@@ -268,6 +268,15 @@ module qspi_pmod_model #(
     integer dtr_dummy, dtr_launch;   // EDh: dummy cycles; first nibble on fall (0) or the next rise (1)
     reg     dtr_unal_ok;
     reg     eye_rand;      // +QSPI_EYE_RANDOM
+
+    // Flash read counters (declared before their first use: iverilog 13 rejects a
+    // use before the declaration), for benches (hierarchical) and the line printed at
+    // the end: n_eb (alias n_ebh) / n_edh = EBh / EDh commands (a stream of
+    // sequential reads shows one), n_resume = SCK edges after a pause in a
+    // flash read's data phase, n_bytes = flash bytes launched (both nibbles).
+    integer n_eb = 0, n_edh = 0, n_resume = 0, n_bytes = 0;
+    wire [31:0] n_ebh = n_eb;
+
     // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
     reg [1:0] psram_qpi;    // in QPI mode
     reg [1:0] psram_rst;    // reset since power-up: reads, writes and 35h allowed
@@ -327,6 +336,13 @@ module qspi_pmod_model #(
     reg         mixed;      // broadcast to PSRAMs in different modes
     reg  [1:0]  qpi_sel;    // psram_qpi when this transaction began
     reg  [7:0]  cmd_q;      // mixed broadcast: the QPI chip's command
+    // Declared here, before their first use (iverilog 13 rejects a use before
+    // the declaration). EDh: a flash in the DTR read (see the header).
+    wire dtr_rd = (chip == 2'd0 && cmd == 8'hED);
+    // The resume detector's state (see "A resume is an SCK edge" below).
+    reg      sck_p = 1'bx;
+    realtime t_edge, min_sp, sp;
+    initial begin t_edge = -1.0; min_sp = 1.0e9; end
     reg  [1:0]  rst_now;    // PSRAMs reset in this transaction
     integer     sel_gen;    // counts deselects: cancels a pending output enable
     integer     launch;     // counts read nibbles launched (see below)
@@ -977,8 +993,6 @@ module qspi_pmod_model #(
     // is deselected first; chip select rising turns it off after TCHZ_NS. So
     // the nibble launched by the falling edge that deselects the chip -- which
     // lands after the release -- changes dev_io but never drives the pins.
-    // EDh: a flash in the DTR read (see the header).
-    wire dtr_rd = (chip == 2'd0 && cmd == 8'hED);
 
     // One address or mode nibble of the EDh open, from the edge that sampled it.
     task dtr_nib;
@@ -1049,19 +1063,9 @@ module qspi_pmod_model #(
     // Bus contention
     always @(*) if (h_oe && dev_oe) fail("host and device both driving IO");
 
-    // Flash read counters, for benches (hierarchical) and the line printed at
-    // the end: n_eb (alias n_ebh) / n_edh = EBh / EDh commands (a stream of
-    // sequential reads shows one), n_resume = SCK edges after a pause in a
-    // flash read's data phase, n_bytes = flash bytes launched (both nibbles).
-    integer n_eb = 0, n_edh = 0, n_resume = 0, n_bytes = 0;
-    wire [31:0] n_ebh = n_eb;
-
     // A resume is an SCK edge, in the data phase of a flash EBh / EDh, more
     // than 1.5 times the shortest edge spacing seen so far in this select
     // after the edge before it. SCK may stop at either level.
-    reg      sck_p = 1'bx;
-    realtime t_edge, min_sp, sp;
-    initial begin t_edge = -1.0; min_sp = 1.0e9; end
     always @(sck) begin
         if ((sck === 1'b0 || sck === 1'b1) && (sck_p === 1'b0 || sck_p === 1'b1) && any_sel) begin
             if (t_edge >= 0.0) begin
