@@ -131,8 +131,10 @@ numbers and are listed in `tb/tb_pmod_dtr.v`.
 
 | Quantity | ff | tt | ss | Source |
 |---|---|---|---|---|
-| a_dat: clk to an IO pin at the tile, combinational `io_out` | 3.47 (min) | 5.80 (max) | about 8.7 | [STA]; ss is 5.80 x 1.5 [EST] |
-| a_sck: clk to the registered SCK pin at the tile | about 1.2 | about 1.8 | about 2.8 | [EST] |
+| a_sck: clk rise to the registered SCK pin (`uio_out[3]`) at the tile, early / late, `qsd-af1c678` 3x4 harden | 1.23 to 1.54 | 1.82 to 2.27 | 3.29 (min_ss, SCK fall early) to 4.07 (max_ss, SCK rise late) | [STA] |
+| a_dat: clk fall to the DDR IO pins (`uio_out[1,2,4,5]`, from the `nib_n` flops), early / late | 1.09 / 1.46 (min_ff / max_ff) | 1.62 to 2.21 | 2.96 to 4.04 | [STA] |
+| a_dat - a_sck, worst over a pin pair, early/late derate mixed (pessimistic): setup side (+) and hold side (-) | +0.13 / -0.33 (min_ff) to +0.13 / -0.37 (max_ff) | +0.24 / -0.47 to +0.25 / -0.54 | +0.48 / -0.92 (max_ss); +0.52 / -0.80 (min_ss) | [STA]; with one derate on both sides -0.59 to +0.11 at ss |
+| SDR IO pin path (posedge, combinational `io_out`); masked in DDR, where `t_ddr` = 1 makes `io_out` = `nib_n` | 1.51 (min_ff, min) | 5.51 to 6.30 | 10.34 to 11.88 | [STA] |
 | sigma: SCK-to-IO skew through the TT mux, pads and board | +/-1.0 | +/-1.0 | +/-1.0 | [EST] |
 | R: round trip excluding the flash (SCK flop, mux, pad, board, flash pin, and back to the capture flop), reading A: TinyQV's "a little over 20 ns" includes the flash's clock-to-output | about 11 | about 15.5 | about 22.5 | [TT] with ff x 0.7, ss x 1.45 [EST] |
 | R, reading B: the 20 ns is the pads only | about 14.5 | about 20.5 | about 30 | [TT] + [EST] |
@@ -141,6 +143,27 @@ numbers and are listed in `tb/tb_pmod_dtr.v`.
 
 The swept R range (8 to 53 ns in the simulation, 3.3) covers both readings at every corner with
 margin.
+
+Measured on the `qsd-af1c678` 3x4 harden (post-route SPEF, all nine corners, T = 16.0 ns; `pnl` md5
+ddb88503; PD review 55). The a_sck / a_dat rows above are those values at the tile pins; "early" is
+the min analysis with derate 0.95, "late" the max analysis with 1.05. The contract |a_dat - a_sck| <=
+2 ns holds with margin (worst 0.92 ns, max_ss). More from the same run:
+
+- **Half-cycle paths** (setup / hold slack at T = 16.0, ns, ss to ff over min/nom/max): `nib_p` to
+  `nib_n` setup >= +6.42 (ss) and >= +7.30 (ff), hold >= +8.03; `cap_n` to `sr` setup >= +6.02,
+  hold >= +8.01; pin to `cap_n` (TT's 3.2 ns input delay) setup >= +5.01, hold >= +9.10. The 6.83 ns of the
+  d = 0.5 table in 3.2 was 0.8 ns too high for setup at ss; no half-cycle path is a limit.
+- **Negedge mapping:** all eight negedge flops (`nib_n[3:0]`, `cap_n[3:0]`) are posedge cells
+  (`dfxtp_2`) behind a private `inv_2` on the clock (cloned from one inverter, hung off the ordinary
+  clock leaves). At max_ss they see the falling edge 2.201 to 2.218 ns after the clk-port fall (17 ps
+  spread, inverter 0.060 to 0.069 ns); the tree passes the fall about 0.5 ns faster than the rise at
+  ss, so posedge-to-negedge is T/2 - 0.59 and negedge-to-posedge T/2 + 0.59 there. STA includes it.
+- **What the TT SDC does not time:** SCK is not a clock, so the SCK-IO skew (the numbers above are
+  from a hand probe), the flash-side hold and the return path into `cap_n` / `sr` (only the DDR_CAP
+  sweep covers that) have no check; input and output delays are clk-rise-relative with one value
+  for min and max, so a falling-edge launch to a pin gets half the budget (the reported worst setup
+  path, `nib_n` to `uio_out[1]`, +0.507 at max_ss, is that artefact); the clock duty cycle at the
+  pin; and the TT mux, pads and board (sigma).
 
 ### 3.2 Host to device (address and mode nibbles, both edges)
 
