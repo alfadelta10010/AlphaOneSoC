@@ -358,6 +358,29 @@ module tb_qspi;
         end
     endtask
 
+    // stream_en falling while the engine is idle with a stream open closes the stream by itself
+    // (REVIEW-6a F10). Only where stream_en is ours to drive: the steady-on run.
+    task stream_en_drop;
+        begin
+            if (!toggle && stream_en) begin
+                fetch(32'h2000_0800); fetch(32'h2000_0804);      // a stream is open (CS0 low)
+                repeat (10) @(negedge clk);
+                if (cs_n[0] !== 1'b0) begin
+                    $display("FAIL stream_en drop: stream not held open while idle (cs_n=%b)", cs_n);
+                    errors = errors + 1;
+                end
+                stream_en = 0;
+                repeat (8) @(negedge clk);
+                if (cs_n[0] !== 1'b1) begin
+                    $display("FAIL stream_en falling while idle did not close the stream (cs_n=%b)", cs_n);
+                    errors = errors + 1;
+                end
+                fetch(32'h2000_0808);                            // a plain (re-)open, data intact
+                stream_en = 1;
+            end
+        end
+    endtask
+
     initial begin
         for (k = 0; k < 256; k = k + 1) pmod.flash[k] = k ^ 8'h5A;
         for (k = 512; k < 2048; k = k + 1) pmod.flash[k] = (k * 37) ^ (k >> 3);
@@ -469,6 +492,7 @@ module tb_qspi;
             fetch(32'h2000_0504);
         end
 
+        stream_en_drop;
         if ($test$plusargs("MODESW")) mode_switch_suite;
 
         // A store to flash. Flash 0x100 reads 0; PSRAM A 0x100, the same chip
