@@ -117,8 +117,9 @@ module tb_qspi;
     );
 
     qspi_pin_inv pins (.clk(clk), .ctl_oe(ctl_oe), .cs_n(cs_n), .sck(sck), .io_oe(io_oe),
-        .quiet(qspi.strm && qspi.state != 4'd1 && qspi.state != 4'd2 && qspi.state != 4'd3 &&
-               qspi.state != 4'd4 && qspi.state != 4'd8 && qspi.state != 4'd9));
+        .quiet(qspi.strm && qspi.state != qspi.S_CMD && qspi.state != qspi.S_ADDR &&
+               qspi.state != qspi.S_DUMMY && qspi.state != qspi.S_DATA &&
+               qspi.state != qspi.S_CLOSE && qspi.state != qspi.S_GO));
 
     // mem_ctrl's side of the QSPI engine's request (tb/req_hold_check.v).
     req_hold_check #(.W(61), .NAME("QSPI transaction"), .DONE_NEEDS_REQ(1), .LATE(1)) chk_qspi (
