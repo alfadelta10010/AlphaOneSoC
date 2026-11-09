@@ -24,8 +24,8 @@ stage() { # name command...
   [ -e "$D/done.$n" ] && return
   st "stage $n start"; "$@"; st "stage $n end rc=$?"; touch "$D/done.$n"
 }
-caught() { # dir: some program of a mutant run must FAIL
-  grep -qs '^FAIL' "$1"/*.verdict || { st "$(basename "$1"): every program passed: the mutant was not caught"; return 1; }
+caught() { # dir: some program of a mutant run must FAIL or TIMEOUT (a hang is a detection too)
+  grep -qsE '^(FAIL|TIMEOUT)' "$1"/*.verdict || { st "$(basename "$1"): every program passed: the mutant was not caught"; return 1; }
 }
 rtl() { bash $S/run_gl.sh RTL=1 LIST=$BUILD/list.$1 OUT=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
 gl()  { bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.$1 OUT=$D/gl BASE=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
