@@ -427,15 +427,22 @@ test-wrapper: $(BUILD_DIR)
 # +TEST=soc +PROG=<name>), on the RTL: scripts/gl/build_isa.sh PARTS=D builds
 # them with -DMB_UART and each one's divisor, run_gl.sh runs the two lists. The
 # same lists run on the hardened netlist on the sandbox; this is the baseline,
-# one job at a time. Not part of test-components.
+# one job at a time. Each run gets a new directory, rtl-<list>.<date-time>
+# (run_gl.sh resumes from the verdicts and the compiled sim it finds), and a
+# list passes only when every one of its programs PASSes. Not part of
+# test-components; verify-all's unit stage runs it.
 test-wrapper-soc:
 	@echo "=== The mailbox programs through the TinyTapeout pins (RTL) ==="
 	@bash scripts/gl/build_isa.sh PARTS=D OUT=$(BUILD_DIR)/wrapper_soc TOOLCHAIN=$(TOOLCHAIN)
-	@for l in D10:10.0 D20:20.0; do \
-		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$(BUILD_DIR)/wrapper_soc/list.$${l%%:*} \
-			TCLK=$${l##*:} OUT=$(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*} JOBS=1 > /dev/null; \
-		cat $(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*}/summary; \
-	done; ! grep -qE '^(FAIL|TIMEOUT) [1-9]' $(BUILD_DIR)/wrapper_soc/rtl-D10/summary $(BUILD_DIR)/wrapper_soc/rtl-D20/summary
+	@t=$$(date +%Y%m%d-%H%M%S); for l in D10:10.0 D20:20.0; do \
+		k=$${l%%:*}; d=$(BUILD_DIR)/wrapper_soc/rtl-$$k.$$t; L=$(BUILD_DIR)/wrapper_soc/list.$$k; \
+		echo "$$k: $$d"; \
+		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$$L \
+			TCLK=$${l##*:} OUT=$$d JOBS=1 > /dev/null || { rc=$$?; echo "FAIL $$k: run_gl.sh exited $$rc"; exit 1; }; \
+		cat $$d/summary; n=$$(grep -c . $$L); \
+		if [ "$$n" -gt 0 ] && grep -qx "PASS $$n" $$d/summary && ! grep -qE '^(FAIL|TIMEOUT) [1-9]|^FAIL:' $$d/summary; then :; \
+		else echo "FAIL $$k: want PASS $$n of the list's $$n programs and no FAIL line (summary above)"; exit 1; fi; \
+	done
 
 # One tt_pins run on a gate-level netlist (the pnl from the harden, or its nl),
 # the local smoke only: every set runs on a bigger machine through
