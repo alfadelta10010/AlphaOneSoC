@@ -46,7 +46,7 @@ for a in "$@"; do
   esac
 done
 [ -n "$NETLIST" ] || { echo "NETLIST=<path> is required" >&2; exit 2; }
-NL_MD5=9891c47cfccadddf1abceaa12526fad4
+NL_MD5=71d75961e9e64b995d551afdec157aff
 # The version of the PDK the harden used (not what $PDK_ROOT/sky130A points to).
 LIB="$PDK_ROOT/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
 TOP=tt_um_alfadelta10010_alphaone_soc
