@@ -334,6 +334,7 @@ m("UA04", "uart.v", "rts_n <= !(!rx_busy && !dr);", "rts_n <= dr;", "RTS# assert
 m("UA05", "uart.v", "if (rst || wr_dll || wr_dlm) brg <= 16'd0;", "if (rst) brg <= 16'd0;", "divisor write does not restart the baud counter")
 m("UA06", "uart.v", "wire [7:0] lsr = {1'b0, tx_idle, tx_idle, bi, 2'b00, oe, dr};", "wire [7:0] lsr = {1'b0, 1'b1, tx_idle, bi, 2'b00, oe, dr};", "LSR.TEMT always 1")
 m("UA07", "uart.v", "(rx_s ? !rx_chk : rx_zero);", "(rx_s ? 1'b1 : rx_zero);", "frame after a framing error accepted")
+m("UA08", "uart.v", "else if (rd_lsr)\n                bi <= 1'b0;", "else if (rd_lsr || (rx_mid && rx_busy && rx_bit == 4'd0))\n                bi <= 1'b0;", "BI cleared at the next start bit instead of by an LSR read (not sticky)")
 m("GP01", "gpio.v", "wire req   = sel && we && be[0];", "wire req   = sel && we;", "writes without lane 0 stall and act too")
 # GP02 (MOSI one bit early) and GP04 (DIV 3 runs at DIV 2) are retired: the DIV shifter they
 # mutated was replaced by src/spi.v (WO-28). SPI01-SPI32 below cover the new logic.

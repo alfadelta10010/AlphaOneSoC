@@ -1154,6 +1154,53 @@ module tb_uart;
         join
         rx_settle;
         rd8(5, v8); chk("LSR after a framing error on 0x80", v8, 8'h60);
+        // BI is sticky: it stays 1 from a break until an LSR read, through an RBR
+        // pop and through a second break's start bit, stop-bit window and end.
+        // Break, RBR pop with no LSR read, then a second break (RBR empty: its
+        // DR is the BI's partner), read mid-break and around its stop bit.
+        wait_cts;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(0, v8); chk("sticky BI: the first break's zero byte", v8, 8'h00);
+        rd8(2, v8);
+        wait_cts;
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                #(3.0 * tb);
+                rd8(5, v8); chk("sticky BI: LSR mid second break (RBR empty), BI still set", v8, 8'h70);
+                #(6.2 * tb);
+                rd8(2, v8);                                  // inside the stop-bit window
+                rd8(2, v8); rd8(2, v8);
+                #(1.0 * tb);
+                rd8(2, v8);
+            end
+        join
+        rx_settle;
+        rd8(5, v8); chk("sticky BI: LSR after the second break", v8, 8'h71);
+        rd8(0, v8); chk("sticky BI: second break's zero byte", v8, 8'h00);
+        rd8(5, v8); chk("sticky BI: all clear", v8, 8'h60);
+        // The same with RBR full when the second break arrives (OE).
+        wait_cts;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(2, v8);
+        // (a sender ignoring CTS: RTS# is deasserted, RBR being full)
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                #(3.0 * tb);
+                rd8(5, v8); chk("sticky BI: LSR mid second break (RBR full), BI still set", v8, 8'h71);
+                #(6.2 * tb);
+                rd8(2, v8);
+                rd8(2, v8); rd8(2, v8);
+                #(1.0 * tb);
+                rd8(2, v8);
+            end
+        join
+        rx_settle;
+        rd8(5, v8); chk("sticky BI: LSR after the second break with RBR full", v8, 8'h73);
+        rd8(5, v8); chk("sticky BI: BI and OE cleared", v8, 8'h61);
+        rd8(0, v8); chk("sticky BI: RBR holds the first break's byte", v8, 8'h00);
+        rd8(5, v8); chk("sticky BI: all clear again", v8, 8'h60);
         if (rx_bad < 11) fail("framing: too few bad frames sent");
 
         // ── The late-break boundary ─────────────────────────────────────────
