@@ -311,6 +311,50 @@ module tb_qspi;
                 errors = errors + 1;
             end
             fetch(32'h2000_062C);
+            same_cycle_suite;
+        end
+    endtask
+
+    // One flash read whose QSPI_CFG change lands on the clock the request is raised: the stream
+    // (if open) must not be continued under the old mode. Checks the data, the number of
+    // commands the model saw for this one read (a mode change closes and reopens: exactly one
+    // new command, EDh when ddr is on, EBh when off) and the mode the engine latched.
+    integer sc_eb0, sc_edh0;
+    task same_cycle(input [8*24-1:0] what, input new_ddr, input [2:0] new_cap, input [31:0] a);
+        begin
+            sc_eb0 = pmod.n_eb; sc_edh0 = pmod.n_edh;
+            @(negedge clk); ddr_v = new_ddr; cap_v = new_cap; i_req = 1; i_addr = a;
+            @(posedge clk); while (!i_ready) @(posedge clk);
+            check(what, a, i_rdata, mem_word(a));
+            @(negedge clk); i_req = 0;
+            if (!toggle && (pmod.n_edh - sc_edh0 != (new_ddr ? 1 : 0) || pmod.n_eb - sc_eb0 != (new_ddr ? 0 : 1))) begin
+                $display("FAIL %0s: %0d EDh %0d EBh commands, want %0d EDh %0d EBh", what,
+                         pmod.n_edh - sc_edh0, pmod.n_eb - sc_eb0, new_ddr ? 1 : 0, new_ddr ? 0 : 1);
+                errors = errors + 1;
+            end
+            if (qspi.t_ddr !== new_ddr || qspi.t_cap !== new_cap) begin
+                $display("FAIL %0s: engine latched ddr=%b cap=%0d, want ddr=%b cap=%0d", what,
+                         qspi.t_ddr, qspi.t_cap, new_ddr, new_cap);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    // The same-cycle phase (REVIEW-6a F5): with a stream open and the next request a continuation,
+    // ddr 1 -> 0, 0 -> 1 and a DDR_CAP change (ddr = 1) change on the request's own clock.
+    task same_cycle_suite;
+        begin
+            ddr_v = 1; cap_v = 3'd1;
+            fetch(32'h2000_0700); fetch(32'h2000_0704);          // a DDR stream is open
+            same_cycle("samecyc ddr 1->0", 1'b0, 3'd1, 32'h2000_0708);
+            fetch(32'h2000_070C);                                // SDR continuation
+            same_cycle("samecyc ddr 0->1", 1'b1, 3'd0, 32'h2000_0710);
+            fetch(32'h2000_0714);                                // DDR continuation
+            same_cycle("samecyc cap 0->1", 1'b1, 3'd1, 32'h2000_0718);
+            same_cycle("samecyc cap 1->0", 1'b1, 3'd0, 32'h2000_071C);
+            ddr_v = 0; cap_v = 3'd1;                             // the next fetch is a one-clock-later change
+            fetch(32'h2000_0720);
+            same_cycle("samecyc ddr 0->1 top", 1'b1, 3'd0, 32'h2000_0722);   // a top-up address (p - 2)
         end
     endtask
 
