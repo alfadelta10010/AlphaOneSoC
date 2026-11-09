@@ -133,6 +133,11 @@
 //     long as CS0 is low. The launch machinery is the SDR one (delay, hold, X
 //     between nibbles, transport: an eye shorter than QSPI_DELAY-QSPI_HOLD
 //     closes).
+//   * +QSPI_EYE_RANDOM: the closed-eye window between nibbles carries random
+//     bits instead of X, as a real pin would. For gate-level and SDF runs that
+//     deliberately sample outside the eye (the DDR capture sweep): there an X
+//     spreads through the netlist's gates into the pc, while at RTL it only
+//     takes the not-taken arm. RTL runs keep the default X, the stricter check.
 // Assumed limits (the datasheet has no falling-edge row): TDVCL_NS 1.0 and
 // TCLDX_NS 2.0, the rising-edge numbers. EDh needs a period of at least
 // TCLK_DTR_NS (15.15, 66 MHz) from rise 8 on. An open with A1:A0 != 00 stops
@@ -260,6 +265,7 @@ module qspi_pmod_model #(
     integer hold_ns;
     integer dtr_dummy, dtr_launch;   // EDh: dummy cycles; first nibble on fall (0) or the next rise (1)
     reg     dtr_unal_ok;
+    reg     eye_rand;      // +QSPI_EYE_RANDOM
     // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
     reg [1:0] psram_qpi;    // in QPI mode
     reg [1:0] psram_rst;    // reset since power-up: reads, writes and 35h allowed
@@ -277,6 +283,7 @@ module qspi_pmod_model #(
         dtr_launch = 0;
         if ($value$plusargs("DTR_LAUNCH=%d", dtr_launch)) ;
         dtr_unal_ok = $test$plusargs("QSPI_DTR_UNALIGNED_OK");
+        eye_rand    = $test$plusargs("QSPI_EYE_RANDOM");
         psram_wrap = $test$plusargs("PSRAM_WRAP");
         psram_qpi  = {$test$plusargs("PSRAM_QPI") || $test$plusargs("PSRAM_B_QPI"),
                       $test$plusargs("PSRAM_QPI") || $test$plusargs("PSRAM_A_QPI")};
@@ -929,7 +936,7 @@ module qspi_pmod_model #(
     task automatic nibble_x(input integer k);
         begin
             #(hold_ns);
-            dev_io = 4'bxxxx;
+            dev_io = eye_rand ? $random : 4'bxxxx;
             x_from = k;
         end
     endtask
