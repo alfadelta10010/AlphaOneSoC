@@ -140,21 +140,38 @@ A formal harness reads the files listed in its `FILES` entry in `tb/formal/run.s
 
 ## After a QSPI change
 
-The next planned change is in `src/qspi_ctrl.v` (and possibly `src/mem_ctrl.v`): streaming flash
-reads as the default and an optional DDR/DTR mode. Checklist:
+A change in `src/qspi_ctrl.v` or `src/mem_ctrl.v` (streaming flash reads, the `EDh` DDR mode,
+`QSPI_CFG`) is checked by:
 
-1. `tb/qspi_pmod_model.v` must model streaming reads and DTR, with the setup/hold check
-   extended to the DTR edges (the -DTR datasheet rows). `samp_mask` is the extension point
-   (falling-edge mask, per-edge limits). Check the checks themselves: each limit raised past
-   its measured value must report.
-2. `make test-qspi` with its `QSPI_RUNS` sweep, and the SoC directed suite at the `rd_late` and
-   `QSPI_DELAY` corners.
-3. Formal: mem_flash (the CS0 command set), mem_arb (a stream yields to a data access),
-   mem_ld and mem_li (measure LD and LI again with `make bounds-qspi` and compare the printed LP/LF/S/LD/LI with the `define values in `tb/formal/mem_props.sv` by hand: the target compares nothing itself), mem_tcem (if PSRAM streams),
-   qspi_strap.
-4. EQY refit: new FSM states are expected, so this one is manual.
-5. GL parts A to D and SDF, with the Pmod checks at every corner.
-6. The `tb_sw` benchmarks on the Verilator branch, for the CPI gain.
+1. The Pmod model, `tb/qspi_pmod_model.v`, with its DTR unit bench: `make test-pmod-dtr` runs
+   pass cases, expected-fail cases and limit-raise cases (each limit raised past its measured
+   margin must report). A change to the model's checks needs a case that fails without it.
+2. `make test-qspi` with its `QSPI_RUNS` sweep, and `make test-qspi-ddr-sweep`: the passing capture
+   points per round trip R (= 8 to 53 ns) against the window rule, for every `DDR_CAP`; it exits 1
+   on any difference, and with `+DTR_LAUNCH=1` no point may pass.
+3. The SoC directed suite, `tests/directed/run.sh soc`, and its DDR corner
+   `RUN_PLUSARGS=+SOC_DDR=1 tests/directed/run.sh soc`. `+RD_LATE` is valid only with
+   `+QSPI_DELAY=25 +QSPI_HOLD=12` (the MANIFEST `soc` lines pair them; given alone, every test aborts
+   with 0 retires). Those fixed-delay lines pair a delay with the SDR capture point, which a forced
+   DDR capture point cannot read, so the DDR corner prints `SKIP <name> (DDR corner: fixed-delay
+   line)` for each and counts them in the `REGRESS` line; the DDR timing corners are covered by
+   `test-qspi-ddr-sweep` and by `tests/soc/ddr_sweep.S` (the `ddr_sweep` lines in the Makefile).
+4. Formal: mem_flash (the CS0 command set, `EDh` included), mem_arb (a stream yields to a data
+   access; CS0 never low with CS1/CS2), mem_ld and mem_li (measure LD and LI again with
+   `make bounds-qspi` and compare the printed LP/LF/S/LD/LI with the `define` values in
+   `tb/formal/mem_props.sv` by hand: the target compares nothing itself), mem_tcem, qspi_strap
+   (the two straps) and qspi_pins (the real engine with ddr free, through clk2fflogic: CS0 never
+   low with CS1/CS2, CS gap of two clocks, an idle open stream has SCK low and io_oe 0, no `EDh`
+   without DDR). The mem_* and qspi_strap harnesses read an SDR copy of the engine (negedge flops
+   turned into posedge, ddr tied 0); see the header of `tb/formal/mem.conf`.
+5. The mutation campaign on the new logic (`tb/mutate/run.py`, QS mutants) against a frozen tree.
+6. EQY refit: new FSM states and flops are expected, so this one is manual.
+7. GL parts A to D and SDF, with the Pmod checks at every corner. For DDR the half-cycle paths and
+   the pin cone are the parts to look at (`docs/qspi-ddr.md`, section 5).
+8. The `tb_sw` benchmarks on the Verilator branch, for the CPI gain.
+
+`tb_rivercore` also checks two core invariants on every cycle (FC02, the CSR-write wait, and
+FC49, the M-operation flush rule); a failure prints its name.
 
 ## After the Verilator branch merges
 
