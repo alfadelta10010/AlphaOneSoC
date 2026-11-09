@@ -154,6 +154,13 @@ columns).
     GPIO38.
   * Do **not** enable its RTS: GPIO23 is `ui_in[6]`, a keypad row.
   * Leave GPIO21–24 as inputs.
+* **Flash hand-over.** A master that hands the QSPI Pmod to this design must leave the flash
+  **idle** (no program, erase or status write running, nothing suspended), **not in deep power-down**
+  (`B9h`), **without a `77h` burst wrap** (W4 = 1, the power-up default) and with **QE = 1**. Our
+  start-up sequence undoes continuous-read mode (quad, dual and DTR) and QPI, and nothing else. A
+  flash in any of the other states gives a boot failure with no diagnosis, and a wrap gives silent
+  wrong fetches. TinyQV makes the same assumption (tier 1, silicon). Details and sources:
+  `docs/qspi-memories.md` section 7.3a.
 * **7-segment display.** It is wired to every `uo_out` through solder
   jumpers JP1–8, so it flickers with the traffic. Cut the jumpers to stop
   that. `uo_out[7]` (segment DP) is the SD card's CS#, so it is no
