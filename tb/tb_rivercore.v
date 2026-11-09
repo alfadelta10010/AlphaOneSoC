@@ -760,12 +760,15 @@ module tb_rivercore;
     //
     //  FC49: a flush and a live M operation (muldiv_want) are never both
     //  there, so capture and start need no !flush term.
+    //  E-FC49b: the M unit is only ready, busy or done while the M
+    //  instruction is still in EX (muldiv_want): it stalled EX, so a flush
+    //  cannot have dropped it, and muldiv_ready needs no flush term.
     //  FC02: while a CSR write sits in WB (not trapped), the instruction in
     //  EX is held by ex_wait, so nothing it decides sees the write half done.
     //  Both counts of the antecedent are printed at the end, so a run can
     //  show the check was exercised.
     // ================================================================
-    integer inv_cycles = 0, inv_flush = 0, inv_muldiv = 0, inv_csrwb = 0, inv_fail = 0;
+    integer inv_cycles = 0, inv_flush = 0, inv_muldiv = 0, inv_csrwb = 0, inv_mdact = 0, inv_fail = 0;
     always @(posedge clk) begin
         if (!rst) begin
             inv_cycles = inv_cycles + 1;
@@ -775,6 +778,15 @@ module tb_rivercore;
                 $display("FAIL FC49: flush together with muldiv_want at pc 0x%08h cycle %0d", `CPU.ifex_pc, cycle_count);
                 inv_fail = inv_fail + 1;
                 emit_abort_marker; $fclose(dump_fd); $finish;
+            end
+            if (`CPU.muldiv_ready || `CPU.muldiv_busy || `CPU.muldiv_done) begin
+                inv_mdact = inv_mdact + 1;
+                if (!`CPU.muldiv_want) begin
+                    $display("FAIL FC49b: M unit ready/busy/done (ready %0d busy %0d done %0d) without muldiv_want at pc 0x%08h cycle %0d",
+                             `CPU.muldiv_ready, `CPU.muldiv_busy, `CPU.muldiv_done, `CPU.ifex_pc, cycle_count);
+                    inv_fail = inv_fail + 1;
+                    emit_abort_marker; $fclose(dump_fd); $finish;
+                end
             end
             if (`CPU.exwb_valid && `CPU.exwb_csrWR && !`CPU.exwb_trap && `CPU.ifex_valid) begin
                 inv_csrwb = inv_csrwb + 1;
@@ -1080,8 +1092,8 @@ module tb_rivercore;
                 $display("  IPC: %0f", $itor(instr_count) / $itor(cycle_count));
             $display("  Register-file reads checked: %0d", rf_chk_n);
             $display("  Bus transactions checked: %0d", bus_chk_n);
-            $display("  FC02/FC49 checks: %0d cycles, flush %0d, muldiv_want %0d, CSR-write-in-WB with EX valid %0d, %0d FAIL",
-                     inv_cycles, inv_flush, inv_muldiv, inv_csrwb, inv_fail);
+            $display("  FC02/FC49/FC49b checks: %0d cycles, flush %0d, muldiv_want %0d, M-unit-active %0d, CSR-write-in-WB with EX valid %0d, %0d FAIL",
+                     inv_cycles, inv_flush, inv_muldiv, inv_mdact, inv_csrwb, inv_fail);
             $display("  fetch-reuse: hits %0d fetches %0d loads %0d", fr_hits, fr_fetches, fr_loads);
             $display("  Dump: %0s", dump_file_str);
         end
