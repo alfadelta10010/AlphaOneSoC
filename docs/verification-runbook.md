@@ -170,8 +170,9 @@ A change in `src/qspi_ctrl.v` or `src/mem_ctrl.v` (streaming flash reads, the `E
    the pin cone are the parts to look at (`docs/qspi-ddr.md`, section 5).
 8. The `tb_sw` benchmarks on the Verilator branch, for the CPI gain.
 
-`tb_rivercore` also checks two core invariants on every cycle (FC02, the CSR-write wait, and
-FC49, the M-operation flush rule); a failure prints its name.
+`tb_rivercore` also checks the core invariants the FC02/FC49 removal rests on, on every cycle
+(FC02, the CSR-write wait; FC49, the M-operation flush rule; FC49b, the M unit is only ready,
+busy or done for a wanted instruction); a failure prints its name.
 
 ## After the Verilator branch merges
 
