@@ -434,7 +434,7 @@ fails:
 5. **Execute test.** A stream framing error (the device launching half an SCK
    late) is invisible to loads, so the routine runs flash code in DDR at the
    chosen point with the watchdog armed: BOOT_MODE = `0xD8 + k`, WDT_TORR TOP 1
-   (131 072 to 196 608 clocks, about 2.2 to 3.3 ms at 60 MHz, written first so
+   (131 072 to 196 608 clocks, about 2.1 to 3.1 ms at 62.5 MHz, written first so
    the write kicks) and WDT_CR.EN, then QSPI_CFG DDR on at k, then a call to a
    straight-line flash routine (300+ instructions from immediates, then a short
    loop) whose checksum is compared with the SDR one. A trap during the test:

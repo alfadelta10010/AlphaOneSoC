@@ -225,21 +225,21 @@ The guaranteed margin at the worst R is (W - step) / 2 = (3.83 - Delta) / 2 per 
 the sweep measures the real eye. DDR at 60 MHz on TT pads is marginal by construction, which is why
 it is off at reset and software-switched.
 
-**Measured in simulation [SIM]** (`make test-qspi-ddr-sweep`, `tb/qspi_ddr_sweep.sh`): the Pmod
-model's flash output is valid from R + 7 ns after the SCK edge (`+QSPI_DELAY = R + 7`) until
-R + 1 ns after the next launch (`+QSPI_HOLD = R + 1`), a window of [R+7, R+17.67) ns, for R = 8 to 53
-in steps of 3 and every `DDR_CAP` 0 to 7. The passing set of c = DDR_CAP + 1 per R is compared with
-the window rule and any difference fails the target:
+**Measured in simulation [SIM]** (`make test-qspi-ddr-sweep`, `tb/qspi_ddr_sweep.sh`, at the 62.5 MHz
+clock, T = 16 ns, `+CLK_HALF_PS=8000`): the Pmod model's flash output is valid from R + 7 ns after the
+SCK edge (`+QSPI_DELAY = R + 7`) until R + 1 ns after the next launch (`+QSPI_HOLD = R + 1`), a window of
+[R+7, R+17) ns, for R = 8 to 53 in steps of 3 and every `DDR_CAP` 0 to 7. Capture point c = DDR_CAP + 1
+sits at X_c = 8c ns. The passing set per R is compared with the window rule (R+7 <= X_c < R+17) and any
+difference fails the target:
 
 | R (ns) | 8 | 11 | 14 | 17 | 20 | 23 | 26 | 29 | 32 | 35 | 38 | 41 | 44 | 47 | 50 | 53 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| passing c | 2 3 | 3 | 3 | 3 4 | 4 | 4 | 4 5 | 5 | 5 | 6 | 6 | 6 7 | 7 | 7 | 7 8 | 8 |
+| passing c | 2 3 | 3 | 3 | 3 4 | 4 | 4 | 5 | 5 | 5 6 | 6 | 6 | 6 7 | 7 | 7 | 8 | 8 |
 
-The model window is 0.5 ns wider than the derived one at its late edge (R + 17.67 against R + 17.17,
-because the model's spread is 1 ns where the derivation uses 2 ns). The two rules give different sets
-only where a point sits within 0.5 ns of that edge (R = 41, c = 7, X = 58.33 ns); the table above is
-the model's. With `+DTR_LAUNCH=1` (a device that launches the first nibble half an SCK late) the
-streamed suite passes at no capture point, for every R.
+The budget text above (sections 3.1 to 3.3, derived at 60 MHz) is being redone at 16 ns by the datasheet
+audit; the derived table is still the 60 MHz one. With `+DTR_LAUNCH=1` (a device that launches the first
+nibble half an SCK late) the streamed suite passes at no capture point, for every R. The SoC runs
+(`ddr_sweep` in `SYSCON_SOC_RUNS`) pick DDR_CAP 2, 3, 3, 4 at R = 11, 17, 23, 29 at both 62.5 and 60 MHz.
 
 ### 3.4 What the missing duty-cycle guarantee does
 

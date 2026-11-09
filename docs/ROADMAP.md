@@ -24,7 +24,7 @@ been synthesised; nothing here is measured unless it cites a run.
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
 | (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33. | Built on branch `qspi-stream_alfadelta10010`: streaming and `EDh` DDR are in `qspi_ctrl`, DDR is off at reset and selected by QSPI_CFG (syscon +0x1C, reset by every reset). A boot-time sweep over `DDR_CAP` picks the capture point and falls back to SDR (9.1 item 8). Wire protocol, timing budget and the measured sweep: `docs/qspi-ddr.md`. |
-| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. The tree with all three blocks misses 16 ns by 0.303 ns at the slowest corner, so the clock is documented as **60 MHz** (16.67 ns, met at every corner). | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 60 MHz; 1.7 is the way back to 62.5 MHz. |
+| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. On 2026-11-01 the tree with all three blocks missed 16 ns by 0.303 ns at the slowest corner, so the clock was documented as 60 MHz. **Met again at 16 ns (2026-11-09):** the af1c678 3x4 harden closes all 9 corners at `CLOCK_PERIOD` 16 ns, and the user set the target to **62.5 MHz** (2026-11-09). The margin is small, +0.56 ns at max_ss, and varies between hardens, so every RTL change re-runs the corners. | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 62.5 MHz unless a line says otherwise; the board may also run the chip at 60 MHz (the benches keep a 60 MHz run). |
 
 The limits every item is judged against:
 
@@ -44,7 +44,7 @@ The limits every item is judged against:
 * **Memory is the speed limit.** About 43 clocks per instruction on compiled
   C with fetch reuse (53 without; WO-27 A9, `bench.c` at -O2), against 3.3
   with zero-wait memory: over 90% of the time the core waits for QSPI. At
-  60 MHz that is about 1.4 million instructions per second. The QSPI clock
+  62.5 MHz that is about 1.5 million instructions per second (1.4 at 60 MHz). The QSPI clock
   is the core clock / 2 = 30 MHz, and TT's pads toggle at about 33 MHz, so
   a faster core clock does not make memory faster. Speed comes only from
   fewer or cheaper bus transactions. Streaming (2026-11-08) makes a
@@ -306,7 +306,8 @@ Open (2026-10-31):
 * **What "basic functionality" means for the freeze** (section 0). The
   user's call; section 9's lower rungs are candidate checkpoints.
 * ~~**The UART's reset divisor.**~~ Decided 2026-11-08: `UART_DIV_RESET`
-  is 33, 113,636 baud (115,200 - 1.4%) at 60 MHz from reset; the benches and
+  was 33 (113,636 baud at 60 MHz); with the clock retargeted to 62.5 MHz
+  (2026-11-09) it is **34**, 114,890 baud (-0.27%) from reset; the benches and
   gate-level lists follow.
 
 ### 1.6 The lock gate
@@ -319,7 +320,7 @@ Open (2026-10-31):
    errors; TT precheck passed; the TT cocotb tests pass 3/3 at gate level. No
    hold violation at any corner (worst +0.092 ns, fast corner), and the
    register file's inputs keep +0.128 ns against the ff hold guard band.
-   Setup is met at every corner at 16.67 ns (60 MHz) but not at 16 ns: one
+   (History, 2026-11-01.) Setup was met at every corner at 16.67 ns (60 MHz) but not at 16 ns: one
    path, from bus address bit 17 (syscon's select) to the CSR write value,
    misses by 0.303 ns at the slowest corner only (max ss; nominal ss is
    +0.315 ns). Utilisation and density are in section 0. Two changes made it
@@ -369,15 +370,15 @@ Open (2026-10-31):
 
 ### 1.7 Back to 62.5 MHz
 
-One path keeps the clock at 60 MHz (1.6 item 2): from `soc.bus.d_addr[17]`,
-the address bit that selects syscon, to `soc.cpu.csr_unit.csr_new[22]`,
--0.303 ns at 16 ns at the slowest corner (max ss). The PR #12 tree had
-+0.861 ns at that corner (2026-10-25); what moved this path since has not
-been analysed. The STA of the routed layout at other periods
-(`localFiles/harden-2026-11-01/sta-sweep.sh`) puts the limit at about
-61 MHz: +0.090 ns at 16.39 ns. Getting 62.5 MHz back needs a change on main
-that takes logic off this path, then another harden and port. The extra 4%
-does not make memory faster (section 0).
+Done. The one path that held the clock at 60 MHz (1.6 item 2: from
+`soc.bus.d_addr[17]`, the address bit that selects syscon, to
+`soc.cpu.csr_unit.csr_new[22]`, -0.303 ns at 16 ns at the slowest corner)
+closed in the af1c678 harden: all 9 corners meet 16 ns, +0.56 ns at max_ss.
+The user set 62.5 MHz as the documented clock on 2026-11-09. The margin is
+small and moves between hardens, so each RTL change re-checks it. The extra
+4% does not make memory faster (section 0). Before the retarget the STA of the
+routed layout (`localFiles/harden-2026-11-01/sta-sweep.sh`) had put the limit
+at about 61 MHz.
 
 ## 2. Verification status and plan
 
@@ -633,8 +634,8 @@ interrupts are the only interrupts: there is no PLIC, and every device is
 polled. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
 16 MB of PSRAM at `0x8000_0000`. An ns16550 subset UART, GPIO, the tiny_spi
 controller with an SD card and the OLED, and syscon (reboot, power-off,
-reset cause, boot mode, watchdog). About 1.4 million instructions per second
-at 60 MHz.
+reset cause, boot mode, watchdog). About 1.5 million instructions per second
+at 62.5 MHz.
 
 ### 9.1 Boot contract
 
@@ -645,9 +646,9 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 1. **Set `mtvec` before anything can trap.** It resets to 0, which is
    outside flash and PSRAM, so a trap before it is set faults again at 0.
 2. **Set the UART divisor before the first character** if the clock is not
-   60 MHz: set LCR.DLAB, write DLL and DLM, clear DLAB. The reset divisor is
-   33: 113,636 baud at 60 MHz (115,200 - 1.4%); at 62.5 MHz write 34 (114,890
-   baud, -0.27%).
+   62.5 MHz: set LCR.DLAB, write DLL and DLM, clear DLAB. The reset divisor is
+   34: 114,890 baud at 62.5 MHz (115,200 - 0.27%); at 60 MHz write 33 (113,636
+   baud, -1.4%).
 3. **Read RESET_CAUSE and BOOT_MODE, then write `0x7` to RESET_CAUSE** so that
    the next boot sees only its own cause (`docs/soc-architecture.md`,
    syscon).
@@ -656,15 +657,16 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
    kernel. Linux never writes it. With the keypad fitted, EN stays 0.
 5. **SD first, on every boot, before any other SPI traffic:** with both CS#
    high clock at least 74 cycles (10 bytes of `0xFF`; BAUD resets to `0xFF`,
-   117 kHz at 60 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
+   122 kHz at 62.5 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
    block, first clock `0xFF` with SD CS# low until the card returns `0xFF`
    (`docs/pins-and-peripherals.md` section 3).
 6. **The watchdog is off at reset, and once enabled only a reset turns it
    off** (the DesignWare behaviour). Enable it only in code that services it.
-7. **Timebase:** `mtime` counts every core clock, 60 MHz as documented
+7. **Timebase:** `mtime` counts every core clock, 62.5 MHz as documented
    (section 0).
    FreeRTOS's RISC-V port computes its tick from `configCPU_CLOCK_HZ`, and
-   Linux reads `timebase-frequency`: both take that value.
+   Linux reads `timebase-frequency`: both take that value
+   (`configCPU_CLOCK_HZ` 62500000, `timebase-frequency` = 62500000).
 8. **QSPI_CFG (syscon +0x1C: STREAM bit 0, DDR bit 1, DDR_CAP bits 4:2) is
    reset by every reset** (pin, reboot, watchdog expiry): the boot always
    starts in SDR, `DDR_CAP` 2, STREAM on unless the `ui_in[2]` strap is high.
