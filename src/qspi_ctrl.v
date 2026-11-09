@@ -342,7 +342,7 @@ module qspi_ctrl (
     // nibble taken at a continuation, and a launch: every SCK edge of the data
     // phase but the last falling one (it launches the held nibble), and the
     // falling edge that ends the dummies.
-    wire [2:0] m1        = (t_cap + 3'd2) >> 1;
+    wire [2:0] m1        = {1'b0, t_cap[2:1]} + 3'd1;   // 1..4, no 3-bit wrap
     wire       dq_hit    = dq[m1 - 3'd1];
     wire       dq_pend   = |(dq & ((4'd1 << (m1 - 3'd1)) - 4'd1));
     wire       mode_chg  = (t_ddr != ddr) || (t_ddr && t_cap != ddr_cap);
