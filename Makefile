@@ -214,8 +214,8 @@ test-qspi: $(BUILD_DIR)
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
 	done; done
 
-# DDR capture-point sweep (docs/qspi-ddr.md 3.3): the 60 MHz clock, a device whose flash output is
-# valid from R + 7 ns after the SCK edge to R + 16.67 + 1 ns (tCLQV 6, a 2 ns spread around it),
+# DDR capture-point sweep (docs/qspi-ddr.md 3.3): the 62.5 MHz clock, a device whose flash output is
+# valid from R + 7 ns after the SCK edge to R + 16 + 1 ns (tCLQV 6, a 2 ns spread around it),
 # for round trips R, every DDR_CAP. tb/qspi_ddr_sweep.sh compares the passing set per R
 # (c = DDR_CAP + 1) with the expected one and exits 1 on a difference; with +DTR_LAUNCH=1 (a
 # device that launches the first nibble half an SCK late) no capture point may pass.
@@ -335,23 +335,29 @@ test-soc-spi: $(BUILD_DIR)
 # ddr_flash@<n> is tests/soc/ddr_flash.S built for DDR_CAP point n (-DDDR_PT=n), run at device
 # delays that point reads at the bench's 20 ns clock (window [delay, 20 + hold), point n captures
 # at 10 * (n + 1) ns).
-# ddr_sweep@<FLAG> is tests/soc/ddr_sweep.S (BASE = no flag). +CLK_HALF_PS=8333 is the chip's 60 MHz; a
+# ddr_sweep@<FLAG> is tests/soc/ddr_sweep.S (BASE = no flag). +CLK_HALF_PS=8000 is the chip's 62.5 MHz (8333 is the 60 MHz the board may also run); a
 # round trip R is +QSPI_DELAY=R+7 +QSPI_HOLD=R+1; +WANT_K is the DDR_CAP the program must report
-# (docs/qspi-ddr.md 4 and 6, on the passing set of R: 11 -> 2, 17 -> 3, 23 -> 3, 29 -> 4). -1 = "DDR off":
-# +DTR_LAUNCH=1 (caught by the execute test's trap), a window no capture point lands in (+QSPI_DELAY=20
-# +QSPI_HOLD=8), a watchdog expiry after "DDR on" (WDT_AFTER: the next boot says "DDR off"), and the execute
+# (docs/qspi-ddr.md 4 and 6, on the passing set of R: 11 -> 2, 17 -> 3, 23 -> 3, 29 -> 4, the same at 62.5 and 60 MHz). -1 = "DDR off":
+# +DTR_LAUNCH=1 (caught by the execute test's trap), a window no capture point lands in (+QSPI_DELAY=18
+# +QSPI_HOLD=6: [18, 22) ns at 62.5 MHz, 2 ns clear of the 16 and 24 ns points; 20/8 put 24 ns on the
+# window's edge, where the result depends on event order), a watchdog expiry after "DDR on" (WDT_AFTER: the next boot says "DDR off"), and the execute
 # test left out (NO_EXEC: the stream failure is caught by the watchdog instead).
+DDR_SWEEP_62 := +CLK_HALF_PS=8000
 DDR_SWEEP_60 := +CLK_HALF_PS=8333
 SYSCON_SOC_RUNS := "ddr_flash@0" "ddr_flash@1 +QSPI_DELAY=12 +QSPI_HOLD=6" "ddr_flash@2 +QSPI_DELAY=22 +QSPI_HOLD=12" "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30 +WANT_K=4" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=18 +QSPI_HOLD=6 +WANT_K=-1" \
+	"ddr_sweep@WDT_AFTER $(DDR_SWEEP_62) +QSPI_DELAY=24 +QSPI_HOLD=18 +EXP_WDT=1 +WANT_K=-1" \
+	"ddr_sweep@NO_EXEC $(DDR_SWEEP_62) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +EXP_WDT=1 +WANT_K=-1" \
 	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2" \
 	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=3" \
 	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3" \
-	"ddr_sweep@BASE $(DDR_SWEEP_60) +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30 +WANT_K=4" \
-	"ddr_sweep@BASE $(DDR_SWEEP_60) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1" \
-	"ddr_sweep@BASE $(DDR_SWEEP_60) +DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1" \
-	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=20 +QSPI_HOLD=8 +WANT_K=-1" \
-	"ddr_sweep@WDT_AFTER $(DDR_SWEEP_60) +QSPI_DELAY=24 +QSPI_HOLD=18 +EXP_WDT=1 +WANT_K=-1" \
-	"ddr_sweep@NO_EXEC $(DDR_SWEEP_60) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +EXP_WDT=1 +WANT_K=-1"
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30 +WANT_K=4"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
