@@ -107,3 +107,5 @@ PPA / area claims
 
 - New test not RF_X-clean -> mutation runner's +rfx second pass reports EVERY plain-suite survivor as killed by
   that test (WO-27 fr_misa, 2026-10-30). Check: run each new test on the UNMUTATED RTL with +RF_X +RF_COLLIDE_X.
+
+- Equivalence (yosys equiv_make) after `opt_clean -purge`: a formal-only alias (`assign fv_x = x`) can take over the net name, leaving a flop unmatched -> one "unproven" cell that is an artefact; all other proofs are conditional on it (WO-36, 2026-11-07).

@@ -1,0 +1,2 @@
+def -DNO_DF_ASSUME   # without the core data discipline the fetch starves -> ML2
+def -DLI0=441 -DLI1=455 -DLD0=1000 -DLD1=1000   # one clock under the measured bound

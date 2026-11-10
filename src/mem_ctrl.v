@@ -11,8 +11,11 @@
 // Arbitration: data first. The pipeline only issues a new data request on
 // the cycle after a fetch completes or after a fetch-word-reuse hit (an
 // instruction taken from the kept halfword with no fetch). At most every
-// other IF/EX load is a hit, so at most two data accesses run between
-// consecutive fetches and the fetch port cannot be starved; and
+// other IF/EX load is a hit, so few data accesses run between consecutive
+// fetches (up to four: two back-to-back AMOs, a read and a write each, behind
+// fetches that already completed; bounded by tb/formal core_df) and a fetch
+// waits a bounded time (449/482 clocks at most with streaming, 442/456 without;
+// rd_late 0/1, measured by simulation, not proved); and
 // serving the data request first means the fetch that follows a load is not
 // read before the load and then thrown away while the load stalls the
 // pipeline (fetch-first would do that on every load, forever, on a pipeline

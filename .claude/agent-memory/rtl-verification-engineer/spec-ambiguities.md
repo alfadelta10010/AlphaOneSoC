@@ -95,3 +95,12 @@
 - SA-010 (2026-10-25, closed by the user, review F13) RESET_CAUSE
   accumulates (PIN survives reboots; 0x3/0x7 are normal). Kept; firmware
   rule: read at boot, then W1C 0x7. Docs get the rule in WO-19.
+
+## SPI (WO-29, 2026-10-30) -- open, asked of the coordinator
+- SA-SPI-01 tb_soc_periph is 20 ns; WO-28 margins/SP01 kill assume 16 ns (Q1).
+- SA-SPI-02 DT spi-max-frequency 5.2 MHz gives BAUD 6 not 5 (Q2).
+- SA-SPI-03 mid-byte RXDATA/TXDATA = live sr/bb? (Q3). SA-SPI-04 MOSI after EN 0->1 (Q4).
+- SA-SPI-05 upper bits read 0 (Q5). SA-SPI-06 reboot SCK/CS# same-timestamp race (Q6).
+- SA-SPI-07 SD t_ODLY/t_OH/t_ISU figures from memory (Q7).
+- Lesson: SPI02 (sample at end of B) and SPI01 at BAUD 2 survive every delay-based
+  test; only an exact-edge PROBE (complement elsewhere) and formal kill them.

@@ -1,0 +1,4 @@
+# a PSRAM read restarts its data phase while start is high: CS1/CS2 low without bound -> MT1
+sed qspi_ctrl.v s/^\( *\)if (t_ddr ? dq_pend : (late \&\& !t_we))$/\1if (start \&\& psram \&\& !t_we) cnt <= 3'd7; else if (t_ddr ? dq_pend : (late \&\& !t_we))/
+# CS is high for one clock between transactions (the next CS falls in the S_END cycle) -> MT2
+sed qspi_ctrl.v s/^\( *\)sck   <= 1'b0;$/\1sck   <= 1'b0; if (!init \&\& start) cs_n <= ~sel_now;/

@@ -15,3 +15,6 @@
   early unless software writes mtime": writes that toggle the tapped bit
   are ticks (probe: 3 writes fire it 10 clocks after a kick). No test, no
   prescaler (+0.06 t). Linux never writes mtime.
+- W-RVFI-1 (2026-11-07, planned): riscv-formal runs on a full-RAM PMA; PMA faults stay with directed + core_req + tb_rivercore bus checks.
+- W-RVFI-2 (planned): riscv-formal env excludes U-mode, PMP lock, MPRV-to-U, misa.C=0 (assumptions); covered by directed, tb_pmp, csr formal. Spurious entry into those states is invisible to riscv-formal.
+- W-RVFI-3 (planned): no data-memory consistency / bus model in riscv-formal (FC51 survives there); directed memory_model + core_hold cover it. M arithmetic under ALTOPS is unchecked by riscv-formal (tb_muldiv + directed).

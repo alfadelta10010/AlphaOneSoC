@@ -14,7 +14,8 @@ side, src, dst = sys.argv[1:4]
 TOP = "tt_um_alfadelta10010_alphaone_soc"
 FSMS = [("soc.cpu.exwb_memSize", 2, 3, "memsize", "soc.cpu.fsmcut_exwb_memSize"),
         ("soc.cpu.muldiv_inst.st", 3, 6, "muldiv", "soc.cpu.muldiv_inst.fsmcut_st"),
-        ("soc.qspi.state", 3, 7, "qspi", "soc.qspi.fsmcut_state")]
+        ("soc.qspi.state", 4, 10, "qspi", "soc.qspi.fsmcut_state"),
+        ("soc.gpio_inst.spi_inst.st", 2, 3, "spi", "soc.gpio_inst.spi_inst.fsmcut_st")]
 text = open(src).read()
 m = re.search(r"^module \\%s\n.*?^end\n" % re.escape(TOP), text, re.S | re.M)
 assert m, "top module not found"

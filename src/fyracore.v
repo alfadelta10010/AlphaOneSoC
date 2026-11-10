@@ -13,7 +13,7 @@
 //     instruction that reads it waits and reads the register file (use_hazard)
 //   - Branch/jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write: no fetch
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
-//   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
+//   - CSR write in WB: the next instruction is still in EX (3-cycle EX, ex_wait)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
 //   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
 //   - AMO: 2-cycle WB (stall pipeline)
@@ -129,6 +129,35 @@ module fyracore #(
     output wire [31:0] dbg_instr,
     output wire        dbg_compressed,
     output wire        dbg_trap
+`ifdef RISCV_FORMAL
+    , output wire        rvfi_valid
+    , output wire [63:0] rvfi_order
+    , output wire [31:0] rvfi_insn
+    , output wire        rvfi_trap
+    , output wire        rvfi_halt
+    , output wire        rvfi_intr
+    , output wire [1:0]  rvfi_mode
+    , output wire [1:0]  rvfi_ixl
+    , output wire [4:0]  rvfi_rs1_addr
+    , output wire [4:0]  rvfi_rs2_addr
+    , output wire [31:0] rvfi_rs1_rdata
+    , output wire [31:0] rvfi_rs2_rdata
+    , output wire [4:0]  rvfi_rd_addr
+    , output wire [31:0] rvfi_rd_wdata
+    , output wire [31:0] rvfi_pc_rdata
+    , output wire [31:0] rvfi_pc_wdata
+    , output wire [31:0] rvfi_mem_addr
+    , output wire [3:0]  rvfi_mem_rmask
+    , output wire [3:0]  rvfi_mem_wmask
+    , output wire [31:0] rvfi_mem_rdata
+    , output wire [31:0] rvfi_mem_wdata
+    // Formal-only taps for the riscv-formal wrapper's environment
+    , output wire        fv_fetch_can_deny
+    , output wire        fv_data_priv_m
+    , output wire        fv_misa_c
+    , output wire        fv_wfi_active
+    , output wire        fv_wb_hit
+`endif
 );
 
     // ================================================================
@@ -515,6 +544,9 @@ module fyracore #(
     wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
     wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
 
+`ifdef RISCV_FORMAL_ALTOPS
+    wire [31:0] muldiv_result_raw;
+`endif
     muldiv muldiv_inst(
         .clk   (clk),
         .rst   (rst),
@@ -524,7 +556,11 @@ module fyracore #(
         .sra   (ctrl_aluOp[3]),
         .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
         .b     (alu_d2),             // rs2, or the immediate shift amount
+`ifdef RISCV_FORMAL_ALTOPS
+        .result(muldiv_result_raw),
+`else
         .result(muldiv_result),
+`endif
         .busy  (muldiv_busy),
         .done  (muldiv_done)
     );
@@ -614,10 +650,11 @@ module fyracore #(
     wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
     // A write to pmpcfg0 or pmpaddr0-3 changes the checks that the next
     // instruction's fetch and data access undergo, and both run in EX while
-    // the write commits one stage later in WB. The CSR-write stall
-    // (csr_wb_hazard) keeps the data check behind the write, but with a
-    // locked entry or in U-mode the next instruction's fetch verdict can be
-    // latched during that very stall cycle, against the old configuration.
+    // the write commits one stage later in WB. The 3-cycle EX (the next
+    // instruction is still in EX while the write commits) keeps the data
+    // check behind the write, but with a locked entry or in U-mode the next
+    // instruction's fetch verdict can be latched during that very cycle,
+    // against the old configuration.
     // So the write refetches the next instruction the way FENCE.I does,
     // and it reaches EX only after the write has committed. One fetch per
     // PMP write (tests/directed/pmp_refetch).
@@ -784,14 +821,15 @@ module fyracore #(
     // stall_nofetch is the same without the pending fetch: an M instruction
     // starts on it (see muldiv_start).
     //
-    // csr_wb_hazard: a CSR write commits in WB, and the instruction behind it
-    // waits in EX for that one cycle, so everything EX derives from CSR state
-    // -- a CSR read, the trap and MRET targets, interrupt gating, MPRV/MPP for
-    // the data PMP check, TW, misa.C -- sees the committed value. The
-    // alternative, forwarding csr.v's post-write value into each of those, is
-    // a 32-bit mux per consumer and a copy of every WARL rule on the read
-    // path. In the SoC the cycle is hidden behind the next fetch.
-    wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
+    // No stall term for "a CSR write is in WB": the 3-cycle EX does that job.
+    // A CSR write commits in WB, and the instruction behind it is still in EX
+    // (ex_ph = 0, ex_wait = 1) for that cycle, so everything EX derives from
+    // CSR state -- a CSR read, the trap and MRET targets, interrupt gating,
+    // MPRV/MPP for the data PMP check, TW, misa.C -- sees the committed value.
+    // (There used to be a csr_wb_hazard term here; it was dead, proved by
+    // the core_inv harness: whenever it was 1 the EX was already stalled.)
+    // IF EX EVER GETS SHORTER THAN 3 CYCLES, that stall must return: Zicsr
+    // requires a CSR write's effect to be visible to the next instruction.
     // ex_wait: the EX instruction's ALU and comparator results are not in
     // alu_r and br_r yet (see ex_ph).
     //
@@ -804,7 +842,7 @@ module fyracore #(
     // exwb_rd in front of `stall`.
     wire ex_wait = ifex_valid && !ex_ph;
     wire stall_nofetch = wb_busy || wb_mem_stall || wfi_active ||
-                         ex_ifetch_hi_phase || csr_wb_hazard || ex_wait;
+                         ex_ifetch_hi_phase || ex_wait;
     wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
@@ -813,9 +851,9 @@ module fyracore #(
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
     // !ex_trap_iter: a trapping M instruction (a fetch fault whose garbage
-    // word decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
-    // flush, which contains ex_trap -- so without this muldiv_stall would
-    // wait for a result that never comes and the trap would never commit.
+    // word decodes as MUL/DIV, say) never starts -- without this
+    // exclusion muldiv_stall would wait for a result that never comes and the
+    // trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
     // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
@@ -846,7 +884,13 @@ module fyracore #(
     // *next* M instruction, which then captured the previous result.
     wire muldiv_have = muldiv_ready || muldiv_done;
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
+    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other;
+    // No `!flush` on capture or start, and no flush term in the muldiv_ready
+    // reset: flush and muldiv_want are never both 1 (a flush source in EX
+    // means the EX instruction is not an M op, and a trapping M op is
+    // excluded by ex_trap_iter), so a flush never meets a live M operation.
+    // If an M op could ever be in EX together with a flush source, restore
+    // all three.
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
@@ -854,15 +898,13 @@ module fyracore #(
     // completed, and muldiv_stall then dropped that fetch and fetched the
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_nofetch && !flush;
+                          && !stall_nofetch;
     assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin
-        // flush first: the operation's instruction is being discarded, so the
-        // result must not survive to be captured by its own re-execution.
         // capture before done: a result taken on its own done cycle must not
         // be left sticky for the next M instruction.
-        if (rst || flush)        muldiv_ready <= 1'b0;
+        if (rst)                 muldiv_ready <= 1'b0;
         else if (muldiv_capture) muldiv_ready <= 1'b0;
         else if (muldiv_done)    muldiv_ready <= 1'b1;
     end
@@ -1081,8 +1123,9 @@ module fyracore #(
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    // No interrupt is injected while a CSR write is in WB (csr_wb_hazard is
-    // part of stall_other), so there is no window where one slips in after
+    // No interrupt is injected while a CSR write is in WB (the next
+    // instruction is still in EX, held by ex_wait, which is part of
+    // stall_other), so there is no window where one slips in after
     // csrci mstatus,8 but before the write commits.
     wire irq_global_en     = !priv_mode || csr_mstatus_mie;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
@@ -1110,10 +1153,11 @@ module fyracore #(
     // another interrupt. It also tore down an in-flight memory access, because
     // the injection path overrides the EX/WB hold.
     //
-    // muldiv_want rather than muldiv_stall (or `stall`): muldiv_stall feeds
-    // muldiv_start through flush, which contains irq_inject, so it would
-    // close a combinational loop. Excluding any M instruction in EX -- before
-    // it starts, while it runs, and on the cycle its result is captured --
+    // muldiv_want rather than muldiv_stall (or `stall`, which is
+    // stall_other plus muldiv_stall): muldiv_stall is low on the capture
+    // cycle (muldiv_have), so either would let an interrupt in on that cycle
+    // and discard the finished result. Excluding any M instruction in EX --
+    // before it starts, while it runs, and on the cycle its result is captured --
     // means an interrupt never discards a finished or in-flight multiply;
     // it is taken at the next instruction instead.
     assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
@@ -1156,7 +1200,7 @@ module fyracore #(
     // MPRV=1 makes loads and stores check as though the hart were in MPP.
     // Instruction fetch is excluded by the spec, so its check keeps priv_mode.
     // The load or store right after `csrw mstatus` waits in EX for the write
-    // to commit (csr_wb_hazard), so it is checked against the new values.
+    // to commit (EX's 3 cycles), so it is checked against the new values.
     wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;
 
     pmp pmp_unit(
@@ -1173,14 +1217,14 @@ module fyracore #(
     );
 
     // No CSR forwarding: an instruction never reads CSR state in EX while a
-    // CSR write is in WB (csr_wb_hazard stalls it for that cycle).
+    // CSR write is in WB (EX's 3 cycles hold it until the write has committed).
     assign csr_rdata_eff = csr_rdata;
 
     // ================================================================
     //  PC Update Logic
     // ================================================================
     // "csrw mepc, t5; mret" and "csrw mtvec, t0; ecall" read the written
-    // value: csr_wb_hazard holds the MRET or the trap in EX until the write
+    // value: EX's 3 cycles hold the MRET or the trap in EX until the write
     // has committed.
     wire [31:0] trap_target = csr_mtvec;
     wire [31:0] mret_target = csr_mepc;
@@ -1552,4 +1596,111 @@ module fyracore #(
         end
     end
 
+`ifdef RISCV_FORMAL
+    // ================================================================
+    //  RISC-V Formal Interface (RVFI), NRET = 1, XLEN = ILEN = 32
+    //  Formal-only: nothing here exists without RISCV_FORMAL.
+    // ================================================================
+    // An instruction retires in WB. Every synchronous exception is reported
+    // (trap = 1); the WB cycle of an interrupt is not an instruction.
+    wire fv_wb_ret = exwb_valid && !wb_busy && !wb_mem_stall;
+    assign rvfi_valid = !rst && fv_wb_ret && !(exwb_trap && exwb_trap_cause[31]);
+    assign rvfi_trap  = rvfi_valid && exwb_trap;
+    assign rvfi_halt  = 1'b0;
+    assign rvfi_ixl   = 2'b01;
+    assign rvfi_insn  = exwb_raw_instr;
+    assign rvfi_pc_rdata = exwb_trap_pc;
+
+    reg [63:0] fv_order;
+    reg        fv_intr_pend;
+    always @(posedge clk) begin
+        if (rst) begin
+            fv_order     <= 64'b0;
+            fv_intr_pend <= 1'b0;
+        end else begin
+            if (rvfi_valid) begin
+                fv_order     <= fv_order + 64'd1;
+                fv_intr_pend <= exwb_trap;
+            end else if (csr_trap_signal) begin
+                fv_intr_pend <= 1'b1;
+            end
+        end
+    end
+    assign rvfi_order = fv_order;
+    assign rvfi_intr  = rvfi_valid && fv_intr_pend;
+
+    // Fields captured when the instruction leaves EX: loaded on the edges
+    // where EX/WB loads from EX (the last arm of the EX/WB update).
+    reg [4:0]  fv_x_rs1_addr, fv_x_rs2_addr;
+    reg [31:0] fv_x_rs1_rdata, fv_x_rs2_rdata;
+    reg [31:0] fv_x_pc_wdata;
+    reg        fv_x_mode;
+    reg        fv_x_hit;
+    // and on the IF/EX load edges (the last arm of the IF/EX update)
+    reg        fv_ifex_hit;
+    always @(posedge clk) begin
+        if (!rst && !stall && !(flush || ex_nofetch))
+            fv_ifex_hit <= if_hit;
+        if (!rst && !wb_busy && !wb_mem_stall && !stall) begin
+            fv_x_rs1_addr  <= (ex_rs1 == ifex_rf_rs1) ? ex_rs1 : 5'b0;
+            fv_x_rs1_rdata <= (ex_rs1 == ifex_rf_rs1 && ex_rs1 != 5'b0) ? ex_rs1_val : 32'b0;
+            fv_x_rs2_addr  <= (ex_rs2 == ifex_rf_rs2) ? ex_rs2 : 5'b0;
+            fv_x_rs2_rdata <= (ex_rs2 == ifex_rf_rs2 && ex_rs2 != 5'b0) ? ex_rs2_val : 32'b0;
+            fv_x_pc_wdata  <= ex_trap                          ? trap_target :
+                              irq_inject                       ? trap_target :
+                              ex_is_mret                       ? mret_target :
+                              (ex_branch_taken && ifex_valid)  ? ex_branch_target :
+                                                                 pc;
+            fv_x_mode      <= priv_mode;
+            fv_x_hit       <= fv_ifex_hit;
+        end
+    end
+    assign rvfi_rs1_addr  = rvfi_valid ? fv_x_rs1_addr  : 5'b0;
+    assign rvfi_rs2_addr  = rvfi_valid ? fv_x_rs2_addr  : 5'b0;
+    assign rvfi_rs1_rdata = rvfi_valid ? fv_x_rs1_rdata : 32'b0;
+    assign rvfi_rs2_rdata = rvfi_valid ? fv_x_rs2_rdata : 32'b0;
+    assign rvfi_pc_wdata  = rvfi_valid ? fv_x_pc_wdata  : 32'b0;
+    assign rvfi_mode      = rvfi_valid ? (fv_x_mode ? 2'b11 : 2'b00) : 2'b00;
+    assign fv_wb_hit      = rvfi_valid && fv_x_hit;
+
+    // Register write: the register file's own enable and data
+    assign rvfi_rd_addr  = (rvfi_valid && wb_regWR && exwb_rd != 5'b0) ? exwb_rd : 5'b0;
+    assign rvfi_rd_wdata = (rvfi_rd_addr != 5'b0) ? wb_data : 32'b0;
+
+    // Memory access (none for a trap or a failing SC: dmem_req is low)
+    wire fv_m_ok    = rvfi_valid && !exwb_trap;
+    wire fv_m_load  = fv_m_ok && exwb_memRD && !exwb_memWR;
+    wire fv_m_store = fv_m_ok && exwb_memWR && !exwb_memRD && !exwb_isSC;
+    wire fv_m_sc    = fv_m_ok && exwb_isSC;
+    wire fv_m_amo   = fv_m_ok && exwb_isAmo;
+    assign rvfi_mem_rmask = (fv_m_load || fv_m_amo) ? access_be : 4'b0;
+    assign rvfi_mem_wmask = (fv_m_store || fv_m_amo || (fv_m_sc && sc_success)) ? access_be : 4'b0;
+    assign rvfi_mem_rdata = fv_m_amo ? amo_old_val : fv_m_load ? dmem_rdata : 32'b0;
+    assign rvfi_mem_wdata = (rvfi_mem_wmask != 4'b0) ? dmem_wdata : 32'b0;
+    assign rvfi_mem_addr  = ((rvfi_mem_rmask | rvfi_mem_wmask) != 4'b0) ? dmem_addr : 32'b0;
+
+    // Taps
+    assign fv_fetch_can_deny = fetch_can_deny;
+    assign fv_data_priv_m    = data_priv_mode;
+    assign fv_misa_c         = csr_misa_c;
+    assign fv_wfi_active     = wfi_active;
+`endif
+`ifdef RISCV_FORMAL_ALTOPS
+    // Replace the M result by riscv-formal's ALTOPS formulas (low 32 bits of
+    // each 64-bit bitmask), selected by funct3. Shifts keep the real result.
+    reg [31:0] fv_altop;
+    always @(*) begin
+        case (ex_funct3)
+            3'b000:  fv_altop = (alu_d1 + alu_d2) ^ 32'h5876063e; // MUL
+            3'b001:  fv_altop = (alu_d1 + alu_d2) ^ 32'hf6583fb7; // MULH
+            3'b010:  fv_altop = (alu_d1 - alu_d2) ^ 32'hecfbe137; // MULHSU
+            3'b011:  fv_altop = (alu_d1 + alu_d2) ^ 32'h949ce5e8; // MULHU
+            3'b100:  fv_altop = (alu_d1 - alu_d2) ^ 32'h7f8529ec; // DIV
+            3'b101:  fv_altop = (alu_d1 - alu_d2) ^ 32'h10e8fd70; // DIVU
+            3'b110:  fv_altop = (alu_d1 - alu_d2) ^ 32'h8da68fa5; // REM
+            default: fv_altop = (alu_d1 - alu_d2) ^ 32'h3138d0e1; // REMU
+        endcase
+    end
+    assign muldiv_result = ctrl_isMulDiv ? fv_altop : muldiv_result_raw;
+`endif
 endmodule

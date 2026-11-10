@@ -17,11 +17,20 @@
 //   +0x08  BOOT_MODE    R/W (lane 0), [7:0]. 0 after a pin reset, kept
 //                       across a reboot: software's note to the next boot.
 //   +0x0C  CHIP_ID      R, the CHIP_ID parameter.
-//   +0x10  STRAPS       R. [0] = the rd_late strap as latched at the last pin
-//                       reset.
+//   +0x10  STRAPS       R. [0] = the rd_late strap, [1] = the no-stream strap
+//                       (ui_in[2], 1 = streaming off at reset), each as latched
+//                       at the last pin reset.
 //   +0x14  CLK_GATE     reserved: reads 0, writes ignored.
 //   +0x18  POWER        reserved: reads 0, writes ignored.
-//   +0x1C               reads 0, writes ignored.
+//   +0x1C  QSPI_CFG     R/W (lane 0), reads {27'b0, DDR_CAP, DDR, STREAM}.
+//                       [0] STREAM: 1 = streaming flash reads allowed (qspi_ctrl
+//                       stream_en). [1] DDR: 1 = DTR flash reads (qspi_ctrl
+//                       ddr). [4:2] DDR_CAP: the DDR capture point (qspi_ctrl
+//                       ddr_cap). Reset by rst_soc -- every reset,
+//                       reboot and watchdog expiry included: STREAM to the
+//                       inverse of the no-stream strap, DDR to 0, DDR_CAP to
+//                       DDR_CAP_RESET. So any reboot comes back in SDR, which is
+//                       the DDR fallback.
 //
 //   Watchdog, Synopsys DesignWare layout (snps,dw-wdt), +0x100..+0x1FF:
 //   +0x100  WDT_CR      R/W (lane 0). [0] EN: a write with bit 0 = 1 sets it;
@@ -59,7 +68,9 @@
 // The strap lives here because qspi_ctrl's `late` flop reloads whenever its
 // reset is high: during a reboot it must see the value latched at the pin
 // reset, not the live pin. rd_late follows the pin while rst is high (as
-// before syscon existed) and the latched value otherwise.
+// before syscon existed) and the latched value otherwise. The no-stream strap
+// is read the same way: QSPI_CFG.STREAM resets to ~(pin while rst is high,
+// latched value otherwise), so a reboot does not re-read the pin.
 //
 // CLK_GATE and POWER are reserved rather than implemented: nothing gates a
 // clock yet, and a register with no function is an ABI nobody can define.
@@ -80,7 +91,8 @@
 `default_nettype none
 
 module syscon #(
-    parameter [31:0] CHIP_ID = 32'h4131_5301   // "A1S", revision 0x01
+    parameter [31:0] CHIP_ID = 32'h4131_5301,  // "A1S", revision 0x01
+    parameter [2:0]  DDR_CAP_RESET = 3'd2      // QSPI_CFG.DDR_CAP after any reset
 )(
     input  wire        clk,
     input  wire        rst,            // the chip's reset (rst_n): sticky state
@@ -92,11 +104,17 @@ module syscon #(
     input  wire [31:0] wdata,
     output wire [31:0] rdata,
     input  wire        strap_rd_late,  // the strap pin (ui_in[0])
+    input  wire        strap_no_stream,// the strap pin (ui_in[2]): 1 = streaming off at reset
     output wire        rd_late,        // to qspi_ctrl
+    output wire        qspi_stream_en, // QSPI_CFG.STREAM
+    output wire        qspi_ddr,       // QSPI_CFG.DDR
+    output wire [2:0]  qspi_ddr_cap,   // QSPI_CFG.DDR_CAP
     input  wire [15:0] wdt_tap         // mtime[29:14]
 );
 
-    reg       rq, rq2, off, strap_q;
+    reg       rq, rq2, off, strap_q, strap_ns_q;
+    reg       cfg_stream, cfg_ddr;
+    reg [2:0] cfg_cap;
     reg [2:0] cause;
     reg       en, tprev;
     reg [3:0] top;
@@ -111,6 +129,8 @@ module syscon #(
     wire       halt    = fin & ((wdata[15:0] == 16'h5555) | (wdata[15:0] == 16'h3333));
     wire       w_cause = wr & (idx == 3'd1) & be[0];
     wire       w_mode  = wr & (idx == 3'd2) & be[0];
+    wire       w_cfg   = wr & (idx == 3'd7) & be[0];
+    wire       ns_now  = rst ? strap_no_stream : strap_ns_q;
 
     wire       whit    = (addr[15:8] == 8'h01);     // +0x100..+0x1FF
     wire [5:0] widx    = addr[7:2];
@@ -138,6 +158,18 @@ module syscon #(
     end
 
     always @(posedge clk) begin
+        if (rst_soc) begin
+            cfg_stream <= ~ns_now;
+            cfg_ddr    <= 1'b0;
+            cfg_cap    <= DDR_CAP_RESET;
+        end else if (w_cfg) begin
+            cfg_stream <= wdata[0];
+            cfg_ddr    <= wdata[1];
+            cfg_cap    <= wdata[4:2];
+        end
+    end
+
+    always @(posedge clk) begin
         if (rst) begin
             rq        <= 1'b0;
             rq2       <= 1'b0;
@@ -145,6 +177,7 @@ module syscon #(
             cause     <= 3'b001;
             boot_mode <= 8'h00;
             strap_q   <= strap_rd_late;
+            strap_ns_q <= strap_no_stream;
         end else begin
             rq        <= reboot | fire | (rq & ~rq2);
             rq2       <= rq & ~rq2;
@@ -158,6 +191,9 @@ module syscon #(
 
     assign rst_soc = rst | rq | off;
     assign rd_late = rst ? strap_rd_late : strap_q;
+    assign qspi_stream_en = cfg_stream;
+    assign qspi_ddr       = cfg_ddr;
+    assign qspi_ddr_cap   = cfg_cap;
 
     assign rdata = whit         ? (widx == 6'd0  ? {31'b0, en}
                                  : widx == 6'd1  ? {24'b0, top, top}
@@ -167,8 +203,9 @@ module syscon #(
                  : idx == 3'd1  ? {29'b0, cause}
                  : idx == 3'd2  ? {24'b0, boot_mode}
                  : idx == 3'd3  ? CHIP_ID
-                 : idx == 3'd4  ? {31'b0, strap_q}
-                 :                32'h0000_0000;   // FINISH, +0x14, +0x18, +0x1C
+                 : idx == 3'd4  ? {30'b0, strap_ns_q, strap_q}
+                 : idx == 3'd7  ? {27'b0, cfg_cap, cfg_ddr, cfg_stream}
+                 :                32'h0000_0000;   // FINISH, +0x14, +0x18
 
     wire _unused = &{be[3:2], wdata[31:16], 1'b0};
 

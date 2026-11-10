@@ -38,7 +38,7 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uo_out[7]` | GPIO out 7: SD CS# (resets high) | out | SD CS# (DAT3), by a jumper wire; the 7-segment DP otherwise |
 | `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
 | `ui_in[1]` | GPIO in 1, and SPI MISO | in | SD DO (MISO); DIP 2 must be off with the SD fitted |
-| `ui_in[2]` | GPIO in 2 | in | DIP 3 |
+| `ui_in[2]` | the no-stream strap during the pin reset (held through reboots), then GPIO in 2. 1 = flash streaming off at reset | in | DIP 3 (off = RP2350 pull-down = streaming on) |
 | `ui_in[3]` | UART RX | in | RP2350 GPIO20 (UART1 TX) |
 | `ui_in[4..7]` | GPIO in 4..7 | in | keypad ROW4..ROW1, or DIP 5–8 |
 
@@ -147,12 +147,20 @@ columns).
   strap), since it chose the clock. It should also pull down `ui_in[1..2]`
   if they are used as inputs with their DIPs off, except `ui_in[1]` with the
   SD card fitted: the card drives MISO there, and the RP2350 pin must be an
-  input with no pull-down (see the SD notes below).
+  input with no pull-down (see the SD notes below). A floating `ui_in[2]`
+  can only make flash reads slower (streaming off), never unbootable.
 * **RP2350 UART.**
   * UART1 on GPIO20 (TX) and GPIO37 (RX), with **CTS** flow control on
     GPIO38.
   * Do **not** enable its RTS: GPIO23 is `ui_in[6]`, a keypad row.
   * Leave GPIO21–24 as inputs.
+* **Flash hand-over.** A master that hands the QSPI Pmod to this design must leave the flash
+  **idle** (no program, erase or status write running, nothing suspended), **not in deep power-down**
+  (`B9h`), **without a `77h` burst wrap** (W4 = 1, the power-up default) and with **QE = 1**. Our
+  start-up sequence undoes continuous-read mode (quad, dual and DTR) and QPI, and nothing else. A
+  flash in any of the other states gives a boot failure with no diagnosis, and a wrap gives silent
+  wrong fetches. TinyQV makes the same assumption (tier 1, silicon). Details and sources:
+  `docs/qspi-memories.md` section 7.3a.
 * **7-segment display.** It is wired to every `uo_out` through solder
   jumpers JP1–8, so it flickers with the traffic. Cut the jumpers to stop
   that. `uo_out[7]` (segment DP) is the SD card's CS#, so it is no
@@ -225,10 +233,14 @@ about 0.4 tiles of that.
 * `ui_in` as in the pinout table. `qspi_rd_late` = `ui_in[0]`, straight from
   the pin; the QSPI engine samples it on every clock edge while `rst` is
   high, the last of them the second edge after `rst_n` rises. **Hold
-  `ui_in[0]` until then.** The whole `ui_in` byte also feeds GPIO IN.
+  `ui_in[0]` until then.** `ui_in[2]` is the no-stream strap, read the same
+  way (`qspi_no_stream`): 1 resets syscon's QSPI_CFG.STREAM to 0, 0 to 1. The
+  whole `ui_in` byte also feeds GPIO IN.
   syscon latches the strap while `rst` is high (the same window: every edge up
   to the second after `rst_n` rises) and the QSPI engine uses that copy
-  afterwards, so a reboot does not re-read the pin.
+  afterwards, so a reboot does not re-read the pin. The no-stream strap is
+  latched in the same window, and every reboot or watchdog reset restores
+  QSPI_CFG from that copy.
 * **A reboot or power-off is generated inside the SoC**, so the wrapper's
   `run` gating applies to `rst_n` only. The pins still go to their reset
   values: the QSPI pins are released by the engine's own registered output
@@ -365,11 +377,10 @@ As built (`src/uart.v`):
   expects. The transmitter keeps shifting underneath.
 * **RBR resets to 0.** Linux's startup reads it before any byte has
   arrived, and an X there would spread in an X-accurate simulation.
-* **The divisor resets to 27**, 115200 baud at a 50 MHz clock (+0.5%), so a
-  program in flash can print before it sets the divisor
-  (`alphaone_soc`'s `UART_DIV_RESET`). At 62.5 MHz, the clock the 3x4
-  harden closes at, 27 gives 144,676 baud and 115200 needs 34 (-0.3%). A
-  divisor of 0 behaves as 1.
+* **The divisor resets to 34**, 114,890 baud (-0.27% from 115200) at the
+  documented 62.5 MHz clock, so a program in flash can print before it sets
+  the divisor (`alphaone_soc`'s `UART_DIV_RESET`). At 60 MHz 34 gives
+  110,294 baud (-4.3%, 33 would be -1.4%) and at 50 MHz 27 would be 115200 (+0.5%). A divisor of 0 behaves as 1.
 * Every register write waits for `ready`, so a word store that writes THR
   and LCR together while the transmitter is busy writes LCR once, when THR
   is taken, and cannot flip DLAB under its own THR write.
@@ -385,9 +396,9 @@ Early console: `earlycon=uart8250,mmio,0x10000000,115200,<core clock in Hz>`,
 or `earlycon=uart8250,mmio,0x10000000` with no baud at all. The clock
 matters: given a baud and no clock, `drivers/tty/serial/earlycon.c` assumes
 `BASE_BAUD * 16` = 1.8432 MHz and `8250_early.c` programs divisor
-1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.1 Mbaud at
-50 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
-UART runs at whatever it holds -- 115200 at 50 MHz straight out of reset,
+1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.906 Mbaud at
+62.5 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
+UART runs at whatever it holds -- 114,890 baud at 62.5 MHz straight out of reset,
 or whatever the boot loader set. A plain `earlycon` with `stdout-path` in
 the device tree takes `clock-frequency` from the node and is also right.
 

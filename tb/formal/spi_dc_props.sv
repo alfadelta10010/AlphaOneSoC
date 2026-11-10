@@ -41,4 +41,11 @@ module spi_dc_props (
                     rx1 == rx2 && tx1 == tx2 && ct1 == ct2 && bd1 == bd2);   // D1
         end
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (armed && st1 != 2'd0); cover (armed && st1 == 2'd2 && cc1 == 8'd0);
+    end
+`endif
 endmodule

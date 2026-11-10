@@ -56,6 +56,13 @@
 # directory must appear in MANIFEST, so a test cannot silently drop out of
 # the suite.
 #
+# With RUN_PLUSARGS=+SOC_DDR=1 the SoC run puts the flash reads in DDR (EDh). A
+# MANIFEST line that sets +QSPI_DELAY pairs the model's round-trip delay with the
+# SDR capture point, which a forced DDR capture point cannot read, so the runner
+# prints "SKIP <name> (DDR corner: fixed-delay line)" for it and counts it in the
+# REGRESS line. The DDR timing corners are covered by `make test-qspi-ddr-sweep`
+# and by tb/qspi_ddr_sweep.sh, which pair each delay with its capture point.
+#
 # RUN_PLUSARGS is added to every simulation, e.g. RUN_PLUSARGS=+RF_X starts
 # the registers at X instead of 0 (src/regFile.v), so a test that reads a
 # register it never wrote fails on the X it leaves in the dump -- unless
@@ -174,7 +181,7 @@ sim() { # sim <name> <plusargs...>
 norm() { sed -E 's/ +/ /g' "$1"; }
 rd()   { grep -oE "\b$2 +0x[0-9a-fxzXZ]+" "$1" 2>/dev/null | tail -1 | awk '{print $2}'; }
 
-pass=0; fail=0
+pass=0; fail=0; skipped=0
 ok()  { pass=$((pass+1)); printf "  PASS %s\n" "$1"; }
 bad() { fail=$((fail+1)); printf "  FAIL %s\n" "$1"; [ -n "${2:-}" ] && printf "%s\n" "$2"
         [ -n "${FAILFAST:-}" ] && { echo "REGRESS pass=$pass fail=$fail (FAILFAST: stopped at the first failure)"; exit 1; }
@@ -256,6 +263,10 @@ suite() {
     elif [ "$mode" = flash ]; then
       continue
     fi
+    if [ $SOC = 1 ] && [[ " ${RUN_PLUSARGS:-} " == *" +SOC_DDR"* ]] && [[ " $rest " == *" +QSPI_DELAY="* ]]; then
+      skipped=$((skipped+1)); printf "  SKIP %s (DDR corner: fixed-delay line)\n" "$name"
+      continue
+    fi
     # shellcheck disable=SC2086
     case "$mode" in
       spike|flash) run_spike "$name" $rest ;;
@@ -263,7 +274,8 @@ suite() {
       *)      bad "$name" "    unknown mode '$mode'" ;;
     esac
   done < "$HERE/MANIFEST"
-  echo "REGRESS pass=$pass fail=$fail"
+  if [ $skipped = 0 ]; then echo "REGRESS pass=$pass fail=$fail"
+  else echo "REGRESS pass=$pass fail=$fail skip=$skipped"; fi
   [ $fail = 0 ]
 }
 

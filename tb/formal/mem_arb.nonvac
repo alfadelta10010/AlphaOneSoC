@@ -1,0 +1,6 @@
+cat MC03   # fetch first -> MD1
+cat MC04   # data request breaks into a split fetch -> MD2
+cat MC01   # split one halfword early -> MD3
+cat MC02   # split only at the A/B boundary -> MD3
+cat MC07   # second half stays on PSRAM A -> MD3
+cat MC08   # split fetch completes after its first half -> MD3

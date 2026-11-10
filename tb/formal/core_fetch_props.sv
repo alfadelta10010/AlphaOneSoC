@@ -73,4 +73,12 @@ module core_fetch_props (
             end
         end
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (chk && f_kv); cover (chk && f_load && f_exec);
+        cover (chk && f_load && f_exec && f_fetched[1:0] == 2'b11);
+    end
+`endif
 endmodule

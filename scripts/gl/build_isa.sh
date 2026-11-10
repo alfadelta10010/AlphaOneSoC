@@ -9,7 +9,7 @@
 # Writes under OUT: elf/<name>.elf, hex/<name>.hex (flash image at 0), and the
 # lists list.A, list.B, list.C, list.D10, list.D20 of `name|hex|plusargs` lines
 # (run_gl.sh LIST=). Part D is the 16 mailbox programs of tests/soc built with
-# -DMB_UART (they report over the UART as well) and the chip's divisor 27; the
+# -DMB_UART (they report over the UART as well) and the chip's divisor 34; the
 # three that drive the SSD1331 (D20) run with a 20 ns clock, the rest (D10)
 # with 10 ns: run_gl.sh TCLK=.
 # Nothing from the suites is copied; they are read from SUITES' yaml paths.
@@ -35,7 +35,7 @@ case " $PARTS " in *" D "*)
   # program MB_DIV image (T10: 10 ns clock, T20: 20 ns): the table of WO-26
   late='+RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'
   while read -r t div img; do
-    df="-DMB_UART -DUART_DIV_RESET=27"; [ "$div" != - ] && df="$df -DMB_DIV=$div"
+    df="-DMB_UART -DUART_DIV_RESET=34"; [ "$div" != - ] && df="$df -DMB_DIV=$div"
     $CC $FLAGS $df -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/$t.S -o "$OUT/elf/$t.elf" || exit 1
     $OC -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 "$OUT/elf/$t.elf" "$OUT/hex/$t.hex"
     if [ "$t" = syscon_strap ]; then
@@ -66,8 +66,12 @@ case " $PARTS " in *" A "*)
     $CC $FLAGS -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/$t.S -o "$OUT/elf/$t.elf" || exit 1
     $OC -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 "$OUT/elf/$t.elf" "$OUT/hex/$t.hex"
   done
-  # test-wrapper's runs: QSPI_LATE is +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12
-  { echo 'tt_pins.0|tt_pins|'; echo 'tt_pins.1|tt_pins|+QSPI_DELAY=19'
+  # test-wrapper's runs: QSPI_LATE is +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12.
+  # tt_pins.1 runs at QSPI_DELAY=18 here: 19 leaves only 1 ns of the 20 ns SCK period at
+  # the 10 ns bench clock and the 2-cell pad-to-flop path is 2 ns at UNIT_DELAY=#1 (WO-40:
+  # PASS at 18 and 17 on fin-3x4). The 19 ns case stays covered at RTL by test-qspi's
+  # +QSPI_DELAY=19 run and test-wrapper's runs.
+  { echo 'tt_pins.0|tt_pins|'; echo 'tt_pins.1|tt_pins|+QSPI_DELAY=18'
     echo 'tt_pins.2|tt_pins|+RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'
     echo 'tt_reboot.0|tt_reboot|+TEST=reboot'
     echo 'tt_reboot.1|tt_reboot|+TEST=reboot +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'; } > "$OUT/list.A";;

@@ -63,7 +63,7 @@
 | ALU and comparator results | Registered (`alu_r`, `br_r`, free-running). An instruction waits in EX (`ex_wait`) until it has sat there for one whole cycle with its operands read and final; `ex_ph` marks the cycles on which the flops hold its own results |
 | Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
 | Register read (synchronous, write-first `rf_top` macro) | The instruction's first cycle in EX. The read addresses are the EX instruction's register numbers as fetched (`ifex_rf_rs1`/`ifex_rf_rs2`, flops), whatever the pipeline is doing, so no stall term and no fetched bit reaches the macro's address pins. The data is the registers after the last edge's write, as a combinational read would give -- `regFile`'s one-entry bypass supplies the word written on that same edge, so the macro's own write-through is not relied on. Each read is masked to 0 where the decoded field is x0 |
-| CSR write in WB | The next instruction waits one cycle in EX (`csr_wb_hazard`) |
+| CSR write in WB | No stall term: the next instruction is still in its 3-cycle EX (`ex_wait`) while the write commits. If EX gets shorter than 3 cycles a stall must return |
 | Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
 | Memory not ready | Stall while `imem_ready` is low, or while a data request is outstanding |
@@ -78,13 +78,13 @@ ex_rf_ok      : cleared when IF/EX loads, set after one held cycle
 ex_ph         : cleared when IF/EX loads, set after a held cycle with ex_rf_ok && !use_hazard
 ex_wait       = ifex_valid && !ex_ph
 stall_nofetch = wb_busy || wb_mem_stall || wfi_active
-                || ex_ifetch_hi_phase || csr_wb_hazard || ex_wait
+                || ex_ifetch_hi_phase || ex_wait
                 // use_hazard acts through ex_wait: it keeps ex_ph clear
 stall_other   = stall_nofetch || if_mem_stall
 wb_mem_stall  = dmem_req && !dmem_ready
 muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap_iter
 muldiv_have   = muldiv_ready || muldiv_done
-muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && !stall_nofetch && !flush
+muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && !stall_nofetch
 muldiv_stall  = muldiv_want && !muldiv_have
 stall         = stall_other || muldiv_stall
 flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr
@@ -101,9 +101,9 @@ An M instruction or a shift starts while the next fetch is still outstanding (`m
 
 ### 2.3 CSR Values Seen by EX
 
-CSR writes commit in WB, one stage behind EX. Zicsr requires a write's effects to be visible to the very next instruction. Nothing is forwarded; the next instruction waits instead:
+CSR writes commit in WB, one stage behind EX. Zicsr requires a write's effects to be visible to the very next instruction. Nothing is forwarded; the next instruction is still in EX when the write commits:
 
-- **`csr_wb_hazard`**: while a CSR write is in WB, the instruction in EX stalls for that cycle, so every EX consumer -- a CSR read (including the U-mode counter aliases), `trap_target`/`mret_target`, interrupt gating, the MRET privilege restore, the data PMP check (MPRV/MPP), the U-mode WFI check (TW), compressed decode and branch-target alignment (misa.C) -- reads the stored value. No interrupt is injected during it.
+- **EX's 3 cycles** (there is no `csr_wb_hazard` term: it was removed 2026-11-08 as dead; if EX ever gets shorter than 3 cycles it must return): while a CSR write is in WB, the instruction behind it is still in EX (`ex_wait`), so every EX consumer -- a CSR read (including the U-mode counter aliases), `trap_target`/`mret_target`, interrupt gating, the MRET privilege restore, the data PMP check (MPRV/MPP), the U-mode WFI check (TW), compressed decode and branch-target alignment (misa.C) -- reads the stored value. No interrupt is injected during it.
 - **Legal values**: each writable register stores its `*_legal` wire (`mie_legal`, `mtvec_legal`, `pmpcfg0_legal`, `pmpaddr0_legal`, ...; mstatus and misa store `mstatus_after_we` / `misa_after_we`). Every WARL rule lives there and only there: MPP legalisation, the misa.C refusal, mie/mcounteren/mcountinhibit masks, mtvec direct mode, per-byte pmpcfg locks, TOR/L locks on pmpaddr. Bits no write can set are constant, so they have no flops.
 - **`wval_out` (`csr_wval`)**: the value the CSR at `waddr` reads back once the pending write commits (the same wires, plus the mepc IALIGN read mask, mip's live bits and read-zero CSRs). Only the testbench trace uses it; synthesis removes it.
 - **mcycle**: the stall cycle would make an `rdcycle` right after `csrw mcycle` (or `mcycleh`) read the written value + 1. `mcycle_wr_q` skips the increment on the cycle after an mcycle write, so it reads the written value, as Spike does.
@@ -116,7 +116,7 @@ wire [31:0] trap_target = csr_mtvec;
 wire [31:0] mret_target = csr_mepc;
 ```
 
-`csrw mepc, t0; mret` returns to the new mepc, and `csrw mtvec, t0` followed by a trapping instruction vectors to the new mtvec: the MRET or the trapping instruction waits in EX until the write has committed (`csr_wb_hazard`).
+`csrw mepc, t0; mret` returns to the new mepc, and `csrw mtvec, t0` followed by a trapping instruction vectors to the new mtvec: the MRET or the trapping instruction waits in EX until the write has committed (EX's 3 cycles).
 
 ---
 

@@ -1,0 +1,3 @@
+cat WD16   # SA-009 gate removed
+cat WD05   # recorded kill
+sed syscon.v s/DDR_CAP_RESET = 3'd2/DDR_CAP_RESET = 3'd5/   # the reset value drifts from the harness parameter -> P3

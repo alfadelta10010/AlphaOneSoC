@@ -1,0 +1,1 @@
+def -DLD0=181 -DLD1=182 -DLI0=1000 -DLI1=1000   # one clock under the tight bound: the counter counts and the bound is reached

@@ -37,6 +37,8 @@ module spi_bus_props (
     // the strobe the spec calls for: an accepted write with lane 0
     wire spw = sel && we && be[0] && ready;
 
+    reg armed = 1'b0;               // a reset has been applied; every assert is gated on it
+    always @(posedge clk) if (rst) armed <= 1'b1;
     reg rst_q = 1'b0, spw_q = 1'b0, txe_q = 1'b0, bba_q = 1'b0, en_q = 1'b0, wr_en_q = 1'b0;
     reg [5:2] addr_q = 0;  reg [31:0] wdata_q = 0;  reg [7:0] in_q = 0, in_m_q = 0, out_r_q = 0;
     reg [7:0] bb_q = 0, baud_q = 0, out_q = 0;  reg cpol_q = 0, cpha_q = 0, ctl_q = 0;
@@ -49,7 +51,7 @@ module spi_bus_props (
     wire [4:0] strobes = {x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out};
     wire       req = sel && we && be[0];
 
-    always @(*) begin
+    always @(*) if (armed) begin
         // ---- the guarantees for spi_core's assumptions
         assert ((strobes & (strobes - 5'd1)) == 5'd0);                              // G1 (AC1)
         assert (!(x_wr_tx && x_bba));                                               // G2 (AC2)
@@ -97,4 +99,15 @@ module spi_bus_props (
             assert (in_s == in_m_q);
         end
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (armed && sel && !we); cover (armed && req && addr == 4'd9); cover (armed && req && addr == 4'd9 && !ready);
+        cover (armed && req && addr != 4'd9 && !ready); cover (armed && rst_q); cover (armed && !rst_q && spw_q && addr_q == 4'd0);
+        cover (armed && !rst_q && spw_q && addr_q == 4'd3); cover (armed && !rst_q && spw_q && addr_q == 4'd12);
+        cover (armed && !rst_q && spw_q && addr_q == 4'd11); cover (armed && !rst_q && spw_q && addr_q == 4'd9);
+        cover (armed && addr == 4'd8); cover (armed && addr == 4'd10);
+    end
+`endif
 endmodule

@@ -72,4 +72,12 @@ module csr_props (
             assert (mepc_out[0] == 1'b0 && (misa_c || mepc_out[1] == 1'b0));                // P8
         end
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (armed && raddr == 12'h300); cover (armed && raddr == 12'h301); cover (armed && raddr == 12'h304);
+        cover (armed && raddr == 12'h305); cover (armed && raddr == 12'h306); cover (armed && raddr == 12'h320);
+    end
+`endif
 endmodule

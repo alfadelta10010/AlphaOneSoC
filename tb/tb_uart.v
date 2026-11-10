@@ -281,7 +281,7 @@ module tb_uart;
     // that frame's DR (bi_link 1) or OE (bi_link 2).
     reg        bi_val = 1'b0, bi_pend = 1'b0;
     real       bi_lo, bi_hi;
-    integer    bi_link = 0, rx_breaks = 0, bi_seen = 0;
+    integer    bi_link = 0, rx_breaks = 0, bi_seen = 0, rx_steered = 0, brk_floor = 5;
     reg  [7:0] m_rbr;
     reg        m_rbr_known = 1'b0;
     integer    rx_kept = 0, rx_dropped = 0, rx_popped = 0, rx_bad = 0, rx_glitches = 0;
@@ -457,8 +457,14 @@ module tb_uart;
                 if (old_dlab && (b[0] || b[1])) begin
                     // A divisor latch write restarts the baud generator: the
                     // receiver's samples may come up to a tick early too.
-                    if (dr_pend) begin dr_lo = dr_lo - cur_div() * T; fr_hi_to = fr_hi_to - cur_div() * T; end
+                    // The stop bit's sample moves for a kept frame (DR), a
+                    // dropped one (OE) and a break (BI) alike, and with it the
+                    // end of RTS#'s held-high window (after a break: its half
+                    // bit of high line).
+                    if (dr_pend) dr_lo = dr_lo - cur_div() * T;
                     if (oe_pend) oe_lo = oe_lo - cur_div() * T;
+                    if (bi_pend) bi_lo = bi_lo - cur_div() * T;
+                    if ($realtime <= fr_hi_to && fr_hi_to < 1.0e17) fr_hi_to = fr_hi_to - cur_div() * T;
                 end
                 if (b[0]) begin
                     if (old_dlab) m_dll = wd[7:0];
@@ -502,11 +508,13 @@ module tb_uart;
                   for (bh = 0; bh < 2; bh = bh + 1) begin
                     mt[dh*4+oh*2+bh] = 1'b0;
                     // A pending break's BI rises on the same edge as the DR or
-                    // OE it brings, when that one is still pending too.
+                    // OE it brings, when that one is still pending too --
+                    // unless BI is still set from an earlier break that no LSR
+                    // read has cleared: BI is sticky, so it is 1 throughout.
                     if ((dpos == 2 || dpos == dh) && (opos == 2 || opos == oh) &&
                         (bpos == 2 || bpos == bh) &&
-                        !(rxm_on && bi_pend && bi_link == 1 && dr_pend && bh != dh) &&
-                        !(rxm_on && bi_pend && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
+                        !(rxm_on && bi_pend && !bi_val && bi_link == 1 && dr_pend && bh != dh) &&
+                        !(rxm_on && bi_pend && !bi_val && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
                         if (a2) begin
                             e = {8'h00, 8'hB0, 1'b0, thre[0], thre[0], bh[0], 2'b00, oh[0], dh[0], 8'h00};
                             m = 32'hFFFF_FFFF;
@@ -635,7 +643,7 @@ module tb_uart;
     // Model reset, for a reset released on the edge after this is called.
     task automatic model_reset;
         begin
-            m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd27; m_dlm = 8'd0;
+            m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd34; m_dlm = 8'd0;
             m_sbc = 1'b0; m_sbc_old = 1'b0; sbc_edge = -1;
             if (dr_val || dr_pend) rx_kept = rx_kept - 1;  // a byte reset threw away
             rxm_reset;
@@ -802,6 +810,7 @@ module tb_uart;
 
     initial begin
         if ($value$plusargs("SEED=%d", seed)) ;
+        if ($value$plusargs("BRK_FLOOR=%d", brk_floor)) ;
         if (!$value$plusargs("NRAND=%d", nrand)) nrand = 1500;
         model_reset;
         noise;
@@ -839,7 +848,7 @@ module tb_uart;
         rd8(7, v8); chk("SCR after reset", v8, 8'h00);
         rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
         wr8(3, 8'h80);
-        rd8(0, v8); chk("DLL after reset", v8, 8'd27);
+        rd8(0, v8); chk("DLL after reset", v8, 8'd34);
         rd8(1, v8); chk("DLM after reset", v8, 8'd0);
         for (bi = 0; bi < 16; bi = bi + 1) begin
             bus(1'b0, bi, 1'b0, $random(seed));
@@ -1145,6 +1154,53 @@ module tb_uart;
         join
         rx_settle;
         rd8(5, v8); chk("LSR after a framing error on 0x80", v8, 8'h60);
+        // BI is sticky: it stays 1 from a break until an LSR read, through an RBR
+        // pop and through a second break's start bit, stop-bit window and end.
+        // Break, RBR pop with no LSR read, then a second break (RBR empty: its
+        // DR is the BI's partner), read mid-break and around its stop bit.
+        wait_cts;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(0, v8); chk("sticky BI: the first break's zero byte", v8, 8'h00);
+        rd8(2, v8);
+        wait_cts;
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                #(3.0 * tb);
+                rd8(5, v8); chk("sticky BI: LSR mid second break (RBR empty), BI still set", v8, 8'h70);
+                #(6.2 * tb);
+                rd8(2, v8);                                  // inside the stop-bit window
+                rd8(2, v8); rd8(2, v8);
+                #(1.0 * tb);
+                rd8(2, v8);
+            end
+        join
+        rx_settle;
+        rd8(5, v8); chk("sticky BI: LSR after the second break", v8, 8'h71);
+        rd8(0, v8); chk("sticky BI: second break's zero byte", v8, 8'h00);
+        rd8(5, v8); chk("sticky BI: all clear", v8, 8'h60);
+        // The same with RBR full when the second break arrives (OE).
+        wait_cts;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(2, v8);
+        // (a sender ignoring CTS: RTS# is deasserted, RBR being full)
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                #(3.0 * tb);
+                rd8(5, v8); chk("sticky BI: LSR mid second break (RBR full), BI still set", v8, 8'h71);
+                #(6.2 * tb);
+                rd8(2, v8);
+                rd8(2, v8); rd8(2, v8);
+                #(1.0 * tb);
+                rd8(2, v8);
+            end
+        join
+        rx_settle;
+        rd8(5, v8); chk("sticky BI: LSR after the second break with RBR full", v8, 8'h73);
+        rd8(5, v8); chk("sticky BI: BI and OE cleared", v8, 8'h61);
+        rd8(0, v8); chk("sticky BI: RBR holds the first break's byte", v8, 8'h00);
+        rd8(5, v8); chk("sticky BI: all clear again", v8, 8'h60);
         if (rx_bad < 11) fail("framing: too few bad frames sent");
 
         // ── The late-break boundary ─────────────────────────────────────────
@@ -1448,10 +1504,10 @@ module tb_uart;
         rd8(1, v8); chk("IER after reset", v8, 8'h00);
         rd8(3, v8); chk("LCR after reset", v8, 8'h00);
         rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
-        wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd27); wr8(3, 8'h00);
-        wr8(0, 8'h3E);                                            // at divisor 27
+        wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd34); wr8(3, 8'h00);
+        wr8(0, 8'h3E);                                            // at divisor 34
         fork
-            begin wait_cts; rx_frame(8'h4F, bit_ns(27, 0.01), 27, 1'b1, 0.0); end
+            begin wait_cts; rx_frame(8'h4F, bit_ns(34, 0.01), 34, 1'b1, 0.0); end
             get_byte;
         join
         wait_tx_idle;
@@ -1529,6 +1585,22 @@ module tb_uart;
             if (k && (rx_dropped == n || oe_seen == j)) fail("random without CTS: no overrun happened");
         end
 
+        // Break and BI floors by construction (TB-007): the sender draws a break 2 times in 100, so
+        // the count per seed is chance. Whatever the draws left owing is sent here, each break
+        // followed by the LSR read that clears BI (one rx_breaks and one bi_seen per forced break;
+        // the guard below only stops a broken bench from looping).
+        n = 0;
+        while ((rx_breaks < brk_floor || bi_seen < brk_floor) && n < 2 * brk_floor + 10) begin
+            d = cur_div(); tb = bit_ns(d, 0.0);
+            wait_cts;
+            rx_break((10 + urand(20)) * tb, d);
+            rx_settle;
+            rd8(5, v8);
+            if (dr_val) rd8(0, v8);
+            n = n + 1;
+        end
+        rx_steered = n;
+
         // ── Divisor reload ──────────────────────────────────────────────────
         // A 16550 reloads its baud counter when a divisor latch is written
         // (PC16550D: "Upon loading either of the Divisor Latches, a 16-bit
@@ -1580,11 +1652,12 @@ module tb_uart;
                  tx_frames_by_div[3], tx_stalls);
         $display("tb_uart: RX %0d kept, %0d dropped (overrun), %0d popped, %0d bad-stop/break (%0d breaks), %0d glitches, OE seen %0d times, BI %0d",
                  rx_kept, rx_dropped, rx_popped, rx_bad, rx_breaks, rx_glitches, oe_seen, bi_seen);
-        // Breaks sent per seed run 8-15, so the floor is 5. BI is sticky until an
+        $display("tb_uart: steered %0d of %0d random ops (breaks %0d, BI %0d, floor %0d)", rx_steered, 2 * nrand, rx_breaks, bi_seen, brk_floor);
+        // The floor of 5 holds by construction (the top-up after the random phase). BI is sticky until an
         // LSR read clears it, so one observation can cover two breaks but never
         // the other way round; bi_seen counts clearing reads only.
         if (bi_seen > rx_breaks) fail($sformatf("BI seen %0d times for %0d breaks sent", bi_seen, rx_breaks));
-        if (rx_breaks < 5 || bi_seen < 5) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
+        if (rx_breaks < brk_floor || bi_seen < brk_floor) fail($sformatf("too few breaks: %0d sent, BI seen %0d times", rx_breaks, bi_seen));
         if (tx_frames != tx_writes) fail($sformatf("%0d THR writes but %0d frames", tx_writes, tx_frames));
         if (errors == 0) $display("PASS tb_uart (%0d checks)", checks);
         else             $display("FAIL tb_uart: %0d errors, %0d checks", errors, checks);

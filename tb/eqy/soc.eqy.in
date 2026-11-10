@@ -24,6 +24,11 @@ gold-nomatch soc.cpu.rf.dIn*
 gate-nomatch soc.cpu.rf.dIn*
 gold-nomatch soc.cpu.rf.w_ena*
 gate-nomatch soc.cpu.rf.w_ena*
+# syscon's ns_now = rst ? strap_no_stream : strap_ns_q is strap_ns_q's own D in the netlist, but the RTL flop
+# is written only in reset (an enable), so its D cone never contains ns_now: matched, ns_now is a free cut input
+# of the strap_ns_q partition and the proof needs induction length 4. Unmatched, both sides see the whole cone.
+gold-nomatch soc.syscon_inst.ns_now*
+gate-nomatch soc.syscon_inst.ns_now*
 gold-nomatch soc.qspi.rd_late*
 gate-nomatch soc.qspi.rd_late*
 gold-nomatch soc.cpu.exwb_memSize*
@@ -32,13 +37,15 @@ gold-nomatch soc.cpu.muldiv_inst.st*
 gate-nomatch soc.cpu.muldiv_inst.st*
 gold-nomatch soc.qspi.state*
 gate-nomatch soc.qspi.state*
+gold-nomatch soc.gpio_inst.spi_inst.st*
+gate-nomatch soc.gpio_inst.spi_inst.st*
 @MATCHRULES@
 
 # ---- FSM cut point ----------------------------------------------------------
-# EQY 0.62's [recode] does not cut the gate side, so the three recoded FSMs
-# (exwb_memSize, muldiv_inst.st, qspi.state) are not matched. run.sh instead patches
+# EQY 0.62's [recode] does not cut the gate side, so the four recoded FSMs
+# (exwb_memSize, muldiv_inst.st, qspi.state, spi_inst.st) are not matched. run.sh instead patches
 # both designs (fsmcut.py): gold's flop Q moves to <cut> (soc.cpu.fsmcut_exwb_memSize,
-# soc.cpu.muldiv_inst.fsmcut_st, soc.qspi.fsmcut_state) and readers see clamp(<cut>); the
+# soc.cpu.muldiv_inst.fsmcut_st, soc.qspi.fsmcut_state, soc.gpio_inst.spi_inst.fsmcut_st) and readers see clamp(<cut>); the
 # gate's one-hot flops move to <name>__oh and <cut> = enc(oh), readers see
 # onehot(clamp(<cut>)). <cut> has the same name on both sides, so it is matched and cut:
 # every other partition loses the FSM, and each FSM is one small partition checking the

@@ -60,15 +60,31 @@ UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
 SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
              "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
 
-TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800}
+# formal: run.sh's inner limits are 1800 s (yosys) and PDR_TIMEOUT + 600 = 1800 s (sby, pdr
+# harnesses of the mutation lists); the outer limit is inner max + 600 so a slow proof ends
+# inside run.sh with a verdict, never by a race with this timeout. A formal TIMEOUT is an
+# ERROR (no verdict), never a kill.
+TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1800 + 600}
 # Formal harnesses (tb/formal/<name>_props.sv) per source file. soc_rst_sync is
 # structural and has no _props.sv.
-FORMAL = {"csr.v": ["csr"], "fyracore.v": ["core_hold", "core_req", "core_fetch"], "regFile.v": ["core_hold"],
+# Cover (*_cov), mem_li, md07_miter and the *_cov harnesses are left out: a cover
+# harness FAILS on a mutant that merely makes a trace unreachable (not a bug
+# found), and mem_li / md07_miter are opt-in (no engine closes them in the time
+# box). Every pdr harness's PDR_TIMEOUT (1200 s) + 600 is below TIMEOUT["formal"].
+MEM = ["mem_flash", "mem_tcem", "mem_arb", "mem_ld"]
+FORMAL = {"csr.v": ["csr"],
+          "fyracore.v": ["core_hold", "core_req", "core_fetch", "core_df"],
+          "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
-          "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12"],
+          "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12", "bus"],
+          "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap"],
+          "soc_bus.v": ["bus"], "uart.v": ["bus"],
+          "muldiv.v": ["md07"],
           "tt_um_alfadelta10010_alphaone_soc.v": ["spi_f12"]}
-NO_PROPS = {"soc_rst_sync", "spi_f12", "spi_bb1"}  # spi_bb1 reuses spi_bb_props.sv
+# No <name>_props.sv of their own: structural, or a define/PROPN variant of mem/spi_bb.
+NO_PROPS = {"soc_rst_sync", "spi_f12", "spi_bb1"} | set(MEM)
+FORMAL_BIN_DEFAULT = os.path.expanduser("~/tools/oss-cad-suite/bin")
 
 
 SKIP_FORMAL = set()
@@ -165,11 +181,37 @@ def score(entry, kinds, keep):
     else:
         for kind, b in benches_for(f, kinds):
             env = dict(os.environ)
+            nocex = False
             log = os.path.join(absbase, "%s-%s.log" % (kind, b))
             if kind == "formal":
                 env["FYRA_SRC"] = os.path.join(absbase, "src")
                 env["OUT_DIR"] = absbase
+                if "FORMAL_BIN" not in env and os.path.isdir(FORMAL_BIN_DEFAULT):
+                    env["FORMAL_BIN"] = FORMAL_BIN_DEFAULT
                 rc, dt = run(["bash", "tb/formal/run.sh", b], env, TIMEOUT[kind], log)
+                if rc == 1 and "did not close" in first_fail(log):
+                    # Not a reachable violation: induction just failed to close.
+                    # Rerun as bmc from reset (NONVAC_RUN, depth NVDEPTH, 24 by
+                    # default): a counterexample is a real kill, else KILLED-NOCEX.
+                    env2 = dict(env, NONVAC_RUN="1")
+                    # a harness's .nonvac "engine sat|sby" line names the engine whose
+                    # bmc can reach the copies (spi_dc: sby's free initial state)
+                    try:
+                        for ln in open(os.path.join(ROOT, "tb/formal", b + ".nonvac")):
+                            if ln.startswith("engine "):
+                                env2["FORMAL_ENGINE"] = ln.split()[1]
+                                break
+                    except OSError:
+                        pass
+                    log2 = log.replace(".log", "-bmc.log")
+                    rc2, dt2 = run(["bash", "tb/formal/run.sh", b], env2, TIMEOUT[kind], log2)
+                    dt += dt2
+                    if rc2 == 1 and "did not close" not in first_fail(log2):
+                        log = log2
+                    elif rc2 in (0, 1):
+                        nocex = True
+                    else:
+                        rc = 2         # the bmc rerun gave no verdict
             elif kind in ("unit", "soc"):
                 cmd = ["make", "-s", "SRC_DIR=%s/src" % base, "BUILD_DIR=%s/b" % base, b]
                 if TREE:
@@ -196,10 +238,12 @@ def score(entry, kinds, keep):
                     if rc2 != 0:
                         rc, log, b = rc2, log2, b + "+rfx"
                 shutil.rmtree(os.path.join(absbase, "dir"), ignore_errors=True)
-            if kind == "formal" and rc == 2:
-                verdict = "ERROR"      # the checker gave no verdict: not a kill
+            if kind == "formal" and rc in (2, "TIMEOUT"):
+                verdict = "ERROR"      # the checker gave no verdict (or timed out): not a kill
             else:
                 verdict = "TIMEOUT" if rc == "TIMEOUT" else ("SURVIVED" if rc == 0 else "KILLED")
+                if verdict == "KILLED" and nocex:
+                    verdict = "KILLED-NOCEX"   # induction did not close and bmc finds no counterexample
             rows.append((mid, f, "%s:%s" % (kind, b), verdict, int(dt),
                          first_fail(log) if verdict != "SURVIVED" else ""))
     if not keep:
@@ -231,6 +275,26 @@ def report():
               % (b, len(k), len(ms), 100.0 * len(k) / max(1, len(ms)),
                  " ".join(sorted(set(ms) - set(k) - set(e))),
                  ("  ERROR: " + " ".join(sorted(e))) if e else ""))
+    # per source file: a mutant counts once, as its strongest class
+    fmap = {}
+    for line in open(RESULTS):
+        c = line.rstrip("\n").split("\t")
+        fmap[c[0]] = c[1]
+    rank = ["KILLED", "KILLED-NOCEX", "SURVIVED", "ERROR"]
+    tab = {}
+    for m in live:
+        vs = [v for (mm, b), v in best.items() if mm == m]
+        cls = "KILLED" if any(v in ("KILLED", "TIMEOUT") for v in vs) else \
+              "KILLED-NOCEX" if "KILLED-NOCEX" in vs else \
+              "ERROR" if "ERROR" in vs else "SURVIVED"
+        tab.setdefault(fmap[m], {r: [] for r in rank})[cls].append(m)
+    print("per file (counterexample kill / did-not-close only / survived / error):")
+    for f in sorted(tab):
+        t = tab[f]
+        print("  %-38s %3d mutants  KILLED %3d  KILLED-NOCEX %3d (%s)  SURVIVED %3d (%s)  ERROR %3d (%s)"
+              % (f, sum(len(v) for v in t.values()), len(t["KILLED"]), len(t["KILLED-NOCEX"]),
+                 " ".join(sorted(t["KILLED-NOCEX"])), len(t["SURVIVED"]), " ".join(sorted(t["SURVIVED"])),
+                 len(t["ERROR"]), " ".join(sorted(t["ERROR"]))))
     errd = {m for m in live if any(v == "ERROR" for (mm, b), v in best.items() if mm == m)}
     surv = [m for m in live if m not in killed_any and m not in errd]
     print("survived every bench: %s" % (" ".join(surv) or "none"))

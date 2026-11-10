@@ -15,28 +15,37 @@
 // change on the negative edge and are sampled on the positive one.
 module tb_syscon;
     reg         clk = 0;
-    reg         rst = 1, sel = 0, we = 0, pin = 1;
+    reg         rst = 1, sel = 0, we = 0, pin = 1, pin2 = 1;
     reg  [3:0]  be = 0;
     reg  [13:0] aw = 0;               // addr[15:2]
     reg  [31:0] wdata = 0;
     reg  [31:0] tc = 0;               // scaled mtime: wdt_tap = tc[15:0]
-    wire        rst_soc, rd_late;
+    wire        rst_soc, rd_late, q_stream, q_ddr;
+    wire [2:0]  q_cap;
     wire [31:0] rdata;
     syscon uut (
         .clk(clk), .rst(rst), .rst_soc(rst_soc), .sel(sel), .we(we), .be(be),
         .addr(aw), .wdata(wdata), .rdata(rdata),
-        .strap_rd_late(pin), .rd_late(rd_late), .wdt_tap(tc[15:0]));
+        .strap_rd_late(pin), .rd_late(rd_late), .wdt_tap(tc[15:0]),
+        .strap_no_stream(pin2), .qspi_stream_en(q_stream), .qspi_ddr(q_ddr), .qspi_ddr_cap(q_cap));
     always #5 clk = ~clk;
     always @(posedge clk) tc <= tc + 1;
+    // the no-stream strap pin: random each clock unless a section pins it
+    reg p2_v = 0;
+    reg p2_auto = 1; integer p2seed = 777;
+    always @(negedge clk) if (p2_auto) pin2 = $random(p2seed);
 
     integer checks = 0, fails = 0, cyc = 0, fires = 0;
+    integer n_kfire = 0, cv_kfire = 0;   // a kick or TORR write on the clock of a fire (SA-008): all run / random phase
     integer seed = 1, seed0 = 1, ncyc = 200000, gseed = 12345;
 
     // ------------------------------------------------------------ the model
     reg        mv = 0;                // model valid (after the first reset edge)
     reg [2:0]  m_cause;
     reg [7:0]  m_bm;
-    reg        m_strap, m_off, m_en, m_tprev;
+    reg        m_strap, m_off, m_en, m_tprev, m_ns, m_stream, m_ddr;
+    reg [2:0]  m_cap;
+    integer    cv_cfgw = 0, cv_ns1 = 0, cv_ns0 = 0, cv_cfghold = 0;
     reg [3:0]  m_top;
     integer    m_hold, m_ticks, lclr = 0;
     reg        prev_rst = 1, prev_pin = 1;
@@ -75,7 +84,8 @@ module tb_syscon;
                     3'd1: e_rd = {29'b0, m_cause};
                     3'd2: e_rd = {24'b0, m_bm};
                     3'd3: e_rd = `CHIP_ID_SPEC;
-                    3'd4: e_rd = {31'b0, m_strap};
+                    3'd4: e_rd = {30'b0, m_ns, m_strap};
+                    3'd7: e_rd = {27'b0, m_cap, m_ddr, m_stream};
                     default: e_rd = 32'h0;
                 endcase
             end else if (a[13:6] == 8'h01) begin
@@ -107,6 +117,9 @@ module tb_syscon;
             held = (m_hold > 0) || m_off;
             chk("rst_soc", rst_soc, rst | held);
             chk("rd_late", rd_late, rst ? pin : m_strap);
+            chk("q_stream", q_stream, m_stream);
+            chk("q_ddr", q_ddr, m_ddr);
+            chk("q_cap", q_cap, m_cap);
             if (sel && !we && !rst) chk("rdata", rdata, e_rd(aw));
         end
         if (rst) begin
@@ -115,6 +128,8 @@ module tb_syscon;
                 if (m_off)      cv_rsto = cv_rsto + 1;
             end
             m_cause = 3'b001; m_bm = 8'h00; m_strap = pin; m_hold = 0; m_off = 0;
+            m_ns = pin2; m_stream = ~pin2; m_ddr = 0; m_cap = `QCFG_CAP_RESET;
+            if (cv_on) begin if (pin2) cv_ns1 = cv_ns1 + 1; else cv_ns0 = cv_ns0 + 1; end
             m_en = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1; mv = 1;
         end else if (mv) begin
             if (m_hold > 0 || m_off) begin
@@ -122,6 +137,8 @@ module tb_syscon;
                 if (cv_on && pin !== prev_pin) cv_hpin = cv_hpin + 1;
                 if (cv_on && m_hold == 1 && !m_off) cv_hdone = cv_hdone + 1;
                 if (m_hold > 0) m_hold = m_hold - 1;
+                if (cv_on && (m_stream !== ~m_ns || m_ddr || m_cap !== `QCFG_CAP_RESET)) cv_cfghold = cv_cfghold + 1;
+                m_stream = ~m_ns; m_ddr = 0; m_cap = `QCFG_CAP_RESET;
                 m_en = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1;
             end else begin
                 wt = tc[m_top];
@@ -140,6 +157,10 @@ module tb_syscon;
                             3'd2: if (be[0]) begin
                                       m_bm = wdata[7:0];
                                       if (cv_on) cv_bm = cv_bm + 1;
+                                  end
+                            3'd7: if (be[0]) begin
+                                      m_stream = wdata[0]; m_ddr = wdata[1]; m_cap = wdata[4:2];
+                                      if (cv_on) cv_cfgw = cv_cfgw + 1;
                                   end
                             default: ;
                         endcase
@@ -167,6 +188,10 @@ module tb_syscon;
                     if (fr) cv_fires = cv_fires + 1;
                 end
                 // independent timing check of the stated bound (SYS-015)
+                if (fr && (kick || torr)) begin
+                    n_kfire = n_kfire + 1;
+                    if (cv_on) cv_kfire = cv_kfire + 1;
+                end
                 if (fr) begin
                     p = 1 << (m_top + 1);
                     d = cyc - lclr;
@@ -690,6 +715,54 @@ module tb_syscon;
         end
     endtask
 
+    // QSPI_CFG (+0x1C) and STRAPS[1]: reset values for both strap values, each
+    // field, lane gating, reset by reboot / watchdog / power-off + pin reset,
+    // and the strap not re-read on a reboot. The model compares every read and
+    // the three outputs on every clock; these reads are the stimulus.
+    task s_cfg;
+        integer sv;
+        begin
+            sec("QSPI_CFG and the no-stream strap");
+            p2_auto = 0;
+            for (sv = 0; sv < 2; sv = sv + 1) begin
+                p2_v = sv[0]; pin2 = sv[0];
+                prst(3, 3'b111, 1'b1);
+                ld(`SYS_QSPICFG); ld(`SYS_STRAPS);
+                // each field alone, then all, then lanes 1-3 alone (no effect)
+                st(`SYS_QSPICFG, 32'h1, 4'h1); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h0, 4'h1); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h2, 4'h1); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h1C, 4'h1); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'hFFFF_FFE0, 4'h1); ld(`SYS_QSPICFG);   // bits 31:5 stay 0
+                st(`SYS_QSPICFG, 32'h1F, 4'h1); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h0, 4'hE); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h0, 4'h2); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h0, 4'h4); ld(`SYS_QSPICFG);
+                st(`SYS_QSPICFG, 32'h0, 4'h8); ld(`SYS_QSPICFG);
+                // reboot: back to the strap value, DDR 0, CAP reset; pin changed meanwhile
+                p2_v = ~sv[0]; pin2 = ~sv[0];
+                st(`SYS_FINISH, 32'h7777, 4'h3);
+                idle(5); ld(`SYS_QSPICFG); ld(`SYS_STRAPS);
+                st(`SYS_QSPICFG, 32'h1F, 4'h1); ld(`SYS_QSPICFG);
+                // watchdog expiry resets it too
+                st(`WDT_TORR, 32'h0, 4'h1);
+                st(`WDT_CR, 32'h1, 4'h1);
+                idle(80);
+                ld(`SYS_QSPICFG); ld(`SYS_STRAPS); ld(`SYS_CAUSE);
+                st(`SYS_QSPICFG, 32'h1F, 4'h1); ld(`SYS_QSPICFG);
+                // a write on the cycle a reboot starts is lost; power-off holds it at reset
+                st(`SYS_FINISH, 32'h5555, 4'h3);
+                st(`SYS_QSPICFG, 32'h0, 4'h1);
+                idle(3); ld(`SYS_QSPICFG);
+                p2_v = sv[0]; pin2 = sv[0];
+                prst(2, 2'b11, 1'b1);
+                ld(`SYS_QSPICFG); ld(`SYS_STRAPS);
+            end
+            p2_auto = 1;
+            prs;
+        end
+    endtask
+
     task s_poweroff_wdt;
         begin
             sec("power-off with the watchdog enabled");
@@ -742,6 +815,63 @@ module tb_syscon;
                 idle(6);
                 ld(`SYS_CAUSE);
                 if (m_off) begin idle(20); prs; end
+            end
+            prs;
+        end
+    endtask
+
+    // SA-008 (docs/soc-architecture.md, REQ-SYS-015/016): a kick or a TORR write in the very clock of
+    // the third tick does not stop the fire. Expected values below come from the specification, not
+    // from the model (which also checks every clock). K1 CRR 0x76, K2 TORR, K4 CRR != 0x76 in the
+    // fire clock: the fire happens; K3 a kick one clock before the fire clock: no fire, and the next
+    // one comes after three further tap edges, inside (2P, 3P+1] clocks of the kick.
+    integer sa_d, sa_f0, sa_lk;
+    task sa8_fired(input [8*10-1:0] nm);
+        begin
+            nxt; drv_idle;                                   // the clock after the fire edge
+            chk(nm, rst_soc, 1'b1);
+            nxt; drv_idle;
+            chk(nm, rst_soc, 1'b1);                          // two-edge reboot
+            idle(6);
+            chk(nm, rst_soc, 1'b0);
+            if (fires != sa_f0 + 1) xfail("SA-008: the fire did not happen once");
+            ld(`SYS_CAUSE); #4; chk(nm, rdata & 32'h4, 32'h4);        // RESET_CAUSE.WDT set
+            ld(`WDT_CR);    #4; chk(nm, rdata, 32'h0);                // watchdog disabled
+            ld(`WDT_TORR);  #4; chk(nm, rdata, 32'hFF);               // TOP 15 (REQ-SYS-016)
+            nxt; drv_idle;
+        end
+    endtask
+    task s_sa008;
+        integer q, tt, Pq;
+        begin
+            sec("SA-008: kick or TORR write in the fire clock");
+            for (q = 0; q < 4; q = q + 1) begin
+                for (tt = 1; tt <= 3; tt = tt + 2) begin
+                    Pq = 1 << (tt + 1);
+                    prs; wdt_arm(tt); if (q != 3) aim_fire(100); sa_f0 = fires;
+                    case (q)
+                        0: begin drv(1, 1, 4'h1, `WDT_CRR, 32'h76); sa8_fired("K1 kick"); end
+                        1: begin drv(1, 1, 4'h1, `WDT_TORR, tt);    sa8_fired("K2 torr"); end
+                        2: begin drv(1, 1, 4'h1, `WDT_CRR, 32'h75); sa8_fired("K4 nokick"); end
+                        3: begin
+                            // K3: one clock before the fire clock
+                            aim_pre_fire(100);
+                            drv(1, 1, 4'h1, `WDT_CRR, 32'h76);
+                            nxt; drv_idle;                       // the kick has been taken at the last edge
+                            sa_lk = lclr;
+                            nxt; drv_idle;
+                            chk("K3 nofire", rst_soc, 1'b0);
+                            while (fires == sa_f0 && cyc - sa_lk < 4 * Pq + 20) begin nxt; drv_idle; end
+                            sa_d = cyc - sa_lk;
+                            if (fires == sa_f0) xfail("K3: no fire after the kick");
+                            else begin
+                                checks = checks + 1;
+                                if (!(sa_d > 2 * Pq && sa_d <= 3 * Pq + 1)) xfail("K3: next fire outside (2P, 3P+1] of the kick");
+                            end
+                            idle(8);
+                        end
+                    endcase
+                end
             end
             prs;
         end
@@ -856,12 +986,14 @@ module tb_syscon;
             end
             nxt; rst = 0; drv_idle;
             cv_on = 0;
+            $display("coverage cfg: writes %0d reset-in-hold %0d pin2 at pin reset 0:%0d 1:%0d", cv_cfgw, cv_cfghold, cv_ns0, cv_ns1);
             $display("coverage: reboots %0d power-offs %0d fails %0d fires %0d ignored-FINISH %0d W1C %0d/%0d/%0d BM-writes %0d good-kicks %0d other-WDT-writes %0d TORR-enabled %0d held-writes %0d rst-in-hold %0d rst-in-off %0d held-pin-changes %0d hold-done %0d reboots-with-SOFT-set %0d",
                      cv_reboot, cv_off, cv_fail, cv_fires, cv_ign, cv_w1c0, cv_w1c1, cv_w1c2, cv_bm, cv_good, cv_wdt_other,
                      cv_torr, cv_hw, cv_rsth, cv_rsto, cv_hpin, cv_hdone, cv_rb_soft);
             if (cv_reboot < 50 || cv_off < 20 || cv_fail < 20 || cv_fires < 30 || cv_ign < 500 ||
                 cv_w1c0 < 50 || cv_w1c1 < 50 || cv_w1c2 < 50 || cv_bm < 500 || cv_good < 200 ||
-                cv_wdt_other < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50 || cv_hdone < 100 || cv_rb_soft < 1) begin
+                cv_wdt_other < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50 || cv_hdone < 100 || cv_rb_soft < 1 ||
+                cv_cfgw < 20 || cv_cfghold < 5 || cv_ns0 < 5 || cv_ns1 < 5) begin
                 fails = fails + 1;
                 $display("FAIL coverage: a floor was missed (see the coverage line)");
             end
@@ -882,16 +1014,19 @@ module tb_syscon;
         s_w1c;
         s_wdt_regs;
         s_strap;
+        s_cfg;
         s_poweroff_wdt;
         s_kicks;
         s_torr;
         $display("TORR cells reached: %0d of %0d", cells, cells_want);
         if (cells != cells_want) xfail("TORR phase/count cells not all reached");
         s_same;
+        s_sa008;
         s_wdt_timing;
         s_sweep;
         s_random;
         idle(4);
+        $display("kick/TORR write in a fire clock: %0d in the run, %0d in the random phase", n_kfire, cv_kfire);
         $display("end time %0d ns", $time);
         if (fails == 0) $display("PASS tb_syscon (%0d checks, %0d watchdog fires, seed %0d)", checks, fires, seed0);
         else            $display("FAIL tb_syscon: %0d failures, %0d checks, seed %0d", fails, checks, seed0);

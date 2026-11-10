@@ -7,20 +7,24 @@
 //       edge: seen at the port as WDT clear in a held cycle and set in the
 //       next, with the same word (RESET_CAUSE) addressed.
 //   P2  after any held edge the watchdog is disabled: CR reads EN = 0.
-module syscon_gate_props (
+//   P3  after any held edge QSPI_CFG (+0x1C) has DDR = 0 and DDR_CAP = DDR_CAP_RESET (the harness parameter, 2 since 6dee0f1;
+//       syscon keeps its own default, so a changed reset value is a FAIL here until this follows):
+//       every reset, reboot and watchdog expiry returns to SDR.
+module syscon_gate_props #(parameter [2:0] DDR_CAP_RESET = 3'd2) (
     input  wire        clk, rst,
     input  wire        sel, we,
     input  wire [3:0]  be,
     input  wire [15:2] addr,
     input  wire [31:0] wdata,
-    input  wire        strap_rd_late,
+    input  wire        strap_rd_late, strap_no_stream,
     input  wire [15:0] wdt_tap
 );
     wire [31:0] rdata;
     wire        rst_soc, rd_late;
     syscon dut (.clk(clk), .rst(rst), .rst_soc(rst_soc), .sel(sel), .we(we), .be(be),
                 .addr(addr), .wdata(wdata), .rdata(rdata),
-                .strap_rd_late(strap_rd_late), .rd_late(rd_late), .wdt_tap(wdt_tap));
+                .strap_rd_late(strap_rd_late), .rd_late(rd_late), .wdt_tap(wdt_tap),
+                .strap_no_stream(strap_no_stream));
 
     reg armed = 1'b0;
     always @(posedge clk) if (rst) armed <= 1'b1;
@@ -34,5 +38,14 @@ module syscon_gate_props (
     always @(*) begin
         assert (!(armed && held_q && !rst && addr == 14'd1 && rdata[2]));   // P1
         assert (!(armed && hq2 && addr == 14'h40 && rdata[0]));             // P2
+        assert (!(armed && hq2 && addr == 14'd7 && (rdata[1] || rdata[4:2] != DDR_CAP_RESET)));   // P3
     end
+
+`ifdef SBY_COVER
+    // antecedents of the implication asserts above: an unreached one makes its assert vacuous
+    always @(*) begin
+        cover (armed && held_q && !rst && addr == 14'd1); cover (armed && hq2 && addr == 14'h40);
+        cover (armed && hq2 && addr == 14'd7);
+    end
+`endif
 endmodule

@@ -39,8 +39,8 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
-        test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
-        test-wrapper test-wrapper-soc test-gl asm \
+        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
+        test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test verilator-build verilator-test
 
 all: test-all
@@ -188,25 +188,46 @@ test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-mul
 #                     has to undo
 # then tb_qspi_stress, with core-shaped request streams: plain, late and
 # wrapping, and twice more with resets dropped into the traffic.
+# Every run is made three times: streaming flash reads on (stream_en 1),
+# +NOSTREAM (0) and +STREAM_TOGGLE (flipped at random clocks).
 QSPI_LATE := +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12
 QSPI_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+PSRAM_WRAP" \
              "+PSRAM_QPI +FLASH_CRM" "+FLASH_QPI" "+FLASH_QPI +FLASH_CRM" "+FLASH_DCRM" \
              "+PSRAM_A_QPI +FLASH_DCRM" "+PSRAM_B_QPI +FLASH_QPI"
-QSPI_STRESS_RUNS := "" "$(QSPI_LATE) +PSRAM_WRAP" "+RESETS +QSPI_DELAY=19" "+RESETS $(QSPI_LATE) +PSRAM_WRAP +SEED=2"
+# DDR flash reads (EDh), the 10 ns clock: capture points 0 and 1 suit the default 2 ns delay,
+# point 2 needs the slower device; +MODESW adds the mode switches with a stream open.
+QSPI_DDR_RUNS := "+DDR +DDR_CAP=0" "+DDR +DDR_CAP=1" "+DDR +DDR_CAP=2 +QSPI_DELAY=12 +QSPI_HOLD=6" \
+                 "+DDR +DDR_CAP=1 +PSRAM_WRAP" "+DDR +DDR_CAP=1 +PSRAM_QPI +FLASH_CRM" "+MODESW"
+QSPI_STRESS_RUNS := "+DDR +DDR_CAP=1" "+DDR +DDR_CAP=0 +RESETS" "" "$(QSPI_LATE) +PSRAM_WRAP" "+RESETS +QSPI_DELAY=19" "+RESETS $(QSPI_LATE) +PSRAM_WRAP +SEED=2"
 test-qspi: $(BUILD_DIR)
 	@echo "=== Testing QSPI memory path ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
-	@cd $(BUILD_DIR) && for args in $(QSPI_RUNS); do \
-		$(VVP) tb_qspi $$args > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
+	@cd $(BUILD_DIR) && for sv in "" +NOSTREAM +STREAM_TOGGLE; do for args in $(QSPI_RUNS) $(QSPI_DDR_RUNS); do \
+		$(VVP) tb_qspi $$args $$sv > tb_qspi.log 2>&1; grep -E 'PASS|FAIL|ERROR|TIMEOUT' tb_qspi.log | head -3; \
 		grep -q '^PASS' tb_qspi.log || exit 1; \
-	done
+	done; done
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_stress $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi_stress.v
-	@cd $(BUILD_DIR) && for args in $(QSPI_STRESS_RUNS); do \
-		$(VVP) tb_qspi_stress $$args > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
+	@cd $(BUILD_DIR) && for sv in "" +NOSTREAM +STREAM_TOGGLE; do for args in $(QSPI_STRESS_RUNS); do \
+		$(VVP) tb_qspi_stress $$args $$sv > tb_qspi_stress.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_stress.log | head -3; \
 		grep -q '^PASS' tb_qspi_stress.log || exit 1; \
-	done
+	done; done
+
+# DDR capture-point sweep (docs/qspi-ddr.md 3.3): the 62.5 MHz clock, a device whose flash output is
+# valid from R + 7 ns after the SCK edge to R + 16 + 1 ns (tCLQV 6, a 2 ns spread around it),
+# for round trips R, every DDR_CAP. tb/qspi_ddr_sweep.sh compares the passing set per R
+# (c = DDR_CAP + 1) with the expected one and exits 1 on a difference; with +DTR_LAUNCH=1 (a
+# device that launches the first nibble half an SCK late) no capture point may pass.
+test-qspi-ddr-sweep: $(BUILD_DIR)
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_sweep $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
+	@bash $(TB_DIR)/qspi_ddr_sweep.sh $(BUILD_DIR)/tb_qspi_sweep $(VVP)
+
+# The Pmod model's DTR (EDh) unit bench: pass, expected-fail and limit-raise cases.
+test-pmod-dtr:
+	@echo "=== Testing the QSPI Pmod model's DTR read ==="
+	@BUILD_DIR=$(BUILD_DIR)/pmod_dtr bash $(TB_DIR)/pmod_dtr_run.sh
 
 # The UART against spec-derived models: register/lane scoreboard, a
 # reference receiver on TX, an asynchronous reference transmitter on RX
@@ -311,7 +332,32 @@ test-soc-spi: $(BUILD_DIR)
 # and the watchdog. Each run is "<program> [plusargs]"; +TEST= and +FLASH_FILE=
 # are added here. A run fails on a FAIL, ERROR or TIMEOUT line or a missing
 # PASS; all runs go first.
-SYSCON_SOC_RUNS := "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset"
+# ddr_flash@<n> is tests/soc/ddr_flash.S built for DDR_CAP point n (-DDDR_PT=n), run at device
+# delays that point reads at the bench's 20 ns clock (window [delay, 20 + hold), point n captures
+# at 10 * (n + 1) ns).
+# ddr_sweep@<FLAG> is tests/soc/ddr_sweep.S (BASE = no flag). +CLK_HALF_PS=8000 is the chip's 62.5 MHz (8333 is the 60 MHz the board may also run); a
+# round trip R is +QSPI_DELAY=R+7 +QSPI_HOLD=R+1; +WANT_K is the DDR_CAP the program must report
+# (docs/qspi-ddr.md 4 and 6, on the passing set of R: 11 -> 2, 17 -> 3, 23 -> 3, 29 -> 4, the same at 62.5 and 60 MHz). -1 = "DDR off":
+# +DTR_LAUNCH=1 (caught by the execute test's trap), a window no capture point lands in (+QSPI_DELAY=18
+# +QSPI_HOLD=6: [18, 22) ns at 62.5 MHz, 2 ns clear of the 16 and 24 ns points; 20/8 put 24 ns on the
+# window's edge, where the result depends on event order), a watchdog expiry after "DDR on" (WDT_AFTER: the next boot says "DDR off"), and the execute
+# test left out (NO_EXEC: the stream failure is caught by the watchdog instead).
+DDR_SWEEP_62 := +CLK_HALF_PS=8000
+DDR_SWEEP_60 := +CLK_HALF_PS=8333
+SYSCON_SOC_RUNS := "ddr_flash@0" "ddr_flash@1 +QSPI_DELAY=12 +QSPI_HOLD=6" "ddr_flash@2 +QSPI_DELAY=22 +QSPI_HOLD=12" "syscon_regs" "syscon_reboot" "syscon_strap" "syscon_strap $(QSPI_LATE)" "syscon_cfg" "syscon_cfg +NO_STREAM" "syscon_fail" "syscon_wdt" "syscon_wdt_split" "syscon_poweroff" "syscon_pinreset" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30 +WANT_K=4" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_62) +QSPI_DELAY=18 +QSPI_HOLD=6 +WANT_K=-1" \
+	"ddr_sweep@WDT_AFTER $(DDR_SWEEP_62) +QSPI_DELAY=24 +QSPI_HOLD=18 +EXP_WDT=1 +WANT_K=-1" \
+	"ddr_sweep@NO_EXEC $(DDR_SWEEP_62) +DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +EXP_WDT=1 +WANT_K=-1" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3" \
+	"ddr_sweep@BASE $(DDR_SWEEP_60) +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30 +WANT_K=4"
 SYSCON_SOC_DIR  := $(BUILD_DIR)/syscon_soc
 test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
@@ -323,6 +369,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
 		set -- $$run; t=$$1; shift; n=$$((n+1)); \
 		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
+		case $$t in ddr_sweep@*) f=$${t#*@}; [ "$$f" = BASE ] || fl="$$fl -D$$f"; t=ddr_sweep;; *@*) fl="$$fl -DDDR_PT=$${t#*@}"; t=$${t%@*};; esac; \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
@@ -335,16 +382,17 @@ test-syscon-soc: $(BUILD_DIR)
 
 # The TinyTapeout top level through its pins alone (tb/tb_tt_um.v):
 # tests/soc/tt_pins.S boots from the QSPI Pmod model's flash and reports over
-# the UART. Three runs:
+# the UART. Four runs:
 #   default            2 ns device delay, ui_in[0] = 0 through reset
 #   QSPI_DELAY=19      just under one SCK period, which rd_late = 0 must take
 #   RD_LATE, 25 ns     ui_in[0] = 1 through reset: only rd_late = 1 reads this
+#   NO_STREAM          ui_in[2] = 1 through reset: QSPI_CFG.STREAM stays 0
 # then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
 # strap at 0 and at 1 (RD_LATE, 25 ns).
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
                 $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
-WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)"
+WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+NO_STREAM"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper
 test-wrapper: $(BUILD_DIR)
 	@echo "=== Testing the TinyTapeout top level ==="
@@ -379,15 +427,22 @@ test-wrapper: $(BUILD_DIR)
 # +TEST=soc +PROG=<name>), on the RTL: scripts/gl/build_isa.sh PARTS=D builds
 # them with -DMB_UART and each one's divisor, run_gl.sh runs the two lists. The
 # same lists run on the hardened netlist on the sandbox; this is the baseline,
-# one job at a time. Not part of test-components.
+# one job at a time. Each run gets a new directory, rtl-<list>.<date-time>
+# (run_gl.sh resumes from the verdicts and the compiled sim it finds), and a
+# list passes only when every one of its programs PASSes. Not part of
+# test-components; verify-all's unit stage runs it.
 test-wrapper-soc:
 	@echo "=== The mailbox programs through the TinyTapeout pins (RTL) ==="
 	@bash scripts/gl/build_isa.sh PARTS=D OUT=$(BUILD_DIR)/wrapper_soc TOOLCHAIN=$(TOOLCHAIN)
-	@for l in D10:10.0 D20:20.0; do \
-		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$(BUILD_DIR)/wrapper_soc/list.$${l%%:*} \
-			TCLK=$${l##*:} OUT=$(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*} JOBS=1 > /dev/null; \
-		cat $(BUILD_DIR)/wrapper_soc/rtl-$${l%%:*}/summary; \
-	done; ! grep -qE '^(FAIL|TIMEOUT) [1-9]' $(BUILD_DIR)/wrapper_soc/rtl-D10/summary $(BUILD_DIR)/wrapper_soc/rtl-D20/summary
+	@t=$$(date +%Y%m%d-%H%M%S); for l in D10:10.0 D20:20.0; do \
+		k=$${l%%:*}; d=$(BUILD_DIR)/wrapper_soc/rtl-$$k.$$t; L=$(BUILD_DIR)/wrapper_soc/list.$$k; \
+		echo "$$k: $$d"; \
+		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$$L \
+			TCLK=$${l##*:} OUT=$$d JOBS=1 > /dev/null || { rc=$$?; echo "FAIL $$k: run_gl.sh exited $$rc"; exit 1; }; \
+		cat $$d/summary; n=$$(grep -c . $$L); \
+		if [ "$$n" -gt 0 ] && grep -qx "PASS $$n" $$d/summary && ! grep -qE '^(FAIL|TIMEOUT) [1-9]|^FAIL:' $$d/summary; then :; \
+		else echo "FAIL $$k: want PASS $$n of the list's $$n programs and no FAIL line (summary above)"; exit 1; fi; \
+	done
 
 # One tt_pins run on a gate-level netlist (the pnl from the harden, or its nl),
 # the local smoke only: every set runs on a bigger machine through
@@ -405,7 +460,7 @@ test-gl:
 	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
 	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-pmod-dtr test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
@@ -495,6 +550,21 @@ endif
 		$(if $(CYCLES),+MAX_CYCLES=$(CYCLES)) \
 		$(if $(TOHOST),+TOHOST_ADDR=$(TOHOST)) \
 		$(if $(START_PC),+START_PC=$(START_PC))
+
+# Latency bounds of mem_ctrl + qspi_ctrl by random simulation (LP LF S LD LI, rd_late 0 and 1;
+# the pdr/bmc proofs in tb/formal/mem_*.sv carry the proved ones). Not part of test-all.
+# Streaming on: LP 40/41, LF 57/58, S 126, LD 182/183, LI 449/482; off: LF 56/57, LI 442/456 (DF_N=4). FAILs if
+# the worst of the two differs from the defines in tb/formal/mem_props.sv.
+bounds-qspi: $(BUILD_DIR)
+	@$(IVERILOG) -g2012 -DDFN=$(or $(DF_N),4) -o $(BUILD_DIR)/bounds_tb $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v tb/formal/bounds_tb.v
+	@cd $(BUILD_DIR) && $(VVP) bounds_tb +SE=1 | grep '^stream_en' > bounds_se1.txt; $(VVP) bounds_tb +SE=0 | grep '^stream_en' > bounds_se0.txt; cat bounds_se1.txt bounds_se0.txt
+	@# F-17: the measured numbers (worst of streaming on and off) must equal the mem_props.sv defines (S = S_MAX + 1)
+	@cat $(BUILD_DIR)/bounds_se1.txt $(BUILD_DIR)/bounds_se0.txt | awk -v pf=tb/formal/mem_props.sv \
+	  'BEGIN { while ((getline l < pf) > 0) if (l ~ /^`define (LP|LF|LD|LI)[01] |^`define S_MAX /) { split(l, a, " "); d[a[2]] = a[3] } } \
+	   { r = ""; for (i = 2; i <= NF; i++) { split($$i, kv, "="); if (kv[1] == "rd_late") r = kv[2]; else if (r != "") m[kv[1] r] = (kv[2] > m[kv[1] r] ? kv[2] : m[kv[1] r]) } } \
+	   END { bad = 0; for (k in m) { n = k; sub(/[01]$$/, "", n); e = (n == "S") ? d["S_MAX"] + 1 : d[k]; \
+	           if (e == "" || m[k] + 0 != e + 0) { printf "FAIL bounds %s: measured %s, mem_props.sv define %s\n", k, m[k], e; bad = 1 } } \
+	         if (bad) exit 1; print "OK bounds: measured (streaming on/off, worst) equal the mem_props.sv defines" }'
 
 # ============================================================
 #  Full test suite

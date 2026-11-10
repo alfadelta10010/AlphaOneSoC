@@ -1,0 +1,1 @@
+sed spi.v s/st  <= A;/st  <= IDLE;/   # the engine never leaves IDLE: the covers are unreachable

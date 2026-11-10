@@ -1,0 +1,2 @@
+# QS06 (tb/mutate/mutants.py) no longer applies since the DDR edit changed the line after ctl_oe; same fault as a sed:
+sed qspi_ctrl.v s/^\( *\)ctl_oe <= 1'b1;$/\1ctl_oe <= 1'b1; late <= rd_late;/   # rd_late strap followed after reset

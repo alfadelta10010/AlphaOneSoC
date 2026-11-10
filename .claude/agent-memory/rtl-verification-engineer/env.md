@@ -90,3 +90,61 @@
   `partition.list` lines are "module partition : nets" (take field 2).
   gate sat invariant: `sat -tempinduct` honours init attrs ("Import
   set-constraint from init attribute"). EQY setup for this design: 30 s.
+- yosys 0.66 formal white-box (probe 2026-10-30, toy in scratchpad): a
+  hierarchical ref `dut.x` in a harness becomes an implicit UNDRIVEN wire
+  (warning "is implicitly declared" only) -> proof about a free signal;
+  `bind` parses but its asserts never reach sat (broken toy still "Induction
+  step proven: SUCCESS"). Both forbidden. Working recipe: `read_verilog rtl.v;
+  expose mod/wire ...; read_verilog -sv -formal harness.sv; prep -top h`
+  (harness instantiates mod with the exposed wires as ports; mutant toy killed).
+  Coordinator rule: a sat PROVED counts only at induction length 1.
+
+## 2026-11-07 (planner C, VC-1/VC-8)
+- tb/eqy runs on fin-3x4 **nl.v** (md5 4d861ceb16f49fcadb0e55cf65d6e26d), as WO-24 used sc-3x4 nl.v (fbf13f22...), not pnl. STAGE=read takes 6 s.
+- `nice` on the docker CLI does not reach the container. To cap an EQY stage during someone else's night run: one `docker run --cpus=1.5 ... nice -n 10 env NATIVE=1 bash tb/eqy/run.sh ...` (fine for read/lemma/fsminv; prove needs run.sh's dk route for make).
+- fin-3x4 synthesis recodes 4 FSMs: + soc.gpio_inst.spi_inst.st (log 2180: 00->bit0, 10->bit1, 01->bit2). The SDF corner files have identical min:typ:max triplets; CLOCK_PERIOD 16 ns.
+- An SDF GLS full tt_pins run at 16 ns is about 2-3 min (~/regr/rfm/gls-sdf/results-repo.txt).
+- 2026-11-07 sandbox formal (probes ~/regr/vc/plannerA/p1,p2): OSS CAD yosys 0.70+286 gives all 14
+  run.sh verdict words (csr PROVED at k-ind LENGTH 8; others as recorded), ~3.5 min total. sby:
+  abc pdr PASS syscon_gate / FAIL WD16 (1 s); smtbmc bitwuzla prove depth 1 PASS syscon_gate and
+  spi_core (4 s) but UNKNOWN on WD16 (base depth too short); abc pdr TIMEOUT >280 s on spi_core.
+  OSS CAD bin/* are self-contained wrappers (set PATH themselves); suprove/avy present.
+- riscv-formal / RVFI probes (2026-11-07, sandbox, under GL load; planner B VC-5):
+  clone pinned c992aa61 at ~/regr/vc/plannerB/riscv-formal. Bare fyracore BMC
+  (free mem, full-RAM PMA, functional RF stub): yices depth 40 in 88 s (~linear),
+  bitwuzla explodes (step 15 = 87 s, doubling), abc bmc3 depth 40 in 3 s; sby
+  `abc bmc3` honours assume (PASS with, FAIL without). Generic `synth` (ABC) gate
+  stat differs ~0.1% between two equivalent inputs -> never a zero-area criterion;
+  coarse `prep -flatten; opt_clean -purge` stat is deterministic (2063 cells, 1 s).
+  equiv_make on prep RTLIL exited 1 under -q (cause unseen; try memory_map first).
+  riscv-formal facts: insn check asserts spec_trap==trap (no priv/PMP model) and
+  supports RISCV_FORMAL_PMA_MAP(pc only) + MEM_FAULT; ill check = only insn 0;
+  liveness/hang get RISCV_FORMAL_FAIRNESS; [depth] "a b c" = reset-cycles trig
+  check; genchecks solver option: yices|boolector|bitwuzla|bmc3|btormc.
+
+## sby initial state (review 2026-11-07, verified on the sandbox)
+- sby prep runs `formalff -setundef -clk2ff -ff2anyinit -hierarchy`; aiger is written `-zinit`: a flop with no init value gets a free power-up value (`$anyinit`). Check: `grep -E '^ +[0-9]+ +\$anyinit' sby_<n>/model/design_aiger.log`.
+- A harness PASSES `setundef -zero -init` runs BEFORE that and pins every such flop to 0 (0 `$anyinit`). WO-31's mem.conf/qspi_strap.conf did this; "pdr refused x bits" does NOT reproduce: `setundef -anyseq;` (no -init) and `setundef -zero;` both run and PROVE under abc pdr.
+- Probes: ~/regr/vc/review-f/{tree,tA,tP} (tA = free-init copies, tP = core_inv M2 induction copy).
+
+## WO-38 review (2026-11-07, VC-5, localFiles/verif-close-2026-11-07/vc5/REVIEW.md)
+- riscv-formal facts (c992aa61): pc_bwd is vacuous on any in-order NRET=1 core (same-cycle loop is empty
+  for ch0; expectation comes only from an earlier retire of N+1). pc_fwd + liveness + unique cover it.
+  [depth] "a b": a = checker RESET_CYCLES (genchecks.py:716), b = the single check cycle.
+  The reg check uses a free register and order and compares reported values only. ill = insn==0 only.
+  bus_* checks exist but need an RVFI_BUS port.
+- FyraCore port: rs*_rdata is sampled at EX exit (fyracore.v:1636-1640), so reg_ch0 cannot see a
+  transient RF-read fault (RG05). ALTOPS hook takes op/operands from ex_funct3/alu_d1/alu_d2, so a
+  muldiv op/operand wiring fault is masked.
+- Probe ~/regr/vc/review38 (`reg 1 20`): FC56 FAIL in 55 s; RG05 TIMEOUT at 540 s under load ~5.5/6.
+  bmc3 reg on RG05 is slow; do not expect a quick PASS.
+
+## WO-43 review (2026-11-07, VC-10, localFiles/verif-close-2026-11-07/vc10/REVIEW.md)
+- qspi_pmod_model setup/hold (c38546d): mask 482-489, chk_rise 518, io_chg 552, CS hold #0.001 at 595.
+  Gap: oe drop not hold-checked (566 clears hold_pend); RTL drop = 10.000 ns after last sampled rise (safe).
+- Cheap non-vacuity for model timing checks: raise one `parameter real` limit above the measured value
+  (python re.subn on a model copy) -> must fail with that device/kind; all 7 killed in ~1 s each.
+- ctl_oe is reset-only: qspi_ctrl.v:240/247, wrapper :113 (& run from rst_sync).
+- QUIRK: Makefile QSPI_RUNS words carry literal quotes ("+A +B"); `for a in $QR` in bash mangles them.
+  Use `eval "set -- $QR"` or run via make. $test$plusargs prefix-matches (+FLASH_CRM" still matches).
+- Probe dir ~/regr/vc/review43 (m/<param>/ model copies, b/<param>/ builds).

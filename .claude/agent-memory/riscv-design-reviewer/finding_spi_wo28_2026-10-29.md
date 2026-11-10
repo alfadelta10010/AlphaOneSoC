@@ -34,3 +34,16 @@ off 18940e4). RTL waits for the PR #12 merge.
 **Why:** next RTL block before the lock. **How to apply:** when reviewing the SPI RTL, check against the
 WO's 2.2 clock table, the formal list in 5.3 and mutants SP01-SP20. SP01 (classic sample edge) is killed only by
 a bench with rt=25 ns at BAUD 1.
+
+**2026-10-30 implementation review, C1-C6 (b3de324..42e2fec): RTL APPROVE.**
+* spi.v matches the 2.2 clock table line for line; flops 63 (+24 exact). bb next-state is 4-source (hold, wdata, sr, rx_in), not
+  the 3:1 the WO costed; inherent (IDLE `bb <= sr` is the common slow-CPU path). Read mux 9-way. No new long path
+  (dmem_addr is exwb_alu_result, a flop; addr[5:2] compare runs parallel to gpio_sel).
+* Scratch probe (driver polled loop, 4 modes x BAUD 0-2, loopback delayed D clk+1 ns): rx==tx iff D <= 2*BAUD, i.e. MISO sampled
+  at launch+(2B+1) clk, as 2.4 and WO-29 say; Q4 MOSI hold, never-X reads, 16(B+1) clk/byte all hold. Probe gotcha: EN 0->1
+  moves SCK from OUT bit 3 to cpol, which is a real SCK edge (reset this from the device-side bit counter).
+* Rulings: 0xCB in oled_spi is correct (WO-28 1.3's "value unchanged" was my slip: MOSI holds the last bit). irq_stall's
+  OUT-behind-a-byte keeps the purpose (same `ready` wire). tb_gpio cut to a 105-line OUT/IN smoke test (WO allowed it):
+  NO unit SPI checks, NO RX check, NO modes 0-2 anywhere until WO-29. mutate/run.py raises on GP01-GP04 (loud, not a kill).
+* Stale comments: Makefile test-gpio, irq_stall header "(DIV 3)", clint_decode (+0xBFFC is now reserved slot 0x3C, not
+  CTRL), tt_reboot.S l.11 "0x09", pins doc l.147 asks for an RP2350 pull-down on ui_in[1] (conflicts with the SD MISO rule).

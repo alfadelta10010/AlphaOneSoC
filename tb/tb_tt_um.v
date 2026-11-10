@@ -119,7 +119,17 @@ module tb_tt_um;
 
     reg clk = 1'b0;
     reg clk_on = 1'b0;                // the board's clock is running
-    always #(TCLK / 2.0) if (clk_on) clk = ~clk;
+    // +CLK_HALF_PS=<ps> (as tb_syscon_soc): the clock's half period; 8000 is the chip's 62.5 MHz (8333 = 60 MHz). Absent, TCLK / 2.
+    function automatic real clk_half_ns(input integer dummy);
+        integer ps;
+        begin
+            clk_half_ns = TCLK / 2.0;
+            if ($value$plusargs("CLK_HALF_PS=%d", ps)) clk_half_ns = ps / 1000.0;
+        end
+    endfunction
+    real tclk_half = clk_half_ns(0);
+    real tclk_run  = 2.0 * clk_half_ns(0);          // the clock period the run uses (TCLK without the plusarg)
+    always #(tclk_half) if (clk_on) clk = ~clk;
     integer cyc = 0;
     always @(posedge clk) cyc <= cyc + 1;
 
@@ -127,6 +137,24 @@ module tb_tt_um;
     reg        rd_late = 1'b0;        // +RD_LATE
     reg        strap = 1'b0;          // ui_in[0] until the program wants GPIO IN
     reg        strap_on = 1'b1;       // ui_in[0] is the strap, not tb_in[0]
+    reg        no_stream = 1'b0;      // +NO_STREAM: ui_in[2], the no-stream strap, is 1 through each reset
+    // The wrapper reads the straps while rst_n is low and up to the second
+    // clock edge after it rises. ui_in[2] carries no_stream from rst_n low
+    // through the fourth edge after it rises, then tb_in[2] (a GPIO input
+    // like the others: periph_access drives 0xA4 on it).
+    reg  [2:0] ns_edges = 3'd0;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) ns_edges <= 3'd0;
+        else if (ns_edges != 3'd4) ns_edges <= #(`IN_DLY_NS) ns_edges + 3'd1;
+    wire       ns_hold = (ns_edges != 3'd4);
+    // The no-stream strap (ui_in[2]) must reach qspi_ctrl: QSPI_CFG.STREAM is
+    // its inverse from the first clocked reset on, through every later reset
+    // and reboot of these programs (none of them writes QSPI_CFG).
+    // RTL only: a gate-level netlist has no dut.soc hierarchy.
+`ifndef GL_TEST
+    always @(posedge clk) if (cyc > 4 && dut.soc.qspi_stream_en !== ~no_stream)
+        $display("FAIL QSPI_CFG.STREAM = %b with ui_in[2] = %b through reset (cycle %0d)", dut.soc.qspi_stream_en, no_stream, cyc);
+`endif
     reg  [7:0] tb_in = 8'h00;
     wire       uart_rx;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted
@@ -134,7 +162,7 @@ module tb_tt_um;
     wire [3:0] kp_row;
     reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[7], SCK [3], MOSI [1], DO ui_in[1]
     wire       sd_do_in1;
-    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
+    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, ns_hold ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
 `ifdef USE_POWER_PINS
@@ -398,8 +426,11 @@ module tb_tt_um;
     localparam integer ID_syscon_wdt_split = 14;
     localparam integer ID_syscon_poweroff = 15;
     localparam integer ID_syscon_pinreset = 16;
+    localparam integer ID_ddr_flash = 18;    // WO-55b: tests/soc/ddr_flash.S
+    localparam integer ID_ddr_sweep = 19;    // tests/soc/ddr_sweep.S, +WANT_K=<k> (-1 = "DDR off", -2 = any point 1..6), no watchdog reboot
     localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
     integer pid = 0;
+    integer s_want_k = 0, s_exp_wdt = 0;
     function automatic integer prog_id(input string p);
         begin
             prog_id = 0;
@@ -420,6 +451,8 @@ module tb_tt_um;
             if (p == "syscon_poweroff") prog_id = ID_syscon_poweroff;
             if (p == "syscon_pinreset") prog_id = ID_syscon_pinreset;
             if (p == "sd_init") prog_id = ID_sd_init;
+            if (p == "ddr_flash") prog_id = ID_ddr_flash;
+            if (p == "ddr_sweep") prog_id = ID_ddr_sweep;
         end
     endfunction
     // ── +TEST=soc +PROG=<name>: the mailbox programs of tests/soc ───────────
@@ -512,7 +545,7 @@ module tb_tt_um;
             s_div = 1; s_exp_re = 0; s_exp_po = 1; s_exp_cut = 0;
             case (pid)
                 ID_uart_hello: begin
-                    s_div = 27; s_want = "Hello, world!\015\nHello, world!\015\n";
+                    s_div = 34; s_want = "Hello, world!\015\nHello, world!\015\n";
                 end
                 ID_uart_echo: begin
                     s_div = 4; s_want = "The quick brown fox jumps over the lazy dog, 0123456789!\015\n";
@@ -549,7 +582,7 @@ module tb_tt_um;
                     for (k = 0; k < 16; k = k + 1) begin push_oled(1'b0, 8'h55); push_oled(1'b0, 8'hAA); end
                 end
                 ID_periph_access: begin
-                    s_div = 27; s_want = "ABq";
+                    s_div = 34; s_want = "ABq";
                     s_n_ev = 12;
                     s_ev[0] = 'h10; s_ev[1] = 'h10; s_ev[2] = 'h20; s_ev[3] = 'h20; s_ev[4] = 'h20;
                     s_ev[5] = 'h21; s_ev[6] = 'h20; s_ev[7] = 'h20; s_ev[8] = 'h20; s_ev[9] = 'h20;
@@ -562,7 +595,7 @@ module tb_tt_um;
                 ID_clint_decode: s_div = 1;
                 ID_syscon_regs: s_div = 1;
                 ID_syscon_reboot: begin
-                    s_div = 27; s_n_val = 5; s_exp_re = 4;
+                    s_div = 34; s_n_val = 5; s_exp_re = 4;
                 end
                 ID_syscon_strap: begin
                     // (with rd_late = 1 the cue changes nothing: the strap pin is already 0 from the second edge on. The run is
@@ -588,6 +621,17 @@ module tb_tt_um;
                     s_div = 1; s_n_val = 3; s_val_known = 1'b1;
                     s_val[0] = 32'd2048; s_val[1] = 32'd4; s_val[2] = 32'd2;
                 end
+                ID_ddr_flash: s_div = 1;
+                ID_ddr_sweep: begin
+                    // the boot-time DDR sweep: its UART text is the verdict (the last line against +WANT_K), the VALUE
+                    // stores are plain mailbox writes
+                    s_div = 1;
+                    if (!$value$plusargs("WANT_K=%d", s_want_k)) fail("ddr_sweep: no +WANT_K");
+                    if ($value$plusargs("EXP_WDT=%d", s_exp_wdt) && s_exp_wdt != 0) fail("ddr_sweep at the pins: +EXP_WDT is not supported");
+                    if (s_want_k == -2) s_want = "DDR on, cap ?\n";   // any point 1..6, checked in soc_final
+                    else if (s_want_k < 0) s_want = "DDR off\n";
+                    else s_want = $sformatf("DDR on, cap %0d\n", s_want_k);
+                end
                 default: fail($sformatf("+PROG=%s: not a program of this bench", prog));
             endcase
             // no payload byte may look like a frame tag
@@ -609,7 +653,7 @@ module tb_tt_um;
                     if (code == 3) rp.set_flow(1'b1);
                 end
                 ID_uart_linux: begin
-                    if (code == 4) rp.set_baud(16.0 * 3 * TCLK);
+                    if (code == 4) rp.set_baud(16.0 * 3 * tclk_run);
                     if (code == 5) begin rp.set_flow(1'b1); rp.send_str("ls -l /dev\015"); end
                 end
                 ID_oled_spi: begin
@@ -768,7 +812,9 @@ module tb_tt_um;
                 mepc = ram_word('hFFF004 + 4 * n);
                 tot[part] = tot[part] + 1;
                 if (mepc == x) hits[part] = hits[part] + 1;
-                if (mepc + 32'h30 < x || mepc > x + 32'h10)
+                // after the store, the latest point is the part's wait loop (blt s5, s8):
+                // A and B at x + 2, C at x + 0x2c, after its two checks
+                if (mepc + 32'h30 < x || mepc > x + 32'h30)
                     fail($sformatf("irq_stall part %0d: interrupt %0d taken at mepc %h, the part's store completes at %h", part, n, mepc, x));
             end
             $display("NOTE irq_stall: interrupts taken right after the held store (mepc = its next instruction): THR %0d of %0d, SPI DATA %0d of %0d, amoswap %0d of %0d",
@@ -780,6 +826,15 @@ module tb_tt_um;
     task automatic soc_final;
         integer k;
         begin
+            if (pid == ID_ddr_sweep && s_want_k == -2)      // +WANT_K=-2: any capture point the sweep picks (an SDF-timed run)
+                for (k = 1; k < 7; k = k + 1) if (s_pay == $sformatf("DDR on, cap %0d\n", k)) s_want = s_pay;
+            if (pid == ID_ddr_sweep) $display("NOTE ddr_sweep UART: %0d bytes, last line \"%0s\"", s_pay.len(), s_pay.substr(0, (s_pay.len() > 0) ? s_pay.len() - 2 : 0));
+            // F8 (WO-64): a run that is to have used DDR must show EDh reads at the Pmod, or the
+            // DDR checksums (compared only with the SDR ones) pass with DDR never taking effect
+            if (pid == ID_ddr_flash || (pid == ID_ddr_sweep && (s_want_k > 0 || s_want_k == -2))) begin
+                $display("NOTE DDR run: %0d EDh flash reads at the Pmod", pmod.n_edh);
+                if (pmod.n_edh == 0) fail("DDR run: no EDh read reached the Pmod, DDR never took effect");
+            end
             if (s_pay != s_want)
                 fail($sformatf("the RP2350 received \"%s\" (%0d characters), want \"%s\" (%0d)", s_pay, s_pay.len(), s_want, s_want.len()));
             if (s_ev_i != s_n_ev) fail($sformatf("%0d cues, want %0d", s_ev_i, s_n_ev));
@@ -849,7 +904,7 @@ module tb_tt_um;
         end
     endtask
 
-    initial begin #1; if (soc_test) rp.set_baud(16.0 * s_div * TCLK); end
+    initial begin #1; if (soc_test) rp.set_baud(16.0 * s_div * tclk_run); end
 
     task automatic on_byte_isa(input [7:0] b);
         begin
@@ -1085,11 +1140,16 @@ module tb_tt_um;
         end
     end
 
-    // RTS# while a received byte waits: the program cannot have read RBR
-    // within the half bit since the stop bit was sampled.
+    // RTS# while a received byte waits: it must be high at some point of
+    // the stop bit, from the UART's stop-bit sample on. A program that polls
+    // LSR fast (streaming fetch) can read RBR within that half bit and drop
+    // it again before the stop bit ends, so the end alone is not the test.
+    reg rts_hi_stop = 1'b0;
+    always @(rp.tx_stops) rts_hi_stop = (uo_out[5] === 1'b1);
+    always @(posedge uo_out[5]) rts_hi_stop = 1'b1;
     always @(rp.tx_sent)
-        if (rp.tx_sent > 0 && uo_out[5] !== 1'b1)
-            fail("RTS# low at the end of a received byte, before the program read it");
+        if (rp.tx_sent > 0 && !rts_hi_stop && uo_out[5] !== 1'b1)
+            fail("RTS# low through the stop bit of a received byte: never raised for it");
 
     // ── Run ─────────────────────────────────────────────────────────────────
     integer max_cycles = 0;
@@ -1100,7 +1160,7 @@ module tb_tt_um;
     // starts.
     initial begin
         #1;
-        #(1.0 * (max_cycles + 1000) * TCLK);
+        #(1.0 * (max_cycles + 1000) * tclk_run);
         $display("TIMEOUT tb_tt_um: stuck at cycle %0d, %0d bytes seen", cyc, seen);
         $finish;
     end
@@ -1153,6 +1213,7 @@ module tb_tt_um;
 
     initial begin
         rd_late = $test$plusargs("RD_LATE");
+        no_stream = $test$plusargs("NO_STREAM");
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 400_000;
         if ($value$plusargs("TEST=%s", testname)) begin
             reboot_test = (testname == "reboot");
