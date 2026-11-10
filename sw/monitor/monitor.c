@@ -27,7 +27,7 @@ struct frame {
     uint32_t mepc, mstatus, mcause, mtval;
 };
 
-#define TICK       600000u          /* clocks between Ctrl-C checks: 10 ms at 60 MHz */
+#define TICK       625000u          /* clocks between Ctrl-C checks: 10 ms at 62.5 MHz */
 #define MIE_MTIE   0x80u
 #define ST_MPIE    0x80u
 #define ST_MPP_M   0x1800u

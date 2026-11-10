@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-#define CLK_HZ          60000000u   /* the core clock; mtime counts it (ROADMAP 9.1 rule 7) */
+#define CLK_HZ          62500000u   /* the core clock; mtime counts it (ROADMAP 9.1 rule 7) */
 
 #define FLASH_BASE      0x20000000u
 #define PSRAM_BASE      0x80000000u
@@ -41,8 +41,8 @@ struct image_hdr {
 #define UART_LSR_DR     0x01
 #define UART_LSR_THRE   0x20
 #define UART_LSR_TEMT   0x40
-/* Boot contract rule 2: 113,636 baud at 60 MHz (115,200 - 1.4%). */
-#define UART_DIVISOR    33
+/* Boot contract rule 2: 114,890 baud at 62.5 MHz (115,200 - 0.27%). */
+#define UART_DIVISOR    34
 
 /* syscon */
 #define SYSCON_FINISH       0x00

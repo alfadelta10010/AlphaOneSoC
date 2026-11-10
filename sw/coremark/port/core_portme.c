@@ -4,7 +4,7 @@
  *
  * Time is mtime, which counts core clocks, so a result is exact in clocks
  * and independent of the clock frequency the bench or the board runs at.
- * CoreMark's own score line needs a run of 10 s at CLK_HZ (600 million
+ * CoreMark's own score line needs a run of 10 s at CLK_HZ (625 million
  * clocks) to be valid; a shorter run prints CoreMark's error for that, and
  * portable_fini adds the figure that does not depend on run length:
  * CoreMark/MHz = iterations * 10^6 / clocks. */

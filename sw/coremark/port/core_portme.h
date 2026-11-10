@@ -17,8 +17,8 @@
 #define HAS_PRINTF 0
 int ee_printf(const char *fmt, ...);
 
-/* The ticks get_time() returns are core clocks: at 60 MHz a valid 10 s run
- * is 600 million of them, and 32 bits hold about 71 s. */
+/* The ticks get_time() returns are core clocks: at 62.5 MHz a valid 10 s run
+ * is 625 million of them, and 32 bits hold about 71 s. */
 typedef unsigned int CORE_TICKS;
 
 #ifndef COMPILER_VERSION

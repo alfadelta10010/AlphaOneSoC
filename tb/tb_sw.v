@@ -23,7 +23,7 @@
 `timescale 1ns / 1ps
 
 `ifndef TCLK_NS
-`define TCLK_NS 16.6667                  // 60 MHz, the chip clock (ROADMAP section 0)
+`define TCLK_NS 16.0                     // 62.5 MHz, the chip clock (ROADMAP section 0)
 `endif
 
 module tb_sw;
@@ -44,9 +44,10 @@ module tb_sw;
     wire [7:0] gpio_out;
     wire [7:0] gpio_in = 8'h00;
 
-    // The chip's own reset divisor (27); software sets the one it wants.
-    alphaone_soc #(.UART_DIV_RESET(27)) soc (
-        .clk(clk), .rst(rst), .qspi_rd_late(1'b0),
+    // The chip's own reset divisor (34); software sets the one it wants. Flash streaming
+    // is on, as it is by default (the strap pin low).
+    alphaone_soc soc (
+        .clk(clk), .rst(rst), .qspi_no_stream(1'b0), .qspi_rd_late(1'b0),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
         .uart_rx(uart_rx_r), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),

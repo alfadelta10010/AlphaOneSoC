@@ -7,8 +7,8 @@ Each log has a line 'EMBENCH <name> clocks=<n> correct=<0|1>' (the time
 between start_trigger and stop_trigger, in core clocks: mtime counts them).
 Embench's rule (doc/README.md, "Speed benchmarks"): relative speed =
 reference_ms / ms * gsf, then divided by the CPU's MHz; the score is the
-geometric mean. The clocks are exact, so ms = clocks / (60 MHz * 1000), and
-the score is reference_ms / ms * gsf / 60.
+geometric mean. The clocks are exact, so ms = clocks / (62.5 MHz * 1000), and
+the score is reference_ms / ms * gsf / 62.5
 """
 import glob
 import json
@@ -19,7 +19,7 @@ import sys
 ref = json.load(open(sys.argv[1]))
 gsf = float(sys.argv[2])
 build = sys.argv[3]
-MHZ = 60.0
+MHZ = 62.5
 
 rows = []
 for log in sorted(glob.glob(f"{build}/embench-*/run.log")):
@@ -35,7 +35,7 @@ for log in sorted(glob.glob(f"{build}/embench-*/run.log")):
 
 if not rows:
     sys.exit("no Embench runs found")
-print(f"{'benchmark':16} {'clocks':>12} {'ms@60MHz':>10} {'score/MHz':>10}")
+print(f"{'benchmark':16} {'clocks':>12} {'ms@62.5MHz':>10} {'score/MHz':>10}")
 for n, c, ms, s, ok in rows:
     print(f"{n:16} {c:12d} {ms:10.1f} {s:10.4f}{'' if ok else '  WRONG RESULT'}")
 good = [s for _, _, _, s, ok in rows if ok]
