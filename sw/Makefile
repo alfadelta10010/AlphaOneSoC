@@ -4,7 +4,7 @@
 #   make run-hello | run-coremark | run-dhrystone | run-monitor | run-fatfs | run-freertos
 #                                          ... and run it on the SoC bench (Verilator), check the output
 #   make bench                             build the software bench only
-#   make fetch                             fetch the third-party sources (CoreMark, Dhrystone) at pinned commits
+#   make fetch                             fetch the third-party sources (CoreMark, Dhrystone, Embench, FatFs, FreeRTOS) at pinned commits
 #
 # Knobs:  BENCH_OPT=-O2 (the benchmarks' optimisation flags)   CM_ITER=1 (CoreMark iterations)
 #         CFLAGS=-Os (everything else)   RUNARGS=+MAX_CYCLES=...
@@ -23,6 +23,8 @@ FREESTANDING := -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns
 LDLIBS  := -Wl,--start-group -lc -lm -lgcc -Wl,--end-group
 COMMON  := common/crt0.S common/trap_entry.S common/trap.c common/uart.c common/exit.c common/printf.c
 
+# 114,890 baud at 62.5 MHz (common/soc.h UART_DIVISOR); the bench checks the program ends with it
+UART_DIVISOR := 34
 BENCH_OPT ?= -O2
 CM_ITER   ?= 1
 
@@ -31,13 +33,18 @@ RTL := $(addprefix $(ROOT)/src/,alu branchCtrl clint compressed_decoder controll
 RTL := $(addsuffix .v,$(RTL))
 
 # The third-party sources are needed to read the benchmark lists below.
-ifneq ($(words $(wildcard $(TP)/embench-iot/support/main.c $(TP)/coremark/core_main.c \
+# (clean and bench do not need them; a failed fetch stops make here, not later as a missing file.)
+ifeq ($(filter clean bench,$(MAKECMDGOALS)),$(MAKECMDGOALS))
+else ifneq ($(words $(wildcard $(TP)/embench-iot/support/main.c $(TP)/coremark/core_main.c \
         $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c \
         $(TP)/freertos/tasks.c)),5)
-$(shell ./fetch.sh >&2)
+FETCH_RC := $(shell ./fetch.sh >&2; echo $$?)
+ifneq ($(FETCH_RC),0)
+$(error fetch.sh failed ($(FETCH_RC)); see above)
+endif
 endif
 
-.PHONY: all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -45,9 +52,24 @@ fetch:
 $(TP)/coremark/core_main.c $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c $(TP)/freertos/tasks.c:
 	./fetch.sh
 
+# A <dir>/flags file holds the flags and toolchain a build used and is rewritten only when
+# they change, so an ELF depends on them (BENCH_OPT, CM_ITER, GSF, CFLAGS on the command
+# line all rebuild it). Headers are listed by name below, not found by a dependency scan.
+.PHONY: FORCE
+FORCE:
+define STAMP
+$$(BUILD)/$(1)/flags: FORCE
+	@mkdir -p $$(dir $$@)
+	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC))' > $$$$t; \
+	 if cmp -s $$$$t $$@; then rm -f $$$$t; else mv -f $$$$t $$@; fi
+endef
+HDRS := $(wildcard common/*.h)
+
 # ── the loader ──────────────────────────────────────────────────────────────
+loader_CFLAGS := $(FREESTANDING)
+$(eval $(call STAMP,loader))
 $(BUILD)/loader/loader.elf: loader/start.S loader/loader.c common/uart.c common/trap.c common/trap_entry.S \
-                            common/soc.h loader/loader.ld
+                            $(HDRS) loader/loader.ld $(BUILD)/loader/flags
 	@mkdir -p $(dir $@)
 	$(TC)gcc $(CFLAGS) $(FREESTANDING) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -T loader/loader.ld \
 	    loader/start.S loader/loader.c common/uart.c common/trap.c common/trap_entry.S -lgcc -o $@
@@ -57,7 +79,9 @@ $(BUILD)/loader/loader.bin: $(BUILD)/loader/loader.elf
 # ── a payload program: <name>_SRC lists its sources, <name>_CFLAGS its flags,
 #    <name>/expect.txt what its output must show (tools/check_run.py) ────────
 define PAYLOAD
-$$(BUILD)/$(1)/$(1).elf: $$(COMMON) $$($(1)_SRC) common/soc.h common/payload.ld
+$(eval $(call STAMP,$(1)))
+$$(BUILD)/$(1)/$(1).elf: $$(COMMON) $$($(1)_SRC) $$(HDRS) common/payload.ld $$(BUILD)/$(1)/flags \
+                         $$(wildcard $(1)/*.h $(1)/port/*.h)
 	@mkdir -p $$(dir $$@)
 	$$(TC)gcc $$(CFLAGS) $$($(1)_CFLAGS) -nostartfiles -static -Wl,--no-warn-rwx-segments -T common/payload.ld \
 	    $$(COMMON) $$($(1)_SRC) $$(LDLIBS) -o $$@
@@ -70,7 +94,7 @@ $$(BUILD)/$(1)/flash.hex: $$(BUILD)/$(1)/$(1).bin $$(BUILD)/loader/loader.bin to
 	    --out $$@ --bin $$(BUILD)/$(1)/flash.bin
 $(1): $$(BUILD)/$(1)/flash.hex
 run-$(1): $(1) $$(BUILD)/bench/sim $$($(1)_RUNDEP)
-	cd $$(BUILD)/$(1) && $$(BUILD)/bench/sim +FLASH_FILE=$$(BUILD)/$(1)/flash.hex $$($(1)_RUNARGS) $$(RUNARGS) | tee run.log
+	cd $$(BUILD)/$(1) && $$(SIMRUN) +FLASH_FILE=$$(BUILD)/$(1)/flash.hex +UART_DIV=$$(UART_DIVISOR) $$($(1)_RUNARGS) $$(RUNARGS) | tee run.log
 	python3 tools/check_run.py $$(BUILD)/$(1)/run.log $$(or $$($(1)_EXPECT),$(1)/expect.txt)
 	$$($(1)_CHECK)
 	@echo "$(1): ok"
@@ -157,6 +181,14 @@ embench-score:
 	python3 tools/embench_report.py $(EMB)/baseline-data/speed.json $(GSF) $(BUILD)
 
 # ── the bench ───────────────────────────────────────────────────────────────
+# Verilator by default. The same bench builds with Icarus (the reference simulator, about 30x
+# slower): make bench-icarus, then  make run-hello SIMRUN='vvp $(BUILD)/bench/tb_sw.vvp'
+SIMRUN ?= $(BUILD)/bench/sim
+bench-icarus: $(BUILD)/bench/tb_sw.vvp
+$(BUILD)/bench/tb_sw.vvp: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
+	@mkdir -p $(dir $@)
+	iverilog -g2012 -o $@ -s tb_sw $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v \
+	    $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v
 bench: $(BUILD)/bench/sim
 $(BUILD)/bench/sim: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
 	@mkdir -p $(dir $@)
