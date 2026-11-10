@@ -46,7 +46,7 @@ for a in "$@"; do
   esac
 done
 [ -n "$NETLIST" ] || { echo "NETLIST=<path> is required" >&2; exit 2; }
-NL_MD5=4d861ceb16f49fcadb0e55cf65d6e26d
+NL_MD5=71d75961e9e64b995d551afdec157aff
 # The version of the PDK the harden used (not what $PDK_ROOT/sky130A points to).
 LIB="$PDK_ROOT/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
 TOP=tt_um_alfadelta10010_alphaone_soc
@@ -184,7 +184,7 @@ gate_fsm_buses() {         # \name[0..n-1] scalar flop nets joined into a bus \n
   done <<EOF
 soc.cpu.exwb_memSize 3
 soc.cpu.muldiv_inst.st 6
-soc.qspi.state 7
+soc.qspi.state 10
 soc.gpio_inst.spi_inst.st 3
 EOF
 }
@@ -248,7 +248,7 @@ EOF
     {
       echo "PROVED k-induction length ${len:-?}, ${dt}s: all 186 constant bits (184 CSR + gpio out_r[1], [3]) equal their reset value once reset (L1)"
       [ "${len:-1}" -gt 1 ] && echo "NOTE: induction length ${len} > 1: the step is from any state; the base case covers only the zero power-up of the no-reset flops (if_kbuf, spi cc/bc), which EQY starts free on both sides"
-      echo "PROVED the same run: exwb_memSize != 3, muldiv st not 6 or 7, qspi state != 7, spi st != 3 once reset (L2, 4 FSMs)"
+      echo "PROVED the same run: exwb_memSize != 3, muldiv st not 6 or 7, qspi state > 9, spi st != 3 once reset (L2, 4 FSMs)"
       echo
       echo "bit  value  (consts.txt)"
       sed 's/^/PROVED /' "$L/consts.txt"
@@ -287,7 +287,7 @@ write_gold_final() {       # $1 = dir, $2 = consts file
 fsm_init_gate() {          # the netlist's FSM buses start at the one-hot image of state 0 (fsminv base case)
   echo "setattr -set init 3'b001 w:soc.cpu.exwb_memSize"
   echo "setattr -set init 6'b000001 w:soc.cpu.muldiv_inst.st"
-  echo "setattr -set init 7'b0000001 w:soc.qspi.state"
+  echo "setattr -set init 10'b0000000001 w:soc.qspi.state"
   echo "setattr -set init 3'b001 w:soc.gpio_inst.spi_inst.st"
 }
 
@@ -301,7 +301,7 @@ cut_design() {
   python3 "$HERE/fsmcut.py" "$side" "$D/${side}_pre.il" "$D/${side}_cut.il" > "$D/$side.patch.txt" 2>&1 \
     || die "fsmcut.py $side asserted: $(tail -3 "$D/$side.patch.txt" | tr '\n' ' ')"
   nq=$(grep -c "^$side: connect .Q " "$D/$side.patch.txt"); npin=$(grep -c "^$side: rf_macro w_ena" "$D/$side.patch.txt")
-  wq=4; [ "$side" = gate ] && wq=19
+  wq=4; [ "$side" = gate ] && wq=22
   [ "$nq" = "$wq" ] && [ "$npin" = 1 ] || die "cut: $side patch has $nq Q edits (want $wq) and $npin pin edits (want 1)"
   cat > "$D/${side}_cut.ys" <<EOF
 read_rtlil $D/${side}_cut.il
@@ -392,7 +392,7 @@ EOF
   ( cd "$B" && dk timeout 600 yosys -ql fsminv/neg.log fsminv/neg.ys ) > /dev/null 2>&1
   local len; len=$(grep -oE "Trying induction with length [0-9]+" "$F/inv.log" | tail -1 | grep -oE "[0-9]+$")
   if grep -q "Induction step proven: SUCCESS" "$F/inv.log" && grep -q "model found: FAIL" "$F/neg.log"; then
-    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of the 4 FSMs soc.cpu.exwb_memSize (3), muldiv_inst.st (6), qspi.state (7), spi_inst.st (3) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
+    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of the 4 FSMs soc.cpu.exwb_memSize (3), muldiv_inst.st (6), qspi.state (10), spi_inst.st (3) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
     say "fsminv: PROVED (k=${len:-?}), NEG FAIL"; return 0
   fi
   echo "FAILED: see $F/inv.log and $F/neg.log" > "$F/fsminv.txt"
@@ -504,7 +504,7 @@ mutant_error() {           # $1 = name, $2 = reason: recorded; the stage goes on
   say "mutants: $1 ERROR $2"; echo "$1 $2" >> "$B/mutants/errors.txt"
 }
 
-want() { [ -z "${MUT_ONLY:-}" ] || case " $MUT_ONLY " in *" $1 "*) return 0;; esac; return 1; }
+want() { [ -z "${MUT_ONLY:-}" ] && return 0; case " $MUT_ONLY " in *" $1 "*) return 0;; esac; return 1; }
 
 mutate_flop() {            # $1 name, $2 kind, $3.. candidate flops (the first with a swappable cell in its cone is used)
   local k="$1" kind="$2" X="$B/mutants" fl; shift 2

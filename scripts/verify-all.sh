@@ -11,7 +11,8 @@
 #
 # Stages (default: unit directed formal rvfi mutation, plus eqy gl sdf for each of
 # NETLIST / PNL / SDFDIR that is given):
-#   unit      make test-all, then test-seeds with seeds 1..8
+#   unit      make test-all, then test-seeds with seeds 1..8, then test-wrapper-soc (the mailbox
+#             programs through the pins at 10 and 20 ns, RTL)
 #   directed  tests/directed/run.sh plain, with +RF_X +RF_COLLIDE_X, and soc
 #   formal    tb/formal/run.sh default list on both engines (full verdict lines compared with
 #             scripts/verify-all.expected, depth/timeout env overrides unset), then --nonvac on every harness that has a .nonvac
@@ -67,9 +68,12 @@ st_unit() {
   local B=build/va-unit   # relative: the Makefile prefixes $(CURDIR) to BUILD_DIR (test-soc-periph's FLASH_FILE)
   make BUILD_DIR="$B" test-all > "$OUT/unit.make.log" 2>&1; local rc1=$?
   make BUILD_DIR="$B" test-seeds SEEDS="1 2 3 4 5 6 7 8" > "$OUT/unit.seeds.log" 2>&1; local rc2=$?
+  # its summary prints "FAIL 0" lines, so its log stays out of the unit.*.log scan; the target
+  # itself fails on any FAIL or TIMEOUT count above 0
+  make BUILD_DIR="$B" test-wrapper-soc > "$OUT/wsoc.log" 2>&1; local rc3=$?
   local np nf; np=$(cat "$B"/*.log 2>/dev/null | grep -c '^PASS'); nf=$(cat "$OUT"/unit.*.log | grep -cE '^FAIL|\*\*\* Error|Error [0-9]')
-  if [ $rc1 = 0 ] && [ $rc2 = 0 ] && [ "$nf" = 0 ]; then vd unit PASS "test-all rc=0 seeds 1-8 rc=0 PASS-lines=$np"
-  else vd unit FAIL "test-all rc=$rc1 test-seeds rc=$rc2 fail-lines=$nf (see unit.make.log, unit.seeds.log)"; fi
+  if [ $rc1 = 0 ] && [ $rc2 = 0 ] && [ $rc3 = 0 ] && [ "$nf" = 0 ]; then vd unit PASS "test-all rc=0 seeds 1-8 rc=0 wrapper-soc rc=0 PASS-lines=$np"
+  else vd unit FAIL "test-all rc=$rc1 test-seeds rc=$rc2 wrapper-soc rc=$rc3 fail-lines=$nf (see unit.make.log, unit.seeds.log, wsoc.log)"; fi
 }
 
 # ---- directed

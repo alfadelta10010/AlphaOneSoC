@@ -54,7 +54,7 @@ module tb_soc_periph;
     wire [7:0] gpio_out, gpio_in;
 
     alphaone_soc #(.UART_DIV_RESET(UART_DIV)) soc (
-        .clk(clk), .rst(rst), .qspi_rd_late(1'b0),
+        .clk(clk), .rst(rst), .qspi_rd_late(1'b0), .qspi_no_stream(1'b0),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
         .uart_rx(uart_rx), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),

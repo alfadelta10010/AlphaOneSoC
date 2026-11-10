@@ -9,8 +9,13 @@
 // setundef -anyseq: the start state is free (sby makes every flop an $anyinit). The two
 // copies are equal at the first reset because, until then, they see identical inputs
 // (rd_late only enters through `late <= rd_late` under rst); every assert is armed-gated.
+// WO-54a: stream_en is one input shared by both copies (left unconnected each copy would get its own
+// free value and the miter would diverge for a reason unrelated to the strap); the streaming flops
+// (strm, p, t_top, t_sel) and the full state are in x_all, so the equal-start assume and the helper
+// lemma cover them.
 module qspi_strap_props (
     input  wire        clk, rst, rd_late,
+    input  wire        stream_en,       // free, and shared by both copies (every on/off sequence)
     input  wire        start, we,
     input  wire [1:0]  cs_sel, nbytes_m1,
     input  wire [23:0] addr,
@@ -25,13 +30,13 @@ module qspi_strap_props (
 
     wire a_idle, a_done, b_idle, b_done, a_sck, b_sck, a_ctl, b_ctl, a_oe, b_oe;
     wire [31:0] a_rdata, b_rdata, a_sr, b_sr;
-    wire [2:0] a_cs, b_cs;  wire [3:0] a_io, b_io;  wire [1:0] a_tt, b_tt;  wire [11:0] a_all, b_all;
-    qspi_x a (.clk(clk), .rst(rst), .rd_late(rd_late), .start(start), .cs_sel(cs_sel), .addr(addr), .we(we),
+    wire [2:0] a_cs, b_cs;  wire [3:0] a_io, b_io;  wire [1:0] a_tt, b_tt;  wire [48:0] a_all, b_all;
+    qspi_x a (.clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en), .ddr(1'b0), .ddr_cap(3'd0), .start(start), .cs_sel(cs_sel), .addr(addr), .we(we),
         .nbytes_m1(nbytes_m1), .wdata(wdata), .idle(a_idle), .done(a_done), .rdata(a_rdata), .sck(a_sck),
-        .cs_n(a_cs), .ctl_oe(a_ctl), .io_out(a_io), .io_oe(a_oe), .io_in(io_in), .x_sr(a_sr), .x_tt(a_tt), .x_all(a_all));
-    qspi_x b (.clk(clk), .rst(rst), .rd_late(rd_b), .start(start), .cs_sel(cs_sel), .addr(addr), .we(we),
+        .cs_n(a_cs), .ctl_oe(a_ctl), .io_out(a_io), .io_oe(a_oe), .io_in(io_in), .x_sr(a_sr), .x_tt(a_tt), .x_all(a_all), .x_nib());
+    qspi_x b (.clk(clk), .rst(rst), .rd_late(rd_b), .stream_en(stream_en), .ddr(1'b0), .ddr_cap(3'd0), .start(start), .cs_sel(cs_sel), .addr(addr), .we(we),
         .nbytes_m1(nbytes_m1), .wdata(wdata), .idle(b_idle), .done(b_done), .rdata(b_rdata), .sck(b_sck),
-        .cs_n(b_cs), .ctl_oe(b_ctl), .io_out(b_io), .io_oe(b_oe), .io_in(io_in), .x_sr(b_sr), .x_tt(b_tt), .x_all(b_all));
+        .cs_n(b_cs), .ctl_oe(b_ctl), .io_out(b_io), .io_oe(b_oe), .io_in(io_in), .x_sr(b_sr), .x_tt(b_tt), .x_all(b_all), .x_nib());
 
     reg seen = 1'b0;
     always @(posedge clk) seen <= 1'b1;
@@ -41,7 +46,7 @@ module qspi_strap_props (
         if (armed) begin
             assert (a_idle == b_idle); assert (a_done == b_done); assert (a_rdata == b_rdata);
             assert (a_sck == b_sck);   assert (a_cs == b_cs);     assert (a_ctl == b_ctl);
-            assert (a_io == b_io);     assert (a_oe == b_oe);
+            assert (!a_oe || a_io == b_io); assert (a_oe == b_oe);   // io_out is a pin value only while io_oe (nib_n has no reset)
             assert (a_all == b_all);    // the control flops, the read register and the write-direction flops agree:
             assert (a_sr == b_sr);      // helper lemmas that make the miter 1-inductive
             assert (a_tt == b_tt);

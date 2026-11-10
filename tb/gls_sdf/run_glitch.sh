@@ -20,9 +20,10 @@ for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; esac; done
 R=$(cd "$(dirname "$0")/../.." && pwd); G=$R/tb/gls_sdf
 VARIANTS=${VARIANTS:-"D D2 N2 N1"}; JOBS=${JOBS:-1}
 PDKV=8afc8346a57fe1ab7934ba5a6056ea8b43078e71
-NLDIR=/home/mempool/tt/projects/fin-3x4/runs/wokwi/final
+# qsd-84c878f: the harden of d75cb5c, named by that commit's hash before a history reorder (same RTL)
+NLDIR=/home/mempool/tt/projects/qsd-84c878f/runs/wokwi/final
 NL=$NLDIR/pnl/tt_um_alfadelta10010_alphaone_soc.pnl.v
-NLMD5=5862cf7620e7a1d8c053154ee426fd1c
+NLMD5=5b2270d55facb1be258577bbae2f6d6e
 CELLS=${PDK_ROOT:-/home/mempool/tt/pdk}/ciel/sky130/versions/$PDKV/sky130A/libs.ref/sky130_fd_sc_hd/verilog
 REFM=$HOME/regr/rfm/gls-sdf/gls_model_timing
 export PATH=/home/mempool/tools/rv64-gcc-elf/bin:$PATH
@@ -38,7 +39,7 @@ full() { case $1 in
   min_ss) echo min_ss_100C_1v60;; nom_ss) echo nom_ss_100C_1v60;; max_ss) echo max_ss_100C_1v60;;
   *) echo "$1";; esac; }
 ALL9="nom_tt max_ss min_ff min_tt max_tt nom_ss min_ss nom_ff max_ff"; THREE="nom_tt max_ss min_ff"
-corners_of() { if [ -n "${CORNERS:-}" ]; then echo "$CORNERS"; else case $1 in D|N1) echo "$ALL9";; *) echo "$THREE";; esac; fi; }
+corners_of() { if [ -n "${CORNERS:-}" ]; then echo "$CORNERS"; else case $1 in D|N1) echo "$ALL9";; DDR) echo "max_ss nom_tt min_ff";; *) echo "$THREE";; esac; fi; }
 
 # 1. the netlist
 m=$(md5sum "$NL" | awk '{print $1}'); echo "netlist md5 $m $NL"
@@ -67,10 +68,17 @@ if [ ! -s "$WORK/tt_pins.hex" ]; then
     || { echo "WO34 FAIL tt_pins build"; exit 1; }
 fi
 HEX=$WORK/tt_pins.hex
+# DDR: ddr_sweep (the boot-time capture sweep, run from flash) through the pins at the chip's 62.5 MHz
+if [ ! -s "$WORK/ddr_sweep.hex" ]; then
+  ( cd "$WORK" && riscv64-unknown-elf-gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles -DMB_UART -DMB_DIV=1 \
+      -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/ddr_sweep.S -o ddr_sweep.elf && \
+    riscv64-unknown-elf-objcopy -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 ddr_sweep.elf ddr_sweep.hex ) \
+    || { echo "WO34 FAIL ddr_sweep build"; exit 1; }
+fi
 
 # 4. one run
 run_one() { # variant corner
-  local v=$1 c=$2 cf d s0 w line
+  local v=$1 c=$2 cf d s0 w line top="-s glitch_mon" mon_v="$G/glitch_mon.v" vargs="+FLASH_FILE=$HEX +RF_X +RF_COLLIDE_X" tmo=1200
   cf=$(full "$c"); d=$WORK/runs/${v}_$c; mkdir -p "$d"; cd "$d" || return
   [ -e done ] && return
   s0=$(date +%s)
@@ -81,25 +89,31 @@ run_one() { # variant corner
   : > edit.log
   case $v in
     D)  mv pnl0.v pnl.v;;
+    DDR) mv pnl0.v pnl.v; top=""; mon_v=""; tmo=21600     # no glitch monitor: the pins are quiet by construction, the bench judges
+         vargs="+FLASH_FILE=$WORK/ddr_sweep.hex +RF_X +RF_COLLIDE_X +TEST=soc +PROG=ddr_sweep +CLK_HALF_PS=8000 +QSPI_EYE_RANDOM +QSPI_DELAY=${DDR_DELAY:-24} +QSPI_HOLD=${DDR_HOLD:-18} +WANT_K=-2 +MAX_CYCLES=3000000";;
     D2) python3 "$G/edit_netlist.py" pnl0.v pnl.v --pin-delay 2.0 > edit.log 2>&1;;
     N2) python3 "$G/edit_netlist.py" pnl0.v pnl.v --tt01 --pin-delay 2.0 > edit.log 2>&1;;
     N1) python3 "$G/edit_netlist.py" pnl0.v pnl.v --tt01 > edit.log 2>&1;;
   esac
   rc=$?; rm -f pnl0.v
   [ -s pnl.v ] || { echo "$v $c EDIT-FAILED" >> "$SUM"; touch done; return; }
-  $IVERILOG -g2012 -gspecify -I "$R/src" -o sim.vvp -s tb_tt_um -s glitch_mon -DGL_TEST -DUSE_POWER_PINS -DSIM \
+  $IVERILOG -g2012 -gspecify -I "$R/src" -o sim.vvp -s tb_tt_um $top -DGL_TEST -DUSE_POWER_PINS -DSIM \
     -DTCLK_NS=$T -DIN_DLY_NS=$IN_DLY -DRST_CHK_NS=$RST_CHK -DSDF_FILE=\"$d/cells.sdf\" \
     "$WORK/models/primitives.v" "$WORK/models/sky130_fd_sc_hd.v" "$G/rf_top_timing.v" pnl.v \
-    "$R/tb/qspi_pmod_model.v" "$R/tb/rp2350_uart_model.v" "$R/tb/ssd1331_model.v" "$R/tb/keypad_model.v" "$R/tb/tb_tt_um.v" "$G/glitch_mon.v" > compile.log 2>&1 \
+    "$R/tb/qspi_pmod_model.v" "$R/tb/rp2350_uart_model.v" "$R/tb/ssd1331_model.v" "$R/tb/keypad_model.v" "$R/tb/tb_tt_um.v" $mon_v > compile.log 2>&1 \
     || { echo "$v $c COMPILE-FAILED" >> "$SUM"; rm -f pnl.v cells.sdf sim.vvp; touch done; return; }
   rm -f pnl.v
-  timeout -s KILL 1200 $VVP -n sim.vvp +FLASH_FILE=$HEX +RF_X +RF_COLLIDE_X > sim.log 2>&1
+  timeout -s KILL $tmo $VVP -n sim.vvp $vargs > sim.log 2>&1
   rm -f sim.vvp cells.sdf
   local mon bench warn d1
   mon=$(grep -E '^GLITCH-MON (PASS|FAIL)' sim.log | tail -1)
   bench=$(grep -hE '^(PASS|FAIL|ERROR|TIMEOUT)' sim.log | head -1)
   warn=$(grep -c 'SDF WARNING' sim.log)
   d1=$(grep -E '^GLITCH-MON event 1 ' sim.log | sed -n 's/.*d_oe3=\([-0-9.]*\):.*/\1/p')
+  if [ "$v" = DDR ]; then
+    line="$v $c bench [$bench] $(grep -m1 'NOTE ddr_sweep UART' sim.log) dtr [$(grep -m1 'DTR min margins' sim.log)] sdf-warn $warn wall $(( $(date +%s) - s0 ))"
+    echo "$line" >> "$SUM"; echo "$line"; touch done; return
+  fi
   line="$v $c monitor [$mon] bench [$bench] sdf-warn $warn d_oe3 ${d1:-none} wall $(( $(date +%s) - s0 ))"
   echo "$line" >> "$SUM"; echo "$line"
   touch done
@@ -131,6 +145,10 @@ for v in $VARIANTS; do for c in $(corners_of "$v"); do
   tr=$(sed -n 's/.*(\([0-9.]*\):\([0-9.]*\):\([0-9.]*\)).*/\1 \2 \3/p' "$d/iopath.txt" | awk '{print ($1==$2 && $2==$3) ? "equal" : "DIFFER"}')
   [ "$tr" = equal ] || fail "$v $c IOPATH triplet not equal"
   case $v in
+    DDR)
+      grep -q '^PASS tb_tt_um soc ddr_sweep' "$L" || fail "$v $c bench not PASS"
+      grep -q 'DTR min margins' "$L" || fail "$v $c no DTR margin line"
+      grep -q 'NOTE soc ddr_sweep' "$L" || fail "$v $c no ddr_sweep NOTE";;
     D|D2)
       grep -qE '^GLITCH-MON PASS [0-9]+ events' "$L" || fail "$v $c monitor not PASS"
       n=$(sed -n 's/^GLITCH-MON PASS \([0-9]*\) events.*/\1/p' "$L" | tail -1); [ "${n:-0}" -ge 3 ] || fail "$v $c fewer than 3 events"

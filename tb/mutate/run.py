@@ -73,7 +73,7 @@ TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1
 # box). Every pdr harness's PDR_TIMEOUT (1200 s) + 600 is below TIMEOUT["formal"].
 MEM = ["mem_flash", "mem_tcem", "mem_arb", "mem_ld"]
 FORMAL = {"csr.v": ["csr"],
-          "fyracore.v": ["core_hold", "core_req", "core_fetch", "core_inv", "core_df"],
+          "fyracore.v": ["core_hold", "core_req", "core_fetch", "core_df"],
           "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"], "alphaone_soc.v": ["soc_rst_sync"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],

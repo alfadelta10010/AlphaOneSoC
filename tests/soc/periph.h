@@ -53,9 +53,9 @@
 #define LSR_TEMT 0x40
 
 /* The UART divisor after reset. The internal benches (tb_soc_periph,
- * tb_syscon_soc) build the SoC with UART_DIV_RESET(4); the chip's is 27
+ * tb_syscon_soc) build the SoC with UART_DIV_RESET(4); the chip's is 34
  * (docs/pins-and-peripherals.md), which the pins bench builds pass with
- * -DUART_DIV_RESET=27. A program that means "the reset divisor" writes this. */
+ * -DUART_DIV_RESET=34. A program that means "the reset divisor" writes this. */
 #ifndef UART_DIV_RESET
 #define UART_DIV_RESET 4
 #endif

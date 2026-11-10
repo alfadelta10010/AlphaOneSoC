@@ -1,0 +1,8 @@
+# a PSRAM request after an open stream selects CS0 and the PSRAM together -> (a)
+sed qspi_ctrl.v s/cs_n  <= ~t_sel;/cs_n  <= ~(t_sel | 3'b001);/
+# CS is high for one clock between transactions (the next CS falls in the S_END cycle) -> (b)
+sed qspi_ctrl.v s/^\( *\)sck   <= 1'b0;$/\1sck   <= 1'b0; if (!init \&\& start) cs_n <= ~sel_now;/
+# the bus stays driven when a stream is left open -> (c)
+sed qspi_ctrl.v s|strm  <= streamable;|strm  <= streamable; io_oe <= streamable;|
+# every flash read sends EDh, ddr or not -> (d)
+sed qspi_ctrl.v s|t_ddr ? 8'hED|1'b1 ? 8'hED|

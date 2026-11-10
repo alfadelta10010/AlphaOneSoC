@@ -24,6 +24,11 @@ gold-nomatch soc.cpu.rf.dIn*
 gate-nomatch soc.cpu.rf.dIn*
 gold-nomatch soc.cpu.rf.w_ena*
 gate-nomatch soc.cpu.rf.w_ena*
+# syscon's ns_now = rst ? strap_no_stream : strap_ns_q is strap_ns_q's own D in the netlist, but the RTL flop
+# is written only in reset (an enable), so its D cone never contains ns_now: matched, ns_now is a free cut input
+# of the strap_ns_q partition and the proof needs induction length 4. Unmatched, both sides see the whole cone.
+gold-nomatch soc.syscon_inst.ns_now*
+gate-nomatch soc.syscon_inst.ns_now*
 gold-nomatch soc.qspi.rd_late*
 gate-nomatch soc.qspi.rd_late*
 gold-nomatch soc.cpu.exwb_memSize*

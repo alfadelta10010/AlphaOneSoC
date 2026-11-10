@@ -13,7 +13,7 @@
 //     instruction that reads it waits and reads the register file (use_hazard)
 //   - Branch/jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write: no fetch
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
-//   - CSR write in WB: the next instruction waits one cycle (csr_wb_hazard)
+//   - CSR write in WB: the next instruction is still in EX (3-cycle EX, ex_wait)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
 //   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
 //   - AMO: 2-cycle WB (stall pipeline)
@@ -650,10 +650,11 @@ module fyracore #(
     wire ex_csr_readonly = (ex_csr_addr[11:10] == 2'b11);
     // A write to pmpcfg0 or pmpaddr0-3 changes the checks that the next
     // instruction's fetch and data access undergo, and both run in EX while
-    // the write commits one stage later in WB. The CSR-write stall
-    // (csr_wb_hazard) keeps the data check behind the write, but with a
-    // locked entry or in U-mode the next instruction's fetch verdict can be
-    // latched during that very stall cycle, against the old configuration.
+    // the write commits one stage later in WB. The 3-cycle EX (the next
+    // instruction is still in EX while the write commits) keeps the data
+    // check behind the write, but with a locked entry or in U-mode the next
+    // instruction's fetch verdict can be latched during that very cycle,
+    // against the old configuration.
     // So the write refetches the next instruction the way FENCE.I does,
     // and it reaches EX only after the write has committed. One fetch per
     // PMP write (tests/directed/pmp_refetch).
@@ -820,14 +821,15 @@ module fyracore #(
     // stall_nofetch is the same without the pending fetch: an M instruction
     // starts on it (see muldiv_start).
     //
-    // csr_wb_hazard: a CSR write commits in WB, and the instruction behind it
-    // waits in EX for that one cycle, so everything EX derives from CSR state
-    // -- a CSR read, the trap and MRET targets, interrupt gating, MPRV/MPP for
-    // the data PMP check, TW, misa.C -- sees the committed value. The
-    // alternative, forwarding csr.v's post-write value into each of those, is
-    // a 32-bit mux per consumer and a copy of every WARL rule on the read
-    // path. In the SoC the cycle is hidden behind the next fetch.
-    wire csr_wb_hazard = ifex_valid && exwb_valid && exwb_csrWR && !exwb_trap;
+    // No stall term for "a CSR write is in WB": the 3-cycle EX does that job.
+    // A CSR write commits in WB, and the instruction behind it is still in EX
+    // (ex_ph = 0, ex_wait = 1) for that cycle, so everything EX derives from
+    // CSR state -- a CSR read, the trap and MRET targets, interrupt gating,
+    // MPRV/MPP for the data PMP check, TW, misa.C -- sees the committed value.
+    // (There used to be a csr_wb_hazard term here; it was dead, proved by
+    // the core_inv harness: whenever it was 1 the EX was already stalled.)
+    // IF EX EVER GETS SHORTER THAN 3 CYCLES, that stall must return: Zicsr
+    // requires a CSR write's effect to be visible to the next instruction.
     // ex_wait: the EX instruction's ALU and comparator results are not in
     // alu_r and br_r yet (see ex_ph).
     //
@@ -840,7 +842,7 @@ module fyracore #(
     // exwb_rd in front of `stall`.
     wire ex_wait = ifex_valid && !ex_ph;
     wire stall_nofetch = wb_busy || wb_mem_stall || wfi_active ||
-                         ex_ifetch_hi_phase || csr_wb_hazard || ex_wait;
+                         ex_ifetch_hi_phase || ex_wait;
     wire stall_other = stall_nofetch || if_mem_stall;
 
     // muldiv stall logic (see muldiv instantiation in EX section above):
@@ -849,9 +851,9 @@ module fyracore #(
     //                 When muldiv_done fires, stall drops so the pipeline advances
     //                 and captures muldiv_result into exwb_alu_result this cycle.
     // !ex_trap_iter: a trapping M instruction (a fetch fault whose garbage
-    // word decodes as MUL/DIV, say) never starts -- muldiv_start is gated on
-    // flush, which contains ex_trap -- so without this muldiv_stall would
-    // wait for a result that never comes and the trap would never commit.
+    // word decodes as MUL/DIV, say) never starts -- without this
+    // exclusion muldiv_stall would wait for a result that never comes and the
+    // trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
     // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
@@ -882,7 +884,13 @@ module fyracore #(
     // *next* M instruction, which then captured the previous result.
     wire muldiv_have = muldiv_ready || muldiv_done;
     // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other && !flush;
+    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other;
+    // No `!flush` on capture or start, and no flush term in the muldiv_ready
+    // reset: flush and muldiv_want are never both 1 (a flush source in EX
+    // means the EX instruction is not an M op, and a trapping M op is
+    // excluded by ex_trap_iter), so a flush never meets a live M operation.
+    // If an M op could ever be in EX together with a flush source, restore
+    // all three.
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
@@ -890,15 +898,13 @@ module fyracore #(
     // completed, and muldiv_stall then dropped that fetch and fetched the
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_nofetch && !flush;
+                          && !stall_nofetch;
     assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin
-        // flush first: the operation's instruction is being discarded, so the
-        // result must not survive to be captured by its own re-execution.
         // capture before done: a result taken on its own done cycle must not
         // be left sticky for the next M instruction.
-        if (rst || flush)        muldiv_ready <= 1'b0;
+        if (rst)                 muldiv_ready <= 1'b0;
         else if (muldiv_capture) muldiv_ready <= 1'b0;
         else if (muldiv_done)    muldiv_ready <= 1'b1;
     end
@@ -1117,8 +1123,9 @@ module fyracore #(
     // ── Interrupt pending detection ──────────────────────────────────────────
     // Per spec §3.1.6.1: MIE only gates M-mode; U-mode interrupts always enabled
     // (no delegation in M+U only system). Priority: external(11) > sw(3) > timer(7).
-    // No interrupt is injected while a CSR write is in WB (csr_wb_hazard is
-    // part of stall_other), so there is no window where one slips in after
+    // No interrupt is injected while a CSR write is in WB (the next
+    // instruction is still in EX, held by ex_wait, which is part of
+    // stall_other), so there is no window where one slips in after
     // csrci mstatus,8 but before the write commits.
     wire irq_global_en     = !priv_mode || csr_mstatus_mie;
     wire irq_external_pend = external_irq & csr_mie[11] & irq_global_en;
@@ -1146,10 +1153,11 @@ module fyracore #(
     // another interrupt. It also tore down an in-flight memory access, because
     // the injection path overrides the EX/WB hold.
     //
-    // muldiv_want rather than muldiv_stall (or `stall`): muldiv_stall feeds
-    // muldiv_start through flush, which contains irq_inject, so it would
-    // close a combinational loop. Excluding any M instruction in EX -- before
-    // it starts, while it runs, and on the cycle its result is captured --
+    // muldiv_want rather than muldiv_stall (or `stall`, which is
+    // stall_other plus muldiv_stall): muldiv_stall is low on the capture
+    // cycle (muldiv_have), so either would let an interrupt in on that cycle
+    // and discard the finished result. Excluding any M instruction in EX --
+    // before it starts, while it runs, and on the cycle its result is captured --
     // means an interrupt never discards a finished or in-flight multiply;
     // it is taken at the next instruction instead.
     assign irq_inject = any_irq_pend && ifex_valid && !ex_trap
@@ -1192,7 +1200,7 @@ module fyracore #(
     // MPRV=1 makes loads and stores check as though the hart were in MPP.
     // Instruction fetch is excluded by the spec, so its check keeps priv_mode.
     // The load or store right after `csrw mstatus` waits in EX for the write
-    // to commit (csr_wb_hazard), so it is checked against the new values.
+    // to commit (EX's 3 cycles), so it is checked against the new values.
     wire data_priv_mode = csr_mstatus_mprv ? (csr_mstatus_mpp == 2'b11) : priv_mode;
 
     pmp pmp_unit(
@@ -1209,14 +1217,14 @@ module fyracore #(
     );
 
     // No CSR forwarding: an instruction never reads CSR state in EX while a
-    // CSR write is in WB (csr_wb_hazard stalls it for that cycle).
+    // CSR write is in WB (EX's 3 cycles hold it until the write has committed).
     assign csr_rdata_eff = csr_rdata;
 
     // ================================================================
     //  PC Update Logic
     // ================================================================
     // "csrw mepc, t5; mret" and "csrw mtvec, t0; ecall" read the written
-    // value: csr_wb_hazard holds the MRET or the trap in EX until the write
+    // value: EX's 3 cycles hold the MRET or the trap in EX until the write
     // has committed.
     wire [31:0] trap_target = csr_mtvec;
     wire [31:0] mret_target = csr_mepc;

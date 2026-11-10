@@ -96,7 +96,15 @@ E = eventual, A = architectural (no clock count).
 | REQ-QSPI-001 | PSRAM QPI 0x0B/0x38, flash 0xEB mode 0xFF, no flash write, tCPH/tCEM/tRST, SCK limits (soc-arch, datasheets) | C | tb_qspi, tb_qspi_stress; formal mem_flash (PROVED, pdr: flash never selected for a write, CS0 sees only EB/FF), mem_tcem (PROVED, pdr: PSRAM tCEM, tCPH), qspi_strap (PROVED, pdr: `rd_late` strap held after reset); Pmod model setup/hold checks (section 4.3) | Pmod model |
 | REQ-QSPI-002 | the start-up sequence undoes every hand-over state | B | tb_qspi hand-over runs, +RESETS | Pmod model |
 | REQ-MEMC-001 | data-first; split PSRAM fetch at 1 KB pages; whole-word loads; enabled bytes only stored | A | tb_qspi, tb_qspi_stress; formal mem_arb (PROVED, pdr: data first, split halves consecutive) | shadow memory |
-| REQ-MEMC-002 | every request is served within a bound; no starvation | B | tb_qspi_stress; formal mem_ld (BOUNDED 366: a held data request is served within LD = 182/183, measured S = 126 start-up cycles), core_df (BOUNDED 32: at most DF_N = 4 data handshakes per held fetch); LI = 442/456 for a held fetch is measured by simulation, not proved (section 4.3) | per-request wait bound + traffic floor (new) |
+| REQ-MEMC-002 | every request is served within a bound; no starvation | B | tb_qspi_stress; formal mem_ld (BOUNDED 366: a held data request is served within LD = 182/183, measured S = 126 start-up cycles), core_df (BOUNDED 32: at most DF_N = 4 data handshakes per held fetch); LI = 449/482 (streaming on, the default; 442/456 off) for a held fetch is measured by simulation, not proved (section 4.3); `make bounds-qspi` fails if a measured bound differs from the `mem_props.sv` defines | per-request wait bound + traffic floor (new) |
+| REQ-QSPI-003 | streaming: after a 4-byte flash read with stream_en set, CS0 stays low, SCK low, io_oe 0; a flash read at p continues with 4 more bytes (8 SCK, 4 in DDR), at p-2 tops up with 2; anything else, a PSRAM access or a write closes the stream with CS high for two clocks | C | tb_qspi, tb_qspi_stress, ddr_flash and flash_boot through the SoC; formal qspi_pins (c), mem_arb | pmod model byte-exact data and per-run EBh/EDh counts; mutants QS09 (stream_en falling while idle: tb_qspi `stream_en_drop`), QS10 (the 2-byte top-up), QS12 (no mode change closes the stream; tb_qspi `mode_switch_suite`), QS14 (a continuation ignores a same-clock mode change: `same_cycle_suite`) |
+| REQ-QSPI-004 | CS0 is never low together with CS1 or CS2; CS is high for at least two clocks between transactions; the flash is never selected for a write; CS0 sees only EB/FF/ED commands, ED only with DDR | C | formal qspi_pins (a, b, d), mem_arb, mem_flash | proved (pdr), covers, sed-broken copies |
+| REQ-QSPI-005 | EDh wire protocol: command on IO0, A1:A0 = 00, mode FFh (M5-4 = 11), IO released before fall 18, 7 dummy cycles, 23 SCK for 4 bytes, 25 for a read at a halfword address, nibbles in order, the held nibble taken at the continuation | C | tb_qspi `+DDR`, tb_pmod_dtr (P1-P14), tb_qspi_stress `+DDR` | pmod model protocol checks (it fails an unaligned open, a mode byte of 10 in M5-4, both-driving) |
+| REQ-QSPI-006 | host timing in DDR: address and mode nibbles change half a clock from both SCK edges; the model's data-in setup/hold limits on both edges and the IO release hold hold at the 62.5 MHz bench clock | C | tb_pmod_dtr (margins P1-P3, fail cases F1-F4, F7, F10, F11, limit-raise cases L1-L8), tb_qspi | limits raised past the measured margin must report |
+| REQ-QSPI-007 | capture: a nibble is captured DDR_CAP + 1 half clocks after its launching edge, for DDR_CAP 0..7; the passing set per round trip R = 8..53 ns equals the window rule R+7 <= X_c < R+17.67; a device launching half an SCK late passes at no point | C | make test-qspi-ddr-sweep (tb/qspi_ddr_sweep.sh), tests/soc/ddr_sweep.S through the SoC | expected sets written in the script; run against a copy with the index width bug it fails |
+| REQ-QSPI-008 | QSPI_CFG (syscon +0x1C): STREAM bit 0, DDR bit 1, DDR_CAP bits 4:2; reset by every reset to DDR 0, DDR_CAP 2, STREAM = ~strap; the write reaches qspi_ctrl directly; a read in flight finishes in its latched mode, a mode change closes an open stream | C | tb_syscon, tb_syscon_soc, tb_qspi (mode change mid-stream); formal syscon_gate (DDR_CAP reset) | spec model (tb/syscon_spec.vh); mutants SY22 (QSPI_CFG written by any byte lane), SY23 (STREAM resets to 1), QS11 (DDR_CAP change does not close the stream), QS13 (the new mode not latched at the request: a same-clock change, tb_qspi `same_cycle_suite`), QS12, QS14 |
+| REQ-QSPI-009 | the no-stream strap on ui_in[2] and rd_late on ui_in[0] are sampled during the pin reset and held; not re-read on a reboot; STRAPS (+0x10) reads both | C | tb_syscon, tb_syscon_soc, tb_tt_um; formal qspi_strap | model; mutants SY12, SY18, SY24 (the STREAM reset follows the live pin, not the latched strap) |
+| REQ-QSPI-010 | DDR is off at every reset and the SDR pin trace is unchanged by the DDR logic while DDR = 0; the SoC runs the whole directed suite in the DDR corner (+SOC_DDR=1, fixed-delay lines skipped by name) | C | tests/directed/run.sh soc, with and without RUN_PLUSARGS=+SOC_DDR=1 | Spike traces |
 | REQ-UART-* | 16550 subset (pins-and-peripherals 2) | C | tb_uart | spec models |
 | REQ-GPIO-* | GPIO + SPI mode 3 (pins-and-peripherals 3-4) | C | tb_gpio | spec models |
 | REQ-BUS-001 | an IO target drops ready only while selected; only a CLINT store writes the CLINT | C | tb_soc_periph; formal bus (PROVED, sby k-induction, length 1) | per-clock checks, clint_decode |
@@ -385,8 +393,8 @@ touches behaviour nothing specifies (section 5).
 | SE04 | equivalent in the core | SRLI/SRAI immediate sign-extended: only shamt, imm[4:0], is used |
 | SE05 | equivalent in the core | the CSR-immediate zimm taken from the wrong field: fyracore takes zimm from rs1 |
 | MD07 | equivalent | PROVED (formal md07, sat and sby k-induction, length 1): in the divide loop acc < m when m != 0 (I2, entered with acc = 0 through NEGA/NEGB, I1), so sum[33] == sum[32], and with m == 0 both arms are equal (E1); the arm-swap copy fails at depth 48. Cross-check: md07_miter (the original muldiv against MD07) is opt-in and not run to a verdict (a bounded run reached step 29 of 40 in 76 min); its cover (1/1) and the MD06 miter non-vacuity run (counterexample within 40) hold |
-| FC02 | equivalent (argument + BOUNDED 80) | csr_wb_hazard implies !ex_ph and another stall_nofetch term (E-FC02a/b), so stall_nofetch never changes when the term is dropped; checked in every state within 80 steps of reset (formal core_inv, bmc), not proved: the length-1 induction does not close (the muldiv unit's latched kind versus the EX instruction is a necessary invariant but not a sufficient one). A dead stall term, removable (an area decision) |
-| FC49 | equivalent (argument + BOUNDED 80) | !(flush && muldiv_want) and ready/busy/done imply muldiv_want (E-FC49a/b), so the next muldiv_ready is 0 on any flush cycle without the flush terms (E-FC49c); the 80 steps include a finished M operation (an armed cover, `core_inv_armed_cov` (in the default list, COVERED 5/5), reaches the done of a real M operation at step 38 after reset, 38 + 12 <= 80; the default `core_inv_cov` done point is also met by a short shift, so it does not show this); not proved (as FC02). Non-vacuity: copies that reset ex_ph or drop muldiv_want both give a counterexample within 80 |
+| FC02 | removed from the RTL (2026-11-08, qspi-stream branch) | the `csr_wb_hazard` stall term was equivalent (it implied EX was already stalled by the 3-cycle EX; the former core_inv harness, bounded 80), so it was deleted for area. If EX ever gets shorter than 3 cycles the stall must return (Zicsr) |
+| FC49 | removed from the RTL (2026-11-08, qspi-stream branch) | the three `flush` gates on the M handshake were equivalent (flush and muldiv_want are never both 1, E-FC49a; and the unit is only ready, busy or done while muldiv_want, E-FC49b, which the muldiv_ready reset without `|| flush` rests on; the former core_inv harness, bounded 80), so they were deleted for area. tb_rivercore checks FC02, E-FC49a and E-FC49b on every cycle of every directed run (WO-64: FC49b fires on a muldiv_ready that is never cleared) |
 | QS06 | killed by qspi_strap at the unit contract; equivalent in the SoC | the `rd_late` strap not held after reset. It survives every other bench; qspi_strap (PROVED, pdr) fails on it with a counterexample. In the SoC syscon holds the strap, so the SoC cannot see it |
 | FR14 | equivalent (argument) | FENCE.I and a PMP write in the flush term never meet a set if_kv: if_kv is set only behind a compressed instruction, and no compressed encoding decodes as FENCE.I or a CSR write (illegal ones become NOPs). Consistent with every bench run: it survives core_hold, core_req, core_inv, core_df and the directed core suite; formal core_fetch finds no counterexample (its induction does not close at length 12 and the bounded rerun gave no verdict, scored ERROR, not a kill) |
 | FC27 | equivalent | argument: garbage rd writes during a load wait are unobservable, EX is held by use_hazard until the final write, and after a reset x1-x31 are unspecified (Priv 3.4) |
@@ -404,10 +412,11 @@ testbench narrowed to Spike's window (WO-11); SA-006 (U-mode WFI) as a doc fix
 
 ### 4.3 Formal harnesses (tb/formal)
 
-`tb/formal/run.sh` runs the default list of 40 harnesses: the 39 of the final run at
-7a66221 (sby engine, rc 0, no FAILED or ERROR; the sat leg of the same tree gave the same
-39 verdict words) plus core_inv_armed_cov, added afterwards (COVERED 5/5). The two legs differ only for the induction harnesses: pdr, sbmc and
-cover harnesses (about 27 of the 40) run on sby in both. Verdict
+`tb/formal/run.sh` runs the default list of 39 harnesses (the 37 before qspi_pins and qspi_pins_cov, WO-54b; the 40 of the earlier runs minus core_inv, core_inv_cov
+and core_inv_armed_cov, retired 2026-11-08 with FC02 and FC49). The 39 of the final run at
+7a66221 (sby engine, rc 0, no FAILED or ERROR; the sat leg gave the same 39 verdict words)
+included core_inv and core_inv_cov. The two legs differ only for the induction harnesses: pdr, sbmc and
+cover harnesses (about 27 of the 39) run on sby in both. Verdict
 words, as the logs print them: PROVED (pdr) = sby `abc pdr`, unbounded; PROVED (sby
 k-induction, length 1) = the step starts from any state (a longer induction does not
 count); PROVED (structural) = a netlist walk; BOUNDED n = no counterexample within n
@@ -430,14 +439,14 @@ Every harness has a non-vacuity sidecar (`.nonvac`) and most have a cover (`_cov
 | spi_bb, spi_bb1 | bit-bang SPI | BOUNDED 96 each | NONVAC-OK | spi_cover COVERED 6/6 |
 | spi_f12 | SPI12 (F1/F2 structure) | PROVED (structural) | SPI12 | - |
 | bus | an IO target drops ready only while selected; decode; read mux | PROVED (sby k-induction, length 1) | SB01-03, uart and gpio ready seds | bus_cov 2/2 |
-| qspi_strap | `rd_late` strap sampled in reset and held (miter) | PROVED (pdr, free init 25 `$anyinit`) | QS06 | qspi_strap_cov 1/1 |
-| mem_flash | flash never selected for a write; CS0 sees only EB/FF | PROVED (pdr, 14 `$anyinit`) | QS01, QS02 | mem_flash_cov 4/4 |
-| mem_tcem | PSRAM tCEM, tCPH | PROVED (pdr, 13 `$anyinit`) | two seds (MT1, MT2) | mem_tcem_cov 5/5 |
+| qspi_strap | `rd_late` strap sampled in reset and held (miter; `stream_en` one free input shared by both copies, the streaming flops strm, p, t_top, t_sel in the lemma) | PROVED (pdr; SDR copy of the engine, ddr = 0, DDR flops t_ddr, t_cap, dq in the lemma, nib_p exported but not compared: WO-54b) | QS06 | qspi_strap_cov 1/1 |
+| qspi_pins | pin rules of the real engine, free inputs, ddr and ddr_cap free, through clk2fflogic (WO-54b): (a) CS0 never low with CS1/CS2; (b) CS all high >= 2 clocks between low periods, no direct chip-to-chip move; (c) idle with CS0 low (open stream): SCK low, io_oe 0; (d) no EDh command byte unless ddr was high | PROVED (pdr) | four seds: CS0+PSRAM select, 1-clock gap (MT2's), bus driven in an idle stream, EDh without DDR | qspi_pins_cov 4/4 |
+| mem_flash | flash never selected for a write; CS0 sees only EB/FF (`stream_en` a free input; SDR copy of the engine with ddr = 0, argument in tb/formal/mem.conf: clk2fflogic measured 15x/19x slower on mem_flash/mem_arb) | PROVED (pdr, 14 `$anyinit`) | QS01, QS02 | mem_flash_cov 4/4 |
+| mem_tcem | PSRAM tCEM, tCPH; flash CS0-low run with the engine not idle <= LF = 57/58 (an idle open stream has no bound, by design) | PROVED (pdr, 13 `$anyinit`) | two seds (MT1, MT2) | mem_tcem_cov 5/5 |
 | mem_arb | data first, split atomicity | PROVED (pdr, 12 `$anyinit`) | MC01-04, MC07, MC08 | mem_arb_cov 5/5 |
 | mem_ld | held data request is served within LD = 182/183 | BOUNDED 366 (>= S 126 + LD) | reduced-LD copy | opt-in (3/5 at 330; reached once at 480) |
 | core_df | data handshakes per held fetch <= DF_N = 4 (mem's assumption M-A4) | BOUNDED 32 | DF_N = 1, 2, 3 FAIL | core_df_cov 2/2 |
 | md07 | MD07 equivalent (4.2) | PROVED (sby k-induction, length 1) | arm-swap copy | md07_cov 3/3 |
-| core_inv | FC02, FC49 equivalent (4.2) | BOUNDED 80 | ex_ph-reset and muldiv_want copies | core_inv_cov 4/4, core_inv_armed_cov 5/5 (a real M-op done at step 38) |
 
 The mem_* and qspi_strap verdicts hold under `tb/formal/mem_props.sv`'s environment assumptions, so "PROVED" there is conditional on how each is discharged: M-A1 (a request not yet answered is held) by core_hold, PROVED; M-A2 (the PMA window and alignment of requests) by core_req, BOUNDED 150 only; M-A3 (`rd_late` stable while out of reset) by syscon holding the strap, checked in simulation only (tb_syscon, tb_qspi); M-A4 (at most DF_N = 4 data handshakes per fetch, mem_li only) by core_df, BOUNDED 32.
 
@@ -446,24 +455,27 @@ md07_miter (not run to a verdict) and md07_miter_cov (1/1).
 
 Residuals:
 
-- mem_li: the worst fetch latency LI = 442 (`rd_late` 0) and 456 (`rd_late` 1) is
-  measured by simulation (3000 runs, both `rd_late`), not proved. A proof needs a depth
-  of at least S + LI = 582 and the engines did not close it. It is also conditional on
+- mem_li: the worst fetch latency LI = 449 (`rd_late` 0) and 482 (`rd_late` 1) with
+  streaming on (442 and 456 with it off) is
+  measured by simulation (3000 runs, both `rd_late`, both `stream_en` values), not proved. A proof needs a depth
+  of at least S + LI = 608 and the engines did not close it. It is also conditional on
   DF_N <= 4, which core_df bounds to 32 steps only.
-- mem_ld, core_req, spi_bb, spi_bb1, core_df, core_inv: bounded, not proved. md07_miter is
+- mem_ld, core_req, spi_bb, spi_bb1, core_df: bounded, not proved. md07_miter is
   an opt-in cross-check of md07 only.
-- FC02 and FC49: equivalence by argument plus a bounded check (4.2).
 - The core can make up to 4 data handshakes between fetches (two back-to-back AMOs);
   `docs/soc-architecture.md` previously said one (finding F-8, doc fixed), and core_df is
   the check that bounds it.
 
 ### 4.4 Equivalence, gate level, pins, the Pmod model
 
-EQY (`tb/eqy/run.sh`): RTL main a2f7285 is equivalent to the fin-3x4 post-PnR netlist
-(nl.v, md5 4d861ceb16f49fcadb0e55cf65d6e26d). **EQY PASS: 165 of 165 partitions, all by
-sat at induction length 1.** 186 bits removed by synthesis (184 CSR + gpio out_r[1], [3])
-are proved constant on the RTL and tied (181 to 0, 5 to 1). Four FSMs recoded one-hot
-(exwb_memSize, muldiv st, qspi state, spi st) are compared through the FSM cut point, with
+EQY (`tb/eqy/run.sh`): RTL `qspi-stream_alfadelta10010` at d75cb5c (84c878f before a history reorder; same RTL) is equivalent to its
+3x4 post-PnR netlist (nl.v, md5 71d75961e9e64b995d551afdec157aff, 2026-11-09). **EQY PASS:
+179 of 179 partitions, all by sat at induction length 1.** (Main a2f7285 against the
+fin-3x4 netlist of 2026-11-01, md5 4d861ceb...: 165 of 165.) `ns_now` is left unmatched so
+strap_ns_q's partition sees its whole D cone. 186 bits removed by synthesis (184 CSR + gpio
+out_r[1], [3]) are proved constant on the RTL and tied (181 to 0, 5 to 1). Four FSMs recoded
+one-hot (exwb_memSize, muldiv st, qspi state -- 4 bits, 10 states with streaming -- and spi
+st) are compared through the FSM cut point, with
 the netlist's one-hot invariant proved (k = 1; the negative control fails). 7 of 7 mutants
 are caught by a pdr counterexample: netlist gates in the D cones of ifex_pc[4], syscon
 cause, spi cc[5] and if_kbuf[5], the five misa tie-1 bits tied to 0, and wrong qspi and spi
@@ -625,17 +637,17 @@ and the survivors of every bench are listed in 4.2.
 
 ## 5. Not verified, and why
 
-- Formal: `tb/formal/run.sh` runs 40 harnesses by default, through yosys `sat`
+- Formal: `tb/formal/run.sh` runs 39 harnesses by default, through yosys `sat`
   (the default engine) or sby (`FORMAL_ENGINE=sby`: smtbmc with bitwuzla or
   yices, abc pdr, abc bmc3), with yosys 0.70 from the OSS CAD Suite named by
   `FORMAL_BIN`. PROVED means an unbounded result: k-induction at length 1, or
   pdr from a free power-up state. BOUNDED n means no counterexample within n
   steps of reset. riscv-formal results are BOUNDED, never PROVED (4.5).
   BOUNDED harnesses: core_req (150), spi_bb and spi_bb1 (96), core_df (32),
-  core_inv (80), mem_ld (366). csr's outcome: PROVED by pdr (it was
+  mem_ld (366). csr's outcome: PROVED by pdr (it was
   bounded 24 before). core_df is a bounded discharge of mem's assumption
   M-A4 (at most DF_N = 4 data handshakes per held fetch), so the fetch-latency
-  bound LI is "measured by simulation (442/456), conditional on DF_N <= 4,
+  bound LI is "measured by simulation (449/482 streaming on, 442/456 off), conditional on DF_N <= 4,
   which is itself checked only to 32 steps"; mem_li is not proved and is not
   in the default list. The register file is a stub with free read data in
   the core harnesses, so nothing is proved about its contents. The core's

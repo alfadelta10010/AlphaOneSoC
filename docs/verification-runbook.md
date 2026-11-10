@@ -38,9 +38,9 @@ stage.
 
 | Stage | Runs | Proves |
 |---|---|---|
-| unit | `make test-all`, then `test-seeds` with seeds 1 to 8 | Each block and the core against its self-checking bench; the seeded random benches over eight seeds. Simulation: it finds bugs, it does not prove their absence. |
+| unit | `make test-all`, then `test-seeds` with seeds 1 to 8, then `test-wrapper-soc` | Each block and the core against its self-checking bench; the seeded random benches over eight seeds; the mailbox programs through the TinyTapeout pins at a 10 ns and a 20 ns clock (RTL). Simulation: it finds bugs, it does not prove their absence. |
 | directed | `tests/directed/run.sh` plain, with `+RF_X +RF_COLLIDE_X`, and `soc` | The directed programs against Spike, on the core alone, with the register file starting at X and colliding reads at X, and through the whole SoC (fabric, memory controller, QSPI engine, Pmod model). Gate: no X in a dump, the tohost store reached. |
-| formal | `tb/formal/run.sh` (default list, 40 harnesses) on the `sat` and `sby` engines, then `--nonvac` on every default-list harness | The invariants of VPLAN 4.3; see the verdict words. Each full verdict line (minus trace and log paths) is compared with `scripts/verify-all.expected`, with every `*_DEPTH`/`*_TIMEOUT` override unset: a changed word, depth or cover count fails the stage, and so does a missing harness. Every default-list harness must also have its broken copies FAIL; opt-in harnesses (mem_li, mem_li_cov, mem_ld_cov, md07_miter) are not run. |
+| formal | `tb/formal/run.sh` (default list, 39 harnesses) on the `sat` and `sby` engines, then `--nonvac` on every default-list harness | The invariants of VPLAN 4.3; see the verdict words. Each full verdict line (minus trace and log paths) is compared with `scripts/verify-all.expected`, with every `*_DEPTH`/`*_TIMEOUT` override unset: a changed word, depth or cover count fails the stage, and so does a missing harness. Every default-list harness must also have its broken copies FAIL; opt-in harnesses (mem_li, mem_li_cov, mem_ld_cov, md07_miter) are not run. |
 | rvfi | `tb/rvfi/run.sh` once per solver family (yices, bmc3, boolector), then the fault matrix `tb/rvfi/mutants.sh` | riscv-formal consistency and instruction checks on the core, bounded from reset (VPLAN 4.5). The matrix injects one fault per row; every row must FAIL some check except the known blind spots (FC51, MD01, MD03, MD10, RG05). |
 | mutation | `tb/mutate/run.py` on the `src/` files changed since BASE | Every mutant of a changed file is run against the benches. FAIL on any ERROR or TIMEOUT row (a formal TIMEOUT is an ERROR, never a kill), on a partial run (a listed file with no rows, or a run.py that did not exit 0), or on a kill lost against `LAST`; without `LAST` the verdict is NO-BASELINE (lost kills cannot be checked). `BASE` defaults to `main`; in a tree without `.git` pass `CHANGED="a.v b.v"`. |
 | eqy | `tb/eqy/run.sh NETLIST=<nl.v>`, all stages and mutants | The RTL and the hardened netlist have the same next-state function for every flop and the same outputs (VPLAN 4.4). Needs the refit below when the netlist is new. |
@@ -68,12 +68,12 @@ divergence is real.
 
 ## Stated residuals
 
-- mem_li: the worst fetch latency (LI = 442 with `rd_late` 0, 456 with 1) is measured by
+- mem_li: the worst fetch latency (LI = 449 with `rd_late` 0, 482 with 1, streaming on; 442 and 456 off) is measured by
   simulation, not proved; it also depends on at most four data handshakes between fetches
   (core_df, bounded to 32 steps).
 - Bounded, not proved: mem_ld (366), core_req (150), spi_bb and spi_bb1 (96), core_df (32),
-  core_inv (80), and all of riscv-formal. md07_miter is an opt-in cross-check of md07 only.
-- FC02 and FC49: equivalence by argument plus a bounded check.
+  and all of riscv-formal. md07_miter is an opt-in cross-check of md07 only.
+- FC02 and FC49: removed from the RTL (2026-11-08), and core_inv with them.
 - riscv-formal does not cover U-mode, PMP, MPRV, misa.C, CSRs and trap causes and targets,
   atomics, M arithmetic, illegal encodings other than the all-zero parcel, memory waits over two
   cycles, data-memory consistency, or unbounded histories.
@@ -124,7 +124,7 @@ it, which is what you want.
 | Touched | Rerun |
 |---|---|
 | any `src/*.v` | `verify-all.sh` unit, directed, mutation (the file), formal, rvfi if the core changed |
-| `fyracore.v` | formal core_hold, core_req, core_fetch, core_df, core_inv, md07; riscv-formal on `fyracore.v` (all families and the fault matrix); mutation for the file |
+| `fyracore.v` | formal core_hold, core_req, core_fetch, core_df, md07; riscv-formal on `fyracore.v` (all families and the fault matrix); mutation for the file |
 | `csr.v`, `clint.v`, `pmp.v` | formal csr; directed; mutation for the file; riscv-formal only if the retire interface changed |
 | `muldiv.v`, `alu.v`, `branchCtrl.v`, `decoder.v`, `controller.v`, `compressed_decoder.v` | unit and seeds; directed; riscv-formal insn families; mutation for the file |
 | `syscon.v` | formal syscon_comb, syscon_gate, soc_rst_sync; test-syscon and test-syscon-soc; mutation |
@@ -140,21 +140,39 @@ A formal harness reads the files listed in its `FILES` entry in `tb/formal/run.s
 
 ## After a QSPI change
 
-The next planned change is in `src/qspi_ctrl.v` (and possibly `src/mem_ctrl.v`): streaming flash
-reads as the default and an optional DDR/DTR mode. Checklist:
+A change in `src/qspi_ctrl.v` or `src/mem_ctrl.v` (streaming flash reads, the `EDh` DDR mode,
+`QSPI_CFG`) is checked by:
 
-1. `tb/qspi_pmod_model.v` must model streaming reads and DTR, with the setup/hold check
-   extended to the DTR edges (the -DTR datasheet rows). `samp_mask` is the extension point
-   (falling-edge mask, per-edge limits). Check the checks themselves: each limit raised past
-   its measured value must report.
-2. `make test-qspi` with its `QSPI_RUNS` sweep, and the SoC directed suite at the `rd_late` and
-   `QSPI_DELAY` corners.
-3. Formal: mem_flash (the CS0 command set), mem_arb (a stream yields to a data access),
-   mem_ld and mem_li (measure LD and LI again with `make bounds-qspi` and compare the printed LP/LF/S/LD/LI with the `define values in `tb/formal/mem_props.sv` by hand: the target compares nothing itself), mem_tcem (if PSRAM streams),
-   qspi_strap.
-4. EQY refit: new FSM states are expected, so this one is manual.
-5. GL parts A to D and SDF, with the Pmod checks at every corner.
-6. The `tb_sw` benchmarks on the Verilator branch, for the CPI gain.
+1. The Pmod model, `tb/qspi_pmod_model.v`, with its DTR unit bench: `make test-pmod-dtr` runs
+   pass cases, expected-fail cases and limit-raise cases (each limit raised past its measured
+   margin must report). A change to the model's checks needs a case that fails without it.
+2. `make test-qspi` with its `QSPI_RUNS` sweep, and `make test-qspi-ddr-sweep`: the passing capture
+   points per round trip R (= 8 to 53 ns) against the window rule, for every `DDR_CAP`; it exits 1
+   on any difference, and with `+DTR_LAUNCH=1` no point may pass.
+3. The SoC directed suite, `tests/directed/run.sh soc`, and its DDR corner
+   `RUN_PLUSARGS=+SOC_DDR=1 tests/directed/run.sh soc`. `+RD_LATE` is valid only with
+   `+QSPI_DELAY=25 +QSPI_HOLD=12` (the MANIFEST `soc` lines pair them; given alone, every test aborts
+   with 0 retires). Those fixed-delay lines pair a delay with the SDR capture point, which a forced
+   DDR capture point cannot read, so the DDR corner prints `SKIP <name> (DDR corner: fixed-delay
+   line)` for each and counts them in the `REGRESS` line; the DDR timing corners are covered by
+   `test-qspi-ddr-sweep` and by `tests/soc/ddr_sweep.S` (the `ddr_sweep` lines in the Makefile).
+4. Formal: mem_flash (the CS0 command set, `EDh` included), mem_arb (a stream yields to a data
+   access; CS0 never low with CS1/CS2), mem_ld and mem_li (measure LD and LI again with
+   `make bounds-qspi` and compare the printed LP/LF/S/LD/LI with the `define` values in
+   `tb/formal/mem_props.sv` by hand: the target compares nothing itself), mem_tcem, qspi_strap
+   (the two straps) and qspi_pins (the real engine with ddr free, through clk2fflogic: CS0 never
+   low with CS1/CS2, CS gap of two clocks, an idle open stream has SCK low and io_oe 0, no `EDh`
+   without DDR). The mem_* and qspi_strap harnesses read an SDR copy of the engine (negedge flops
+   turned into posedge, ddr tied 0); see the header of `tb/formal/mem.conf`.
+5. The mutation campaign on the new logic (`tb/mutate/run.py`, QS mutants) against a frozen tree.
+6. EQY refit: new FSM states and flops are expected, so this one is manual.
+7. GL parts A to D and SDF, with the Pmod checks at every corner. For DDR the half-cycle paths and
+   the pin cone are the parts to look at (`docs/qspi-ddr.md`, section 5).
+8. The `tb_sw` benchmarks on the Verilator branch, for the CPI gain.
+
+`tb_rivercore` also checks the core invariants the FC02/FC49 removal rests on, on every cycle
+(FC02, the CSR-write wait; FC49, the M-operation flush rule; FC49b, the M unit is only ready,
+busy or done for a wanted instruction); a failure prints its name.
 
 ## After the Verilator branch merges
 

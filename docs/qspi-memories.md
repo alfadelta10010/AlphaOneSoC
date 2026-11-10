@@ -607,6 +607,34 @@ of CRM, so the two can never disagree.
 With the `flash_spi` fallback strap (§9) steps 5–6 are skipped and the
 flash runs SPI-mode continuous read, TinyQV's proven scheme.
 
+### 7.3a Hand-over contract: what a master must leave in the flash
+
+Evidence rule: silicon proven (tier 1) > FPGA proven (tier 2) > datasheet (tier 3). A master that hands
+the Pmod to this design must leave the flash in a state our start-up sequence does not repair. Our
+design sends nothing to the flash but the read commands and the steps below, and TinyQV, whose quad
+reads have run on every shipped Pmod (tier 1), makes the same assumption.
+
+| Must hold at our reset release | If not | Tier of the assumption |
+|---|---|---|
+| **Idle:** no program, erase or status write running, nothing suspended | The flash ignores every instruction but the status reads and suspend (-DTR §7.1.1; BUSY up to 400 ms for a 4 KB sector erase, §9.6): the boot fails with no diagnosis. The engine has no 1-bit path to poll `05h` | 3 (TinyQV assumes the same, tier 1) |
+| **Not in deep power-down** (`B9h`) | Only `ABh` is heard (-DTR p.14): boot failure, no diagnosis | 3 (same assumption as TinyQV) |
+| **No burst wrap** (`77h` with W4 = 0) | W4 = 0 applies to "all the following Fast Read Quad I/O instructions" (§8.2.15 p.52): every open and stream wraps at 8-64 bytes, **silent wrong fetches**. The default W4 = 1 returns after power-up or a reset (`66h`, `99h`) | 3 (same assumption as TinyQV) |
+| **QE = 1** (non-volatile) | `EBh` and `EDh` need it (§8.2.13, §8.2.14, §7.1.10); the -IM part ships with QE = 0 and the TT QA sets it on the Pmods it ships | **1**: TinyQV's quad reads on every shipped Pmod |
+
+What our start-up sequence does undo (section 7.2, `src/qspi_ctrl.v` header), all tier 3 (neither TinyQV
+nor LISA has a start-up sequence):
+
+- quad continuous-read mode (CRM), step 3 (8 clocks of `1111`);
+- dual CRM, step 4 (16 clocks);
+- QPI mode, step 5 (`FFh` in QPI form);
+- DTR CRM: the first 8-clock window is read as address, mode `FFh` and dummy clocks, which leaves the mode
+  (-DTR §8.2.14; our own `EDh` never enters it, M = `FFh`).
+
+What it does **not** undo: busy or suspended, deep power-down, a 77h wrap, QE = 0, a non-default status
+or burst setting. A software reset (`66h`, `99h`, 30 us) or `ABh` (3 us) would clear the last three
+power-states, and would also abort a running erase (section 7.1); sending them is a possible later
+change that costs about 33 us at boot [AUDIT 2.5], not built.
+
 ### 7.4 What we leave behind for the next user
 
 The TinyTapeout flasher (`src/ttcontrol/ttflash.py`) speaks 1-bit SPI
@@ -761,6 +789,24 @@ unaligned fetch, ties at 20). DTR QPI `EDh` with continuous read would be
 > read, never QPI (option A of §9.4). PSRAM QPI is implemented
 > (`97010f4`). Items 2–3 below are kept as analysis, not as the plan; the
 > flash-QPI start-up of §7.3 and the flasher release of §7.4 do not apply.
+
+> **Extended (2026-11-08, the user): switchable `EDh` DTR flash reads and
+> streaming.** The flash stays in SPI mode with the mode byte `FFh`, never
+> continuous read and never QPI, but a flash read may now be an `EDh`
+> (SPI-mode 1-4-4 DTR) read: address and data on both SCK edges, 7 dummy
+> cycles, 23 SCK for 4 bytes (25 for a read at a halfword address), against
+> 28 for `EBh`. It is off at reset and selected by `QSPI_CFG.DDR` (syscon
+> +0x1C) with a software-chosen capture point; the wire protocol, the timing
+> budget at 60 MHz and the open questions are in `docs/qspi-ddr.md`. Flash
+> reads also **stream**: after a 4-byte read chip select stays low and SCK
+> stays low, and a read at the address the previous one ended on costs 8 SCK
+> (4 in DDR) instead of a new command, address and dummy phase; any PSRAM
+> access, write or other address closes the stream. The `-DTR` part has the
+> command (the `-IM` datasheet does not list it; §8.2). **The PSRAM is
+> unchanged:** QPI `0Bh`/`38h`, no DDR and no streaming. A PSRAM must
+> release chip select within tCEM (8 µs, §8.4) so it cannot hold a stream
+> open; it needs refresh and a read cannot cross its 1 KB page (§8.5); and
+> it has no DDR read command. Each PSRAM transaction closes a flash stream.
 
 1. **PSRAM: QPI, `0Bh` reads (4 wait), `38h` writes (QPI form; `02h` is
    equivalent).** −29 % on every

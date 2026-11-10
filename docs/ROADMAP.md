@@ -23,12 +23,25 @@ been synthesised; nothing here is measured unless it cites a run.
 | (2026-10-31) **The RTL freezes once basic functionality works**, not at the shuttle's close. Software climbs from easy goals up: **FreeRTOS first, then Linux** in the next few PRs. Most of this roadmap stays in scope. | Section 9, the software ladder. |
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
-| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. The tree with all three blocks misses 16 ns by 0.303 ns at the slowest corner, so the clock is documented as **60 MHz** (16.67 ns, met at every corner). | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 60 MHz; 1.7 is the way back to 62.5 MHz. |
+| (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33. | Built on branch `qspi-stream_alfadelta10010`: streaming and `EDh` DDR are in `qspi_ctrl`, DDR is off at reset and selected by QSPI_CFG (syscon +0x1C, reset by every reset). A boot-time sweep over `DDR_CAP` picks the capture point and falls back to SDR (9.1 item 8). Wire protocol, timing budget and the measured sweep: `docs/qspi-ddr.md`. |
+| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. On 2026-11-01 the tree with all three blocks missed 16 ns by 0.303 ns at the slowest corner, so the clock was documented as 60 MHz. **Met again at 16 ns (2026-11-09):** the af1c678 3x4 harden closes all 9 corners at `CLOCK_PERIOD` 16 ns, and the user set the target to **62.5 MHz** (2026-11-09). The margin is small, +0.56 ns at max_ss, and varies between hardens, so every RTL change re-runs the corners. | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 62.5 MHz unless a line says otherwise; the board may also run the chip at 60 MHz (the benches keep a 60 MHz run). |
 
 The limits every item is judged against:
 
-* **Area.** The last harden (2026-11-01, main `a2f7285` with syscon, fetch
-  reuse and SPI; `localFiles/harden-2026-11-01`) is 12 tiles as 3x4, with
+* **Area.** The last harden (2026-11-09, `qspi-stream_alfadelta10010` at
+  `d75cb5c`, hardened as `qsd-84c878f` under its hash before a history reorder
+  that left the RTL unchanged: streaming, switchable DDR, QSPI_CFG, FC02/FC49 removed, reset
+  divisor 34) is 12 tiles as 3x4, with **70.9% area utilisation** (164,798 µm²
+  of standard cells) and **71.8% routing density** (global-route usage,
+  overflow 117), DRC, LVS and antenna clean, precheck passed; at 16 ns
+  (62.5 MHz) setup +0.647 ns at max_ss and hold +0.091 ns at min_ff, every
+  corner met. The QSPI work added about 57 flops and ~4,000 µm²; the routing
+  density fell because placement came out tighter and half the hold buffers
+  went (525 -> 242): run-to-run variation, not headroom to bank. A trial that
+  lets synthesis use the `_1` cells (2026-11-09, on main) cut placed area 15%
+  but raised routing to 77.6% with overflow 316 and left hold at +0.025 ns:
+  it does not buy routing room. The previous harden (2026-11-01, main
+  `a2f7285` with syscon, fetch reuse and SPI; `localFiles/harden-2026-11-01`) was 12 tiles as 3x4, with
   **67.3% area utilisation** (160,752 µm² of standard cells) and **75.8%
   routing density**, DRC, LVS and antenna clean (1.6 item 2). Against the
   PR #12 tree's harden (2026-10-25, `localFiles/harden-2026-10-25`: 68.8% and
@@ -43,13 +56,16 @@ The limits every item is judged against:
 * **Memory is the speed limit.** About 43 clocks per instruction on compiled
   C with fetch reuse (53 without; WO-27 A9, `bench.c` at -O2), against 3.3
   with zero-wait memory: over 90% of the time the core waits for QSPI. At
-  60 MHz that is about 1.4 million instructions per second. The QSPI clock
+  62.5 MHz that is about 1.5 million instructions per second (1.4 at 60 MHz). The QSPI clock
   is the core clock / 2 = 30 MHz, and TT's pads toggle at about 33 MHz, so
   a faster core clock does not make memory faster. Speed comes only from
-  fewer or cheaper bus transactions.
+  fewer or cheaper bus transactions. Streaming (2026-11-08) makes a
+  sequential flash fetch 18 clocks instead of 57 (start to done, rd_late 0);
+  the pins-only wrapper programs run in 18,898 clocks instead of 30,896.
 * **Pins.** 24 in total. `uio[7:0]` belong to the QSPI Pmod. `uo_out[7]` is
   now the SD card's CS# (PR #14), so no output is spare. `ui_in[1]` is MISO
-  when the SD card is fitted; `ui_in[2,4..7]` are GPIO, DIP switches or
+  when the SD card is fitted; `ui_in[2]` is also the no-stream strap, read
+  during reset (1 = streaming off); `ui_in[2,4..7]` are GPIO, DIP switches or
   keypad rows.
 
 ## 1. RTL work before the lock
@@ -281,8 +297,8 @@ All small; together they could pay for most of 1.1-1.3.
 
 | Candidate | Saving | Status |
 |---|---|---|
-| FC02: `csr_wb_hazard` is a dead stall term under the 3-cycle EX | small | proved equivalent (VPLAN 4.2) |
-| FC49: the three `flush` gates on the M handshake are dead | small | proved equivalent (VPLAN 4.2); needs STA |
+| FC02: `csr_wb_hazard` is a dead stall term under the 3-cycle EX | -10 cells with FC49 (synthesis) | **removed** (2026-11-08) |
+| FC49: the three `flush` gates on the M handshake are dead | (with FC02) | **removed** (2026-11-08); STA at the next harden |
 | UART 8-bit divisor | -16 flops, about -680 µm² | no rates below 12.2 kbaud at 50 MHz |
 | UART fixed divisor | -24 flops, about -1,000 µm² | software cannot change the baud rate |
 
@@ -301,13 +317,10 @@ Open (2026-10-31):
 
 * **What "basic functionality" means for the freeze** (section 0). The
   user's call; section 9's lower rungs are candidate checkpoints.
-* **The UART's reset divisor.** `UART_DIV_RESET` is 27: 115,200 baud at
-  50 MHz, but 138,889 baud at the 60 MHz clock the chip is documented for.
-  The divisor is a software register, so this matters only for output sent
-  before software writes it; the boot contract (9.1) writes 33 (113,636
-  baud) first. Changing the parameter to 33 would make the reset rate right
-  too; the benches and gate-level programs that assume 27 (WO-26) would
-  follow.
+* ~~**The UART's reset divisor.**~~ Decided 2026-11-08: `UART_DIV_RESET`
+  was 33 (113,636 baud at 60 MHz); with the clock retargeted to 62.5 MHz
+  (2026-11-09) it is **34**, 114,890 baud (-0.27%) from reset; the benches and
+  gate-level lists follow.
 
 ### 1.6 The lock gate
 
@@ -319,7 +332,7 @@ Open (2026-10-31):
    errors; TT precheck passed; the TT cocotb tests pass 3/3 at gate level. No
    hold violation at any corner (worst +0.092 ns, fast corner), and the
    register file's inputs keep +0.128 ns against the ff hold guard band.
-   Setup is met at every corner at 16.67 ns (60 MHz) but not at 16 ns: one
+   (History, 2026-11-01.) Setup was met at every corner at 16.67 ns (60 MHz) but not at 16 ns: one
    path, from bus address bit 17 (syscon's select) to the CSR write value,
    misses by 0.303 ns at the slowest corner only (max ss; nominal ss is
    +0.315 ns). Utilisation and density are in section 0. Two changes made it
@@ -351,8 +364,9 @@ Open (2026-10-31):
      margin at the 10 ns bench clock; STA is the setup check).
    * TT01 on the SDF-annotated netlist (24 runs, 9 corners): no observable
      difference at SDF gate level. The pins' glitch check is done.
-   * Formal: 40 harnesses in the default list (39 in the final run at `7a66221`,
-     rc 0, plus core_inv_armed_cov since) (VPLAN 4.3, 2.1 below).
+   * Formal: 40 harnesses in the default list at the time (39 in the final run at
+     `7a66221`, rc 0, plus core_inv_armed_cov since); 39 now, after core_inv and
+     its covers were retired with FC02/FC49 and qspi_pins came in (VPLAN 4.3, 2.1 below).
    * Seeds 1-8 on the 12 seeded benches, `tb_uart` and `tb_spi` over 1-32:
      all pass; SA-008 is tested (K1-K4 in `tb_syscon`).
    * Mutation re-score of the formal benches: VPLAN 4.6. Residuals, listed
@@ -369,22 +383,23 @@ Open (2026-10-31):
 
 ### 1.7 Back to 62.5 MHz
 
-One path keeps the clock at 60 MHz (1.6 item 2): from `soc.bus.d_addr[17]`,
-the address bit that selects syscon, to `soc.cpu.csr_unit.csr_new[22]`,
--0.303 ns at 16 ns at the slowest corner (max ss). The PR #12 tree had
-+0.861 ns at that corner (2026-10-25); what moved this path since has not
-been analysed. The STA of the routed layout at other periods
-(`localFiles/harden-2026-11-01/sta-sweep.sh`) puts the limit at about
-61 MHz: +0.090 ns at 16.39 ns. Getting 62.5 MHz back needs a change on main
-that takes logic off this path, then another harden and port. The extra 4%
-does not make memory faster (section 0).
+Done. The one path that held the clock at 60 MHz (1.6 item 2: from
+`soc.bus.d_addr[17]`, the address bit that selects syscon, to
+`soc.cpu.csr_unit.csr_new[22]`, -0.303 ns at 16 ns at the slowest corner)
+closed in the af1c678 harden: all 9 corners meet 16 ns, +0.56 ns at max_ss.
+The user set 62.5 MHz as the documented clock on 2026-11-09. The margin is
+small and moves between hardens, so each RTL change re-checks it. The extra
+4% does not make memory faster (section 0). Before the retarget the STA of the
+routed layout (`localFiles/harden-2026-11-01/sta-sweep.sh`) had put the limit
+at about 61 MHz.
 
 ## 2. Verification status and plan
 
 ### 2.1 Formal coverage
 
-`tb/formal/run.sh` runs 40 harnesses by default (39 in the final run at
-`7a66221`, sby engine, rc 0, no FAILED or ERROR; core_inv_armed_cov added since), through yosys's SAT solver or
+`tb/formal/run.sh` runs 39 harnesses by default (2026-11-09: the 40 of main less
+core_inv, core_inv_cov and core_inv_armed_cov, retired with FC02/FC49, plus qspi_pins
+and qspi_pins_cov; VPLAN 4.3), through yosys's SAT solver or
 SymbiYosys (bitwuzla and yices smtbmc, `abc pdr`; the OSS CAD Suite, yosys
 0.70, named by `FORMAL_BIN` on the sandbox). Verdict words as in
 `tb/VPLAN.md` 4.3: PROVED (k-induction at length 1, or pdr from a free
@@ -399,7 +414,6 @@ results are BOUNDED only.
 | `core_req` | BOUNDED 150 | Every request is legal: alignment, mapped window, byte lanes, replicated store data, no store to flash |
 | `core_fetch` | PROVED (k-induction, length 1) | Fetch word reuse against a symbolic code memory |
 | `core_df` | BOUNDED 32 | At most 4 data handshakes per held fetch (the assumption the memory-latency bound rests on) |
-| `core_inv` | BOUNDED 80 | FC02 and FC49 equivalence checks (argument plus bounded) |
 | `syscon_comb` | PROVED (pdr) | No combinational path from the bus to `rst_soc` |
 | `syscon_gate` | PROVED (k-induction, length 1) | No watchdog fire while the SoC is held in reset |
 | `soc_rst_sync` | PROVED (structural) | `rst_soc` reaches no asynchronous reset, set or load |
@@ -409,6 +423,7 @@ results are BOUNDED only.
 | `spi_f12` | PROVED (structural) | GPIO's pin outputs come straight from flops (finding F12) |
 | `bus` | PROVED (k-induction, length 1) | An IO target drops ready only while selected; decode; read mux |
 | `qspi_strap` | PROVED (pdr) | The `rd_late` strap is held after reset |
+| `qspi_pins` | PROVED (pdr) | The real engine, DDR free (clk2fflogic): CS0 never low with CS1/CS2, CS high >= 2 clocks between selects, an idle open stream has SCK low and the pins released, no EDh command without DDR |
 | `mem_flash` | PROVED (pdr) | Flash never selected for a write; CS0 sees only EB/FF |
 | `mem_tcem` | PROVED (pdr) | PSRAM tCEM and tCPH |
 | `mem_arb` | PROVED (pdr) | Data first, split atomicity |
@@ -425,10 +440,12 @@ memory waits over 2 cycles, data-memory consistency).
 
 Residuals, none a defect:
 
-* `mem_li`: the worst fetch latency (442/456 clocks) is measured by
-  simulation, not proved, and rests on the bounded `core_df`. Opt-in.
-* FC02 and FC49 are equivalent by argument plus BOUNDED 80 (`core_inv`); the
-  length-1 induction does not close. MD07 is PROVED.
+* `mem_li`: the worst fetch latency (449/482 clocks with streaming on,
+  442/456 off; `rd_late` 0/1) is measured by simulation, not proved, and rests
+  on the bounded `core_df`. Opt-in.
+* MD07 is PROVED. FC02 and FC49 are no longer residuals: the logic was removed
+  (2026-11-08) and `core_inv` retired with it; `tb_rivercore` still checks the
+  two invariants on every cycle.
 * `md07_miter`, the cross-check of `md07`, is opt-in and was not run to a
   verdict.
 * The RVFI not-covered list above.
@@ -453,7 +470,8 @@ bounded riscv-formal checks and simulation, not proofs.
 4. ~~**SoC properties:**~~ done: `bus`, `mem_arb`, `mem_flash`, `mem_tcem`,
    `qspi_strap` PROVED; `mem_ld` BOUNDED. Residual: `mem_li` (2.1).
 5. ~~Turn the MD07/FC02/FC49 equivalence proofs into `run.sh` harnesses~~:
-   done (`md07`, `core_inv`); FC02 and FC49 stay at argument plus BOUNDED 80.
+   done (`md07`, `core_inv`); FC02 and FC49 have since been removed from the RTL
+   (2026-11-08), and `core_inv` with them.
 
 ### 2.3 Other verification still owed
 
@@ -463,9 +481,9 @@ mutation survivor has a verdict (`tb/VPLAN.md` 4.2). Owed: the mutation
 re-score numbers (`tb/VPLAN.md` 4.6) and the residuals in 2.1. A re-harden
 needs the EQY, gate-level and SDF runs again (one netlist each).
 
-Next RTL change: QSPI streaming fetch and an optional DDR mode, after this
-branch merges (docs/verification-runbook.md describes how
-to re-run the checks above).
+Latest RTL change: QSPI streaming fetch and switchable DDR, on
+`qspi-stream_alfadelta10010` (docs/verification-runbook.md describes how to
+re-run the checks above, and what to run after a QSPI change).
 
 ## 3. Verilator port
 
@@ -570,9 +588,13 @@ core's clock is off) and the CLINT compare.
 
 Considered on 2026-10-22, kept for later:
 
-* **Keep the fetch stream open:** leave CS# low and keep clocking while
-  fetches are sequential. About 1.6x (review estimate), about 0.5-0.7 kGE;
-  must close at each 1 KB PSRAM page and within tCEM; the heaviest to verify.
+* **Keep the fetch stream open:** being done for the flash (2026-11-08,
+  `qspi-stream_alfadelta10010`, see section 0). Not for the PSRAM: its refresh
+  needs CE# high, a read must be ended by CE# high "immediately afterwards",
+  CE# may stay low at most tCEM = 8 µs, and a burst crosses a 1 KB page once
+  at most (RBX parts; others wrap in the page). A stream left open while the
+  core runs breaks that; only short bounded bursts are allowed, which is what
+  the PSRAM gets today.
 * **Instruction cache:** 256 B direct-mapped from two more RF macros plus
   tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. Needs
   the 4x4 slot that was not taken.
@@ -608,7 +630,7 @@ a PLIC (all devices are polled).
    three. The harden is done (2026-11-01, 1.6 item 2).
 4. The software ladder's bare-metal rungs and FreeRTOS (9.2, rungs 1-5), on
    the current benches; they can start before the lock and become its
-   checkpoints.
+   checkpoints. The boot-time DDR sweep (9.1 item 8) belongs to the loader.
 5. Solver stack and riscv-formal (2.2 items 1-2), in parallel with step 6.
 6. Verilator port (3), then the upper rungs: Zephyr or NuttX, and Linux
    bring-up (4).
@@ -629,8 +651,8 @@ interrupts are the only interrupts: there is no PLIC, and every device is
 polled. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
 16 MB of PSRAM at `0x8000_0000`. An ns16550 subset UART, GPIO, the tiny_spi
 controller with an SD card and the OLED, and syscon (reboot, power-off,
-reset cause, boot mode, watchdog). About 1.4 million instructions per second
-at 60 MHz.
+reset cause, boot mode, watchdog). About 1.5 million instructions per second
+at 62.5 MHz.
 
 ### 9.1 Boot contract
 
@@ -640,10 +662,10 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 
 1. **Set `mtvec` before anything can trap.** It resets to 0, which is
    outside flash and PSRAM, so a trap before it is set faults again at 0.
-2. **Set the UART divisor before the first character:** set LCR.DLAB, write
-   DLL = 33 and DLM = 0, clear DLAB. That is 113,636 baud at 60 MHz
-   (115,200 - 1.4%); at 62.5 MHz it would be 34 (114,890 baud, -0.27%). The
-   reset divisor, 27, gives 138,889 baud at 60 MHz (1.5).
+2. **Set the UART divisor before the first character** if the clock is not
+   62.5 MHz: set LCR.DLAB, write DLL and DLM, clear DLAB. The reset divisor is
+   34: 114,890 baud at 62.5 MHz (115,200 - 0.27%); at 60 MHz write 33 (113,636
+   baud, -1.4%).
 3. **Read RESET_CAUSE and BOOT_MODE, then write `0x7` to RESET_CAUSE** so that
    the next boot sees only its own cause (`docs/soc-architecture.md`,
    syscon).
@@ -652,15 +674,29 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
    kernel. Linux never writes it. With the keypad fitted, EN stays 0.
 5. **SD first, on every boot, before any other SPI traffic:** with both CS#
    high clock at least 74 cycles (10 bytes of `0xFF`; BAUD resets to `0xFF`,
-   117 kHz at 60 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
+   122 kHz at 62.5 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
    block, first clock `0xFF` with SD CS# low until the card returns `0xFF`
    (`docs/pins-and-peripherals.md` section 3).
 6. **The watchdog is off at reset, and once enabled only a reset turns it
    off** (the DesignWare behaviour). Enable it only in code that services it.
-7. **Timebase:** `mtime` counts every core clock, 60 MHz as documented
+7. **Timebase:** `mtime` counts every core clock, 62.5 MHz as documented
    (section 0).
    FreeRTOS's RISC-V port computes its tick from `configCPU_CLOCK_HZ`, and
-   Linux reads `timebase-frequency`: both take that value.
+   Linux reads `timebase-frequency`: both take that value
+   (`configCPU_CLOCK_HZ` 62500000, `timebase-frequency` = 62500000).
+8. **QSPI_CFG (syscon +0x1C: STREAM bit 0, DDR bit 1, DDR_CAP bits 4:2) is
+   reset by every reset** (pin, reboot, watchdog expiry): the boot always
+   starts in SDR, `DDR_CAP` 2, STREAM on unless the `ui_in[2]` strap is high.
+   Flash reads stream by default. DDR is switched on only after the boot-time
+   capture sweep (`docs/qspi-ddr.md`, section 6): write `DDR_CAP` in the same
+   store as `DDR` or before it, and **arm the watchdog before setting DDR from
+   flash-resident code**, since a bad point or a framing error in a stream
+   crashes and the watchdog reboot, with a BOOT_MODE note, is the way back to
+   SDR. BOOT_MODE `0xD8 + k` means "DDR tried at point k" (a watchdog reset
+   with it keeps SDR), `0xDF` means "DDR failed", and the range `0xD0` to
+   `0xDF` is reserved for this. Once enabled the watchdog must be serviced
+   (item 6). No fence or jump is needed after writing QSPI_CFG: a read in
+   flight finishes in its old mode and the next one reopens in the new.
 
 ### 9.2 Rungs
 

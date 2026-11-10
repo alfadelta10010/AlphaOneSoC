@@ -457,8 +457,14 @@ module tb_uart;
                 if (old_dlab && (b[0] || b[1])) begin
                     // A divisor latch write restarts the baud generator: the
                     // receiver's samples may come up to a tick early too.
-                    if (dr_pend) begin dr_lo = dr_lo - cur_div() * T; fr_hi_to = fr_hi_to - cur_div() * T; end
+                    // The stop bit's sample moves for a kept frame (DR), a
+                    // dropped one (OE) and a break (BI) alike, and with it the
+                    // end of RTS#'s held-high window (after a break: its half
+                    // bit of high line).
+                    if (dr_pend) dr_lo = dr_lo - cur_div() * T;
                     if (oe_pend) oe_lo = oe_lo - cur_div() * T;
+                    if (bi_pend) bi_lo = bi_lo - cur_div() * T;
+                    if ($realtime <= fr_hi_to && fr_hi_to < 1.0e17) fr_hi_to = fr_hi_to - cur_div() * T;
                 end
                 if (b[0]) begin
                     if (old_dlab) m_dll = wd[7:0];
@@ -502,11 +508,13 @@ module tb_uart;
                   for (bh = 0; bh < 2; bh = bh + 1) begin
                     mt[dh*4+oh*2+bh] = 1'b0;
                     // A pending break's BI rises on the same edge as the DR or
-                    // OE it brings, when that one is still pending too.
+                    // OE it brings, when that one is still pending too --
+                    // unless BI is still set from an earlier break that no LSR
+                    // read has cleared: BI is sticky, so it is 1 throughout.
                     if ((dpos == 2 || dpos == dh) && (opos == 2 || opos == oh) &&
                         (bpos == 2 || bpos == bh) &&
-                        !(rxm_on && bi_pend && bi_link == 1 && dr_pend && bh != dh) &&
-                        !(rxm_on && bi_pend && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
+                        !(rxm_on && bi_pend && !bi_val && bi_link == 1 && dr_pend && bh != dh) &&
+                        !(rxm_on && bi_pend && !bi_val && bi_link == 2 && oe_pend && !oe_val && bh != oh)) begin
                         if (a2) begin
                             e = {8'h00, 8'hB0, 1'b0, thre[0], thre[0], bh[0], 2'b00, oh[0], dh[0], 8'h00};
                             m = 32'hFFFF_FFFF;
@@ -635,7 +643,7 @@ module tb_uart;
     // Model reset, for a reset released on the edge after this is called.
     task automatic model_reset;
         begin
-            m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd27; m_dlm = 8'd0;
+            m_dlab = 1'b0; m_erbfi = 1'b0; m_etbei = 1'b0; m_dll = 8'd34; m_dlm = 8'd0;
             m_sbc = 1'b0; m_sbc_old = 1'b0; sbc_edge = -1;
             if (dr_val || dr_pend) rx_kept = rx_kept - 1;  // a byte reset threw away
             rxm_reset;
@@ -840,7 +848,7 @@ module tb_uart;
         rd8(7, v8); chk("SCR after reset", v8, 8'h00);
         rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
         wr8(3, 8'h80);
-        rd8(0, v8); chk("DLL after reset", v8, 8'd27);
+        rd8(0, v8); chk("DLL after reset", v8, 8'd34);
         rd8(1, v8); chk("DLM after reset", v8, 8'd0);
         for (bi = 0; bi < 16; bi = bi + 1) begin
             bus(1'b0, bi, 1'b0, $random(seed));
@@ -1146,6 +1154,53 @@ module tb_uart;
         join
         rx_settle;
         rd8(5, v8); chk("LSR after a framing error on 0x80", v8, 8'h60);
+        // BI is sticky: it stays 1 from a break until an LSR read, through an RBR
+        // pop and through a second break's start bit, stop-bit window and end.
+        // Break, RBR pop with no LSR read, then a second break (RBR empty: its
+        // DR is the BI's partner), read mid-break and around its stop bit.
+        wait_cts;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(0, v8); chk("sticky BI: the first break's zero byte", v8, 8'h00);
+        rd8(2, v8);
+        wait_cts;
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                #(3.0 * tb);
+                rd8(5, v8); chk("sticky BI: LSR mid second break (RBR empty), BI still set", v8, 8'h70);
+                #(6.2 * tb);
+                rd8(2, v8);                                  // inside the stop-bit window
+                rd8(2, v8); rd8(2, v8);
+                #(1.0 * tb);
+                rd8(2, v8);
+            end
+        join
+        rx_settle;
+        rd8(5, v8); chk("sticky BI: LSR after the second break", v8, 8'h71);
+        rd8(0, v8); chk("sticky BI: second break's zero byte", v8, 8'h00);
+        rd8(5, v8); chk("sticky BI: all clear", v8, 8'h60);
+        // The same with RBR full when the second break arrives (OE).
+        wait_cts;
+        rx_break(15.0 * tb, d); rx_settle;
+        rd8(2, v8);
+        // (a sender ignoring CTS: RTS# is deasserted, RBR being full)
+        fork
+            rx_break(15.0 * tb, d);
+            begin
+                #(3.0 * tb);
+                rd8(5, v8); chk("sticky BI: LSR mid second break (RBR full), BI still set", v8, 8'h71);
+                #(6.2 * tb);
+                rd8(2, v8);
+                rd8(2, v8); rd8(2, v8);
+                #(1.0 * tb);
+                rd8(2, v8);
+            end
+        join
+        rx_settle;
+        rd8(5, v8); chk("sticky BI: LSR after the second break with RBR full", v8, 8'h73);
+        rd8(5, v8); chk("sticky BI: BI and OE cleared", v8, 8'h61);
+        rd8(0, v8); chk("sticky BI: RBR holds the first break's byte", v8, 8'h00);
+        rd8(5, v8); chk("sticky BI: all clear again", v8, 8'h60);
         if (rx_bad < 11) fail("framing: too few bad frames sent");
 
         // ── The late-break boundary ─────────────────────────────────────────
@@ -1449,10 +1504,10 @@ module tb_uart;
         rd8(1, v8); chk("IER after reset", v8, 8'h00);
         rd8(3, v8); chk("LCR after reset", v8, 8'h00);
         rd8(0, v8); chk("RBR after reset (DR clear)", v8, 8'h00);
-        wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd27); wr8(3, 8'h00);
-        wr8(0, 8'h3E);                                            // at divisor 27
+        wr8(3, 8'h80); rd8(0, v8); chk("DLL after reset", v8, 8'd34); wr8(3, 8'h00);
+        wr8(0, 8'h3E);                                            // at divisor 34
         fork
-            begin wait_cts; rx_frame(8'h4F, bit_ns(27, 0.01), 27, 1'b1, 0.0); end
+            begin wait_cts; rx_frame(8'h4F, bit_ns(34, 0.01), 34, 1'b1, 0.0); end
             get_byte;
         join
         wait_tx_idle;

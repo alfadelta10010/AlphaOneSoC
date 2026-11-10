@@ -39,12 +39,13 @@ module rp2350_uart_model #(
     reg [7:0] tx_q [0:16383];
     integer   tx_head, tx_tail;
     integer   tx_sent, tx_sent_cts_off;
+    integer   tx_stops;               // stop bits begun: the DUT samples within this one
     reg       tx_busy;
 
     initial begin
         bit_ns = BIT_NS; flow = 1'b1; gap_ns = 0.0; errors = 0;
         rx_n = 0; rx_frames_bad = 0;
-        tx_head = 0; tx_tail = 0; tx_sent = 0; tx_sent_cts_off = 0; tx_busy = 1'b0;
+        tx_head = 0; tx_tail = 0; tx_sent = 0; tx_sent_cts_off = 0; tx_stops = 0; tx_busy = 1'b0;
         rx = 1'b1;
     end
 
@@ -139,6 +140,7 @@ module rp2350_uart_model #(
             #(bit_ns);
             for (i = 0; i < 8; i = i + 1) begin rx = b[i]; #(bit_ns); end
             rx = 1'b1;
+            tx_stops = tx_stops + 1;
             #(bit_ns);
             tx_sent = tx_sent + 1;
             tx_busy = 1'b0;

@@ -106,7 +106,7 @@ Joins the core's two ports onto the one QSPI engine.
   load and a store each), not one. The bound is what keeps a fetch from being
   starved: the formal harness `core_df` checks at most 4 data handshakes per
   held fetch (BOUNDED, 32 steps from reset), and the worst fetch latency of
-  442/456 clocks (`rd_late` 0/1) is stated for that bound. Serving data first
+  449/482 clocks (`rd_late` 0/1, streaming on; 442/456 off) is stated for that bound. Serving data first
   also avoids reading the next instruction before a load and then losing it
   while the load stalls the pipeline; fetch-first would do that on every load.
 * **Chip select** from the address: flash if `addr[31]` is 0, otherwise PSRAM
@@ -180,6 +180,14 @@ enters continuous-read mode) and releases the bus for the other four.
   the pin reset and holds it through reboots and power-off (a reboot does not
   re-read `ui_in[0]`, which is GPIO by then); software reads it in STRAPS. Measured in `tb_qspi` at a 10 ns clock: 0 passes 2–19 ns,
   1 passes 12–29 ns.
+  At 62.5 MHz (T = 16 ns, SCK 31.25 MHz) with R the pad round trip excluding the flash
+  [datasheet audit 3.1, tier 3]: `rd_late` = 1 captures 48 ns after the launching edge, setup is
+  at least 12 ns and hold at least 5.5 ns for R of 20 to 30 ns (hold needs R of about 15 ns or
+  more; the window is about 15 to 41.5 ns). `rd_late` = 0 captures at 32 ns and fails above
+  R of about 25.5 ns. **Silicon precedent (tier 1):** TinyQV's latency 2 at 64 MHz is the same
+  capture, three clocks after the launching edge (its latency L captures L + 1 clocks after;
+  `docs/info.md:158`: "at the target 64MHz clock a read latency of 2 is required"), and latency 1
+  (`rd_late` = 0) was not enough there. The mapping comes from reading TinyQV's RTL, not a simulation.
 * **Writes never select the flash.** `0x38` is the PSRAM's quad write, but
   on the W25Q128JV-DTR it is Enter QPI. The PMA already faults stores to
   flash; this is the backstop.
@@ -279,10 +287,10 @@ into.
 | +0x04 | RESET_CAUSE | R / W1C, lane 0. [0] PIN, [1] SOFT, [2] WDT | `0x1` | SOFT set, PIN kept |
 | +0x08 | BOOT_MODE | R/W, lane 0, [7:0] | `0x00` | kept |
 | +0x0C | CHIP_ID | R, the `CHIP_ID` parameter | `0x4131_5301` | - |
-| +0x10 | STRAPS | R, [0] = `qspi_rd_late` as latched at the last pin reset | the pin | kept |
+| +0x10 | STRAPS | R, [0] = `qspi_rd_late`, [1] = the no-stream strap (`ui_in[2]`), as latched at the last pin reset | the pins | kept |
 | +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
 | +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
-| +0x1C | - | reads 0, writes ignored | - | - |
+| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR, DDR_CAP: stored, no effect until the DTR read path lands | STREAM = ~no-stream strap, DDR 0, DDR_CAP 0 | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
 | +0x20..+0xFC | - | read 0, writes ignored | - | - |
 | +0x100..+0x1FF | WDT | the watchdog, below | 0 (TOP 15) | disabled |
 | +0x200..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
@@ -403,6 +411,62 @@ handler. `reboot-mode.c` never writes a magic of 0, so the device tree's modes
 are 1 and 2: BOOT_MODE 0 then means "pin reset, or no mode written", and a
 "normal" reboot after a "bootloader" one does overwrite it.
 
+### DDR bring-up (`tests/soc/ddr_sweep.S`)
+
+The chip always boots in SDR with streaming on, because QSPI_CFG resets on every
+reset. DDR flash reads (`EDh`, QSPI_CFG.DDR) are switched on by software after
+it has proved, on this board and at this temperature, that they work. The
+reference routine does that in six steps and falls back to SDR whenever one
+fails:
+
+1. **Reboot check.** It reads RESET_CAUSE and BOOT_MODE. BOOT_MODE `0xDF` ("DDR
+   failed") or `0xD8 + k` with RESET_CAUSE.WDT (a crash while DDR was on at
+   capture point k) keeps SDR and skips the sweep; BOOT_MODE is set to `0xDF`.
+   The routine consumes the WDT bit (W1C `0x4`) so a later, unrelated reboot
+   does not fall back.
+2. **PSRAM.** A position-independent copy of the sweep and a trap handler goes to
+   PSRAM, mtvec points there, and the routine jumps to it. No instruction is
+   fetched from flash again until step 5.
+3. **Reference.** With DDR = 0 it copies a 64-word block of flash (walking
+   bits, 0/F nibbles, pseudo-random words) into PSRAM.
+4. **Load sweep.** For DDR_CAP 1..6 it writes QSPI_CFG = {cap, DDR = 1,
+   STREAM = 1}, reads the block 3 times with loads and compares with the
+   reference; a point passes with zero mismatches over all passes. QSPI_CFG goes
+   back to SDR after each point. Loads are a new `EDh` read each (PSRAM
+   fetches close the stream), so this tests the capture window, never a stream
+   continuation. **Choice:** no passing point: stay SDR. Otherwise the longest
+   run of adjacent passing points (ties go to the later run), and in it the
+   point `start + length / 2`: 1 pass, that one; 2 adjacent, the later; 3, the
+   middle; 4, the upper middle. Later because the die warms after boot and
+   delays grow.
+5. **Execute test.** A stream framing error (the device launching half an SCK
+   late) is invisible to loads, so the routine runs flash code in DDR at the
+   chosen point with the watchdog armed: BOOT_MODE = `0xD8 + k`, WDT_TORR TOP 1
+   (131 072 to 196 608 clocks, about 2.1 to 3.1 ms at 62.5 MHz, written first so
+   the write kicks) and WDT_CR.EN, then QSPI_CFG DDR on at k, then a call to a
+   straight-line flash routine (300+ instructions from immediates, then a short
+   loop) whose checksum is compared with the SDR one. A trap during the test:
+   the PSRAM handler writes SDR and BOOT_MODE `0xDF` and resumes in SDR. A
+   wrong checksum does the same. A hang ends in the watchdog reboot and step 1.
+6. **Pass.** QSPI_CFG stays {k, DDR, STREAM} and BOOT_MODE stays `0xD8 + k`, so
+   a later watchdog reset (a crash in DDR) comes back in SDR. mtvec is restored
+   and the routine returns to flash. Reported over the UART: `DDR on, cap k` or
+   `DDR off`.
+
+**BOOT_MODE codes `0xD0`..`0xDF` are reserved for this routine.** `0xD8 + k`
+(k = 0..7): DDR is on at capture point k and the execute test passed. `0xDF`:
+DDR failed or was refused; stay in SDR until the next pin reset. The others
+are spare. Linux's reboot-mode magics must stay out of that range.
+
+**Watchdog rule.** The execute test enables the watchdog and nothing can
+disable it again. After "DDR on" the application must service it (WDT_CRR
+`0x76`, or the Linux `dw_wdt` driver) within the TOP-1 timeout, or the
+next reset clears it and that reset comes back in SDR (BOOT_MODE `0xD8 + k` with
+WDT). After "DDR off" the watchdog is still armed if the failure came after step
+5 began (trap, wrong checksum), and a reboot lies ahead unless it is serviced.
+TOP 1 is a compromise: well above the 300-instruction test (a few thousand
+clocks), short enough that a hang is caught in a few ms.
+
 ### CLK_GATE and POWER
 
 Reserved: they read 0 and ignore writes, instead of the R/W registers
@@ -422,6 +486,11 @@ its reset is high, but during a reboot it sees the latched value, not
 `ui_in[0]`, which is GPIO by then. A scratch run flipped the pin at a reboot
 and the second boot still read flash; a version that follows the pin hangs in
 the second boot.
+
+The no-stream strap (`ui_in[2]`, 1 = streaming off) is handled the same way:
+a flop loaded while `rst` is high, and QSPI_CFG.STREAM resets to the inverse of
+the pin while `rst` is high and of that flop otherwise, so a reboot does not
+re-read the pin.
 
 ### Area
 

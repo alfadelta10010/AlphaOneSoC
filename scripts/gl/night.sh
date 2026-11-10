@@ -3,6 +3,7 @@
 #   1 rtl-*  the RTL baseline through the same bench, parts A B C
 #   2 gl-*   the pnl netlist, parts A B C, MAX_CYCLES from the baseline
 #   3 mut-*  non-vacuity: a mutated netlist must fail a program of the short list
+#            (the stage ends rc=1 and STATUS says so when every program passes)
 #   night.sh D=<run dir> NETLIST=<pnl> BUILD=<build_isa OUT> [JOBS=auto] [PARTS="A B C"]
 # PARTS=D is the mailbox programs through the pins (WO-26): rtl-D10, rtl-D20 (the
 # RTL baseline, a 10 ns and a 20 ns clock), gl-D10, gl-D20, then mut-D, a stuck
@@ -23,6 +24,9 @@ stage() { # name command...
   [ -e "$D/done.$n" ] && return
   st "stage $n start"; "$@"; st "stage $n end rc=$?"; touch "$D/done.$n"
 }
+caught() { # dir: some program of a mutant run must FAIL or TIMEOUT (a hang is a detection too)
+  grep -qsE '^(FAIL|TIMEOUT)' "$1"/*.verdict || { st "$(basename "$1"): every program passed: the mutant was not caught"; return 1; }
+}
 rtl() { bash $S/run_gl.sh RTL=1 LIST=$BUILD/list.$1 OUT=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
 gl()  { bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.$1 OUT=$D/gl BASE=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
 cat $BUILD/list.A $BUILD/list.B $BUILD/list.C > $BUILD/list.all 2>/dev/null
@@ -42,7 +46,8 @@ if has A || has B || has C; then
 for k in csr alu; do
   mut() {
     python3 $S/mutate_netlist.py $NETLIST $D/mut-$k.v --kind $k > $D/mut-$k.txt 2>&1 || return
-    bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.all OUT=$D/mut-$k BASE=$D/rtl JOBS=$JOBS ONLY="$SHORT" > /dev/null 2>&1
+    bash $S/run_gl.sh NETLIST=$D/mut-$k.v LIST=$BUILD/list.all OUT=$D/mut-$k BASE=$D/rtl JOBS=$JOBS ONLY="$SHORT" > /dev/null 2>&1
+    caught $D/mut-$k
   }
   stage mut-$k mut
 done
@@ -59,6 +64,7 @@ if has D; then
     # (part A's list is empty under PARTS=D: build tt_pins for it)
     [ -s $D/build-A/list.A ] || bash $S/build_isa.sh PARTS=A OUT=$D/build-A > /dev/null 2>&1
     bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$D/build-A/list.A OUT=$D/mut-A10 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
+    caught $D/mut-D20 && caught $D/mut-A10
   }
   for l in D10 D20; do stage rtl-$l rtld $l; done
   for l in D10 D20; do stage gl-$l gld $l; done
