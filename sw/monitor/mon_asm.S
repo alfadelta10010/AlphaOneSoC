@@ -50,6 +50,8 @@ mon_resume:
     csrw    mscratch, a0
     lw      t0, F_MEPC(a0)
     csrw    mepc, t0
+    lw      t0, F_MSTATUS(a0)           /* MPP and MPIE as the program had them: a probe's own */
+    csrw    mstatus, t0                 /* mret has since left MPP at U */
     mv      sp, a0
     .irp n,1,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     lw      x\n, 4*\n(sp)
@@ -119,13 +121,23 @@ mon_return:
     ebreak
 
 /* Demos, run with `g`: demo_regs loads a known value in every register but
- * sp (0xA5A50000 + n in xn) and stops; demo_spin counts in a0 until Ctrl-C
- * (gb) breaks in. */
+ * sp (0xA5A50000 + n in xn) and stops; after `x` it compares every register with
+ * what it loaded, with sp as the scratch, and stops again with a0 = 0 if all are
+ * intact, a0 = 1 if any is not (`r a5 <v>` before `x` makes it 1). demo_spin counts
+ * in a0 until Ctrl-C (gb) breaks in. */
     .globl demo_regs
 demo_regs:
     .irp n,1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     li      x\n, 0xA5A50000 + \n
     .endr
+    ebreak
+    .irp n,1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    li      sp, 0xA5A50000 + \n
+    bne     x\n, sp, 1f
+    .endr
+    li      a0, 0
+    ebreak
+1:  li      a0, 1
     ebreak
 
     .globl demo_spin

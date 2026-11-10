@@ -14,10 +14,12 @@
  *
  * Numbers are hexadecimal. A program stops on ebreak, on any trap, when it
  * returns, or at Ctrl-C under gb. A read of an address nothing answers
- * faults and prints "fault". The monitor owns mscratch (the program's
- * registers are saved through it), so a program under it must not use that
- * CSR, and under gb it must leave the UART receiver alone (the monitor
- * looks for Ctrl-C every TICK clocks and takes the byte). */
+ * faults and prints "fault". The monitor owns mtvec and mscratch (the program's
+ * registers are saved through them), so a program under it must not use mscratch and
+ * has no trap handler of its own unless it sets mtvec itself. Under g the monitor
+ * leaves the CLINT timer alone. Under gb it owns mtimecmp and mie.MTIE too, the
+ * program must leave the UART receiver alone (the monitor looks for Ctrl-C every TICK
+ * clocks and takes the byte), and Ctrl-C only works while the program keeps MIE = 1. */
 #include <stdio.h>
 #include <string.h>
 #include "soc.h"
@@ -275,6 +277,10 @@ static void cmd_csr(int ac, char **av)
         return;
     }
     if (ac >= 3) {
+        if (n == 0x340 || n == 0x305) {
+            puts("mscratch and mtvec are the monitor's own: a write would break the trap entry");
+            return;
+        }
         if (!parse_hex(av[2], &v)) {
             puts("bad value");
             return;
@@ -387,7 +393,7 @@ static void cmd_p(void)
         preg(gn[i].n, 'w', 0x10010000 + gn[i].o);
     puts("syscon");
     static const struct { const char *n; uint16_t o; } sn[] = {
-        {"RESET_CAUSE", 0x04}, {"BOOT_MODE", 0x08}, {"CHIP_ID", 0x0C}, {"STRAPS", 0x10},
+        {"RESET_CAUSE", 0x04}, {"BOOT_MODE", 0x08}, {"CHIP_ID", 0x0C}, {"STRAPS", 0x10}, {"QSPI_CFG", 0x1C},
         {"WDT_CR", 0x100}, {"WDT_TORR", 0x104}, {"WDT_COMP_PARAMS", 0x1F4}};
     for (unsigned i = 0; i < sizeof sn / sizeof sn[0]; i++)
         preg(sn[i].n, 'w', SYSCON_BASE + sn[i].o);
@@ -417,7 +423,7 @@ static void cmd_i(void)
     if (!rd('w', SYSCON_BASE + SYSCON_CHIP_ID, &v))
         printf("CHIP_ID   %08x\n", v);
     if (!rd('w', SYSCON_BASE + SYSCON_RESET_CAUSE, &v))
-        printf("RESET_CAUSE %02x (now cleared by the boot)\n", v);
+        printf("RESET_CAUSE %02x (the loader cleared it after printing the boot cause)\n", v);
     if (!rd('w', SYSCON_BASE + SYSCON_BOOT_MODE, &v))
         printf("BOOT_MODE %02x\n", v);
     puts("map: flash 20000000-20ffffff, PSRAM 80000000-80ffffff, CLINT 02000000, UART 10000000,");
@@ -449,13 +455,11 @@ static void run(struct frame *f, uint32_t entry, int brk)
     f->x[1] = (uint32_t)mon_return;
     f->x[2] = (uint32_t)&_stack_top;
     f->mepc = entry & ~1u;
+    /* mon_resume loads mstatus from the frame, so a faulting probe's mret (which leaves MPP
+     * at U) cannot reach the program: it runs in M-mode, with interrupts on only under gb. */
+    f->mstatus = ST_MPP_M | (brk ? ST_MPIE : 0);
     ctx_valid = 1;
     break_in = brk;
-    __asm__ volatile("csrs mstatus, %0" :: "r"(ST_MPP_M));
-    if (brk)
-        __asm__ volatile("csrs mstatus, %0" :: "r"(ST_MPIE));
-    else
-        __asm__ volatile("csrc mstatus, %0" :: "r"(ST_MPIE));
     resume(f);
 }
 
@@ -527,7 +531,8 @@ void mon_trap(struct frame *f)
         }
         puts("^C");
     }
-    tick_off();
+    if (break_in)
+        tick_off();                 /* under g the program's timer is left as it was */
     ctx_valid = 1;
     uart_puts("\nstopped: ");
     if (c == 3) {
@@ -563,11 +568,9 @@ static void start(void)
 int main(void)
 {
     uart_init(UART_DIVISOR);
-    uint32_t cause = *reg32(SYSCON_BASE + SYSCON_RESET_CAUSE);
-    uint32_t mode = *reg32(SYSCON_BASE + SYSCON_BOOT_MODE);
-    *reg32(SYSCON_BASE + SYSCON_RESET_CAUSE) = 0x7;
+    /* The loader keeps boot contract rule 3 (reads RESET_CAUSE and BOOT_MODE, clears the cause)
+     * and prints them, so there is nothing to read here. */
     __asm__ volatile("csrw mtvec, %0" :: "r"(mon_trap_entry));
     __asm__ volatile("csrw mscratch, zero");
-    printf("reset cause %x, boot mode %x\n", cause & 0xFF, mode & 0xFF);
     mon_switch_stack(FRAME, start);
 }

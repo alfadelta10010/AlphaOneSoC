@@ -4,9 +4,13 @@ PROMPT	i
 PROMPT	r
 PROMPT	g {demo_regs}
 PROMPT	r
-PROMPT	r a5
+PROMPT	x
+PROMPT	r a0
+PROMPT	g {demo_regs}
 PROMPT	r a5 1234abcd
 PROMPT	r a5
+PROMPT	x
+PROMPT	r a0
 PROMPT	m 20000000 8
 PROMPT	mb 80000000 20
 PROMPT	mh 20000000 8
@@ -26,6 +30,8 @@ PROMPT	p
 PROMPT	gb {demo_spin}
 \n	^C
 PROMPT	r
+PROMPT	m 30000000 1
+PROMPT	csr scan 7a0 7a8
 PROMPT	r a0 7ffffff0
 PROMPT	x
 \n	^C

@@ -35,6 +35,9 @@
 + t6   a5a5001f
 # r with a value, and a read-back
 + a5 = 1234abcd
+# x carries on with every register as it was (a0 = 0), and with one changed by `r` (a0 = 1)
++ a0 = 00000000
++ a0 = 00000001
 # memory: flash, a fault, a write and its read-back, a byte write
 + 20000000: 
 + 80000000: 
@@ -56,5 +59,7 @@
 + 10020004 RESET_CAUSE
 # gb and Ctrl-C, resume
 + ^C
-+ stopped: interrupt 7 at pc=
-+ a0 = 7ffffff0
+# two break-ins, the second after a faulting probe and an x: the program still runs in M-mode
+>=2 stopped: interrupt 7 at pc=
+- instruction access fault
++ a0 = 8

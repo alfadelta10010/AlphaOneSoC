@@ -6,6 +6,7 @@
 expect.txt has one rule per line:
   + text     the log must contain this text (fixed string)
   - text     the log must not contain it
+  >=N text   the log must contain it at least N times
   # ...      comment
 and the run must have ended in 'SW-RESULT: PASS'. Exit 1 listing every miss.
 """
@@ -18,6 +19,14 @@ if "SW-RESULT: PASS" not in log:
 for line in open(sys.argv[2]):
     line = line.rstrip("\n")
     if not line or line.startswith("#"):
+        continue
+    if line.startswith(">="):
+        n, _, text = line[2:].partition(" ")
+        if log.count(text) < int(n):
+            bad.append(f"found {log.count(text)} of {n}: {text}")
+        continue
+    if len(line) < 3 or line[0] not in "+-" or line[1] != " ":
+        bad.append(f"malformed rule: {line}")
         continue
     sign, text = line[0], line[2:]
     if sign == "+" and text not in log:
