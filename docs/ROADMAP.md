@@ -521,7 +521,8 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
   * **Cycle-exact against Icarus on the SoC bench** (2026-11-02): the
     software bench (`tb/tb_sw.v`, 9.4) runs the loader and hello world in
     1,967,772 clocks in both simulators, instruction for instruction (on `32cac47`,
-    with streaming flash reads, 1,894,652 in both: re-checked 2026-11-11). Getting
+    with streaming flash reads, 1,894,652 in both: re-checked 2026-11-11; hello now
+    also prints its mcycle line, 2,057,515 in both) Getting
     there found one testbench race, not an RTL difference: releasing reset
     with `rst <= 0` in a process that waits on the clock edge made Verilator
     release the QSPI pins a clock earlier than Icarus. A bench must release
@@ -896,7 +897,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
 streaming flash reads and DDR) at 62.5 MHz on 2026-11-10: **every figure came
 out the same**, as it must, because the programs run from PSRAM and streaming
 only changes flash reads (the loader and the boot: loader plus hello world went
-from 1,967,772 to 1,894,652 clocks). These are the numbers a later RTL change
+from 1,967,772 to 1,894,652 clocks, before hello gained a line). These are the numbers a later RTL change
 is judged against; every figure is in core clocks, so none depends on the
 bench's clock. A valid CoreMark run lasts 10 s, so at 62.5 MHz it needs 625
 million clocks: the run below is 70 iterations.
@@ -907,7 +908,7 @@ million clocks: the run below is 70 iterations.
 | CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
 | Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
 | FatFs, mount to delete | 66 million clocks in all; 76 blocks read, 27 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
-| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **8,949 clocks**; a queue round trip between two tasks: **57,525 clocks**; compare match to the tick hook under a shift/multiply/divide load: **5,988 clocks on average, 9,075 at most** | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
+| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,186 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **5,988 clocks on average, 9,014 at most** | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
 * The boot-time DDR sweep of 9.1 item 8 belongs to the loader; the loader does not run it, so
