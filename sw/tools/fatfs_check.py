@@ -15,12 +15,15 @@ import tempfile
 dump = sys.argv[1]
 img = bytearray(8192 * 512)
 addr = 0
-for tok in open(dump).read().split():
-    if tok.startswith("@"):
-        addr = int(tok[1:], 16)
-    else:
-        img[addr] = int(tok, 16)
-        addr += 1
+for line in open(dump):
+    if line.lstrip().startswith("//"):          # Icarus's $writememh adds comment lines
+        continue
+    for tok in line.split():
+        if tok.startswith("@"):
+            addr = int(tok[1:], 16)
+        else:
+            img[addr] = int(tok, 16)
+            addr += 1
 
 bad = []
 with tempfile.NamedTemporaryFile(suffix=".img") as t:

@@ -22,11 +22,13 @@ build = sys.argv[3]
 MHZ = 62.5
 
 rows = []
+bad = 0
 for log in sorted(glob.glob(f"{build}/embench-*/run.log")):
     text = open(log, errors="replace").read()
     m = re.search(r"EMBENCH (\S+) clocks=(\d+) correct=(\d)", text)
     if not m or "SW-RESULT: PASS" not in text:
         print(f"{log}: no complete result")
+        bad += 1
         continue
     name, clocks, ok = m.group(1), int(m.group(2)), m.group(3) == "1"
     ms = clocks / (MHZ * 1000.0)
@@ -39,6 +41,11 @@ print(f"{'benchmark':16} {'clocks':>12} {'ms@62.5MHz':>10} {'score/MHz':>10}")
 for n, c, ms, s, ok in rows:
     print(f"{n:16} {c:12d} {ms:10.1f} {s:10.4f}{'' if ok else '  WRONG RESULT'}")
 good = [s for _, _, _, s, ok in rows if ok]
+if not good:
+    sys.exit("no benchmark gave a correct result")
 gm = math.exp(sum(math.log(s) for s in good) / len(good))
 print(f"geometric mean over {len(good)} of {len(ref)} benchmarks: {gm:.4f} Embench speed per MHz "
       f"(1.0 = the Cortex-M4 reference)")
+if len(good) != len(ref) or bad:
+    print(f"INCOMPLETE: {len(good)} correct of {len(ref)}, {bad} without a result: the mean above is over fewer benchmarks")
+    sys.exit(1)
