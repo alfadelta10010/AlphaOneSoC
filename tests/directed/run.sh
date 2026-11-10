@@ -82,7 +82,8 @@
 #   FAILFAST=1      stop the suite at its first failing run
 #   SIMULATOR=verilator  build with Verilator (--binary --timing) instead of
 #                   Icarus; same testbench, same references (artifacts go to
-#                   ./out/vl, ./out/vl/soc)
+#                   ./out/vl, ./out/vl/soc). Two-state: the X checks below are
+#                   refused (an error) or not made; Icarus is their reference.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -91,6 +92,17 @@ SOC=0
 SRC="${FYRA_SRC:-$ROOT/src}"
 OUT="${OUT_DIR:-$HERE/out}"
 SIMULATOR="${SIMULATOR:-iverilog}"
+if [ "$SIMULATOR" = verilator ]; then
+  # Verilator is two-state: an X becomes a constant, so the checks that rest on X cannot run
+  # on it (+RF_X, +RF_COLLIDE_X, the X-in-dump failure below, memory_model's NOTREADY_DATA=0
+  # which drives X while not ready and here gives zeros). Icarus stays the reference for them.
+  case " ${RUN_PLUSARGS:-} $* " in
+    *RF_X*|*RF_COLLIDE_X*|*NOTREADY_DATA=0*)
+      echo "ERROR: SIMULATOR=verilator cannot run X checks (RF_X, RF_COLLIDE_X, NOTREADY_DATA=0): use Icarus" >&2
+      exit 2 ;;
+  esac
+  echo "NOTE: Verilator is two-state; the suite's X checks are not made on this run (Icarus makes them)" >&2
+fi
 [ "$SIMULATOR" = verilator ] && OUT="$OUT/vl"
 [ $SOC = 1 ] && OUT="$OUT/soc"
 mkdir -p "$OUT"
