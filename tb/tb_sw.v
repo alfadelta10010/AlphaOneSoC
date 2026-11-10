@@ -8,7 +8,7 @@
 //
 //   SW-RESULT: PASS cycles=<n> instret=<n>
 //   SW-RESULT: FAIL code=<n> cycles=<n> instret=<n>
-//   SW-RESULT: TIMEOUT cycles=<n> instret=<n>      (+MAX_CYCLES, default 2e9)
+//   SW-RESULT: TIMEOUT cycles=<n> instret=<n>      (+MAX_CYCLES, default 2e9, any 64-bit value)
 //
 // The UART decoder checks every frame (start bit mid-point, stop bit) and
 // reports a framing error as an ERROR line. The memory and bus request
@@ -37,7 +37,7 @@ module tb_sw;
     reg clk = 1'b0;
     reg rst = 1'b1;
     always #(TCLK / 2.0) clk = ~clk;
-    integer cyc = 0;
+    reg [63:0] cyc = 64'd0;            // 64 bits: a run of more than 2^31 clocks (34 s of chip time) is legal
     always @(posedge clk) cyc <= cyc + 1;
 
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
@@ -71,8 +71,16 @@ module tb_sw;
         $readmemh(sd_name, sd.disk);
         sd.use_disk = 1'b1;
     end
+    // +UART_DIV=<n>: the divisor the program has set when the run ends must be n (the boot contract's
+    // rate, ROADMAP 9.1 rule 2). The decoder follows whatever the program sets, so without this a
+    // wrong divisor in the loader would still print readable text.
+    integer exp_div;
     task sd_finish;
         begin
+            if ($value$plusargs("UART_DIV=%d", exp_div) && {soc.uart_inst.dlm, soc.uart_inst.dll} != exp_div[15:0]) begin
+                uart_errors = uart_errors + 1;
+                $display("ERROR uart: divisor %0d at the end, want %0d", {soc.uart_inst.dlm, soc.uart_inst.dll}, exp_div);
+            end
             if ($value$plusargs("SD_DUMP=%s", sd_name)) $writememh(sd_name, sd.disk);
             if (sd.n_cmd != 0)
                 $display("SD: %0d commands, %0d blocks read, %0d written, %0d errors",
@@ -126,7 +134,9 @@ module tb_sw;
     // ended by a wait length of 255.
     reg [7:0] sc [0:8191];
     reg [8*1024-1:0] in_name;
-    integer pos, wl, sl, i;
+    // Its own loop variables: the decoder above runs at the same time, and a variable they
+    // shared made each loop advance the other's index (Icarus then saw framing errors).
+    integer pos, wl, sl, i, kk;
     reg [8*32-1:0] pat;
     reg [7:0] sb;
     real in_ns;
@@ -143,13 +153,14 @@ module tb_sw;
                 sl = sc[pos]; pos = pos + 1;
                 while ((tail << (8 * (32 - wl))) != (pat << (8 * (32 - wl))) || rst)
                     @(posedge clk);
+                #1;                           // off the clock edge, as the reset release (below)
                 tail = 0;
                 for (i = 0; i < sl; i = i + 1) begin
                     sb = sc[pos + i];
                     if ($test$plusargs("RXTRACE")) $display("TB-RX send %02x cyc %0d", sb, cyc);
                     in_ns = 16.0 * {soc.uart_inst.dlm, soc.uart_inst.dll} * TCLK;
                     uart_rx_r = 1'b0; #(in_ns);
-                    for (k = 0; k < 8; k = k + 1) begin uart_rx_r = sb[k]; #(in_ns); end
+                    for (kk = 0; kk < 8; kk = kk + 1) begin uart_rx_r = sb[kk]; #(in_ns); end
                     uart_rx_r = 1'b1; #(in_ns * 2.0);
                 end
                 pos = pos + sl;
@@ -159,8 +170,8 @@ module tb_sw;
     end
 
     // ── Run control ─────────────────────────────────────────────────────────
-    integer max_cycles = 2000000000;
-    integer instret = 0;
+    reg [63:0] max_cycles = 64'd2000000000;
+    reg [63:0] instret = 64'd0;
     always @(posedge clk) if (!rst && soc.cpu.dbg_retired) instret <= instret + 1;
 
     initial begin
