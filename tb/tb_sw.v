@@ -14,6 +14,11 @@
 // reports a framing error as an ERROR line. The memory and bus request
 // checks are those of the other SoC benches (tb/req_hold_check.v).
 //
+// An SD card (tb/sd_spi_model.v) sits on the SPI pins as on the demo board (CS# gpio_out[7],
+// SCK [3], MOSI [1], DO gpio_in[1]). +SD_IMAGE=<byte-hex> gives it a disk (sw/tools/mkdisk.sh);
+// +SD_DUMP=<file> writes the disk out when the run ends, for the host to check. A card error
+// (SD model `errors`) turns a PASS into a FAIL.
+//
 // +UART_IN=<hex> feeds the chip's UART receiver (sw/tools/mkscript.py builds the file
 // from a script): each step waits until the program's output ends in a given text, then
 // sends a line at the baud rate the program has set. That is how the monitor is driven.
@@ -42,7 +47,8 @@ module tb_sw;
     wire       uart_tx, uart_rts_n;
     reg        uart_rx_r = 1'b1;
     wire [7:0] gpio_out;
-    wire [7:0] gpio_in = 8'h00;
+    tri1       sd_do;
+    wire [7:0] gpio_in = {6'b000000, sd_do, 1'b0};
 
     // The chip's own reset divisor (34); software sets the one it wants. Flash streaming
     // is on, as it is by default (the strap pin low).
@@ -56,6 +62,23 @@ module tb_sw;
     qspi_pmod_model pmod (
         .host_sck(qspi_sck), .host_cs_n(qspi_cs_n), .host_ctl_oe(qspi_ctl_oe),
         .host_io(qspi_io_out), .host_oe(qspi_io_oe), .dev_io(pmod_io), .dev_oe(pmod_oe));
+
+    sd_spi_model #(.DISK_BLKS(8192)) sd (
+        .fitted(1'b1), .cs_n(gpio_out[7]), .sck(gpio_out[3]), .di(gpio_out[1]),
+        .expect_violations(1'b0), .do_o(sd_do));
+    reg [8*1024-1:0] sd_name;
+    initial if ($value$plusargs("SD_IMAGE=%s", sd_name)) begin
+        $readmemh(sd_name, sd.disk);
+        sd.use_disk = 1'b1;
+    end
+    task sd_finish;
+        begin
+            if ($value$plusargs("SD_DUMP=%s", sd_name)) $writememh(sd_name, sd.disk);
+            if (sd.n_cmd != 0)
+                $display("SD: %0d commands, %0d blocks read, %0d written, %0d errors",
+                         sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, sd.errors);
+        end
+    endtask
 
     reg done = 1'b0;
     req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
@@ -156,7 +179,8 @@ module tb_sw;
             if (fin && (soc.dmem_wdata[15:0] == 16'h5555 || soc.dmem_wdata[15:0] == 16'h3333)) begin
                 done = 1'b1;
                 $write("\n");
-                if (soc.dmem_wdata[15:0] == 16'h5555 && uart_errors == 0)
+                sd_finish;
+                if (soc.dmem_wdata[15:0] == 16'h5555 && uart_errors == 0 && sd.errors == 0)
                     $display("SW-RESULT: PASS cycles=%0d instret=%0d", cyc, instret);
                 else
                     $display("SW-RESULT: FAIL code=%0d cycles=%0d instret=%0d",

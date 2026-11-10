@@ -25,6 +25,11 @@
 //     the bench puts a pull-up (tri1) on the card side.
 //   * +SD_STUCK_DO makes DO read 1 whenever it would be driven (a negative
 //     control).
+//   * a real disk: with DISK_BLKS > 1 and `use_disk` set by the bench (tb_sw does it for
+//     +SD_IMAGE=<byte-hex>), reads and writes go to the `disk` array, so a FAT image
+//     can be mounted, written to and read back (+SD_DUMP in tb_sw writes it out).
+//     DISK_BLKS = 1 (the default) keeps the formula image and the three-block write
+//     store above; no other bench sets it.
 //
 // Checks (errors, or n_expected while `expect_violations`): an SCK edge with
 // CS# low before the power-up clocks; an SCK period < 2.5 us before the card
@@ -42,7 +47,8 @@ module sd_spi_model #(
     parameter real T_ODLY    = 14.0,
     parameter real T_OH      = 0.0,
     parameter real T_ISU     = 5.0,
-    parameter real T_IH      = 5.0
+    parameter real T_IH      = 5.0,
+    parameter integer DISK_BLKS = 1
 )(
     input  wire fitted,
     input  wire cs_n,
@@ -108,6 +114,10 @@ module sd_spi_model #(
         end
     endfunction
 
+    // A real disk, when the bench loads one
+    reg        use_disk = 1'b0;
+    reg [7:0]  disk [0:DISK_BLKS * 512 - 1];
+
     // Written blocks (up to 4): block number and data
     integer    wb_blk [0:3];
     reg [7:0]  wb_dat [0:2047];
@@ -117,7 +127,7 @@ module sd_spi_model #(
         begin
             f = -1;
             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == blk) f = s;
-            blk_byte = (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
+            blk_byte = use_disk ? disk[(blk % DISK_BLKS) * 512 + i] : (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
         end
     endfunction
 
@@ -284,7 +294,8 @@ module sd_spi_model #(
                             f = -1;
                             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
                             if (f < 0) begin f = wb_n; if (wb_n < 3) wb_n = wb_n + 1; wb_blk[f] = wblk; end
-                            for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
+                            if (use_disk) for (s = 0; s < 512; s = s + 1) disk[(wblk % DISK_BLKS) * 512 + s] = wbuf[s];
+                            else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
                         end
                         n_wr_blk = n_wr_blk + 1;
                         rxs = RX_IDLE;
