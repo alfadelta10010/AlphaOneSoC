@@ -1,0 +1,15 @@
++ FreeRTOS V11.1.0, tick 100 Hz = 625000 clocks
++ tick: vTaskDelay(10) took
++ preempt: order aHb
++ yield:
++ queue: 100 round trips
++ mutex: order LHM
++ timer:
++ notify: 5 of 5 taken
++ latency: compare match to the tick hook
++ PASS
+- FAIL
+- ASSERT
+- EXCEPTION
+- INTERRUPT
+- TRAP mcause

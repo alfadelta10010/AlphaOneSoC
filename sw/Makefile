@@ -1,7 +1,7 @@
 # Bare-metal software for AlphaOneSoC (docs/ROADMAP.md section 9).
 #
-#   make hello | monitor | fatfs | coremark | dhrystone      build the loader, the payload and its flash image
-#   make run-hello | run-coremark | run-dhrystone | run-monitor | run-fatfs
+#   make hello | monitor | fatfs | freertos | coremark | dhrystone      build the loader, the payload and its flash image
+#   make run-hello | run-coremark | run-dhrystone | run-monitor | run-fatfs | run-freertos
 #                                          ... and run it on the SoC bench (Verilator), check the output
 #   make bench                             build the software bench only
 #   make fetch                             fetch the third-party sources (CoreMark, Dhrystone) at pinned commits
@@ -32,16 +32,17 @@ RTL := $(addsuffix .v,$(RTL))
 
 # The third-party sources are needed to read the benchmark lists below.
 ifneq ($(words $(wildcard $(TP)/embench-iot/support/main.c $(TP)/coremark/core_main.c \
-        $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c)),4)
+        $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c \
+        $(TP)/freertos/tasks.c)),5)
 $(shell ./fetch.sh >&2)
 endif
 
-.PHONY: all hello monitor fatfs run-fatfs coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
 	./fetch.sh
-$(TP)/coremark/core_main.c $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c:
+$(TP)/coremark/core_main.c $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c $(TP)/freertos/tasks.c:
 	./fetch.sh
 
 # ── the loader ──────────────────────────────────────────────────────────────
@@ -107,6 +108,15 @@ $(BUILD)/fatfs/disk.hex: tools/mkdisk.sh tools/img2hex.py
 	./tools/mkdisk.sh $(BUILD)/fatfs/disk.img $@
 $(BUILD)/fatfs/fatfs.elf: $(FFB)/ff.c
 $(eval $(call PAYLOAD,fatfs))
+
+# Rung 5: FreeRTOS-Kernel V11.1.0 with its upstream RISC-V port (M-mode, CLINT tick, heap_4).
+FR := $(TP)/freertos
+RV := $(FR)/portable/GCC/RISC-V
+freertos_SRC    := freertos/freertos_test.c $(addprefix $(FR)/,tasks.c queue.c list.c timers.c) \
+                   $(RV)/port.c $(RV)/portASM.S $(FR)/portable/MemMang/heap_4.c
+freertos_CFLAGS := -w -Ifreertos/port -I$(FR)/include -I$(RV) \
+                   -I$(RV)/chip_specific_extensions/RV32I_CLINT_no_extensions
+$(eval $(call PAYLOAD,freertos))
 
 CM := $(TP)/coremark
 coremark_SRC    := $(addprefix $(CM)/,core_main.c core_list_join.c core_matrix.c core_state.c core_util.c) \
