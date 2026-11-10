@@ -856,7 +856,9 @@ of `sw/Makefile`. Output goes to `build/sw`.
   `+UART_DIV=34`, which `make -C sw` passes, requires it to end at 34), a
   watcher on syscon FINISH. It prints `SW-RESULT: PASS|FAIL|TIMEOUT` with
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
-  the same file runs under Icarus.
+  the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
+  monitor's scripted session give the same clocks on both, 2,057,515 and 41,736,094
+  (1,014,564 instructions), checked 2026-11-11.
 * **FatFs** (`sw/fatfs`, `make -C sw run-fatfs`): ChaN's FatFs R0.16 (long
   file names, relative paths, `f_printf`) on `sw/common/sd.c`, an SD card
   driver on the SPI controller that keeps the boot contract's rules 4 and 5
