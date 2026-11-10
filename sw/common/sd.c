@@ -1,7 +1,7 @@
 /* An SD card in SPI mode on the SPI controller (src/gpio.v), polled.
  * Follows the boot contract (docs/ROADMAP.md 9.1 rules 4 and 5): EN is set with
- * every CS# high, at least 74 clocks go out with CS# high before CMD0, and the
- * card is first clocked at BAUD 0xFF (122 kHz at 62.5 MHz; the spec allows 400 kHz
+ * every CS# high (both the card's and the OLED's), at least 74 clocks go out with CS# high
+ * before CMD0, and the card is first clocked at BAUD 0xFF (122 kHz at 62.5 MHz; the spec allows 400 kHz
  * during identification). Blocks are 512 bytes; an SDHC card is addressed by block
  * number, a standard-capacity one by byte. CRC is off in SPI mode except for CMD0
  * and CMD8. */
@@ -53,11 +53,16 @@ int sd_init(void)
     uint8_t r;
 
     SPI(GPIO_BAUD) = 0xFF;
-    cs_high();
+    SPI(GPIO_OUT) |= GPIO_SD_CS | GPIO_OLED_CS;     /* rule 4: EN only with every CS# high */
+    SPI(GPIO_CONTROL) = 3;                           /* mode 3: SCK idles high, as the card wants */
     SPI(GPIO_SPICTL) = 1;
     for (int i = 0; i < 10; i++)         /* 80 clocks with CS# high */
         xfer(0xFF);
-    cs_low();                            /* a card left in the middle of a block */
+    /* A card left in the middle of a block (rule 5): clock 0xFF with CS# low until it answers
+     * 0xFF. The bytes complete a write block that was being received, so that sector is then
+     * written with an 0xFF tail; and a card still busy programming for longer than these
+     * 520 bytes (4 ms at 122 kHz, a write can take 250 ms) is sent CMD0 while busy. */
+    cs_low();
     for (int i = 0; i < 520 && xfer(0xFF) != 0xFF; i++)
         ;
     cs_high();
@@ -124,12 +129,20 @@ int sd_read(uint32_t lba, void *buf)
         cs_high();
         return 1;
     }
-    int t = 0;
-    while (xfer(0xFF) != 0xFE)           /* the data token */
-        if (++t > 100000) {
+    for (int t = 0;; t++) {
+        uint8_t b = xfer(0xFF);
+        if (b == 0xFE)                   /* the data token */
+            break;
+        if (b != 0xFF) {                 /* a data error token, 0000xxxx: the card gave up */
+            cs_high();
+            xfer(0xFF);
+            return 0x10 | (b & 0x0F);
+        }
+        if (t > 100000) {
             cs_high();
             return 2;
         }
+    }
     for (int i = 0; i < 512; i++)
         *p++ = xfer(0xFF);
     xfer(0xFF);                          /* CRC16, unchecked */

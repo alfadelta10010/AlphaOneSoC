@@ -25,8 +25,10 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
     if (pdrv != 0 || !ready)
         return RES_NOTRDY;
     for (UINT i = 0; i < count; i++)
-        if (sd_read(sector + i, buff + 512 * i))
+        if (sd_read(sector + i, buff + 512 * i)) {
+            ready = 0;                   /* the next disk_initialize starts the card again */
             return RES_ERROR;
+        }
     return RES_OK;
 }
 
@@ -35,8 +37,10 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
     if (pdrv != 0 || !ready)
         return RES_NOTRDY;
     for (UINT i = 0; i < count; i++)
-        if (sd_write(sector + i, buff + 512 * i))
+        if (sd_write(sector + i, buff + 512 * i)) {
+            ready = 0;
             return RES_ERROR;
+        }
     return RES_OK;
 }
 

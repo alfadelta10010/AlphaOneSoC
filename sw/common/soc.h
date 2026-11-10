@@ -54,6 +54,7 @@ struct image_hdr {
 #define GPIO_CONTROL    0x2C          /* resets to 3: mode 3, as an SD card wants */
 #define GPIO_BAUD       0x30          /* SCK = clk / (2 x (BAUD + 1)) */
 #define GPIO_SD_CS      0x80
+#define GPIO_OLED_CS    0x01
 
 /* syscon */
 #define SYSCON_FINISH       0x00
@@ -97,7 +98,9 @@ void uart_putdec(uint32_t v);
 
 /* Stop the run through syscon. FINISH needs a halfword or word store. */
 void soc_finish(uint32_t code) __attribute__((noreturn));
+static inline void soc_pass(void) __attribute__((noreturn));
 static inline void soc_pass(void) { soc_finish(FINISH_PASS); }
+static inline void soc_fail(unsigned n) __attribute__((noreturn));
 static inline void soc_fail(unsigned n) { soc_finish(((uint32_t)n << 16) | FINISH_FAIL); }
 
 #endif
