@@ -6,8 +6,9 @@
  *              interrupt and the compare update are right
  *   preempt    a task made ready by a higher-priority wake-up runs at once, before the
  *              giver goes on (a context switch out of an interrupt-free path)
- *   yield      two equal tasks yielding through ecall: the exception trap entry, the
- *              context save and restore, and what one switch costs
+ *   yield      two equal tasks yielding through ecall, which must take strict turns: the
+ *              exception trap entry, the context save and restore, and what one switch
+ *              costs
  *   queue      two tasks passing a counter through queues: blocking, wake-up and the
  *              kernel's own locking, and what a round trip costs
  *   mutex      priority inheritance: a low task holding a mutex runs ahead of a medium
@@ -49,13 +50,17 @@ void vApplicationStackOverflowHook(TaskHandle_t t, char *name)
     printf("\nstack overflow in %s\n", name);
     soc_fail(0xA7);
 }
-static volatile uint32_t idle_count;
-void vApplicationIdleHook(void) { idle_count++; }
+void vApplicationIdleHook(void) { }
 
 /* The port calls these for what it does not handle. */
-void freertos_risc_v_application_exception_handler(uint32_t mcause, uint32_t mepc, uint32_t mtval)
+void freertos_risc_v_application_exception_handler(uint32_t mcause, uint32_t a1, uint32_t a2)
 {
-    printf("\nEXCEPTION mcause=%08x mepc=%08x mtval=%08x\n", (unsigned)mcause, (unsigned)mepc, (unsigned)mtval);
+    /* The port's arguments are mcause, mepc + 4 and nothing: read the CSRs themselves. */
+    uint32_t epc, tval;
+    (void)a1; (void)a2;
+    __asm__ volatile("csrr %0, mepc" : "=r"(epc));
+    __asm__ volatile("csrr %0, mtval" : "=r"(tval));
+    printf("\nEXCEPTION mcause=%08x mepc=%08x mtval=%08x\n", (unsigned)mcause, (unsigned)epc, (unsigned)tval);
     soc_fail(0xA8);
 }
 void freertos_risc_v_application_interrupt_handler(uint32_t mcause)
@@ -101,13 +106,18 @@ static void hi_waiter(void *arg)
     vTaskDelete(NULL);
 }
 
-static volatile uint32_t yields;
+static volatile uint32_t yields[2];
 static volatile int yield_stop;
+/* Which yielder made each of the first 64 counts, in order. */
+static volatile uint8_t yield_order[64];
+static volatile uint32_t yield_seq;
 static void yielder(void *arg)
 {
-    (void)arg;
+    uint32_t *mine = arg;
     while (!yield_stop) {
-        yields++;
+        (*mine)++;
+        if (yield_seq < 64)
+            yield_order[yield_seq++] = (uint8_t)(mine - yields);
         taskYIELD();
     }
     vTaskDelete(NULL);
@@ -192,11 +202,18 @@ static void controller(void *arg)
            (unsigned)CLK_PER_TICK);
 
     /* tick */
+    uint32_t c0, c1;
+    __asm__ volatile("csrr %0, mcycle" : "=r"(c0));
     t0 = now();
     vTaskDelay(10);
     t1 = now();
+    __asm__ volatile("csrr %0, mcycle" : "=r"(c1));
     uint32_t dt = t1 - t0;
-    printf("tick: vTaskDelay(10) took %u clocks (%u per tick)\n", (unsigned)dt, (unsigned)(dt / 10));
+    printf("tick: vTaskDelay(10) took %u mtime ticks, %u mcycle clocks (%u per tick)\n", (unsigned)dt,
+           (unsigned)(c1 - c0), (unsigned)(dt / 10));
+    /* mtime is the core clock (boot contract rule 7): mcycle says how long the delay really was */
+    if ((c1 - c0 > dt ? c1 - c0 - dt : dt - (c1 - c0)) * 100 > dt)
+        FAIL("mtime and mcycle disagree: %u and %u", (unsigned)dt, (unsigned)(c1 - c0));
     if (dt < 9 * CLK_PER_TICK || dt > 11 * CLK_PER_TICK + 20000)
         FAIL("a 10-tick delay is %u clocks", (unsigned)dt);
 
@@ -212,19 +229,28 @@ static void controller(void *arg)
 
     /* yield */
     yield_stop = 0;
-    xTaskCreate(yielder, "y1", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
-    xTaskCreate(yielder, "y2", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
-    yields = 0;
+    xTaskCreate(yielder, "y1", configMINIMAL_STACK_SIZE, (void *)&yields[0], 2, NULL);
+    xTaskCreate(yielder, "y2", configMINIMAL_STACK_SIZE, (void *)&yields[1], 2, NULL);
+    yields[0] = yields[1] = 0;
+    yield_seq = 0;
     t0 = now();
     vTaskDelay(3);
     t1 = now();
-    uint32_t y = yields;
+    uint32_t y0 = yields[0], y1 = yields[1], y = y0 + y1;
     yield_stop = 1;
     vTaskDelay(1);
-    printf("yield: %u yields in %u clocks, %u clocks each\n", (unsigned)y, (unsigned)(t1 - t0),
-           y ? (unsigned)((t1 - t0) / y) : 0);
-    if (y < 10)
-        FAIL("only %u yields", (unsigned)y);
+    printf("yield: %u + %u yields in %u clocks, %u clocks each\n", (unsigned)y0, (unsigned)y1,
+           (unsigned)(t1 - t0), y ? (unsigned)((t1 - t0) / y) : 0);
+    /* Two equal-priority tasks that each give the CPU up with ecall take strict turns, so the
+     * order of the counts alternates. If the ecall did not switch, one task would count on
+     * alone: and the tick's time slice would hand the CPU over only once a tick, so the
+     * totals could still come out equal. Count the places where the order changes hands. */
+    uint32_t seq = yield_seq, alt = 0;
+    for (uint32_t i = 1; i < seq; i++)
+        alt += yield_order[i] != yield_order[i - 1];
+    printf("yield: the order changed hands %u times in the first %u\n", (unsigned)alt, (unsigned)seq);
+    if (seq < 64 || alt * 10 < (seq - 1) * 9)
+        FAIL("the yielders did not take turns (%u changes in %u)", (unsigned)alt, (unsigned)seq);
 
     /* queue */
     qa = xQueueCreate(1, sizeof(uint32_t));

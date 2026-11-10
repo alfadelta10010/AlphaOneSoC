@@ -7,7 +7,6 @@
 + timer:
 + notify: 5 of 5 taken
 + latency: compare match to the tick hook
-+ PASS
 - FAIL
 - ASSERT
 - EXCEPTION
