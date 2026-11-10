@@ -14,6 +14,7 @@
 #define CLINT_MTIMECMP  0x02004000u
 #define CLINT_MTIME     0x0200BFF8u
 #define UART_BASE       0x10000000u
+#define GPIO_BASE       0x10010000u
 #define SYSCON_BASE     0x10020000u
 
 /* The loader's flash layout: the loader runs in place from the first bytes
@@ -44,6 +45,16 @@ struct image_hdr {
 /* Boot contract rule 2: 114,890 baud at 62.5 MHz (115,200 - 0.27%). */
 #define UART_DIVISOR    34
 
+/* GPIO and the SPI controller behind it (src/gpio.v) */
+#define GPIO_OUT        0x00          /* bit 0 OLED CS#, 1 MOSI, 3 SCK, 7 SD CS#; resets to 0x89 */
+#define GPIO_SPICTL     0x0C          /* bit 0 EN: the SPI engine owns MOSI and SCK */
+#define GPIO_RXDATA     0x20
+#define GPIO_TXDATA     0x24
+#define GPIO_STATUS     0x28          /* bit 0 TXE: idle and nothing held */
+#define GPIO_CONTROL    0x2C          /* resets to 3: mode 3, as an SD card wants */
+#define GPIO_BAUD       0x30          /* SCK = clk / (2 x (BAUD + 1)) */
+#define GPIO_SD_CS      0x80
+
 /* syscon */
 #define SYSCON_FINISH       0x00
 #define SYSCON_RESET_CAUSE  0x04
@@ -67,6 +78,12 @@ static inline uint64_t mtime_read(void)
     } while (hi != hi2);
     return ((uint64_t)hi << 32) | lo;
 }
+
+/* sd.c: an SD card on the SPI controller, in SPI mode (polled) */
+int  sd_init(void);                                   /* 0 = ready; sets sd_sdhc */
+int  sd_read(uint32_t lba, void *buf);                /* one 512-byte block, 0 = ok */
+int  sd_write(uint32_t lba, const void *buf);
+extern int sd_sdhc;
 
 /* uart.c */
 void uart_init(unsigned divisor);

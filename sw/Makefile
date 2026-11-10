@@ -1,7 +1,7 @@
 # Bare-metal software for AlphaOneSoC (docs/ROADMAP.md section 9).
 #
-#   make hello | monitor | coremark | dhrystone      build the loader, the payload and its flash image
-#   make run-hello | run-coremark | run-dhrystone | run-monitor
+#   make hello | monitor | fatfs | coremark | dhrystone      build the loader, the payload and its flash image
+#   make run-hello | run-coremark | run-dhrystone | run-monitor | run-fatfs
 #                                          ... and run it on the SoC bench (Verilator), check the output
 #   make bench                             build the software bench only
 #   make fetch                             fetch the third-party sources (CoreMark, Dhrystone) at pinned commits
@@ -32,16 +32,16 @@ RTL := $(addsuffix .v,$(RTL))
 
 # The third-party sources are needed to read the benchmark lists below.
 ifneq ($(words $(wildcard $(TP)/embench-iot/support/main.c $(TP)/coremark/core_main.c \
-        $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c)),3)
+        $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c)),4)
 $(shell ./fetch.sh >&2)
 endif
 
-.PHONY: all hello monitor coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: all hello monitor fatfs run-fatfs coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
 	./fetch.sh
-$(TP)/coremark/core_main.c $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c:
+$(TP)/coremark/core_main.c $(TP)/riscv-tests/benchmarks/dhrystone/dhrystone.c $(TP)/fatfs/source/ff.c:
 	./fetch.sh
 
 # ── the loader ──────────────────────────────────────────────────────────────
@@ -87,6 +87,27 @@ $(BUILD)/monitor/in.hex: monitor/script.txt tools/mkscript.py $(BUILD)/monitor/m
 	python3 tools/mkscript.py monitor/script.txt $@ --elf $(BUILD)/monitor/monitor.elf
 $(eval $(call PAYLOAD,monitor))
 
+# Rung 4: FatFs on the SD card. ff.c reads ffconf.h from its own directory, so the sources
+# are copied to build/sw/fatfs with the port's ffconf.h (fatfs/ffconf.sed applied to the
+# vendored one). The disk image is made by tools/mkdisk.sh and the run's card checked by
+# tools/fatfs_check.py.
+FFB := $(BUILD)/fatfs/src
+$(FFB)/ff.c: $(TP)/fatfs/source/ff.c fatfs/ffconf.sed
+	@mkdir -p $(FFB)
+	cp $(TP)/fatfs/source/ff.c $(TP)/fatfs/source/ff.h $(TP)/fatfs/source/diskio.h $(TP)/fatfs/source/ffunicode.c \
+	   $(TP)/fatfs/source/ffsystem.c $(FFB)/
+	sed -f fatfs/ffconf.sed $(TP)/fatfs/source/ffconf.h > $(FFB)/ffconf.h
+fatfs_SRC    := fatfs/fatfs_test.c fatfs/diskio_sd.c common/sd.c $(FFB)/ff.c $(FFB)/ffunicode.c $(FFB)/ffsystem.c
+fatfs_CFLAGS := -I$(FFB) -Wno-format -Wno-error
+fatfs_RUNDEP := $(BUILD)/fatfs/disk.hex
+fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk.hex +SD_DUMP=$(BUILD)/fatfs/dump.hex
+fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex
+$(BUILD)/fatfs/disk.hex: tools/mkdisk.sh tools/img2hex.py
+	@mkdir -p $(dir $@)
+	./tools/mkdisk.sh $(BUILD)/fatfs/disk.img $@
+$(BUILD)/fatfs/fatfs.elf: $(FFB)/ff.c
+$(eval $(call PAYLOAD,fatfs))
+
 CM := $(TP)/coremark
 coremark_SRC    := $(addprefix $(CM)/,core_main.c core_list_join.c core_matrix.c core_state.c core_util.c) \
                    coremark/port/core_portme.c
@@ -127,11 +148,11 @@ embench-score:
 
 # ── the bench ───────────────────────────────────────────────────────────────
 bench: $(BUILD)/bench/sim
-$(BUILD)/bench/sim: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v
+$(BUILD)/bench/sim: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
 	@mkdir -p $(dir $@)
 	$(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD \
 	    --top-module tb_sw -Mdir $(BUILD)/bench/obj -o ../sim \
-	    $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/tb_sw.v \
+	    $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v \
 	    > $(BUILD)/bench/build.log 2>&1 || { tail -30 $(BUILD)/bench/build.log; exit 1; }
 
 clean:
