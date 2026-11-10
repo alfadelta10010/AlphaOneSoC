@@ -127,7 +127,7 @@ module sd_spi_model #(
         begin
             f = -1;
             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == blk) f = s;
-            blk_byte = use_disk ? disk[(blk % DISK_BLKS) * 512 + i] : (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
+            blk_byte = use_disk ? disk[blk * 512 + i] : (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
         end
     endfunction
 
@@ -239,6 +239,7 @@ module sd_spi_model #(
                 end
                 6'd17: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
+                    else if (use_disk && arg >= DISK_BLKS) begin err("CMD17 beyond the disk"); push(8'h40, 1'b0); end
                     else begin push(8'h00, 1'b0); push_block(arg); end
                 end
                 6'd18: begin
@@ -254,6 +255,7 @@ module sd_spi_model #(
                 end
                 6'd24: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
+                    else if (use_disk && arg >= DISK_BLKS) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
                     else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = arg; end
                 end
                 default: push(r1 | 8'h04, 1'b0);
@@ -294,7 +296,7 @@ module sd_spi_model #(
                             f = -1;
                             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
                             if (f < 0) begin f = wb_n; if (wb_n < 3) wb_n = wb_n + 1; wb_blk[f] = wblk; end
-                            if (use_disk) for (s = 0; s < 512; s = s + 1) disk[(wblk % DISK_BLKS) * 512 + s] = wbuf[s];
+                            if (use_disk) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
                             else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
                         end
                         n_wr_blk = n_wr_blk + 1;
