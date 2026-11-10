@@ -55,7 +55,7 @@ void loader_main(void)
 
     if (magic != IMAGE_MAGIC)
         fail(1, "no image (bad magic)");
-    if (load < PSRAM_BASE || (load & 3) || (size & 3) || size > LOAD_LIMIT - load)
+    if (load < PSRAM_BASE || load > LOAD_LIMIT || (load & 3) || (size & 3) || size > LOAD_LIMIT - load)
         fail(2, "image does not fit PSRAM");
     if (entry < load || entry >= load + size)
         fail(3, "entry outside the image");
