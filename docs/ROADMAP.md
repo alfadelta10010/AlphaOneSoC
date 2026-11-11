@@ -498,9 +498,18 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
   passes on Verilator: core bench 199/199, SoC 113/113, and the SoC suite with
   flash reads in DDR (`RUN_PLUSARGS=+SOC_DDR=1`) 111 passed, 2 skipped by
   name as that mode defines. `make verilator-build` and the plugin build from
-  `src/` unchanged. A full river_core regression has not been repeated on
-  this RTL (the last, below, was on d00eb8a); the Icarus runs of the QSPI
-  branch are in `docs/verification-runbook.md`.
+  `src/` unchanged. **Full river_core regression on this RTL under Verilator,
+  2026-11-11** (the branch's tree, `fyracore_verilator` target, 11:51 to
+  16:49, peak 73 C): conf (riscv_tests + riscof) 175/176, the one failure the
+  known `rv32ui-ma_data`; random rounds 1 and 3 **1076/1076**; round 2
+  1073/1076, the three failures all known non-DUT classes: `riscv_amo_test_0`
+  is `spike-interleave-sc` (an `sc.w` at trace line 5012 succeeds on the DUT and
+  fails on Spike, its `lr.w` at line 5000 is in the previous 5000-step
+  window), and `riscv_ebreak_test_1` and `riscv_rand_jump_test_0` are
+  `nonterminating-agree` (traces identical to the 200,000-instruction cap, the
+  DUT's abort marker the only difference). 0 tests unverified in the audit of
+  each round. The Icarus runs of the QSPI branch are in
+  `docs/verification-runbook.md`.
 * **Status (2026-11-01): the port exists and matches Icarus.** The
   testbenches build unchanged with Verilator 5.031 `--binary --timing`: the
   `#` delays and the QSPI Pmod model stay as written, so the model is
@@ -858,7 +867,8 @@ of `sw/Makefile`. Output goes to `build/sw`.
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
   monitor's scripted session give the same clocks on both, 2,057,515 and 41,736,094
-  (1,014,564 instructions), checked 2026-11-11.
+  (1,014,564 instructions); FatFs (66,143,453 clocks, 76 blocks read, 27 written) and
+  FreeRTOS (49,047,478 clocks, the same costs) are likewise identical, checked 2026-11-11.
 * **FatFs** (`sw/fatfs`, `make -C sw run-fatfs`): ChaN's FatFs R0.16 (long
   file names, relative paths, `f_printf`) on `sw/common/sd.c`, an SD card
   driver on the SPI controller that keeps the boot contract's rules 4 and 5
@@ -919,7 +929,6 @@ million clocks: the run below is 70 iterations.
   reports SDHC, on a FAT12 image without a partition table: the standard-capacity path
   (byte addressing, CMD16), a v1 card, FAT16/FAT32 and an MBR-partitioned card are not
   exercised. No CMD13 is sent after a write.
-* A full river_core regression on the PR #16 RTL under Verilator (section 3).
 * FreeRTOS runs in M-mode only; the upstream port has no U-mode tasks under PMP.
 
 All three say the same thing: the core retires an instruction every 38 to 43
