@@ -1,0 +1,14 @@
+# CoreMark's own validation: the three CRCs it checks for the 2000-byte
+# performance run (core_main.c list_known_crc/matrix_known_crc/state_known_crc).
+# A run shorter than 10 s ends with CoreMark's "Errors detected" for the time
+# alone; that is expected on the bench and is not in the forbidden list.
++ CoreMark Size    : 666
++ [0]crclist       : 0xe714
++ [0]crcmatrix     : 0x1fd7
++ [0]crcstate      : 0x8e3a
++ seedcrc          : 0xe9f5
++ CoreMark/MHz
+- ERROR! list crc
+- ERROR! matrix crc
+- ERROR! state crc
+- TRAP

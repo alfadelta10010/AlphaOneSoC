@@ -1,0 +1,6 @@
++ AlphaOne loader
++ sum ok, jumping to 0x80000000
++ Hello, world, from PSRAM!
++ ext:ACIMU
+- TRAP
+- ERROR

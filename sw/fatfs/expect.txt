@@ -1,0 +1,11 @@
++ FatFs R80386 on the SD card
++ mounted FAT
++ label ALPHAONE
++ HELLO.TXT
++ A long file name.txt
++ DATA.BIN: 16384 bytes
++ seek to 9000 ok
++ OUT.BIN: 3000 bytes written and read back
+- FAIL
+- TRAP
+- ERROR

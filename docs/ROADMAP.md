@@ -23,7 +23,7 @@ been synthesised; nothing here is measured unless it cites a run.
 | (2026-10-31) **The RTL freezes once basic functionality works**, not at the shuttle's close. Software climbs from easy goals up: **FreeRTOS first, then Linux** in the next few PRs. Most of this roadmap stays in scope. | Section 9, the software ladder. |
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
-| (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33. | Built on branch `qspi-stream_alfadelta10010`: streaming and `EDh` DDR are in `qspi_ctrl`, DDR is off at reset and selected by QSPI_CFG (syscon +0x1C, reset by every reset). A boot-time sweep over `DDR_CAP` picks the capture point and falls back to SDR (9.1 item 8). Wire protocol, timing budget and the measured sweep: `docs/qspi-ddr.md`. |
+| (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33 (34 since the 62.5 MHz retarget, 1.5). | Built on branch `qspi-stream_alfadelta10010`: streaming and `EDh` DDR are in `qspi_ctrl`, DDR is off at reset and selected by QSPI_CFG (syscon +0x1C, reset by every reset). A boot-time sweep over `DDR_CAP` picks the capture point and falls back to SDR (9.1 item 8). Wire protocol, timing budget and the measured sweep: `docs/qspi-ddr.md`. |
 | (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. On 2026-11-01 the tree with all three blocks missed 16 ns by 0.303 ns at the slowest corner, so the clock was documented as 60 MHz. **Met again at 16 ns (2026-11-09):** the af1c678 3x4 harden closes all 9 corners at `CLOCK_PERIOD` 16 ns, and the user set the target to **62.5 MHz** (2026-11-09). The margin is small, +0.56 ns at max_ss, and varies between hardens, so every RTL change re-runs the corners. | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 62.5 MHz unless a line says otherwise; the board may also run the chip at 60 MHz (the benches keep a 60 MHz run). |
 
 The limits every item is judged against:
@@ -492,14 +492,98 @@ is billions of cycles. At about 43 clocks per instruction that is about 700
 instructions per second on the SoC bench: enough for the bare-metal rungs of
 the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 
-* The QSPI Pmod model and other benches use `#` delays: build with
-  `--timing` (Verilator 5) or rewrite the models as clocked logic. Porting
-  effort unknown.
+* **Status (2026-11-10): rebuilt on main `32cac47` (PR #16, streaming flash
+  reads and switchable DDR), no change to the port needed** apart from the
+  software bench tying the new `qspi_no_stream` strap low. The directed suite
+  passes on Verilator: core bench 199/199, SoC 113/113, and the SoC suite with
+  flash reads in DDR (`RUN_PLUSARGS=+SOC_DDR=1`) 111 passed, 2 skipped by
+  name as that mode defines. `make verilator-build` and the plugin build from
+  `src/` unchanged. **Full river_core regression on this RTL under Verilator,
+  2026-11-11** (the branch's tree, `fyracore_verilator` target, 11:51 to
+  16:49, peak 73 C): conf (riscv_tests + riscof) 175/176, the one failure the
+  known `rv32ui-ma_data`; random rounds 1 and 3 **1076/1076**; round 2
+  1073/1076, the three failures all known non-DUT classes: `riscv_amo_test_0`
+  is `spike-interleave-sc` (an `sc.w` at trace line 5012 succeeds on the DUT and
+  fails on Spike, its `lr.w` at line 5000 is in the previous 5000-step
+  window), and `riscv_ebreak_test_1` and `riscv_rand_jump_test_0` are
+  `nonterminating-agree` (traces identical to the 200,000-instruction cap, the
+  DUT's abort marker the only difference). 0 tests unverified in the audit of
+  each round. The Icarus runs of the QSPI branch are in
+  `docs/verification-runbook.md`.
+* **Status (2026-11-01): the port exists and matches Icarus.** The
+  testbenches build unchanged with Verilator 5.031 `--binary --timing`: the
+  `#` delays and the QSPI Pmod model stay as written, so the model is
+  cycle- and timing-accurate with no rewrite to clocked logic. (SDF
+  gate-level timing is not something Verilator does; that stays on Icarus,
+  `scripts/gl`.)
+  * `plugins/fyracore_verilator_plugin` is the river_core DUT plugin
+    (`target = fyracore_verilator`, section `[fyracore_verilator]` in
+    `plugins/river-config.ini`). It runs `verilator` against `src/` in
+    `init`, so every river_core run is built from the current RTL: cold
+    build about 17 s.
+  * `make verilator-build` / `make verilator-test HEX=...` do the same for a
+    single hex; `SIMULATOR=verilator tests/directed/run.sh [soc]` runs the
+    directed suite on it.
+  * Byte-identical dumps against Icarus on the core bench (rv32i_basic,
+    csr_test, trap_test, rv32m_test). The SoC directed suite, through the
+    QSPI Pmod model, passes 113/113 against the Spike references.
+  * **Cycle-exact against Icarus on the SoC bench** (2026-11-02): the
+    software bench (`tb/tb_sw.v`, 9.4) runs the loader and hello world in
+    1,967,772 clocks in both simulators, instruction for instruction (on `32cac47`,
+    with streaming flash reads, 1,894,652 in both: re-checked 2026-11-11; hello now
+    also prints its mcycle line, 2,057,515 in both) Getting
+    there found one testbench race, not an RTL difference: releasing reset
+    with `rst <= 0` in a process that waits on the clock edge made Verilator
+    release the QSPI pins a clock earlier than Icarus. A bench must release
+    reset after the edge (`#1 rst = 0`); `tb_sw`, `tb_soc_periph` and
+    `tb_syscon_soc` do. `tb_rivercore` compares traces, which this does not
+    change, but a bench that prints cycle counts would differ by one.
+  * Full river_core regression on the sandbox, code d00eb8a, 2026-11-01
+    12:30 to 16:51, peak 73 C: conf (riscv_tests + riscof) 175/176, the one
+    failure the known `rv32ui-ma_data`; three random rounds (rrag +
+    riscv_dv) **1076/1076 each**. 0 false passes in the audit, 0 DUT
+    defects. Compile and compare takes about 90 s a round against about 66
+    min on Icarus; generation (about 85 min a round) is now the whole
+    wall clock. The earlier Icarus rounds had 1 to 2 Spike-side failures
+    each (interleave SC yield, one unlinkable rrag program); none occurred
+    in these seeds, so that is not a Verilator difference. Logs stay on the
+    sandbox in `~/regr/multi`.
+  * Needs Verilator 5.x on the box; the sandbox copy is the local
+    `/tools/verilator-euvm` build under `~/tools/verilator` (the apt
+    package there is 5.032 if a rebuild is wanted).
+* **Speed, measured.** `tb_sw` on the sandbox (i5-8600K): 691 million clocks
+  and 15.8 million instructions in 668 s, i.e. **about 1.0 million clocks/s
+  and 24k instructions/s** (CoreMark, 43.7 clocks per instruction). The
+  river_core SoC bench measured about 245k clocks/s on the loaded laptop
+  (`irq_stress`: 208k clocks in 0.85 s), which is the machine, not the bench.
+  Icarus is about 30k clocks/s. That is enough for every bare-metal rung,
+  including a valid CoreMark in about 15 minutes (11 at 60 MHz with 50 iterations) and the whole Embench suite in
+  10 (five at a time). Linux (hundreds of millions of instructions) is a
+  matter of hours on this bench. The build is deliberately left untuned
+  (decision 2026-11-02): Verilator flags, a clock driven from C++ or a
+  fast-memory bench would make the simulation quicker without making the core
+  quicker, and the bench should show the core's real clocks per instruction.
+  Measured for the record: `-O3` with `--x-assign fast` gave 1.28x on the
+  laptop, and the profile puts about a third of the time in Verilator's
+  `--timing` scheduler. Real speed comes from RTL (fetch reuse is merged),
+  then FPGA and silicon (section 5).
 * Two targets: the core with fast memory (lockstep with Spike until the first
   timer interrupt, UART text after), and the full SoC through the pins with
-  the Pmod model (pass = the shell answers).
-* Keep Icarus as the reference simulator for the existing suites; Verilator
-  must give byte-identical traces on them first.
+  the Pmod model (pass = the shell answers). The river_core plugin and the
+  directed suite cover the testbench builds, and `tb/tb_sw.v` (9.4) is the
+  SoC build for long runs: UART text and syscon FINISH, no trace. The core
+  with fast memory as a Linux target is still to do.
+* Keep Icarus as the reference simulator for the existing suites; the
+  byte-identical comparison above is how Verilator earns trust, and any
+  new suite should be run on both before relying on Verilator alone.
+  Verilator is two-state, so it does not make the X checks: `+RF_X`,
+  `+RF_COLLIDE_X`, the X-in-dump failure of `tests/directed/run.sh` and the
+  memory model's `NOTREADY_DATA=0` (X while not ready; zeros here). `run.sh`
+  refuses the first, second and last under `SIMULATOR=verilator`, and notes
+  the rest; the Icarus suite stays the reference for them. The monitor's
+  scripted session, which first passed on Verilator only because of how it
+  scheduled two processes that shared a loop variable, is the case for
+  running a new suite on both.
 * Reference: georgc4/rv32-linux-soc's Verilator Linux-acceptance CI
   (`localFiles/rv32-linux-soc`).
 
@@ -642,8 +726,8 @@ a PLIC (all devices are polled).
 
 The user's order (2026-10-31): easier goals first, then FreeRTOS, then Linux.
 Each rung proves something the rungs below it do not, and each stays on as a
-regression test for later RTL changes. Collected on 2026-10-31; none of it
-has been run yet.
+regression test for later RTL changes. Collected on 2026-10-31; rungs 1 to 5
+have been built and run (9.4).
 
 What software gets: RV32IMAC with Zicsr, Zicntr and Zifencei; M and U modes;
 4 PMP entries; no S-mode and no MMU. The CLINT's timer and software
@@ -703,11 +787,11 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 | # | Software | What it proves that the rungs below do not | Fit and effort |
 |---|---|---|---|
 | 0 | Directed tests, riscv-tests, river_core (exist) | ISA and privileged behaviour, instruction by instruction | Done; everything below stands on it |
-| 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | Small. Every rung above starts from it |
-| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | Hours. A valid CoreMark run lasts 10 s, about 14 million instructions here: short runs on the benches, full runs on Verilator or silicon |
-| 3 | **Forth monitor** (mecrisp-quintus, an RV32IM Forth) | An interactive prompt over UART that reads and writes registers: the first thing to run on returned silicon | Small; needs only polled UART routines |
-| 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | Small; polled. The SoC bench's SD-card model runs it |
-| 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | Small. The polled UART is enough. U-mode tasks under PMP are not part of the upstream port (to check) |
+| 1 | **Flash loader + hello world** (bare metal) | Boot from flash, the boot contract (9.1), copying an image to PSRAM and jumping to it, UART output at the right rate | **Done** (`sw/`, 9.4). Every rung above starts from it |
+| 2 | **CoreMark, Dhrystone, Embench-IoT** | A performance number for each RTL change (fetch reuse, compiler flags, -Os against -O2), timed with `mtime` | **Done** (`sw/`, 9.4; results in 9.4). A valid CoreMark run lasts 10 s, about 22 million instructions here (70 iterations at 62.5 MHz): Verilator runs it in about 15 minutes on the sandbox |
+| 3 | **Monitor** (`sw/monitor`, a C monitor; mecrisp-quintus Forth is left for later) | A prompt over UART that reports any register or memory location: the 31 registers and pc of a stopped program, every CSR, any address, the peripheral registers. The first thing to run on returned silicon | **Done** (9.4). No RTL change: a timer tick looks for Ctrl-C, since the UART has no interrupt line |
+| 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | **Done** (`sw/fatfs`, 9.4). FatFs R0.16 on a 4 MB FAT image through the SoC bench's SD card |
+| 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | **Done** (`sw/freertos`, 9.4). Upstream port, 100 Hz tick; U-mode tasks under PMP are not part of it |
 | 6 | **Zephyr** | Atomics, U-mode with PMP (userspace), its ns16550 and CLINT drivers, and its kernel test suite (twister) | Medium. KianV's Zephyr port (`localFiles/kianRiscV`) is a starting point. Check that 4 PMP entries are enough for userspace. The test suite needs Verilator |
 | 7 | **NuttX** | POSIX, the `nsh` shell, FAT on SD over SPI, ELF programs loaded without an MMU: the closest rung to Linux | Medium. Its 16550 serial driver expects an interrupt line; check for a polled console |
 | 8 | **Linux, NOMMU, M-mode** | Section 4 | Large |
@@ -736,7 +820,119 @@ Not on the ladder:
 
 | Where | Speed | Good for |
 |---|---|---|
-| SoC bench, Icarus (today) | about 30k clocks/s, about 700 instructions/s | Rungs 1, 3, 4 and 5 as smoke tests (boot, a few task switches, mounting the card), up to a few hundred thousand instructions: minutes each |
-| Core bench with fast memory, Icarus (today) | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
-| Verilator (section 3) | to be measured | Full benchmarks, Zephyr's test suite, NuttX, Linux |
-| FPGA (section 5) and silicon | real time | The interactive rungs (Forth, MicroPython, demos), full CoreMark |
+| SoC bench (`tb_sw`), Icarus | about 30k clocks/s, about 700 instructions/s | The reference the Verilator build is checked against (cycle-exact on the loader and hello world); smoke runs of up to a few hundred thousand instructions, minutes each |
+| Core bench with fast memory, Icarus or Verilator | 3.3 clocks per instruction, 13x fewer than the SoC bench | Short benchmark runs; no QSPI and no SoC peripherals |
+| SoC bench (`tb_sw`), Verilator (section 3) | about 1.0 million clocks/s, 24k instructions/s on the sandbox, untuned (about 30x Icarus) | Where rungs 1-5 run: the monitor's scripted session and FreeRTOS in about 2 minutes each, FatFs in 2, a valid CoreMark in 15, Embench; also the river_core regressions. Zephyr's test suite and Linux: hours |
+| FPGA (section 5) and silicon | real time | The interactive rungs (the monitor at a terminal, MicroPython, demos, Forth if wanted) |
+
+### 9.4 What exists and what it measured
+
+`sw/` holds the bare-metal software; how to build and run it is in the header
+of `sw/Makefile`. Output goes to `build/sw`.
+
+* **Runtime** (`sw/common`): `soc.h` (addresses, register access, `mtime`),
+  a polled UART, a small `printf` (no stdio from newlib), a default trap
+  handler that prints `mcause`/`mepc`/`mtval`, and `exit()`, which stops the
+  run through syscon FINISH.
+* **Monitor** (`sw/monitor`, `make -C sw run-monitor`): a prompt on the UART.
+  `r` shows x0-x31 and pc of the stopped program (`r a0 1234` sets one), `csr`
+  every CSR by name or number (`csr scan` tries all 4096 numbers and lists the
+  ones that answer), `m`/`mb`/`mh` dump any address and `w`/`wb`/`wh` write it
+  (an address nothing answers prints `fault`), `p` the CLINT, UART, GPIO/SPI
+  and syscon registers, `i` the ids and counters, `g`/`gb`/`x` run and carry on.
+  A program stops on `ebreak`, on any trap, or at Ctrl-C under `gb`: a
+  timer tick every 10 ms looks at the UART receiver, and the registers shown
+  are the ones the program had. Its trap entry owns `mscratch`, and under `gb`
+  a program must leave the UART receiver alone. The SoC bench plays a
+  scripted session through the UART receiver (`tb_sw +UART_IN`,
+  `sw/monitor/script.txt`): x1 and x3-x31 read back after `demo_regs` sets them and again after `x` (the
+  program compares them itself; sp is the program's stack top), flash, PSRAM, a
+  fault, byte writes, the CSR list, a CSR scan, `p`, and a break-in on a
+  spinning loop. 2 minutes in Verilator.
+* **Loader** (`sw/loader`): runs in place from flash and keeps the boot
+  contract (9.1): mtvec first, UART divisor 34, RESET_CAUSE and BOOT_MODE read
+  and RESET_CAUSE cleared. It copies the image at flash offset 0x10000
+  (20-byte header: magic, load address, size, entry, word sum) to PSRAM,
+  checks the sum, runs `fence.i` and jumps with `a0 = 0` (hartid) and
+  `a1 = 0` (no device tree yet). 1,222 bytes. The SPI controller is left
+  disabled, so rules 4 and 5 are for whoever uses it (rung 4).
+  `sw/tools/mkflash.py` builds the flash image, as the byte hex the Pmod
+  model reads and as a raw `.bin` for programming.
+* **Bench** (`tb/tb_sw.v`): the SoC at 62.5 MHz, the QSPI Pmod model, an SD
+  card on the SPI pins (`+SD_IMAGE=<hex>` gives it a disk, `+SD_DUMP=<file>`
+  writes the disk out at the end; a card error fails the run), a UART
+  decoder that follows the divisor the program sets (framing is checked, and
+  `+UART_DIV=34`, which `make -C sw` passes, requires it to end at 34), a
+  watcher on syscon FINISH. It prints `SW-RESULT: PASS|FAIL|TIMEOUT` with
+  clocks and instructions retired. Built with Verilator by `make -C sw bench`;
+  the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
+  monitor's scripted session give the same clocks on both, 2,057,515 and 41,736,094
+  (1,014,564 instructions); FatFs (66,143,453 clocks, 76 blocks read, 27 written) and
+  FreeRTOS (49,047,478 clocks, the same costs) are likewise identical, checked 2026-11-11.
+* **FatFs** (`sw/fatfs`, `make -C sw run-fatfs`): ChaN's FatFs R0.16 (long
+  file names, relative paths, `f_printf`) on `sw/common/sd.c`, an SD card
+  driver on the SPI controller that keeps the boot contract's rules 4 and 5
+  (EN with every CS# high, 80 clocks, CMD0, CMD8, ACMD41 at 122 kHz, then
+  15.6 MHz; SDHC by block number). The bench gives the card a 4 MB FAT image
+  made with mtools (`sw/tools/mkdisk.sh`). The test mounts it, lists the root,
+  reads a short file, a long-named file in a directory and a 16 KB file
+  against its pattern, seeks, then creates, grows, appends, renames, makes a
+  directory and deletes; afterwards the host reads the dumped card with
+  mtools (`sw/tools/fatfs_check.py`) and checks every file, that the deleted
+  ones are gone and that the two FAT copies are equal. It ran in 66 million
+  clocks (76 blocks read, 27 written, 114 commands, 0 card errors), 2 minutes
+  of Verilator.
+* **FreeRTOS** (`sw/freertos`, `make -C sw run-freertos`): FreeRTOS-Kernel
+  V11.1.0 with its upstream RISC-V port (the `RV32I_CLINT_no_extensions` chip
+  file, M-mode, heap_4), `mtime` as the tick source at 100 Hz (625,000 clocks
+  a tick; at 1 kHz the tick work, about ten thousand clocks, would take about
+  a sixth of the CPU). The port leaves `mtvec` to
+  the application, so `main` sets it. One controller task checks, in order:
+  a 10-tick delay lasts 9 to 11 ticks of `mtime`; a higher-priority wake-up
+  runs before the giver goes on; two equal tasks yielding through `ecall`;
+  two tasks passing a counter through queues; mutex priority inheritance
+  (order low, high, medium); a 2-tick software timer fires 4 or 5 times in 10
+  ticks (5 in the run); task notifications; and the delay from the compare match to the tick
+  hook while a busy task runs shifts, multiplies and divides. 48 million
+  clocks, under 2 minutes of Verilator; the measured costs are in the table
+  below.
+* **Programs:** `make -C sw run-hello | run-coremark | run-dhrystone`, and
+  `make -C sw embench` then `sw/tools/run_embench.sh` for the Embench suite.
+  Each has an `expect.txt` that the run must satisfy
+  (`sw/tools/check_run.py`). CoreMark, Dhrystone (from riscv-tests) and
+  Embench-IoT are fetched at pinned commits by `sw/fetch.sh`; none of their
+  source is in this repository. `BENCH_OPT` (default `-O2`) and `CM_ITER` set
+  the flags and CoreMark's iterations.
+
+**Results, GCC 14.2 `-O2`, code and data in PSRAM.** Measured first on main
+`a2f7285` (fetch reuse, SPI, syscon) at 60 MHz, and again on `32cac47` (PR #16,
+streaming flash reads and DDR) at 62.5 MHz on 2026-11-10: **every figure came
+out the same**, as it must, because the programs run from PSRAM and streaming
+only changes flash reads (the loader and the boot: loader plus hello world went
+from 1,967,772 to 1,894,652 clocks, before hello gained a line). These are the numbers a later RTL change
+is judged against; every figure is in core clocks, so none depends on the
+bench's clock. A valid CoreMark run lasts 10 s, so at 62.5 MHz it needs 625
+million clocks: the run below is 70 iterations.
+
+| Benchmark | Result | What it means |
+|---|---|---|
+| Dhrystone 2.2 (500 runs) | 16,697 clocks per run; 59.9 Dhrystones/s per MHz; **0.034 DMIPS/MHz**; all 14 final values correct | |
+| CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
+| Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
+| FatFs, mount to delete | 66 million clocks in all; 76 blocks read, 27 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
+| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,186 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **5,988 clocks on average, 9,014 at most** | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
+
+**Still owed from the ladder's own rungs:**
+* The boot-time DDR sweep of 9.1 item 8 belongs to the loader; the loader does not run it, so
+  flash reads stay SDR (streaming on, the reset state) and rule 8 is not covered by rung 1.
+* The SD driver and FatFs have run only against a model that always answers CMD8 and always
+  reports SDHC, on a FAT12 image without a partition table: the standard-capacity path
+  (byte addressing, CMD16), a v1 card, FAT16/FAT32 and an MBR-partitioned card are not
+  exercised. No CMD13 is sent after a write.
+* FreeRTOS runs in M-mode only; the upstream port has no U-mode tasks under PMP.
+
+All three say the same thing: the core retires an instruction every 38 to 43
+clocks, because every instruction word comes over QSPI (about 3% of a
+Cortex-M4 per MHz on Embench). Fetch reuse, a longer fetch stream or an
+instruction cache (section 7) are what move these numbers; a faster
+multiplier or branch logic would not.
