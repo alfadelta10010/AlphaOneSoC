@@ -1,0 +1,10 @@
+# zerocmp reset one cycle late (needs strict >) -> P2
+sed pwm.v s/wire        zr   = zerocmp \& ge\[0\];/wire        zr   = zerocmp \& (s > cmp0);/
+# ip from > instead of >= -> P3
+sed pwm.v s/wire \[3:0\]  ge  = {s >= cmp3, s >= cmp2, s >= cmp1, s >= cmp0};/wire [3:0]  ge  = {s > cmp3, s > cmp2, s > cmp1, s > cmp0};/
+# tick ignores scale -> P1
+sed pwm.v s/wire        tick = en \& ((pre \& m) == m);/wire        tick = en;/
+# sticky ignored -> P3
+sed pwm.v s/else ip <= ge | ({4{sticky}} \& ip);/else ip <= ge;/
+# enoneshot never self-clears -> P4
+sed pwm.v s/if (zr || wrap) enoneshot <= 1'b0;/if (1'b0) enoneshot <= 1'b0;/
