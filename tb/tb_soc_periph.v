@@ -146,9 +146,9 @@ module tb_soc_periph;
             if (soc.cpu.any_irq_pend && soc.dmem_req && soc.dmem_we && !soc.dmem_ready
                 && (soc.uart_sel || soc.gpio_sel)) pend_in_stall = 1'b1;
             if (rp.tx_head != rp.tx_tail && !rp.tx_busy && uart_rts_n) cts_wait = cts_wait + 1;
-            if (soc.gpio_sel && soc.dmem_ready && soc.dmem_addr[3:2] == 2'd0 && soc.dmem_we)
+            if (soc.gpio_sel && soc.gpio_ready && soc.dmem_addr[3:2] == 2'd0 && soc.dmem_we)
                 last_out_wr = cyc;
-            if (soc.gpio_sel && soc.dmem_ready && soc.dmem_addr[3:2] == 2'd1 && !soc.dmem_we
+            if (soc.gpio_sel && soc.gpio_ready && soc.dmem_addr[3:2] == 2'd1 && !soc.dmem_we
                 && cyc - last_out_wr < in_lag_min) in_lag_min = cyc - last_out_wr;
         end
 
@@ -244,6 +244,19 @@ module tb_soc_periph;
         end
     end
 
+    integer pidx = 0, brk_go = 0;
+    task automatic send_pat(input integer n);
+        integer k;
+        for (k = 0; k < n; k = k + 1) begin
+            rp.send_byte(8'h20 + ((pidx * 7 + 3) % 95)); pidx = pidx + 1;
+        end
+    endtask
+    // plic_uart cue 5: a break on RX, 12 bit times, with the line otherwise idle
+    always @(brk_go) if (brk_go != 0) begin
+        while (rp.tx_pending() != 0) @(posedge clk);
+        rp.rx = 1'b0; #(12.0 * rp.bit_ns); rp.rx = 1'b1;
+    end
+
     task automatic on_event(input [31:0] e);
         begin
             if (test == "uart_hello" && e >= 1 && e <= 3) begin
@@ -252,6 +265,13 @@ module tb_soc_periph;
                 if (e == 1) begin rp.set_flow(1'b1); rp.send_str(`ECHO_LINE); ph[1] = cts_wait; end
                 if (e == 2) begin ph[2] = cts_wait; rp.set_flow(1'b0); rp.send_str("XYZ"); end
                 if (e == 3) rp.set_flow(1'b1);
+            end else if (test == "plic_uart") begin
+                // the Linux-order interrupt program: a pattern byte n is 0x20 + (7n + 3) mod 95
+                rp.set_flow(1'b0);
+                if (e >= 1 && e <= 3) send_pat(e == 1 ? 5 : e == 2 ? 16 : 40);
+                if (e == 4) send_pat(8);
+                if (e == 5) brk_go = brk_go + 1;
+                if (e == 6 || e == 7) send_pat(1);
             end else if (test == "uart_linux") begin
                 if (e == 4 && !mb_uart) rp.set_baud(16.0 * 3 * TCLK);
                 if (e == 5) begin rp.set_flow(1'b1); rp.send_str("ls -l /dev\015"); end
@@ -343,6 +363,8 @@ module tb_soc_periph;
                 for (k = 0; k < 9; k = k + 1)  s = $sformatf("%sP%c", s, 8'h5A);
             end
             if (test == "periph_access") s = "ABq";
+            if (test == "plic_uart")
+                for (k = 61; k < 69; k = k + 1) s = $sformatf("%s%c", s, 8'h20 + ((k * 7 + 3) % 95));
             want_uart = s;
         end
     endfunction
