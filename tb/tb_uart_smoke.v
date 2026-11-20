@@ -129,7 +129,7 @@ module tb_uart_smoke;
         wreg(3, 8'h40); wait_clk(500); wreg(3, 8'h00); wait_clk(400);
         rd_chk("IIR RLS", 2, 8'hC6); chk("irq rls", irq, 1); rd_chk("LSR BI", 5, 8'hF1);
         // ISR that only reads LSR on IID 6 (16550A): the LSR read acknowledges BI and the RLS interrupt
-        rd_chk("IIR no longer RLS", 2, 8'hC1); chk("irq rls acked", irq, 0); rd_chk("LSR BI acked", 5, 8'hE1);
+        rd_chk("IIR no longer RLS", 2, 8'hC1); chk("irq rls acked", irq, 0); rd_chk("LSR BI acked", 5, 8'h61);
         rd_chk("break data 0", 0, 8'h00); rd_chk("LSR after pop", 5, 8'h60); rd_chk("IIR after pop", 2, 8'hC1);
         wreg(2, 8'h00); wreg(3, 8'h40); wait_clk(500); wreg(3, 8'h00); wait_clk(400);
         rd_chk("LSR BI fen0", 5, 8'h71); rd_chk("pop", 0, 8'h00);
