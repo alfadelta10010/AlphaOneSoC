@@ -46,7 +46,15 @@
 
 		/* CLINT at 0x0200_0000: the board file's timer; timebase-frequency = the core clock. */
 
-		/* 16550A, byte registers (WO-49). */
+		/* 16550A, byte registers (WO-49), trimmed (WO-63): 8-entry RX FIFO, a one-byte TX holding
+		 * register, RX trigger codes 1/2/4/7 bytes. 8250_of.c sets UPF_FIXED_TYPE, so autoconfig
+		 * never runs and does not overwrite fifosize/tx_loadsz with the 16550A table's 16/16;
+		 * it reads tx-threshold and sets tx_loadsz = fifosize - tx_threshold = 8 - 7 = 1, so
+		 * serial8250_tx_chars() writes one byte per THRE interrupt and the CPU never waits on a
+		 * full THR (a console write with tx_loadsz = 1 also takes the byte-by-byte path, not
+		 * the FIFO one). Were it to push more, THR stalls the CPU up to one frame (~87 us at
+		 * 115200). The driver still writes FCR = ENABLE_FIFO | R_TRIG_10 (code 2), which this
+		 * UART maps to 4 bytes, leaving 4 character times (~350 us) before an RX overrun. */
 		uart0: serial@10000000 {
 			compatible = "ns16550a";
 			reg = <0x10000000 0x100>;
@@ -54,8 +62,8 @@
 			reg-io-width = <1>;
 			clocks = <&clk_core>;
 			clock-frequency = <62500000>;
-			fifo-size = <16>;
-			tx-threshold = <12>;	/* a 16-byte TX burst freezes the CPU ~0.95 ms and there is no RTS#, so RX could overrun */
+			fifo-size = <8>;
+			tx-threshold = <7>;	/* tx_loadsz = 8 - 7 = 1 */
 			interrupt-parent = <&plic>;
 			interrupts = <1>;
 		};
