@@ -3,10 +3,13 @@
 //   0x00 pwmcfg  : {ip[3:0], 12'b0 (gang, center), 2'b0, enoneshot, enalways, 2'b0 (deglitch ignored),
 //                   zerocmp, sticky, 4'b0, scale[3:0]}   lane 3 write sets/clears ip directly
 //   0x08 pwmcount: reads 0 (departure); any write restarts the prescaler and the scaled count
-//   0x10 pwms    : {16'b0, s}; writes ignored (departure)
+//   0x10 pwms    : {16'b0, s}; read-only, as in sifive-blocks (Timer.scala s_desc access R; the manual's RW is not built)
 //   0x20..0x2C pwmcmp0..3: {16'b0, cmp}, lanes 0 and 1
 // Counter: tick = en & (pre & (2^scale - 1)) == 2^scale - 1; s counts on tick. zerocmp & s >= cmp0 resets
-// pre and s one cycle after the match. enoneshot clears on that reset or on the s wrap (our reading).
+// pre and s one cycle after the match. enoneshot clears on that reset or on the s wrap (FE310-G002 20.8/20.12:
+// with zerocmp clear the reset condition is the carry out of the top pwms bit).
+// Pin polarity: pwm_o = ip, high while the registered pwms >= pwmcmpX (manual 20.7/20.9, PWM.scala gpio = ip).
+// pwm-sifive.c's header claims the opposite, but its arithmetic (cmp = 0xFFFF - duty) requires this. Do not invert.
 // A cfg write takes effect next clock; a pwmcount write wins over counting.
 module pwm (
     input  wire        clk, rst,
