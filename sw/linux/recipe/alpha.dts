@@ -1,0 +1,83 @@
+/dts-v1/;
+/* AlphaOneSoC, NOMMU M-mode Linux. SPIKE=1 variant (spike.dts) differs only in
+   timebase-frequency and the syscon address (see build.sh). */
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "alphaone,soc";
+	model = "alphaone,soc";
+
+	chosen {
+		bootargs = "rw console=ttyS0,115200 earlycon=uart8250,mmio,0x10000000 loglevel=7";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x00ff0000>;
+	};
+
+@EXTRAMEM@	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <@TIMEBASE@>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv32imac_zicsr_zifencei";
+			mmu-type = "riscv,none";
+			riscv,pmpregions = <4>;
+			riscv,pmpgranularity = <4>;
+			clock-frequency = <62500000>;
+
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+@PLIC@		clint@2000000 {
+			compatible = "riscv,clint0";
+			reg = <0x02000000 0x10000>;
+			interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+		};
+
+		serial@10000000 {
+			compatible = "ns16550a";
+			reg = <0x10000000 0x100>;
+			reg-shift = <0>;
+			reg-io-width = <1>;
+@UARTIRQ@			clock-frequency = <62500000>;
+			current-speed = <114890>;
+		};
+
+		syscon: syscon@@SYSCON@ {
+			compatible = "syscon";
+			reg = <0x@SYSCON@ 0x1000>;
+		};
+
+		poweroff {
+			compatible = "syscon-poweroff";
+			regmap = <&syscon>;
+			offset = <0>;
+			value = <0x5555>;
+		};
+
+		reboot {
+			compatible = "syscon-reboot";
+			regmap = <&syscon>;
+			offset = <0>;
+			value = <0x7777>;
+		};
+	};
+};
