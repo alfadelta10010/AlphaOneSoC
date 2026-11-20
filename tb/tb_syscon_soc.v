@@ -137,6 +137,7 @@ module tb_syscon_soc;
     integer     m_hold  = 0;             // reboot edges left
     reg         m_off   = 1'b0;          // power-off / fail: held until rst
     reg         m_en    = 1'b0;          // watchdog
+    reg         m_rmod  = 1'b0, m_stat = 1'b0;   // interrupt mode (RMOD) and its flag
     reg  [3:0]  m_top   = `WDT_TOP_RESET;
     integer     m_ticks = 0;
     reg         m_tprev = 1'b1;
@@ -160,7 +161,8 @@ module tb_syscon_soc;
             else if (off == `SYS_CHIPID)   model_word = `CHIP_ID_SPEC;
             else if (off == `SYS_STRAPS)   model_word = {30'b0, m_ns, m_strap};
             else if (off == `SYS_QSPICFG)  model_word = {27'b0, m_cap, m_ddr, m_stream};
-            else if (off == `WDT_CR)       model_word = {31'b0, m_en};
+            else if (off == `WDT_CR)       model_word = {30'b0, m_rmod, m_en};
+            else if (off == `WDT_STAT)     model_word = {31'b0, m_stat};
             else if (off == `WDT_TORR)     model_word = {24'b0, m_top, m_top};
             else if (off == `WDT_COMP1)    model_word = `WDT_COMP1_VAL;
             else                           model_word = 32'h0;   // FINISH, reserved, mailbox, everything else
@@ -181,6 +183,7 @@ module tb_syscon_soc;
     integer exp_prst = 0;
     reg [15:0] fail_code = 16'h0;
     reg [31:0] value = 0, value2 = 0;
+    integer n_irq = 0;
     integer n_fin = 0, n_wdt = 0, n_off = 0;        // reboots by FINISH / watchdog, power-offs
     integer n_loads = 0, n_stores = 0, n_events = 0, n_values = 0;
     reg         ld_pend = 1'b0;                 // a syscon load's select edge was seen; its data reaches the core next
@@ -284,7 +287,7 @@ module tb_syscon_soc;
         reg [31:0] word, mask, wdat;
         reg [13:0] w_off;
         reg [3:0]  be;
-        reg        fin_act, w_cr, w_torr, kick, tick, fire, tap_bit;
+        reg        fin_act, w_cr, w_torr, kick, tick, fire, first, tap_bit;
         integer    n, cls;
         reg [63:0] lo;
 
@@ -400,12 +403,12 @@ module tb_syscon_soc;
             m_cause = `RC_PIN; m_bm = 8'h00; m_strap = strap;
             m_ns = strap_ns; m_stream = ~strap_ns; m_ddr = 1'b0; m_cap = `QCFG_CAP_RESET; m_valid = 1'b1;
             m_hold = 0; m_off = 1'b0; why = 0;
-            m_en = 1'b0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1'b1; last_clear = cyc;
+            m_en = 1'b0; m_rmod = 1'b0; m_stat = 1'b0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1'b1; last_clear = cyc;
         end else if (held) begin
             // the SoC is held: no write takes effect; the watchdog is on rst_soc
             if (m_hold > 0) m_hold = m_hold - 1;
             m_stream = ~m_ns; m_ddr = 1'b0; m_cap = `QCFG_CAP_RESET;
-            m_en = 1'b0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1'b1; last_clear = cyc;
+            m_en = 1'b0; m_rmod = 1'b0; m_stat = 1'b0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1'b1; last_clear = cyc;
         end else begin
             w_off = soc.dmem_addr[15:2];
             wdat  = soc.dmem_wdata;
@@ -423,7 +426,7 @@ module tb_syscon_soc;
                     `SYS_CAUSE:    if (be[0]) m_cause = m_cause & ~wdat[2:0];
                     `SYS_BOOTMODE: if (be[0]) m_bm = wdat[7:0];
                     `SYS_QSPICFG:  if (be[0]) begin m_stream = wdat[0]; m_ddr = wdat[1]; m_cap = wdat[4:2]; end
-                    `WDT_CR:       w_cr = be[0] && wdat[0];
+                    `WDT_CR:       begin w_cr = be[0] && wdat[0]; if (be[0]) m_rmod = wdat[1]; end
                     `WDT_TORR:     w_torr = be[0];
                     `WDT_CRR:      kick = be[0] && (wdat[7:0] == `WDT_KEY);
                     default: ;
@@ -433,7 +436,12 @@ module tb_syscon_soc;
             // tick after the last clear fires, but never on a held edge (A18).
             tap_bit = tap[m_top];
             tick    = m_en && tap_bit && !m_tprev;
-            fire    = m_en && tick && (m_ticks == 2);
+            first   = m_en && tick && (m_ticks == 2) && m_rmod && !m_stat;   // interrupt mode: flag, not reboot
+            fire    = m_en && tick && (m_ticks == 2) && !first;
+            if (first) begin
+                $display("NOTE watchdog interrupt %0d clocks after the last clear (TOP %0d)", cyc - last_clear, m_top);
+                n_irq = n_irq + 1;
+            end
             if (fire) begin
                 n  = cyc - last_clear;
                 lo = 64'd1 << (16 + m_top);
@@ -442,7 +450,9 @@ module tb_syscon_soc;
                     fail($sformatf("watchdog fired %0d clocks after the last clear, TOP %0d wants (%0d, %0d]",
                                    n, m_top, lo, lo + lo / 2 + 1));
             end
-            if (!m_en || kick || w_torr) begin m_ticks = 0; last_clear = cyc; end
+            if (first) m_stat = 1'b1;
+            else if (kick || w_torr || (sc_rd && w_off == 14'h45)) m_stat = 1'b0;
+            if (!m_en || kick || w_torr || first) begin m_ticks = 0; last_clear = cyc; end
             else if (tick) m_ticks = m_ticks + 1;
             if (w_torr) begin m_top = wdat[3:0]; m_tprev = 1'b1; end
             else m_tprev = tap_bit;
