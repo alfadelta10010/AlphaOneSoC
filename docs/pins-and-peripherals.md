@@ -4,11 +4,20 @@ What each of the chip's 24 TinyTapeout I/O pins does, how the demo board and
 the Pmods connect to them, and the peripheral RTL that has to be built behind
 them.
 
-**Status: the pinout is final. The UART (`src/uart.v`), the GPIO block with
-the SPI transmitter (`src/gpio.v`) and the bus and top-level changes are
-built and wired into `src/alphaone_soc.v`, and the TinyTapeout wrapper
-(`src/tt_um_alfadelta10010_alphaone_soc.v`) puts that on the pins.** The
-address map, boot flow and QSPI engine are in `docs/soc-architecture.md`.
+**Status (2026-11-20, 4x4 branch).** The 3x4 submission has the UART
+(`src/uart.v`, polled subset), the GPIO block with the SPI controller
+(`src/gpio.v`, `src/spi.v`), syscon and the TinyTapeout wrapper. The 4x4
+branch (decision of 2026-11-20, `docs/ROADMAP.md` section 0) adds a PLIC, a
+16550A UART with FIFOs and an interrupt, a gamepad receiver, a timer/PWM, an
+audio block and an output pinmux, and moves the default pin map. **Committed:**
+`src/gamepad.v`, `src/pwm.v`, `src/audio.v`, `src/pinmux.v` with their
+spec-model benches and formal harnesses, and the core's third IO window for
+the PLIC. **Decided, in progress:** the PLIC (WO-47, `src/plic.v` is not
+committed yet), the 16550A UART (WO-49), the GPIO and SPI deltas (WO-52), the
+registered IO read path in `soc_bus` (WO-51) and the integration that puts the
+new blocks on the bus and the pins (WO-58). Text below that depends on those is
+marked "(WO-nn, in progress)". The address map, boot flow and QSPI engine are in
+`docs/soc-architecture.md`.
 
 The board is the TinyTapeout ETR demo board v3.2
 ([tt-demo-pcb](https://github.com/TinyTapeout/tt-demo-pcb)), with the
@@ -28,30 +37,43 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uio[5]` | QSPI SD3 | bidir | QSPI Pmod |
 | `uio[6]` | QSPI CS1 (PSRAM A) | out | QSPI Pmod |
 | `uio[7]` | QSPI CS2 (PSRAM B) | out | QSPI Pmod |
-| `uo_out[0]` | GPIO out 0 | out | OLED CS# / keypad COL4 |
-| `uo_out[1]` | GPIO out 1, or SPI MOSI (a flop either way) | out | OLED SDIN and SD DI (MOSI) / keypad COL3 |
-| `uo_out[2]` | GPIO out 2 | out | OLED D/C (moved there, see below) / keypad COL2 |
-| `uo_out[3]` | GPIO out 3, or SPI SCK (a flop either way) | out | OLED SCK and SD SCK / keypad COL1 |
+| `uo_out[0]` | OLED CS# = GPIO out 0 (pinmux default) | out | OLED CS# |
+| `uo_out[1]` | OLED MOSI = GPIO out 1, or SPI MOSI (a pin flop either way) | out | OLED SDIN and SD DI (MOSI) |
+| `uo_out[2]` | OLED D/C = GPIO out 2 | out | OLED D/C (moved there, see below) |
+| `uo_out[3]` | OLED SCK = GPIO out 3, or SPI SCK (a pin flop either way) | out | OLED SCK and SD SCK |
 | `uo_out[4]` | UART TX | out | RP2350 GPIO37 (UART1 RX) |
-| `uo_out[5]` | UART RTS# | out | RP2350 GPIO38 (UART1 CTS) |
-| `uo_out[6]` | GPIO out 6 | out | OLED RES# and VCCEN |
-| `uo_out[7]` | GPIO out 7: SD CS# (resets high) | out | SD CS# (DAT3), by a jumper wire; the 7-segment DP otherwise |
+| `uo_out[5]` | SD CS# = GPIO out 5 (resets high) | out | SD CS# (DAT3), by a jumper wire; the RP2350's GPIO38 (UART1 CTS) is on this pin |
+| `uo_out[6]` | OLED RES# and VCCEN = GPIO out 6 | out | OLED RES# and VCCEN |
+| `uo_out[7]` | AUDIO (the audio block's PWM DAC) | out | TT Audio Pmod, or the 7-segment DP |
 | `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
 | `ui_in[1]` | GPIO in 1, and SPI MISO | in | SD DO (MISO); DIP 2 must be off with the SD fitted |
 | `ui_in[2]` | the no-stream strap during the pin reset (held through reboots), then GPIO in 2. 1 = flash streaming off at reset | in | DIP 3 (off = RP2350 pull-down = streaming on) |
 | `ui_in[3]` | UART RX | in | RP2350 GPIO20 (UART1 TX) |
-| `ui_in[4..7]` | GPIO in 4..7 | in | keypad ROW4..ROW1, or DIP 5–8 |
+| `ui_in[4]` | gamepad LATCH, and GPIO in 4 | in | gamepad Pmod; DIP 5 off |
+| `ui_in[5]` | gamepad CLOCK, and GPIO in 5 | in | gamepad Pmod; DIP 6 off |
+| `ui_in[6]` | gamepad DATA, and GPIO in 6 | in | gamepad Pmod; DIP 7 off |
+| `ui_in[7]` | GPIO in 7 | in | DIP 8 |
 
-**Reset values.** GPIO OUT resets to `0x89`: `uo_out[6]` low holds the OLED
-in reset with its panel supply off, while its CS# (`uo_out[0]`) and the SD
-card's (`uo_out[7]`) are high, deselected, and SCK (`uo_out[3]`) sits at SPI mode 3's idle-high level, so
-enabling the transmitter makes no edge. On the keypad that leaves two columns
-high and two low, which nothing reads until software scans.
-UART TX resets to 1 (idle) and RTS# to 1 (not ready), so the RP2350 sees
-neither a break nor a clear-to-send while the chip is in reset. While reset is
-held the QSPI pins are released, as they are today. The same values hold at a
-syscon reboot (for two clocks) and for as long as the chip is powered off, and
-the QSPI pins are released then too.
+**Pinmux.** Each `uo_out` pin has a default function (the table above) and
+may take another one by a 3-bit code in the PINMUX register (section 11):
+GPIO OUT bit *i*, UART RTS#, AUDIO, or PWM0-3. RTS# exists only as such a
+feature now: the default map gives `uo_out[5]` to SD CS#, so flow control
+means RTS# on pin 5 and no SD card.
+
+**Reset values.** Every `uo_out` pin is a flop after the pinmux, and all eight
+reset to `0x39`: `uo_out[0]` (OLED CS#), `[3]` (SCK, SPI mode 3's idle-high
+level, so enabling the transmitter makes no edge), `[4]` (UART TX idle) and
+`[5]` (SD CS#) high, `[6]` low (OLED held in reset, panel supply off), `[7]`
+(audio) low. GPIO OUT resets to `0xB9`, which is the same on the pins that
+default to GPIO plus bit 7 and bit 4 high, so a pin switched to GPIO starts at
+its idle level. UART TX, RTS# (when mapped) and the PWM and audio sources
+reset to the pin's idle level as well, so the pin flops load `0x39` again on the
+first running edge and nothing moves (the TT01 case, `tb/VPLAN.md` 4.2). While
+reset is held the QSPI pins are released, as they are today. The same values
+hold at a syscon reboot (for two clocks) and for as long as the chip is
+powered off, and the QSPI pins are released then too. (WO-58, in progress:
+the pin flops and the wrapper's `0x39`; the 3x4 submission drives `0xB9`
+and RTS# on pin 5.)
 
 ## Why this layout
 
@@ -68,17 +90,24 @@ the QSPI pins are released then too.
   (<https://tinytapeout.com/specs/pinouts/>): `ui_in[3]` RX, `uo_out[4]` TX.
   On the RP2350 these are plain UART1 function pins (GPIO20 TX, GPIO37 RX).
   The other listed pair (`ui_in[1]`, `uo_out[0]`) needs GPIO18's auxiliary
-  UART function. RTS# goes on `uo_out[5]` because that is GPIO38, the demo
-  board's UART1 CTS pin.
-* **Outputs are the scarce pins.** After TX and RTS#, six outputs remain. The
-  OLED needs five of them once PMODEN and VCCEN are tied off (below), and the
-  keypad needs four. Only one of the two is fitted at a time.
+  UART function. GPIO38, the demo board's UART1 CTS pin, is `uo_out[5]`: RTS#
+  can be mapped there as a pinmux feature, but the default gives the pin to
+  SD CS# (below), so the RP2350's UART1 runs without CTS.
+* **Outputs are the scarce pins.** After TX, seven outputs remain. The OLED
+  needs five of them once PMODEN and VCCEN are tied off (below), the SD card's
+  CS# one more (the rest of the SD card shares the OLED's SPI lines), and the
+  audio PWM one. That is the default map; the pinmux moves any of them.
 * The OLED's SPI lines keep their Pmod positions (CS# 0, MOSI 1, SCK 3), so
   the SPI transmitter can take over MOSI and SCK without moving anything.
+* **The TT Audio Pmod sits on the OUT header and passes `out[0-6]` through**,
+  so the OLED adapter stacks on it and the audio PWM on `uo_out[7]` reaches the
+  Pmod's filter and jack. The gamepad Pmod takes `ui_in[4..6]`, which replaces
+  the keypad rows (the keypad is no longer a board setup).
 
 ## Board setups
 
-One output Pmod at a time on the OUT header.
+The TT Audio Pmod and the OLED adapter stack on the OUT header (the Audio
+Pmod passes `out[0-6]` through); the gamepad Pmod goes on the IN header.
 
 ### OLED (PmodOLEDrgb): the primary display
 
@@ -104,8 +133,10 @@ its lines are cut off from the demo board and rejoined with jumpers:
 | RES# and VCCEN | 8, 9 | `uo_out[6]` |
 | PMODEN | 10 | 3V3 (always on) |
 
-OUT pins 7, 8 and 10 (TX, RTS#, spare) then reach nothing on the Pmod side;
-the RP2350 reads TX and RTS# through the board.
+OUT pins 7, 8 and 10 (TX, SD CS#, AUDIO) then reach nothing on the OLED side;
+the RP2350 reads TX through the board, the SD CS# goes by a jumper from OUT
+header pin 8 (not pin 10) to the card, and the audio output is on the Audio
+Pmod's pin.
 
 What the two ties do:
 
@@ -122,26 +153,18 @@ What the two ties do:
   * To power down: display off (`AEh`), then reset low.
   * Chip reset drives `uo_out[6]` low: controller in reset, panel off.
 
-### Keypad (PmodKYPD): nice to have
+### Gamepad (SNES Pmod): ui_in[4..6]
 
-The keypad connects through Digilent's 2×6-pin to dual 6-pin splitter cable,
-or ten jumper wires. The Pmod itself is not modified.
-
-* The top-row plug (COL4..COL1, GND, 3V3) goes into the OUT top row,
-  `uo_out[0..3]`.
-* The bottom-row plug (ROW4..ROW1, GND, 3V3) goes into the IN bottom row,
-  `ui_in[4..7]`.
-
-The columns have 470 Ω series resistors and the rows 10 kΩ pull-ups. A scan
-drives one column low and the rest high, then reads the four rows. The series
-resistors make two pressed keys in one row safe (about 3.5 mA between two
-columns).
+The TT gamepad Pmod goes on the IN header's bottom row: LATCH on `ui_in[4]`,
+CLOCK on `ui_in[5]`, DATA on `ui_in[6]`. DIP 5-7 must be off. The receiver
+(section 10) is `src/gamepad.v`. The PmodKYPD is no longer supported by the
+default map: its rows were `ui_in[4..7]` and its columns `uo_out[0..3]`.
 
 ### Board rules
 
-* **DIP switches 4–8 off.** DIP 4 sits on UART RX, and 5–8 on the keypad
-  rows. A DIP that is on adds a 1 kΩ pull-up, which against the keypad's
-  470 Ω leaves a pressed row at about 1.1 V.
+* **DIP switches 4–7 off.** DIP 4 sits on UART RX, and 5–7 on the gamepad
+  Pmod's lines (a DIP that is on adds a 1 kΩ pull-up to a line the Pmod
+  drives). DIP 8 is GPIO in 7.
 * **An off DIP leaves its pin floating.** The switches pull up through 1 kΩ
   and nothing pulls down. The RP2350 drives `ui_in[0]` (the read-latency
   strap), since it chose the clock. It should also pull down `ui_in[1..2]`
@@ -150,9 +173,12 @@ columns).
   input with no pull-down (see the SD notes below). A floating `ui_in[2]`
   can only make flash reads slower (streaming off), never unbootable.
 * **RP2350 UART.**
-  * UART1 on GPIO20 (TX) and GPIO37 (RX), with **CTS** flow control on
-    GPIO38.
-  * Do **not** enable its RTS: GPIO23 is `ui_in[6]`, a keypad row.
+  * UART1 on GPIO20 (TX) and GPIO37 (RX), **without CTS** by default: GPIO38
+    is `uo_out[5]`, the SD card's CS#, so it must be an input with no UART
+    function. Flow control needs RTS# mapped to pin 5 (PINMUX code 2), which
+    gives up the SD card; then CTS on GPIO38 works as before. Without it,
+    the 16-deep RX FIFO is the only margin (section 2).
+  * Do **not** enable its RTS: GPIO23 is `ui_in[6]`, the gamepad DATA line.
   * Leave GPIO21–24 as inputs.
 * **Flash hand-over.** A master that hands the QSPI Pmod to this design must leave the flash
   **idle** (no program, erase or status write running, nothing suspended), **not in deep power-down**
@@ -163,27 +189,37 @@ columns).
   `docs/qspi-memories.md` section 7.3a.
 * **7-segment display.** It is wired to every `uo_out` through solder
   jumpers JP1–8, so it flickers with the traffic. Cut the jumpers to stop
-  that. `uo_out[7]` (segment DP) is the SD card's CS#, so it is no
-  heartbeat LED.
+  that. `uo_out[7]` (segment DP) is the audio PWM, `uo_out[5]` the SD card's
+  CS#; neither is a heartbeat LED.
 
 ## Peripheral RTL
 
-| # | Block | Where | Status | Size (measured) | Linux |
+| # | Block | Where | Status | Size | Linux |
 |---|---|---|---|---|---|
-| 1 | TinyTapeout wrapper | `src/tt_um_alfadelta10010_alphaone_soc.v` | built | 2 flops, about 10 gates | — |
-| 2 | UART | `0x1000_0000`, `src/uart.v` | built | 0.29 tiles, 77 flops | `ns16550a` (8250 driver), polled |
-| 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
-| 4 | SPI transmitter | `0x1001_0008`, inside the GPIO block | built | (in 3) | small SPI controller driver |
-| 5 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built | a mux | — |
-| 6 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.151 tile, 23 flops (0.078 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
+| 1 | TinyTapeout wrapper | `src/tt_um_alfadelta10010_alphaone_soc.v` | built; `uo_out` from the pin flops, `0x39` in reset (WO-58, in progress) | 2 flops, about 10 gates | — |
+| 2 | UART | `0x1000_0000`, `src/uart.v` | polled subset built; **16550A with FIFOs and interrupt (WO-49, in progress)** | 0.29 tiles, 77 flops built; about +10,500 µm² synth for the FIFOs (*estimate*) | `ns16550a` (8250 driver), interrupt 1 |
+| 3 | GPIO | `0x1001_0000`, `src/gpio.v` | built; OUT bits 4-5 real, reset `0xB9` (WO-52, in progress) | 0.12 tiles, 39 flops, with 4 | generic gpio-mmio |
+| 4 | SPI transmitter | `0x1001_0020`, inside the GPIO block | built; tiny_spi IRQ enables (WO-52, in progress) | (in 3) | `spi-oc-tiny` |
+| 5 | Gamepad | `0x1001_0010`, `src/gamepad.v`, carved out of the GPIO window by `soc_bus` | RTL, bench, formal committed; on the bus in WO-58 (in progress) | 3,689 µm² synth, 57 flops | small input driver |
+| 6 | PLIC | `0x0C00_0000`, `src/plic.v` | decided, WO-47 (in progress) | about 2,700 µm² synth, 38 flops (*estimate*) | `sifive,plic-1.0.0` |
+| 7 | PWM | `0x1003_0000`, `src/pwm.v` | RTL, bench, formal committed; on the bus in WO-58 (in progress) | 8,402 µm² synth, 107 flops | `pwm-sifive` |
+| 8 | Audio | `0x1003_0100`, `src/audio.v` | RTL, bench, formal committed; on the bus in WO-58 (in progress) | 9,753 µm² synth, 156 flops | none (bare metal) |
+| 9 | Pinmux | `0x1002_0020`, `src/pinmux.v`, carved out of the syscon window | RTL, bench, formal committed; on the bus in WO-58 (in progress) | 2,560 µm² synth, 32 flops | `pinctrl-single` |
+| 10 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built; registered IO read path (WO-51, in progress) | one state flop and a 32-bit register, 632 µm² (measured) | — |
+| 11 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.151 tile, 23 flops (0.078 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
 
 Sizes: yosys + abc against `libs/sky130_fd_sc_hd__tt_025C_1v80.lib`, each
 block synthesised on its own with the audit's recipe; 1 tile ≈ 11,300 µm² of
 standard cells at TinyTapeout's 60% density (UART 3,321 µm², GPIO 1,380 µm²).
 The recipe runs about 20-24% below LibreLane's synthesis (`docs/area-audit.md`).
-In LibreLane the whole SoC is 12.52 tiles with the area cuts, about 1.8x the
-seven-tile budget (see "Area" in `docs/soc-architecture.md`); these two add
-about 0.4 tiles of that.
+The gamepad, PWM, audio and pinmux figures are LibreLane synthesis of the
+committed RTL (area-agent, 2026-11-20); the PLIC and UART figures are planner
+sketches until WO-47 and WO-49 land. At 4x4 the whole peripheral set is about
+39,000 µm² synthesised, 86 % of the placed-area headroom the 4x4 baseline
+harden measured (`localFiles/harden-4x4-2026-11-20/RESULTS.md`), and the
+bundle routes under the 3x4 ceiling only with the registered IO read path
+(measured: combinational read data GRT 78.26 % / overflow 4,290, registered
+66.04 % / 16). The final figures come from the integrated harden.
 
 ### 1. TinyTapeout wrapper
 
@@ -222,10 +258,11 @@ about 0.4 tiles of that.
     `qspi_ctl_oe`, bits 1, 2, 4, 5 = `qspi_io_oe`. So whoever holds the chip
     in reset owns the QSPI bus without needing a clock, and the pins stay
     inputs after `rst_n` rises until the SoC has really been reset.
-  * `uo_out` is `0xB9`, the SoC's own reset values (TX and RTS# high, GPIO
-    OUT `0x89`: the OLED held in reset with its panel supply off). Nothing
-    moves when `rst` falls, because the SoC is driving the same values by
-    then.
+  * `uo_out` is `0x39`, the pin flops' own reset values (OLED CS#, SCK, UART
+    TX and SD CS# high; RES#/VCCEN and AUDIO low: the OLED held in reset with
+    its panel supply off). Nothing moves when `rst` falls, because the SoC is
+    driving the same values by then. (WO-58, in progress: the 3x4
+    submission drives `0xB9`, with RTS# on bit 5.)
 * `uio_out`: `[0]` cs_n[0], `[1]` io_out[0], `[2]` io_out[1], `[3]` sck,
   `[4]` io_out[2], `[5]` io_out[3], `[6]` cs_n[1], `[7]` cs_n[2].
 * `qspi_io_in` = `{uio_in[5], uio_in[4], uio_in[2], uio_in[1]}`. The other
@@ -245,12 +282,11 @@ about 0.4 tiles of that.
   `run` gating applies to `rst_n` only. The pins still go to their reset
   values: the QSPI pins are released by the engine's own registered output
   enables (each `uio_oe` bit is that flop ANDed with `run`, which stays 1), and
-  `uo_out` goes to `0xB9` on the same edge. Every `uo_out` bit is a flop except
-  `uo_out[1]` and `uo_out[3]` while the SPI transmitter is on: those are a mux
-  whose select and data both change on that edge, a possible sub-nanosecond
-  hazard at the instant RES# falls and CS# rises. The OLED is being reset
-  anyway. Gating `run` as well would not remove it, so the follow-up is for the
-  SPI controller to drive MOSI and SCK from flops.
+  `uo_out` goes to `0x39` on the same edge. With the pinmux every `uo_out` bit is
+  one flop through the `run` gate (the structural `spi_f12` harness covers all
+  eight pins; WO-58, in progress), which removes the sub-nanosecond hazard
+  the 3x4 design has on `uo_out[1]` and `uo_out[3]` while the SPI transmitter
+  is on (a mux whose select and data change on that edge).
 * The demo board starts the clock by itself only if the project's `clock_hz`
   in `info.yaml` is not 0. With 0 the clock has to be started by hand, or
   from a `config.ini` section for the project.
@@ -288,109 +324,107 @@ started), in the middle of a flash read with the clock running, and by a
 pulse shorter than a clock. The pins are checked in reset and on each of the
 three clock edges that follow it. Then every GPIO pin in both directions,
 which chip select each PSRAM answers on, and the strap in both positions,
-changed at the first moment it is allowed to. Because the bench refers to
+changed at the first moment it is allowed to (pin expectations move to `0x39`
+and no RTS# on `uo_out[5]` in WO-58, in progress). Because the bench refers to
 nothing inside the design, it also runs on a gate-level netlist of the top
 level.
 
 ### 2. UART at `0x1000_0000`
 
-This is a 16550-compatible subset with **byte-wide registers**
-(`reg-shift = 0`, `reg-io-width = 1`). That is the layout Spike
+**(WO-49, in progress.)** What is built today is a polled 16550 subset with
+one holding register each way; this section describes the 16550A that
+replaces it, with today's behaviour kept where it says so. The registers are
+**byte-wide** (`reg-shift = 0`, `reg-io-width = 1`), the layout Spike
 (`spike --dump-dts`) and QEMU's `virt` board use at the same address, so one
 kernel and a near-identical device tree run on Spike and on the chip. The
 frame is fixed at 8N1, and baud = clk / (16 × divisor).
 
 | Offset | Read (DLAB=0) | Write (DLAB=0) | DLAB=1 |
 |---|---|---|---|
-| 0 | RBR (pops the received byte) | THR | DLL |
-| 1 | IER: bit 0 ERBFI, bit 1 ETBEI | IER | DLM |
-| 2 | IIR | FCR (ignored) | — |
-| 3 | LCR (read/write; only DLAB, bit 7, and SBC, bit 6, are kept) | LCR | LCR |
-| 4 | MCR (reads 0) | ignored | — |
-| 5 | LSR: bit 0 DR, 1 OE, 4 BI, 5 THRE, 6 TEMT | — | — |
-| 6 | MSR: `0xB0` (CTS, DSR, DCD asserted) | — | — |
-| 7 | SCR (reads 0) | ignored | — |
+| 0 | RBR (head of the RX FIFO, 0 when empty; pops) | THR (pushes the TX FIFO) | DLL |
+| 1 | IER: bit 0 ERBFI, 1 ETBEI, 2 ELSI, 3 EDSSI | IER | DLM |
+| 2 | IIR: `{FEN, FEN, 2'b00, IID[3:0]}` | FCR: bit 0 FEN, 1 clear RX, 2 clear TX, bits 7:6 RX trigger | — |
+| 3 | LCR (only DLAB, bit 7, and SBC, bit 6, are kept) | LCR | LCR |
+| 4 | MCR: LOOP, OUT2, OUT1, RTS, DTR; **resets to `0x02`** | MCR | — |
+| 5 | LSR: bit 0 DR, 1 OE, 3 FE, 4 BI, 5 THRE, 6 TEMT, 7 FIFOERR | — | — |
+| 6 | MSR: `0xB0` (CTS, DSR, DCD asserted); in loopback, the MCR outputs | — | — |
+| 7 | SCR (8-bit scratch, resets 0) | SCR | — |
 
 RBR pops only on a load whose byte enable selects offset 0. The core drives
 `dmem_be` on loads too.
 
-The behaviour that matters to Linux (`drivers/tty/serial/8250`):
-
-* **No interrupt line.** The device-tree node has no `interrupts`, so the
-  8250 driver polls on a timer, once per tick. **IIR must be correct even
-  so.** The poll calls the interrupt handler, which reads IIR first and
-  returns at once if bit 0 is set. IIR reads:
-  * `0x04` when ERBFI && DR;
-  * otherwise `0x02` when ETBEI && THRE;
-  * otherwise `0x01`.
-* **Transmit back-pressure instead of a TX FIFO.** A write to THR while the
-  transmitter still holds a byte does not complete: the UART holds `ready`
-  low until the holding register is free. The device tree says `ns16550a`
-  (16-byte FIFO), so on each poll the driver writes up to 16 bytes and the
-  bus paces them.
-  * Without this, a FIFO-less UART in polled mode sends **one character per
-    timer tick**: 100 characters/s at HZ=100.
-  * printk console output polls LSR per character and runs at line rate
-    either way.
-  * The divisor must reset to a non-zero value, so a THR write can never
-    stall forever.
-  * Check against `serial8250_tx_chars` when implementing.
-* **Receive flow control instead of an RX FIFO.** RX has one holding
-  register. RTS# (`uo_out[5]`) is asserted only while the receiver is idle
-  and the holding register is empty. The RP2350, with CTS flow control on,
-  checks CTS before each character, so it sends a character only when there
-  is room for it.
-  * Input is lossless at up to one character per poll. That is enough for
-    typing and for multi-byte escape sequences; a paste is slow but not lost.
-  * Without flow control, a burst arriving between two polls is lost. An
-    arrow key alone is three bytes.
+* **FIFOs.** RX 16 entries of 9 bits (8 data bits and an error flag: a break
+  is the flag with data 0, a framing error the flag with data != 0), TX 4
+  entries of 8 bits. FCR[7:6] pick the RX trigger 1, 4, 8 or 14 (with FEN
+  clear, 1; the FIFO buffers either way). A write that changes FEN clears both
+  FIFOs; FCR bits 1 and 2 clear one each (a TX frame already in the shifter
+  finishes).
+* **Interrupt, IRQ 1.** `irq` is IIR[0] == 0, a level, from flops. IID
+  priority: `0x6` receiver line status (ELSI and OE or an error at the head),
+  `0x4` received data (ERBFI and the trigger level reached), `0xC` character
+  timeout (ERBFI, the FIFO not empty and nothing pushed or popped for four
+  character times), `0x2` THR empty (ETBEI and the TX FIFO empty), else
+  `0x1`. THRE is a level: reading IIR does not clear it. OUT2 does not gate
+  the interrupt (neither Spike nor QEMU gates it).
+* **Loopback** (MCR bit 4): TX is held high, the transmit shifter feeds the
+  receiver, and MSR shows the MCR outputs.
+* **Transmit back-pressure stays.** A write to THR while the 4-deep FIFO is
+  full does not complete: the UART holds `ready` low (only while selected)
+  until a slot frees. With the interrupt, the 8250 driver hands over up to
+  `tx_loadsz` bytes per THRE interrupt without testing THRE. DT without
+  `tx-threshold`: 16 bytes, the first 4 without a stall and the rest paced
+  at line rate; `tx-threshold = <12>` gives 4 per interrupt and no stalls at
+  a third of the interrupt rate. The divisor must reset to a non-zero value,
+  so a THR write can never stall forever.
 * **RX sampling:** two-flop synchroniser, 16x oversampling, start bit checked
-  at mid-bit.
+  at mid-bit, as today. The receiver no longer waits for an empty RBR.
 
-As built (`src/uart.v`):
-
-* **No separate holding registers.** THR is the transmit shift register, so
-  THRE and TEMT are the same bit and a write stalls until the previous
-  frame's stop bit has gone. RBR is the receive shift register: a frame only
-  starts while RBR is empty (RTS# sees to that), so nothing is overwritten.
-  With the core's store loop between two bytes the line idles for a few
-  instruction times per character, a few percent of the throughput.
-* **A frame that starts while RBR is full** (a sender ignoring CTS) is not
-  shifted in: RBR keeps the older byte, and the frame sets OE at its stop
-  bit. **A frame whose stop bit reads 0 with any data bit 1** (a framing
-  error) is dropped and sets nothing; there is no FE bit. **A frame whose
-  every bit reads 0**, stop bit included, is a **break**: it sets BI and,
-  as a 16550 loads one zero character, DR with RBR = 0 (or OE if RBR was
-  full). Linux counts breaks and takes the magic SysRq key from BI. After
-  a framing error the receiver looks for a start bit again as soon as the
-  line is high; if the line instead stays low a whole frame more, counted
-  from the bad stop bit, that is a break that began inside a character and
-  is reported as one. After a break the line must be high for half a bit
-  before a start bit counts, as on a 16550, so a short glitch inside a long
+**Departures from a PC16550D.**
+* MCR resets to `0x02` (RTS = 1), not `0x00`; it only matters when RTS# is
+  mapped to a pin.
+* THRE is level and not cleared by an IIR read; Linux's `__stop_tx` clears
+  ETBEI when it has nothing to send, and its THRE test needs the interrupt on
+  both IIR reads.
+* BI and FE belong to the head entry: an LSR read does not clear them, the pop
+  does. OE is sticky until an LSR read.
+* MSR has no delta bits, so the modem-status interrupt never fires.
+* A frame with a bad stop bit and any data bit 1 is a framing error, queued
+  with the error flag (the polled subset dropped it). A frame whose every bit
+  reads 0, stop bit included, is a break: it queues `{1, 0x00}`, so DR is
+  set with RBR = 0, as a 16550 loads one zero character. Linux counts breaks
+  and takes the magic SysRq key from BI. After a break the line must be high
+  for half a bit before a start bit counts, so a short glitch inside a long
   break is not a second break.
-* **Reading LSR clears OE and BI**, as on a 16550. RBR pops, and OE and BI
-  clear, only on the cycle the load completes.
-* **LCR stores only DLAB and SBC**; its other bits read 0. Linux keeps its
-  own copy of LCR, and its read-modify-writes of LCR only clear bits.
-  **SBC (bit 6) sends a break**: TX is held at 0 from the next 16x tick
-  until SBC is cleared, as `serial8250_break_ctl` (tcsendbreak, TIOCSBRK)
-  expects. The transmitter keeps shifting underneath.
-* **RBR resets to 0.** Linux's startup reads it before any byte has
-  arrived, and an X there would spread in an X-accurate simulation.
-* **The divisor resets to 34**, 114,890 baud (-0.27% from 115200) at the
-  documented 62.5 MHz clock, so a program in flash can print before it sets
-  the divisor (`alphaone_soc`'s `UART_DIV_RESET`). At 60 MHz 34 gives
-  110,294 baud (-4.3%, 33 would be -1.4%) and at 50 MHz 27 would be 115200 (+0.5%). A divisor of 0 behaves as 1.
-* Every register write waits for `ready`, so a word store that writes THR
-  and LCR together while the transmitter is busy writes LCR once, when THR
-  is taken, and cannot flip DLAB under its own THR write.
+* FIFO mode off still buffers (a 16450 would overrun at the second character).
+* LCR stores only DLAB and SBC; its other bits read 0. SBC (bit 6) sends a
+  break: TX is held at 0 from the next 16x tick until SBC is cleared
+  (`serial8250_break_ctl`). RBR resets to 0 so Linux's start-up read cannot
+  see an X. The divisor resets to 34, 114,890 baud (-0.27% from 115200) at
+  62.5 MHz, so a program in flash can print before it sets the divisor
+  (`alphaone_soc`'s `UART_DIV_RESET`); a divisor of 0 behaves as 1. Every
+  register write waits for `ready`, so a word store that writes THR and LCR
+  together while the FIFO is full writes LCR once, when THR is taken.
 
-Device tree: `compatible = "ns16550a"`, `reg-shift = <0>`,
-`reg-io-width = <1>`, `clock-frequency` = the core clock, no `interrupts`.
-With no `interrupts`, `__uart_read_properties()` calls `platform_get_irq()`
-(not the `_optional` form), so every boot logs `error -ENXIO: IRQ index 0
-not found` at error level before the driver falls back to polling with
-irq 0, as intended. The line is expected, not a fault.
+**RX without RTS# (the default map).** At 114,890 baud a character is 87 µs.
+With the 16-deep FIFO, after the RX interrupt fires the CPU has (17 - trigger)
+character times to read the first byte: trigger 1 gives 1.39 ms, 4 gives
+1.13 ms, 8 (Linux's default FCR `0x81`) 0.78 ms, 14 0.26 ms. Linux reaches
+the 8250 handler in roughly 0.3-0.7 ms at 1.5 MIPS, so typing and bursts of up
+to 16 characters are lossless at trigger 1-8, unless interrupts are masked
+longer (a polled printk of 9 or more characters masks them for 87 µs each).
+**A sustained 115200 stream into Linux is not carried without flow control at
+any FIFO depth**: n_tty costs about 0.15-0.3 ms per character against 0.087 ms
+of arrival. Bare metal or FreeRTOS draining in the ISR (about 30 µs a
+character) carries it continuously at trigger 4 or 8. For sustained input,
+map RTS# to `uo_out[5]` (no SD card) or lower the baud rate; otherwise run
+`echo 1 > /sys/class/tty/ttyS0/rx_trig_bytes` in the Linux init.
+
+Device tree (`docs/devicetree-4x4.dtsi`, a fragment, not built):
+`compatible = "ns16550a"`, `reg-shift = <0>`, `reg-io-width = <1>`,
+`clock-frequency` = the core clock, `fifo-size = <16>`, `interrupts = <1>`
+on the PLIC, `tx-threshold` left out unless the stalls matter. (The 3x4
+polled UART had no `interrupts`; `platform_get_irq()` then logged `error
+-ENXIO: IRQ index 0 not found` at every boot, expected and harmless.)
 
 Early console: `earlycon=uart8250,mmio,0x10000000,115200,<core clock in Hz>`,
 or `earlycon=uart8250,mmio,0x10000000` with no baud at all. The clock
@@ -410,11 +444,13 @@ ignore writes.
 
 | Offset | Register |
 |---|---|
-| `0x00` | OUT (read/write). Bit *i* drives `uo_out[i]`; reads return the pins. Bits 4 and 5 belong to the UART: they read 0 and ignore writes. Bit 7 is the SD card's CS#. Bits 1 and 3 are the MOSI and SCK pin flops: with EN = 1 the SPI engine drives them and OUT writes to them are ignored. Resets to `0x89`. |
+| `0x00` | OUT (read/write). Bit *i* is the GPIO output *i*: it reaches `uo_out[i]` while the pinmux selects GPIO for that pin (the default for bits 0-3 and 6, and the SD CS# on bit 5; bit 4 is the UART's pin and bit 7 the audio's by default, so those two bits are only the GPIO source of the pinmux). **Reads return the GPIO outputs, not the pads**, since the pad is a pinmux flop after a mux. Bits 1 and 3 are the SPI engine's MOSI and SCK flops: with EN = 1 the SPI engine drives them and OUT writes to them are ignored. **Resets to `0xB9`.** (WO-52, in progress: bits 4 and 5 are real; the 3x4 design reads them as 0 and resets to `0x89`.) |
 | `0x04` | IN (read only). `ui_in[7:0]` through a two-flop synchroniser. |
 | `0x08` | reserved |
 | `0x0C` | SPICTL. Bit 0 EN (resets 0): 1 = the SPI engine owns `uo_out[1]` and `uo_out[3]`. Bit 8 BUSY (read only) = not TXE. |
-| `0x10`-`0x1C` | reserved |
+| `0x10` | GAMEPAD (read only), section 10; decoded in `soc_bus`, `gpio.v` never sees it |
+| `0x14` | GPSTAT, section 10; same carve |
+| `0x18`, `0x1C` | IN_IE (read/write, `[7:0]`, resets 0) and IN_IP (read; write 1 to clear, lane 0): an input-change interrupt, PLIC source 4. **Optional (WO-52 part C, in progress); reserved (read 0) if it is dropped.** IP[i] sets when the synchronised input *i* changes on either edge, whatever IE says; the interrupt is `|(IP & IE)`. |
 | `0x20`-`0x30` | the SPI controller, section 4 |
 | `0x34`-`0x3C` | reserved |
 
@@ -436,13 +472,10 @@ with both CS# high, then sends CMD0 with SD CS# low, which puts the card in
 SPI mode. Linux's probe order cannot guarantee this, so it belongs to the
 loader.
 
-Linux uses the generic gpio-mmio driver: one output-only chip and one
-input-only chip. Pick the exact binding when writing the device tree.
-
-Keypad scanning is software. Drive one column low and read the four rows,
-four times over. Linux's `matrix_keypad` driver needs interrupt-capable row
-GPIOs, which this chip does not have. The keypad is therefore a small polled
-input driver, or a userspace program.
+Linux uses the generic gpio-mmio driver: one output-only chip (`gpo`, OUT) and
+one input-only chip (`gpi`, IN), bit *i* = OUT or IN bit *i*
+(`docs/devicetree-4x4.dtsi`). The SPI chip selects are `cs-gpios = <&gpo 0 1>,
+<&gpo 5 1>` (OLED, SD, both active low).
 
 ### 4. SPI controller (tiny_spi) at `0x1001_0020`
 
@@ -450,14 +483,14 @@ A general SPI master for the SD card and the OLED on one bus, inside the GPIO
 block (`src/spi.v`). Its registers have the semantics of OpenCores
 `tiny_spi`, so Linux's `drivers/spi/spi-oc-tiny.c` (compatible
 `opencores,tiny-spi-rtlsvn2`) drives it unchanged, polled, with the chip
-selects as `cs-gpios` on GPIO OUT (OLED CS# = bit 0, SD CS# = bit 7; D/C =
+selects as `cs-gpios` on GPIO OUT (OLED CS# = bit 0, SD CS# = bit 5; D/C =
 bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
 
 | Offset | Register |
 |---|---|
 | `0x20` | RXDATA (read): the byte received with the last byte sent; valid once TXE = 1. |
 | `0x24` | TXDATA. Write: queue a byte (waits while the holding register is full). Read: that register, i.e. the byte written but not yet loaded, or after a load the byte received with the byte before. |
-| `0x28` | STATUS (read): bit 0 TXE = engine idle and holding register empty, bit 1 TXR = holding register empty. Writes are ignored. |
+| `0x28` | STATUS. Read: bit 0 TXE = engine idle and holding register empty, bit 1 TXR = holding register empty. Write: `{txren, txeen} <= wdata[1:0]`, the interrupt enables; **a STATUS write never waits** (WO-52, in progress). |
 | `0x2C` | CONTROL: bit 0 CPHA, bit 1 CPOL. All four modes; resets to 3 (mode 3). |
 | `0x30` | BAUD, 8 bits, resets to `0xFF`. SCK = clk / (2 x (BAUD + 1)): 122 kHz to 31.25 MHz at 62.5 MHz. |
 
@@ -475,16 +508,22 @@ bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
   BAUD + 1 clocks of setup and hold. MISO is sampled one core clock before
   the edge that ends each bit, from GPIO IN 1's first synchroniser flop.
   The SSD1331 needs 75 ns phases: BAUD >= 5 at 62.5 MHz. The SD card is
-  capped at 12.5 MHz in the device tree (BAUD 2 = 10.4 MHz); BAUD 1 only
-  after the round trip is measured on silicon (loopback `uo_out[1]` ->
-  `ui_in[1]`). Never use BAUD 0 to receive.
+  capped at 12.5 MHz in the device tree (BAUD 2 = 10.4 MHz). **BAUD 1 is lost
+  to the pin flop** (WO-58, in progress): MOSI and SCK both move one clock
+  later, so device timing is unchanged, but the MISO sample point is
+  internal and the round trip loses one clock (16 ns). At BAUD 2 the card
+  keeps 28 / 23 / 18 ns of margin for round trips of 20 / 25 / 30 ns; at
+  BAUD 1 it goes negative. Never use BAUD 0 to receive.
 * **Modes.** The driver writes CONTROL and BAUD before every transfer with
   the mode of the last device set up, so run both devices in mode 3.
 * Device tree: `baud-width = <8>` and `clock-frequency` are both required.
-* With the keypad fitted EN stays 0: COL3 and COL1 are MOSI and SCK.
+* **Interrupt (WO-52, in progress).** As tiny_spi: `irq = (TXR & txren) |
+  (TXE & txeen)`, PLIC source 2. **The device tree leaves `interrupts` out**:
+  `spi-oc-tiny` then takes one interrupt per byte, about 1 ms each against a
+  48-clock byte at BAUD 2, and polling is faster.
 * Departures from the tiny_spi RTL: a TXDATA write to a full holding register
   waits (tiny_spi overwrote it); TXE also needs the holding register empty;
-  STATUS writes are ignored (no IRQ); CONTROL, BAUD and the data registers have
+  STATUS writes never wait; CONTROL, BAUD and the data registers have
   reset values.
 * A reset or reboot in the middle of A in mode 3 raises SCK on the same edge as
   SD CS#; the frame is abandoned either way.
@@ -494,8 +533,8 @@ bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
 * PmodMicroSD J1: 1 CS, 2 MOSI, 3 MISO, 4 SCK, 5/11 GND, 6/12 3V3, 7 DAT1,
   8 DAT2, 9 CD (confirm against Digilent's reference manual).
 * MOSI, SCK to both devices; MISO (`ui_in[1]`) from the card's DO; SD CS# from
-  `uo_out[7]` by a jumper wire (the OLED adapter clips that pin). Keep the
-  wires short, or fit 33 ohm series resistors, and scope SCK at the card.
+  `uo_out[5]` by a jumper wire from OUT header pin 8 (the OLED adapter clips
+  that pin; the old pin 10 is now audio). Keep the wires short, or fit 33 ohm series resistors, and scope SCK at the card.
 * A 10-100 kohm pull-up on MISO on the card side (the card tri-states DO while
   deselected); check whether the Pmod has one. RP2350 GPIO18 must be an input
   with no pull-down.
@@ -503,13 +542,22 @@ bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
 
 ### 5. Bus and top level
 
-* `soc_bus.v`: `ready` comes from the IO targets, for the UART's and SPI's
-  back-pressure. An IO target may hold `ready` low only on a cycle its own
-  select is high, so the bus ANDs the readies.
-* `alphaone_soc.v`: ports `uart_rx`, `uart_tx`, `uart_rts_n`, `gpio_in[7:0]`
-  and `gpio_out[7:0]` (SPI muxed inside the GPIO block; `gpio_out[5:4]` are
-  0, since those pins are the UART's). The wrapper maps them onto `ui_in`
-  and `uo_out` as in the pinout table.
+* `soc_bus.v`: **every IO target's read data reaches the core through a
+  register** (WO-51, in progress; decision D14, `localFiles/wo-4x4/INDEX-4x4.md`).
+  One state flop `ph` and a 32-bit `io_q`: the selects are high only in phase
+  1, the target acts and `io_q` captures on the edge where `sel && ready`, and
+  `d_ready = ph` one clock later with `io_q`; the selects are low in phase 2,
+  so an RBR pop, a PLIC claim, a W1C or a write acts exactly once. The
+  memory path is unchanged. The cost is one clock per IO access (polled loops
+  2-5 % slower, benchmarks unaffected); the gain is routing (above) and the
+  IO `ready` into the core's stall path becomes a flop. `ready` still comes
+  from the UART and GPIO/SPI back-pressure, and an IO target may hold it
+  low only on a cycle its own select is high, so the bus ANDs the readies.
+  The new targets (PLIC, PWM, audio, gamepad, pinmux) never hold `ready` low.
+* `alphaone_soc.v`: ports `uart_rx`, `gpio_in[7:0]`, `uo[7:0]` (the pin flops)
+  and the old `uart_tx`, `uart_rts_n`, `gpio_out[7:0]` as pre-mux taps for the
+  benches (WO-58, in progress). The wrapper maps `uo` onto `uo_out` and the
+  input byte onto `ui_in` as in the pinout table.
 * `syscon` (`0x1002_0000`, `src/syscon.v`) decodes its own offsets in full
   and never holds `ready` low. `alphaone_soc` resets every other block from
   `rst_soc` (the chip reset, or a syscon reboot for two clock edges, or
@@ -525,11 +573,11 @@ tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
   edges. The QSPI pins are released for those two clocks, the control pins
   (SCK and the chip selects) come back driven idle on the first running edge,
   and the start-up sequence runs again, so the board sees what it sees after
-  `rst_n` rises. `uo_out` is `0xB9` through it, then follows the GPIO block.
+  `rst_n` rises. `uo_out` is `0x39` through it (the 3x4 design: `0xB9`), then follows the pin flops.
 * **Power-off** (`0x5555`, or `0x3333`): the same values held until `rst_n`.
   The QSPI pins stay released, so the Pmod's pull-ups deselect the flash and
-  both PSRAMs; `uo_out` stays `0xB9` (UART idle, RTS# not ready, the OLED in
-  reset with its panel supply off). The clock keeps running. Only `rst_n`
+  both PSRAMs; `uo_out` stays `0x39` (UART idle, SD CS# high, the OLED in
+  reset with its panel supply off, audio low). The clock keeps running. Only `rst_n`
   wakes the chip.
 * **The strap** is read once, at the pin reset, and kept (see the wrapper
   section). The pin is GPIO afterwards.
@@ -539,17 +587,133 @@ tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
   while the chip is powered off.
 * The RP2350 reads no syscon state from the pins; software reads
   RESET_CAUSE, BOOT_MODE and STRAPS over the bus.
+* **The syscon window also holds the PINMUX word** at `0x1002_0020` (section
+  11), carved out by `soc_bus`; `syscon.v` is not edited and still reads 0
+  there. WO-62's CACHE_CTL (if it lands) takes `0x1002_0024` the same way.
+
+### 7. PLIC at `0x0C00_0000`
+
+**(WO-47, in progress; `src/plic.v` is not committed yet.)** A subset of the
+RISC-V PLIC specification 1.0.0 as `drivers/irqchip/irq-sifive-plic.c` drives
+it (`sifive,plic-1.0.0`): one context (hart 0, M-mode), 9 level-triggered
+sources, 1-bit priorities and a 1-bit threshold. It lives in its own 4 MB PMA
+window, the core's third IO window `PMA_IO2` (`0x0C00_0000`-`0x0C3F_FFFF`,
+core commit c60b579), decoded in `soc_bus` by `addr[27]`.
+
+| Offset | Register |
+|---|---|
+| `0x000004 + 4(i-1)` | priority of source *i*: reads 0 or 1, any non-zero write stores 1 (0 masks) |
+| `0x001000` | pending word (read only) |
+| `0x002000` | context 0 enable word (bit 0 hard 0) |
+| `0x200000` | context 0 threshold (0 or 1) |
+| `0x200004` | claim (read) / complete (write the id) |
+
+Every other word reads 0 and ignores writes; there are no aliases. Only a
+full-word write (`be == 4'b1111`) takes effect. The claim id is the lowest
+eligible source (pending, enabled, priority 1, threshold 0); a claim read
+clears its pending bit and marks it in service, and a complete write clears
+that mark only if the source's enable bit is set (a completion of a disabled
+source is ignored, as the specification says; the driver enables around it).
+The gateway forwards a source once and holds it until it is completed. The
+output `meip` is registered, like MTIP (one clock of latency; it drops two
+clocks after a claim), and drives the core's `external_irq`.
+
+| Source | Device |
+|---|---|
+| 1 | UART |
+| 2 | SPI (tiny_spi interrupt; the DT does not use it) |
+| 3 | gamepad change |
+| 4 | GPIO input change (optional, WO-52 part C) |
+| 5-8 | PWM comparators 0-3 |
+| 9 | watchdog (WO-61, optional; tied 0 otherwise) |
+
+The audio block has no interrupt. Device tree: `riscv,ndev = <9>`,
+`interrupts-extended = <&cpu0_intc 11>`.
+
+### 8. PWM at `0x1003_0000`
+
+`src/pwm.v`, committed (the bus connection is WO-58, in progress). The
+register layout of SiFive's pwm0 (FE310-G002 chapter 20), four 16-bit
+comparators on a scaled counter, so `pwm-sifive` drives it; `compatible =
+"sifive,pwm0"` with four `interrupts` (PLIC sources 5-8) and `clocks`.
+
+| Offset | Register |
+|---|---|
+| `0x00` | PWMCFG: `scale[3:0]` (0-15), sticky, zerocmp, enoneshot, enalways, and `ip[3:0]` in bits 31:28 (a write of the top byte sets or clears `ip`); gang, center and deglitch are not built and read 0 |
+| `0x08` | PWMCOUNT: reads 0 (departure); any write restarts the prescaler and the count |
+| `0x10` | PWMS: the scaled counter, read only |
+| `0x20`-`0x2C` | PWMCMP0-3, 16 bits |
+
+The period is 2^(16 + scale) clocks. The pin is `ip`, high while the scaled
+counter is at or above the comparator (the arithmetic of `pwm-sifive.c`,
+`cmp = 0xFFFF - duty`, requires this polarity, so 0 % is not available and
+100 % is `cmp = 0`). `zerocmp` resets the count one cycle after a match on
+comparator 0, and `enoneshot` stops it at that reset or the counter wrap. A
+PWM pin reaches a `uo_out` pin only through the pinmux (codes 4-7). Writes
+never stall.
+
+### 9. Audio at `0x1003_0100`
+
+`src/audio.v`, committed (bus connection WO-58, in progress). Original design,
+no interrupt, no driver: bare-metal software drives it. Three square voices
+and one LFSR noise source, each with a 4-bit linear volume, summed into an
+8-bit PWM DAC with a 256-clock frame (244.14 kHz at 62.5 MHz) on `uo_out[7]`.
+
+| Offset | Register |
+|---|---|
+| `0x00`, `0x04`, `0x08` | TONE0-2: period `P[11:0]`, octave `O[2:0]`, volume `V[3:0]`; f = clk / 16 / 2^O / (2(P+1)) |
+| `0x0C` | NOISE: shift rate `R[2:0]`, volume |
+| `0x10` | CTRL: bit 0 EN, bit 1 PCM |
+| `0x14` | PCM sample (8 bit) |
+
+EN = 0 holds every counter, the LFSR (at 1), the DAC and the pin at their
+reset values. A new period takes effect at the next reload.
+
+### 10. Gamepad at GPIO `+0x10`
+
+`src/gamepad.v`, committed (bus connection WO-58, in progress). The
+receiver for the TT SNES gamepad Pmod, an independent implementation of the
+protocol of TinyTapeout's `gamepad_pmod.v`. LATCH, CLOCK and DATA are
+`ui_in[4..6]` (the GPIO block's synchronised inputs). The Pmod shifts 24
+bits (pad 1, then pad 0; 12 bits each, B Y SELECT START UP DOWN LEFT RIGHT A X
+L R, MSB first, 1 = pressed) on rising CLOCK and pulses LATCH after the last
+bit. A missing pad reads all ones, which is the presence test. A 12-bit
+report loads pad 0 and marks pad 1 absent; any other bit count is ignored.
+
+| Offset | Register |
+|---|---|
+| `+0x10` GAMEPAD | read only: `{pr1, 3'b0, pad1[11:0], pr0, 3'b0, pad0[11:0]}`; an absent pad reads 0 with its present bit clear |
+| `+0x14` GPSTAT | read `{30'b0, ie, chg}`; write bit 1 sets `ie`, write 1 to bit 0 clears `chg` (a new value in the same cycle wins). Never stalls |
+
+The interrupt is `chg & ie` (PLIC source 3). It is carved out of the GPIO
+window by `soc_bus`, so `gpio.v` does not change for it.
+
+### 11. Pinmux at `0x1002_0020`
+
+`src/pinmux.v`, committed (bus connection WO-58, in progress). One word in the
+syscon window, carved out by `soc_bus`: pin *i*'s code in bits `[4i+2:4i]`,
+bit `4i+3` reads 0 (so it can be `pinctrl-single` with 4-bit fields).
+
+| Code | Pin *i* takes |
+|---|---|
+| 0 | the default of the map above |
+| 1 | GPIO OUT bit *i* |
+| 2 | UART RTS# |
+| 3 | AUDIO |
+| 4-7 | PWM0-3 |
+
+The result goes through **one flop per pin**, which resets to `0x39`, the
+wrapper's in-reset value (so F12, the rule that every pin is a flop, holds,
+and the TT01 second-edge release makes no edge). Every source therefore
+reaches its pin one clock later than before. Codes reset to 0, so no write
+is needed out of reset. A write takes effect on the next clock.
 
 ## Not building
 
-* **PLIC.** Every device here is polled, and interrupts would not make it
-  faster on this core. Taking one interrupt through Linux costs very roughly
-  1–2k instructions, 1–2 ms at ~0.9 MIPS. A character at 115200 baud lasts
-  87 µs. An interrupt per character would be slower than back-pressure and
-  flow control, and it would need a FIFO as well. The core's `external_irq`
-  stays 0, and `0x0C00_0000` stays reserved.
-* **UART FIFOs:** replaced by back-pressure (TX) and RTS# (RX).
-* **Hardware keypad scanner:** software scans it.
+* **UART flow control as a default.** RTS# is a pinmux feature on
+  `uo_out[5]` only; the default map gives that pin to SD CS#, and RX relies
+  on the 16-entry FIFO.
+* **Keypad:** the gamepad Pmod replaced it on `ui_in[4..6]`; no hardware scanner.
 * **The other Pmods:**
 
   | Pmod | Why not |
@@ -564,22 +728,18 @@ tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
 
 1. **VCCEN tied to RES#:** confirm against the SSD1331 datasheet's power
    sequence.
-2. **RP2350 terminal:** confirm that whatever runs it can enable CTS flow
-   control on GPIO38 (MicroPython's `UART(..., flow=UART.CTS)` would).
-3. **Linux drivers:** the SPI controller driver, and the gpio-mmio binding.
-4. **Area:** measure every block once written.
+2. **RP2350 terminal:** UART1 without CTS is the default (GPIO38 carries SD
+   CS#); confirm the firmware that runs it does not enable CTS. Flow control
+   is for the RTS# mapping only.
+3. **Linux drivers:** the SPI controller driver, the gpio-mmio binding, the
+   PLIC and `pwm-sifive` nodes (`docs/devicetree-4x4.dtsi`).
+4. **Area:** the integrated 4x4 harden gives the real figures (WO-60's final
+   pass replaces the estimates above).
 5. ~~**Testbench models**~~ -- done: `tb/rp2350_uart_model.v`,
-   `tb/ssd1331_model.v`, `tb/keypad_model.v`, driven by `make
-   test-soc-periph` (`tests/soc/`) rather than `run.sh soc`, whose IO window
-   is off to match Spike. Unit benches: `make test-uart`, `make test-gpio`.
-   The top level's pins: `make test-wrapper`.
-6. **Stall path timing:** the IO `ready` now sits in the core's global stall
-   path (request decode → UART/GPIO ready → `wb_mem_stall`); check it in
-   STA once the design is hardened.
-7. **Keypad reads:** a column write reaches the pin on the edge the store
-   completes, and IN is two synchroniser flops behind the pins, so only a
-   load completing three or more clocks after the column store sees the new
-   rows. With fast memory two back-to-back loads still read the old rows.
-   Software discards two IN reads after each column write
-   (`tests/soc/keypad.S`), or waits three clocks; a Linux driver must too,
-   and must not rely on the QSPI memory making one discard enough.
+   `tb/ssd1331_model.v`, driven by `make test-soc-periph` (`tests/soc/`)
+   rather than `run.sh soc`, whose IO window is off to match Spike. Unit
+   benches: `make test-uart`, `make test-gpio`, and for the 4x4 blocks
+   `test-gamepad`, `test-pwm`, `test-audio`, `test-pinmux` (the Makefile
+   targets are WO-57, in progress). The top level's pins: `make test-wrapper`.
+6. ~~**Stall path timing**~~ -- the registered IO read path (WO-51, in
+   progress) makes the IO `ready` into the core's stall path a flop.
