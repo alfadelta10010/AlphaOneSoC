@@ -194,6 +194,54 @@ static void busy_task(void *arg)
     }
 }
 
+/* Fault paths, built with -DNEG_<name> (make run-fr-<name>): each must stop the run with the hook's
+ * message and code, which the port and the config route to these hooks. */
+#if defined(NEG_OVERFLOW)
+static void ovf(void *arg)
+{
+    (void)arg;
+    volatile uint8_t buf[2400];                 /* the task's stack is 1024 bytes */
+    for (unsigned i = 0; i < sizeof buf; i++)
+        buf[i] = (uint8_t)i;
+    vTaskDelay(1);                              /* the switch checks the stack's guard pattern */
+    for (;;)
+        ;
+}
+#elif defined(NEG_MALLOC)
+static void ovf_dummy_never(void *arg) { (void)arg; for (;;) ; }
+#elif defined(NEG_EXC)
+static void badop(void *arg)
+{
+    (void)arg;
+    __asm__ volatile(".word 0x00000000");       /* an illegal instruction */
+    for (;;)
+        ;
+}
+#endif
+
+static void negative(void)
+{
+#if defined(NEG_OVERFLOW)
+    xTaskCreate(ovf, "ovf", configMINIMAL_STACK_SIZE, NULL, 4, NULL);
+    vTaskDelay(5);
+#elif defined(NEG_MALLOC)
+    xTaskCreate(ovf_dummy_never, "big", 1024 * 1024, NULL, 4, NULL);    /* 4 MB of stack: no heap has it */
+#elif defined(NEG_ASSERT)
+    configASSERT(0);
+#elif defined(NEG_EXC)
+    xTaskCreate(badop, "badop", configMINIMAL_STACK_SIZE, NULL, 4, NULL);
+    vTaskDelay(5);
+#elif defined(NEG_IRQ)
+    /* a software interrupt nobody handles: msip, with MSIE on */
+    *reg32(0x02000000u) = 1;
+    __asm__ volatile("csrs mie, %0" :: "r"(1u << 3));
+    for (;;)
+        ;
+#endif
+    printf("FAIL: the negative case did not stop the run\n");
+    exit(1);
+}
+
 static void controller(void *arg)
 {
     (void)arg;
@@ -201,6 +249,10 @@ static void controller(void *arg)
 
     printf("FreeRTOS %s, tick %d Hz = %u clocks\n", tskKERNEL_VERSION_NUMBER, configTICK_RATE_HZ,
            (unsigned)CLK_PER_TICK);
+
+#if defined(NEG_OVERFLOW) || defined(NEG_MALLOC) || defined(NEG_ASSERT) || defined(NEG_EXC) || defined(NEG_IRQ)
+    negative();
+#endif
 
     /* tick */
     uint32_t c0, c1;

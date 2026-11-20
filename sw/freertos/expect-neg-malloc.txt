@@ -1,0 +1,4 @@
+# The malloc case (-DNEG_MALLOC): the kernel's hook or the port's handler stops the run.
++ malloc failed
+=RESULT FAIL code=166
+- Hello
