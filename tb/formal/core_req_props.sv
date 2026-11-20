@@ -70,4 +70,13 @@ module core_req_props (
             end
         end
     end
+`ifdef SBY_COVER
+    // the open side of the map is reachable (WO-46 review S1): pins the PMA defaults
+    always @(*) if (chk) begin
+        cover (dmem_req && d_io2 && !dmem_we);              // a load reaches the PLIC window
+        cover (dmem_req && d_io2 && dmem_we);               // a store does
+        cover (dmem_req && dmem_addr == 32'h0C3F_FFFC);     // its top word
+        cover (dmem_req && dmem_addr[31:16] == 16'h1003);   // the new IO1 slot (PWM/audio)
+    end
+`endif
 endmodule
