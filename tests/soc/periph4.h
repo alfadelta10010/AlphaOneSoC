@@ -27,7 +27,7 @@
 #define PWM_CMP0  0x20
 /* audio */
 #define AU_TONE0  0x00
-#define AU_TONE1  0x04
+#define AU_TONE1  0x04   /* offsets 0x04..0x0C and 0x14 are not built (read 0) */
 #define AU_TONE2  0x08
 #define AU_NOISE  0x0C
 #define AU_CTRL   0x10
