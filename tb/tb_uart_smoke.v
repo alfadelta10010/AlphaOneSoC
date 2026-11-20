@@ -127,15 +127,16 @@ module tb_uart_smoke;
         // 10 break in loopback (BI entry), FEN 1
         wreg(2, 8'h81); wreg(1, 8'h04);
         wreg(3, 8'h40); wait_clk(500); wreg(3, 8'h00); wait_clk(400);
-        rd_chk("LSR BI", 5, 8'hF1); rd_chk("IIR RLS", 2, 8'hC6); chk("irq rls", irq, 1);
-        rd_chk("LSR BI stays", 5, 8'hF1);                  // an LSR read does not clear BI
+        rd_chk("IIR RLS", 2, 8'hC6); chk("irq rls", irq, 1); rd_chk("LSR BI", 5, 8'hF1);
+        // ISR that only reads LSR on IID 6 (16550A): the LSR read acknowledges BI and the RLS interrupt
+        rd_chk("IIR no longer RLS", 2, 8'hC1); chk("irq rls acked", irq, 0); rd_chk("LSR BI acked", 5, 8'hE1);
         rd_chk("break data 0", 0, 8'h00); rd_chk("LSR after pop", 5, 8'h60); rd_chk("IIR after pop", 2, 8'hC1);
         wreg(2, 8'h00); wreg(3, 8'h40); wait_clk(500); wreg(3, 8'h00); wait_clk(400);
         rd_chk("LSR BI fen0", 5, 8'h71); rd_chk("pop", 0, 8'h00);
         // 11 framing error from the pin (loopback off)
         wreg(4, 8'h02); wreg(2, 8'h81); wreg(1, 8'h04);
         rxf(8'h55, 1'b0); wait_clk(100);
-        rd_chk("LSR FE", 5, 8'hE9); rd_chk("IIR RLS fe", 2, 8'hC6);
+        rd_chk("IIR RLS fe", 2, 8'hC6); rd_chk("LSR FE", 5, 8'hE9);
         rd_chk("FE data", 0, 8'h55); rd_chk("LSR clean", 5, 8'h60);
         rxf(8'h96, 1'b1); wait_clk(100); rd_chk("LSR good", 5, 8'h61); rd_chk("good data", 0, 8'h96);
         // 12 RTS# follows the FIFO fill (not in loopback)
