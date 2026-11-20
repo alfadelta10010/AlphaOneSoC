@@ -1,0 +1,10 @@
+# a 24-bit frame is not loaded -> P1 exact load
+sed gamepad.v s/ld24 = latch_r \& (nb == 5'd24)/ld24 = latch_r \& (nb == 5'd23)/
+# a load on any bit count (partial frames too)
+sed gamepad.v s/wire load = ld24 | ld12;/wire load = latch_r;/
+# presence test on 0x000 instead of 0xFFF -> P2
+sed gamepad.v s/pr0 = d\[11:0\]  != 12'hFFF/pr0 = d[11:0] != 12'h000/
+# the W1C is ignored -> P3
+sed gamepad.v s/else if (w1c) chg <= 1'b0;/else if (1'b0) chg <= 1'b0;/
+# irq ignores ie -> P4
+sed gamepad.v s/assign irq = chg \& ie;/assign irq = chg;/
