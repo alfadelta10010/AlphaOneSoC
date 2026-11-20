@@ -39,7 +39,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
-        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
+        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test
 
@@ -267,6 +267,12 @@ test-plic: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_plic $(SRC_DIR)/plic.v $(TB_DIR)/tb_plic.v
 	@$(call run_tb,tb_plic)
 
+# tb/gamepad_model.v (the SoC benches' Pmod) driving src/gamepad.v through a synchroniser.
+test-gamepad-model: $(BUILD_DIR)
+	@echo "=== Testing the gamepad Pmod model ==="
+	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(BUILD_DIR)/tb_gamepad_model $(SRC_DIR)/gamepad.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/tb_gamepad_model.v
+	@$(call run_tb,tb_gamepad_model)
+
 # The SNES gamepad receiver (src/gamepad.v), spec-model bench, +SEED=, +FRAMES=.
 test-gamepad: $(BUILD_DIR)
 	@echo "=== Testing gamepad ==="
@@ -305,7 +311,8 @@ define MB_FLAGS
 case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|syscon_reboot) d=;; *) d=1;; esac; \
 	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
 endef
-SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode plic_uart
+SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode plic_uart \
+	gamepad pwm_linux pwm_timer audio pinmux sd_cs
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
 	@echo "=== Testing the peripherals through the SoC ==="
@@ -315,7 +322,7 @@ test-soc-periph: $(BUILD_DIR)
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
 		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
@@ -332,14 +339,15 @@ test-soc-periph: $(BUILD_DIR)
 # tb_soc_periph.v built with -DTCLK_NS=16.0): tests/soc/sd_init.S, spi_mixed.S and
 # sd_reboot.S against tb/sd_spi_model.v and the SSD1331 model, with pad delays. Each
 # run is "label;program;cflags;plusargs"; the PASS lines carry exact counts, and the
-# negative controls (rt 40 ns at BAUD 1, no card, DO stuck at 1) PASS only when
+# negative controls (BAUD 1: the pin flop after the pinmux costs the MISO margin, INDEX D13, so the
+# program fails there; rt 40 ns at BAUD 1, no card, DO stuck at 1) PASS only when
 # the program FAILS. `make test-soc-spi MB_UART=1` also sends the reports over the UART;
 # `ONLY="sd_init sd_b1"` runs just those labels.
-RB_DLY_A ?= 700
-RB_DLY_B ?= 900
-SOC_SPI_RUNS := "sd_init;sd_init;;" "sd_init_busy0;sd_init;;+SD_BUSY=0" "sd_b1;sd_init;-DSD_HZ=15625000;" \
+RB_DLY_A ?= 900
+RB_DLY_B ?= 700
+SOC_SPI_RUNS := "sd_init;sd_init;;" "sd_init_busy0;sd_init;;+SD_BUSY=0" "sd_b1_pinflop;sd_init;-DSD_HZ=15625000;+EXPECT_FAIL" \
 	"sd_b1_rt40;sd_init;-DSD_HZ=15625000;+RT_OUT=20 +RT_IN=20 +EXPECT_FAIL" \
-	"sd_init_rt60;sd_init;;+RT_OUT=30 +RT_IN=30" "sd_absent;sd_init;;+EXPECT_FAIL" \
+	"sd_init_rt44;sd_init;;+RT_OUT=22 +RT_IN=22" "sd_absent;sd_init;;+EXPECT_FAIL" \
 	"sd_stuck_do;sd_init;;+SD_STUCK_DO +EXPECT_FAIL" "spi_mixed;spi_mixed;;" \
 	"sd_reboot_a;sd_reboot;-DRB_DLY=$(RB_DLY_A);" "sd_reboot_b;sd_reboot;-DRB_DLY=$(RB_DLY_B);"
 SOC_SPI_DIR := $(BUILD_DIR)/soc_spi
@@ -351,7 +359,7 @@ test-soc-spi: $(BUILD_DIR)
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_SPI_DIR) && bad=0; for r in $(SOC_SPI_RUNS); do \
 		IFS=';'; set -- $$r; unset IFS; [ -z "$(ONLY)" ] || case " $(ONLY) " in *" $$1 "*) ;; *) continue;; esac; label=$$1; prog=$$2; cf=$$3; pa=$$4; \
 		fl=$$cf; pl=; if [ -n "$(MB_UART)" ]; then fl="$$fl -DMB_UART -DMB_DIV=1"; pl="+MB_UART +MB_DIV=1"; fi; \
@@ -500,7 +508,7 @@ test-gl:
 	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
 	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
