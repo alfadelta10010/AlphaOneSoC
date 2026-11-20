@@ -160,12 +160,12 @@ _start:
     # ---- GPIO ----
     lw   t0, G_OUT(s1)
     CHECK t0, 0xB9, 0x140
-    PINS 0x89
+    PINS 0xB9                    # the reset value, all eight bits real since WO-52
     li   t0, 0xFF
     sw   t0, G_OUT(s1)
     lw   t1, G_OUT(s1)
     CHECK t1, 0xFF, 0x141
-    PINS 0xCF
+    PINS 0xFF
     li   t0, 0x42
     sb   t0, G_OUT(s1)
     li   t0, 0x7E
@@ -195,6 +195,38 @@ _start:
     CHECK t0, 0xAC, 0x149
     lw   t0, 0x8(s1)
     CHECK t0, 0, 0x14A           # reserved slot 0x08 reads 0
+    lw   t0, 0x10(s1)
+    CHECK t0, 0, 0x14B           # GAMEPAD (WO-53): no frame yet, no pad present
+    lw   t0, 0x14(s1)
+    CHECK t0, 0, 0x14C           # GPSTAT: chg 0, ie 0
+    li   t0, 2
+    sw   t0, 0x14(s1)            # ie = 1
+    lw   t0, 0x14(s1)
+    CHECK t0, 2, 0x14D
+    sw   zero, 0x14(s1)
+    li   t2, 0x1001FFD4          # GPSTAT through the 64-byte alias
+    lw   t0, 0(t2)
+    CHECK t0, 0, 0x14E
+    lw   t0, 0x18(s1)
+    CHECK t0, 0, 0x14F           # +0x18 (input-change IRQ, not built) reads 0
+    # the pinmux at syscon +0x20 (WO-56) and the PWM / audio slot (IO slot 3, WO-54/55)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0, 0x170
+    li   t0, 0x01000000          # pin 6 = GPIO OUT[6]: the level it already has
+    sw   t0, 0x20(s11)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0x01000000, 0x171
+    sw   zero, 0x20(s11)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0, 0x172
+    li   t2, 0x10030000
+    lw   t0, 0x20(t2)
+    CHECK t0, 0xFFFF, 0x173      # PWMCMP0 resets to 0xFFFF
+    lw   t0, 0(t2)
+    CHECK t0, 0, 0x174           # PWMCFG
+    li   t2, 0x10030100
+    lw   t0, 0x10(t2)
+    CHECK t0, 0, 0x175           # audio CTRL: off
     # AMOs on OUT
     li   t0, 0x40
     amoor.w t1, t0, (s1)
