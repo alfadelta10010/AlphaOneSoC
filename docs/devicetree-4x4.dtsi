@@ -1,0 +1,166 @@
+/* AlphaOneSoC 4x4 device-tree fragment (not built, not compiled).
+ *
+ * Peripheral nodes for the 4x4 branch (docs/pins-and-peripherals.md, docs/soc-architecture.md).
+ * Include it from a board file that supplies the root (#address-cells = <1>), the cpus node and the
+ * memory. Nodes marked (in progress) describe RTL that is not on the bus yet: the PLIC (WO-47), the
+ * 16550A interrupt (WO-49), the registered IO read path (WO-51), the GPIO/SPI changes (WO-52) and the
+ * PWM and pinmux integration (WO-58). The names follow the Linux bindings checked on 2026-11-20.
+ */
+
+/ {
+	clk_core: clock-core {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <62500000>;
+	};
+
+	cpus {
+		cpu0: cpu@0 {
+			/* the board file supplies compatible, riscv,isa and mmu-type "none" */
+			cpu0_intc: interrupt-controller {
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+				#interrupt-cells = <1>;
+			};
+		};
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		/* PLIC at 0x0C00_0000, 4 MB, hart 0 M-mode only (WO-47, in progress).
+		 * Sources: 1 UART, 2 SPI, 3 gamepad, 4 GPIO input change (optional),
+		 * 5-8 PWM comparators 0-3, 9 watchdog (WO-61, optional). */
+		plic: interrupt-controller@c000000 {
+			compatible = "alfadelta10010,alphaone-plic", "sifive,plic-1.0.0";
+			reg = <0x0c000000 0x400000>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			#address-cells = <0>;
+			riscv,ndev = <9>;
+			interrupts-extended = <&cpu0_intc 11>;
+		};
+
+		/* CLINT at 0x0200_0000: the board file's timer; timebase-frequency = the core clock. */
+
+		/* 16550A, byte registers (WO-49, in progress). tx-threshold is left out: tx_loadsz
+		 * stays 16 (4 bytes without a stall, the rest paced at line rate). */
+		uart0: serial@10000000 {
+			compatible = "ns16550a";
+			reg = <0x10000000 0x100>;
+			reg-shift = <0>;
+			reg-io-width = <1>;
+			clocks = <&clk_core>;
+			clock-frequency = <62500000>;
+			fifo-size = <16>;
+			interrupt-parent = <&plic>;
+			interrupts = <1>;
+		};
+
+		/* GPIO: bit i of each chip = OUT bit i / IN bit i. The OUT chip is the pinmux's GPIO
+		 * source; pads follow it only where PINMUX selects GPIO (OLED CS#, D/C, RES#, SD CS#). */
+		gpo: gpio@10010000 {
+			compatible = "gpio-mmio";
+			reg = <0x10010000 0x4>;
+			reg-names = "dat";
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			native-endian;
+		};
+
+		gpi: gpio@10010004 {
+			compatible = "gpio-mmio";
+			reg = <0x10010004 0x4>;
+			reg-names = "dat";
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			native-endian;
+		};
+
+		/* tiny_spi at GPIO +0x20. The SPI interrupt is built but deliberately not described:
+		 * spi-oc-tiny then takes one interrupt per byte, ~1 ms each at BAUD 2, and polling is faster.
+		 * Chip selects are GPIO OUT bits: OLED CS# = 0, SD CS# = 5 (both active low). D/C is bit 2,
+		 * RES#/VCCEN bit 6. The SD card is capped at BAUD 2 (10.4 MHz); BAUD 1 is lost to the pin flop. */
+		spi0: spi@10010020 {
+			compatible = "opencores,tiny-spi-rtlsvn2";
+			reg = <0x10010020 0x14>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clock-frequency = <62500000>;
+			baud-width = <8>;
+			cs-gpios = <&gpo 0 1>, <&gpo 5 1>;
+
+			/* oled@0 and mmc@1 (compatible "mmc-spi-slot", spi-max-frequency <10416666>)
+			 * belong in the board file. */
+		};
+
+		/* syscon at 0x1002_0000: the 8 implemented words (docs/soc-architecture.md "Linux").
+		 * The PINMUX word at +0x20 and CACHE_CTL at +0x24 are carved out of this window. */
+		syscon: syscon@10020000 {
+			compatible = "alfadelta10010,alphaone-syscon", "syscon", "simple-mfd";
+			reg = <0x10020000 0x20>;
+			reg-io-width = <4>;
+
+			poweroff {
+				compatible = "syscon-poweroff";
+				offset = <0x0>;
+				value = <0x5555>;
+			};
+
+			reboot {
+				compatible = "syscon-reboot";
+				offset = <0x0>;
+				value = <0x7777>;
+			};
+
+			reboot-mode {
+				compatible = "syscon-reboot-mode";
+				offset = <0x8>;
+				mask = <0xff>;
+				mode-normal = <0x1>;
+				mode-bootloader = <0x2>;
+			};
+		};
+
+		/* Pinmux word at 0x1002_0020: pin i's code in bits [4i+2:4i], 4-bit fields (WO-58, in progress).
+		 * Codes: 0 default, 1 GPIO, 2 RTS#, 3 AUDIO, 4-7 PWM0-3. */
+		pinmux: pinmux@10020020 {
+			compatible = "pinctrl-single";
+			reg = <0x10020020 0x4>;
+			#pinctrl-cells = <1>;
+			pinctrl-single,register-width = <32>;
+			pinctrl-single,function-mask = <0x7>;
+
+			/* uo_out[5] as UART RTS# (gives up the SD card's CS#), field 5 = shift 20, code 2 */
+			uart-rts-pins {
+				pinctrl-single,bits = <0x0 (2 << 20) (0x7 << 20)>;
+			};
+		};
+
+		watchdog@10020100 {
+			compatible = "snps,dw-wdt";
+			reg = <0x10020100 0x100>;
+			clocks = <&clk_core>;
+		};
+
+		/* PWM at 0x1003_0000 (WO-58, in progress): four comparators, period 2^(16 + scale) clocks.
+		 * The binding requires four interrupts (PLIC sources 5-8) and clocks; the driver does not
+		 * request them. */
+		pwm0: pwm@10030000 {
+			compatible = "sifive,pwm0";
+			reg = <0x10030000 0x30>;
+			clocks = <&clk_core>;
+			#pwm-cells = <3>;
+			interrupt-parent = <&plic>;
+			interrupts = <5>, <6>, <7>, <8>;
+		};
+
+		/* The audio block (0x1003_0100) and the gamepad (GPIO +0x10/+0x14) have no Linux driver;
+		 * bare-metal software drives them. */
+	};
+};
