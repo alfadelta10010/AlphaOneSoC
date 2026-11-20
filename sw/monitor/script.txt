@@ -2,11 +2,45 @@
 PROMPT	h
 PROMPT	i
 PROMPT	r
+PROMPT	x
+PROMPT	
+PROMPT	^Cr
+PROMPT	zz
+PROMPT	g zz
+PROMPT	g
+PROMPT	csr zz
+PROMPT	csr 1000
+PROMPT	csr fff
+PROMPT	csr mscratch 5
+PROMPT	csr mtvec 5
+PROMPT	csr scan 3000 3001
+PROMPT	csr scan zz
+PROMPT	m 80000000 0
+PROMPT	m 80000001 1
+PROMPT	mh 80000001 1
+PROMPT	w 80000001 5
+PROMPT	wh 80000001 5
+PROMPT	wb 20000000 5
+PROMPT	m 80fffffc 4
+PROMPT	m ffffffff 1
+PROMPT	m 20000000 zz
+PROMPT	zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+PROMPT	mb 80000000 4^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^Hh
 PROMPT	g {demo_regs}
 PROMPT	r
+PROMPT	r nosuch
+PROMPT	r zero 5
+PROMPT	r a0 zz
 PROMPT	x
 PROMPT	r a0
+PROMPT	g {demo_trap}
+PROMPT	r a0
+PROMPT	g {demo_fault}
+PROMPT	g {demo_ret}
+PROMPT	x
 PROMPT	g {demo_regs}
+PROMPT	r t0 ABCDEF01
+PROMPT	r t1 0xabcdef02
 PROMPT	r a5 1234abcd
 PROMPT	r a5
 PROMPT	x

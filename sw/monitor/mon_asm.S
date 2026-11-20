@@ -140,6 +140,25 @@ demo_regs:
 1:  li      a0, 1
     ebreak
 
+/* More demos for the stop reasons: an illegal instruction, a load from an address nothing answers, and
+ * a plain return (to mon_return, which stops with "program returned"). */
+    .globl demo_trap
+demo_trap:
+    li      a0, 7
+    .word   0x00000000                  # illegal instruction
+    ebreak
+
+    .globl demo_fault
+demo_fault:
+    li      t0, 0x30000000
+    lw      a0, 0(t0)                   # load access fault
+    ebreak
+
+    .globl demo_ret
+demo_ret:
+    li      a0, 42
+    ret
+
     .globl demo_spin
 demo_spin:
     li      a0, 0

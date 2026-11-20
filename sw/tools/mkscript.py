@@ -5,7 +5,7 @@
 
 A script line is  <wait text> TAB <keys>: the bench waits until the program's output
 ends in the wait text (up to 32 characters), then types the keys and Enter. In the
-keys, ^C is Ctrl-C, ^H a backspace (no Enter is added after a keys field that ends in ^C), and
+keys, ^C is Ctrl-C, ^H a backspace (padded with NULs: its three-character echo takes longer than the bench's typing, as on a slow terminal) (no Enter is added after a keys field that ends in ^C), and
 PROMPT in the wait text is the monitor's prompt after a newline (a bare "> " also
 matches the loader's "->"). {name} is the address of that symbol in --elf, in hex. # starts a comment line.
 """
@@ -29,7 +29,7 @@ for l in open(script):
         continue
     wait, _, keys = l.partition("\t")
     keys = re.sub(r"\{(\w+)\}", lambda m: syms[m.group(1)], keys)
-    send = keys.replace("^C", "\x03").replace("^H", "\x08")
+    send = keys.replace("^C", "\x03").replace("^H", "\x08\x00\x00\x00")
     if not keys.endswith("^C"):
         send += "\r"
     wait = wait.replace("PROMPT", "\\n> ")

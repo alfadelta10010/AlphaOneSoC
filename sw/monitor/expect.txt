@@ -65,3 +65,34 @@
 >=2 stopped: interrupt 7 at pc=
 - instruction access fault
 + a0 = 8
+# Edge cases: nothing stopped, an empty line, a Ctrl-C at the prompt, unknown commands and registers, bad numbers
++ nothing to carry on with
++ no stopped program
++ ? (h for help)
++ no register nosuch
++ bad value, or x0
++ g addr
++ no CSR zz
++ no CSR 1000
++ fff fault (no such CSR)
++ mscratch and mtvec are the monitor's own
++ bad number
+# memory: a zero count prints nothing, misaligned reads fault, misaligned writes are refused, a store to
+# flash and a read past the top of PSRAM fault, a bad count is refused
++ 80000001: fault
++ misaligned
++ fault
++ 80fffffc:
++ ffffffff: fault
++ bad count
+# a backspace edits the line (mb ...^H^H...h is the help command), an overlong line is cut off
++ r [reg [val]]
+>=2 ? (h for help)
+# values: upper case and 0x
++ t0 = abcdef01
++ t1 = abcdef02
+# the stop reasons: an illegal instruction, a load fault, a return
++ stopped: illegal instruction at pc=
++ a0 = 00000007
++ stopped: load access fault at pc=
++ program returned, a0=0000002a

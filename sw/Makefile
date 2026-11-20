@@ -46,7 +46,7 @@ $(error fetch.sh failed ($(FETCH_RC)); see above)
 endif
 endif
 
-.PHONY: ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -109,7 +109,7 @@ monitor_SRC    := monitor/monitor.c monitor/mon_asm.S
 monitor_CFLAGS := -Wno-format   # uint32_t is long on this target; the mini printf takes both as 32 bits
 monitor_EXPECT := monitor/expect.txt
 monitor_RUNDEP := $(BUILD)/monitor/in.hex
-monitor_RUNARGS := +UART_IN=$(BUILD)/monitor/in.hex
+monitor_RUNARGS := +UART_IN=$(BUILD)/monitor/in.hex +MAX_CYCLES=150000000   # a stalled session fails in seconds
 $(BUILD)/monitor/in.hex: monitor/script.txt tools/mkscript.py $(BUILD)/monitor/monitor.elf
 	python3 tools/mkscript.py monitor/script.txt $@ --elf $(BUILD)/monitor/monitor.elf
 $(eval $(call PAYLOAD,monitor))
@@ -150,6 +150,17 @@ freertos_SRC    := freertos/freertos_test.c $(addprefix $(FR)/,tasks.c queue.c l
 freertos_CFLAGS := -w -Ifreertos/port -I$(FR)/include -I$(RV) \
                    -I$(RV)/chip_specific_extensions/RV32I_CLINT_no_extensions
 $(eval $(call PAYLOAD,freertos))
+# The fault paths: one build per case, each expected to stop through its hook (expect-neg-<case>.txt).
+FR_NEG := overflow malloc assert exc irq
+define FRNEG
+fr-$(1)_SRC    := $$(freertos_SRC)
+fr-$(1)_CFLAGS := $$(freertos_CFLAGS) -DNEG_$(shell echo $(1) | tr a-z A-Z)
+fr-$(1)_EXPECT := freertos/expect-neg-$(1).txt
+$$(eval $$(call PAYLOAD,fr-$(1)))
+endef
+$(foreach c,$(FR_NEG),$(eval $(call FRNEG,$(c))))
+.PHONY: run-fr-all
+run-fr-all: $(addprefix run-fr-,$(FR_NEG))
 
 CM := $(TP)/coremark
 coremark_SRC    := $(addprefix $(CM)/,core_main.c core_list_join.c core_matrix.c core_state.c core_util.c) \
@@ -233,6 +244,24 @@ run-ddr-all:
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-nostream-sdr.txt RUNARGS="+NO_STREAM +QSPI_DELAY=20"
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-any.txt RUNARGS="+RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30"
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-any.txt RUNARGS="+NO_STREAM +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30"
+
+# The SD driver's paths against a card with injected faults (tb/sd_spi_model.v +SD_*, tb_sw +SD_ABSENT):
+# make run-sdtest-all runs the variants listed in SDTESTS as name:plusargs (a comma separates two); each checks
+# sdtest/expect-<name>.txt.
+sdtest_SRC    := sdtest/sdtest.c common/sd.c
+sdtest_RUNDEP := $(BUILD)/fatfs/disk-fat12.hex
+sdtest_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-fat12.hex +SD_EXPECT
+$(eval $(call PAYLOAD,sdtest))
+SDTESTS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rderr:+SD_RDERR=123 wrerr:+SD_WRRESP=0d wrcrc:+SD_WRRESP=0b \
+           staterr:+SD_STATUS=01 absent:+SD_ABSENT stuck:+SD_STUCK_DO never:+SD_BUSY=5000 \
+           slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16
+.PHONY: run-sdtest-all
+run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
+	@for v in $(SDTESTS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \
+	  echo "== sdtest $$n: $$a"; \
+	  (cd $(BUILD)/sdtest && $(SIMRUN) +FLASH_FILE=$(BUILD)/sdtest/flash.hex +UART_DIV=$(UART_DIVISOR) $(sdtest_RUNARGS) $$a $(RUNARGS) > run-$$n.log 2>&1); \
+	  python3 tools/check_run.py $(BUILD)/sdtest/run-$$n.log sdtest/expect-$$n.txt || exit 1; \
+	done; echo "sdtest: all variants ok"
 
 # ── the bench ───────────────────────────────────────────────────────────────
 # Verilator by default. The same bench builds with Icarus (the reference simulator, about 30x

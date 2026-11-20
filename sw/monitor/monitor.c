@@ -39,7 +39,7 @@ extern uint32_t mon_probe_resume;
 extern void mon_trap_entry(void), mon_return(void), mon_resume(struct frame *) __attribute__((noreturn));
 extern void mon_switch_stack(void *sp, void (*fn)(void)) __attribute__((noreturn));
 extern void mon_lw(void), mon_lh(void), mon_lb(void), mon_sw(void), mon_sh(void), mon_sb(void);
-extern void demo_regs(void), demo_spin(void);
+extern void demo_regs(void), demo_spin(void), demo_trap(void), demo_fault(void), demo_ret(void);
 extern int  mon_probe(void *fn, uint32_t a0, uint32_t a1, uint32_t *out);
 
 static uint32_t mon_stack[2048] __attribute__((aligned(16)));
@@ -255,10 +255,10 @@ static void cmd_csr(int ac, char **av)
     uint32_t n, v;
     if (ac >= 2 && !strcmp(av[1], "scan")) {
         uint32_t lo = 0, hi = 0xFFF;
-        if (ac > 2 && !parse_hex(av[2], &lo))
+        if ((ac > 2 && !parse_hex(av[2], &lo)) || (ac > 3 && !parse_hex(av[3], &hi))) {
+            puts("bad number");
             return;
-        if (ac > 3 && !parse_hex(av[3], &hi))
-            return;
+        }
         for (n = lo; n <= hi && n < 0x1000; n++)
             if (!csr_read(n, &v))
                 printf("%03x %-13s %08x\n", n, csr_name(n), v);
@@ -313,8 +313,10 @@ static void cmd_m(char sz, int ac, char **av)
         return;
     }
     n = sz == 'b' ? 64 : sz == 'h' ? 32 : 16;
-    if (ac > 2 && !parse_hex(av[2], &n))
+    if (ac > 2 && !parse_hex(av[2], &n)) {
+        puts("bad count");
         return;
+    }
     int per = 16 / w;
     while (n) {
         uint8_t asc[16];
@@ -443,6 +445,8 @@ static void help(void)
     puts("g addr | gb addr     run a program (gb: Ctrl-C stops it);  x  carry on after a stop;  q  power off");
     printf("demos: demo_regs %08x (sets every register, stops)  demo_spin %08x (counts in a0)\n",
            (uint32_t)demo_regs, (uint32_t)demo_spin);
+    printf("       demo_trap %08x (illegal instruction)  demo_fault %08x (load fault)  demo_ret %08x (returns 42)\n",
+           (uint32_t)demo_trap, (uint32_t)demo_fault, (uint32_t)demo_ret);
     printf("free RAM from 80100000; a program's stack top is %08x\n", (uint32_t)&_stack_top);
 }
 

@@ -174,16 +174,24 @@ int sd_write(uint32_t lba, const void *buf)
     xfer(0xFF);
     xfer(0xFF);
     r = xfer(0xFF);
-    if ((r & 0x1F) != 0x05) {            /* data accepted */
-        cs_high();
-        return 2;
-    }
+    /* Busy (DO low) follows the data response, accepted or not: wait it out before CS# goes high, or the
+     * next command meets a card that is still busy. */
     int t = 0;
-    while (xfer(0xFF) != 0xFF)           /* busy while the card programs */
-        if (++t > 1000000) {
+    int busy_end = 0;
+    while (!busy_end) {
+        uint8_t b = xfer(0xFF);
+        if (b == 0xFF)
+            busy_end = 1;
+        else if (++t > 1000000) {
             cs_high();
             return 3;
         }
+    }
+    if ((r & 0x1F) != 0x05) {            /* the data was not accepted (0x0B CRC error, 0x0D write error) */
+        cs_high();
+        xfer(0xFF);
+        return 2;
+    }
     cs_high();
     xfer(0xFF);
 

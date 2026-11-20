@@ -70,9 +70,16 @@ module tb_sw;
         .host_sck(qspi_sck), .host_cs_n(qspi_cs_n), .host_ctl_oe(qspi_ctl_oe),
         .host_io(qspi_io_out), .host_oe(qspi_io_oe), .dev_io(pmod_io), .dev_oe(pmod_oe));
 
+    // +SD_ABSENT: no card in the socket (DO floats high); +SD_EXPECT: the card's protocol errors are expected
+    // (a test that sends it a bad request on purpose) and are counted apart from errors that fail the run.
+    reg sd_fitted = 1'b1, sd_ev = 1'b0;
+    initial begin
+        sd_fitted = !$test$plusargs("SD_ABSENT");
+        sd_ev = $test$plusargs("SD_EXPECT");
+    end
     sd_spi_model #(.DISK_BLKS(8192)) sd (
-        .fitted(1'b1), .cs_n(gpio_out[7]), .sck(gpio_out[3]), .di(gpio_out[1]),
-        .expect_violations(1'b0), .do_o(sd_do));
+        .fitted(sd_fitted), .cs_n(gpio_out[7]), .sck(gpio_out[3]), .di(gpio_out[1]),
+        .expect_violations(sd_ev), .do_o(sd_do));
     reg [8*1024-1:0] sd_name;
     initial if ($value$plusargs("SD_IMAGE=%s", sd_name)) begin
         $readmemh(sd_name, sd.disk);
@@ -89,9 +96,8 @@ module tb_sw;
                 $display("ERROR uart: divisor %0d at the end, want %0d", {soc.uart_inst.dlm, soc.uart_inst.dll}, exp_div);
             end
             if ($value$plusargs("SD_DUMP=%s", sd_name)) $writememh(sd_name, sd.disk);
-            if (sd.n_cmd != 0)
-                $display("SD: %0d commands, %0d blocks read, %0d written, %0d errors",
-                         sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, sd.errors);
+            $display("SD: %0d commands, %0d blocks read, %0d written, %0d errors, %0d expected",
+                         sd.n_cmd, sd.n_rd_blk, sd.n_wr_blk, sd.errors, sd.n_expected);
         end
     endtask
 
