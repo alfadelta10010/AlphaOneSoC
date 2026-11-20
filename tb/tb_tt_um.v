@@ -858,8 +858,9 @@ module tb_tt_um;
                 ID_uart_echo: begin
                     $display("NOTE uart_echo: the RP2350 held characters for CTS %0d clocks; %0d characters sent against CTS",
                              s_cts1 - s_cts0, rp.tx_sent_cts_off);
-                    if (s_cts1 - s_cts0 == 0) fail("uart_echo: flow control never held the RP2350 back");
-                    if (rp.tx_sent_cts_off != 2) fail("uart_echo: want exactly Y and Z sent against CTS");
+                    // 16550A (WO-50): RTS# drops only with fewer than two RX FIFO entries free, so a popping
+                    // program never holds the RP2350 back and nothing is sent against CTS.
+                    if (rp.tx_sent_cts_off != 0) fail("uart_echo: a character was sent against CTS");
                 end
                 ID_uart_linux: if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
                 ID_oled_spi: begin
