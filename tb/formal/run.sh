@@ -262,13 +262,13 @@ for n in "${names[@]}"; do
     if guard_hit "$log"; then echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue; fi
     if [ "$n" = spi_f12 ]; then
     out=$(python3 - "$json" <<'PYEOF'
-# F12 (SPI-014): MOSI, SCK and the chip selects leave from flops.
-#   F1  gpio's out[0,1,2,3,6,7]: the driver, through wires and $pos only, is the
+# F12 (SPI-014, WO-58): every uo_out pin (MOSI, SCK, the chip selects, TX, audio, ...) leaves from a flop.
+#   F1  the pinmux's uo[0..7] (soc.pinmux_inst.uo): the driver, through wires and $pos only, is the
 #       Q of a sequential cell.
-#   F2  the wrapper's uo_out[0,1,2,3,6,7]: the cone back to sequential Q outputs
+#   F2  the wrapper's uo_out[0..7]: the cone back to sequential Q outputs
 #       holds exactly one gate (a 2-input logic cell, or a mux with a constant
 #       leg) that has `run` in its cone, plus at most one inverter; its leaves
-#       are the gpio pin flop and the flop `run`.
+#       are that pin's own pinmux flop (F1's bit i) and the flop `run`.
 import json, sys
 d = json.load(open(sys.argv[1]))
 top = d["modules"]["tt_um_alfadelta10010_alphaone_soc"]
@@ -286,23 +286,27 @@ bad = []
 def seqcell(c):
     return c["type"].startswith(SEQ)
 # F1
-gout = [n for n in top["netnames"] if n.endswith("gpio_inst.out")]
+gout = [n for n in top["netnames"] if n.endswith("pinmux_inst.uo")]
 if len(gout) != 1:
-    print("ERROR no gpio_inst.out net"); sys.exit()
+    print("ERROR no pinmux_inst.uo net"); sys.exit()
 gb = bits_of(gout[0])
-for i in (0, 1, 2, 3, 6, 7):
+if len(gb) != 8:
+    print("ERROR pinmux_inst.uo is not 8 bits"); sys.exit()
+pinq = {}
+for i in range(8):
     b = gb[i]
     seen = 0
     while isinstance(b, int) and b in drv and drv[b][1]["type"] == "$pos" and seen < 20:
         b = drv[b][1]["connections"]["A"][drv[b][3]]; seen += 1
     if not (isinstance(b, int) and b in drv and seqcell(drv[b][1])):
         t = drv[b][1]["type"] if isinstance(b, int) and b in drv else "undriven"
-        bad.append("F1 out[%d] driven by %s" % (i, t))
+        bad.append("F1 uo[%d] driven by %s" % (i, t))
+    pinq[i] = b
 # F2
 run_bits = bits_of("run")
 runq = set(run_bits)
 ub = bits_of("uo_out")
-for i in (0, 1, 2, 3, 6, 7):
+for i in range(8):
     gates, leaves, work, seen = [], set(), [ub[i]], set()
     while work:
         b = work.pop()
@@ -327,7 +331,8 @@ for i in (0, 1, 2, 3, 6, 7):
     logic = [c for c in gates if c["type"] not in ("$not", "$logic_not")]
     inv   = [c for c in gates if c["type"] in ("$not", "$logic_not")]
     seqleaves = {b for kind, b in leaves if kind == "seq"}
-    ok = len(logic) == 1 and len(inv) <= 1 and run_bits[0] in seqleaves and len(seqleaves) == 2
+    ok = (len(logic) == 1 and len(inv) <= 1 and run_bits[0] in seqleaves and len(seqleaves) == 2
+          and pinq.get(i) in seqleaves)
     if ok:
         c = logic[0]
         wide = [p for p, bs in c["connections"].items() if c["port_directions"].get(p) == "input" and len(bs) > 1]

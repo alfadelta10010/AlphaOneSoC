@@ -9,7 +9,7 @@
 //   * tb/qspi_pmod_model.v on uio, with what the Pmod does to a released
 //     pin: the chip selects are pulled up, SCK and SD0..SD3 float (X);
 //   * tb/rp2350_uart_model.v on uo_out[4] (TX), ui_in[3] (RX) and
-//     uo_out[5] (RTS#, its CTS);
+//     uo_out[5] (SD CS# by default; RTS# is a pinmux feature only, so its CTS is tied asserted, WO-58);
 //   * the testbench itself on the GPIO pins and on ui_in[0], the
 //     qspi_rd_late strap during reset.
 //
@@ -26,16 +26,17 @@
 // Checked:
 //
 //   * in reset -- from 2 ns after rst_n falls until the second clock edge
-//     after it rises, clock or no clock -- uio_oe is 0 and uo_out is 0xB9 (TX
-//     and RTS# high, GPIO OUT 0x89). The SoC then drives SCK and the chip
+//     after it rises, clock or no clock -- uio_oe is 0 and uo_out is 0x39 (OLED CS#,
+//     SCK, TX and SD CS# high, the rest low; the pinmux's pin flops reset to it). The SoC then drives SCK and the chip
 //     selects on the third edge, no sooner and no later, which fixes the
 //     length of the reset's release at the pins;
 //   * the four SCK / chip select output enables are one signal, and the four
 //     SD ones another;
 //   * from the first reset on, no X on uo_out, on uio_oe, or on a uio_out pin
 //     that is driven;
-//   * GPIO OUT on uo_out[7:6] and [3:0], GPIO IN from all of ui_in;
-//   * RTS# high while the received byte waits to be read;
+//   * GPIO OUT bits 6:5 and 3:0 on uo_out[6:5] and [3:0] (bit 4 is the UART's TX and bit 7 has
+//     no pin by default: uo_out[7] is the audio output, low while the audio block is off),
+//     GPIO IN from all of ui_in;
 //   * PSRAM A on uio[6] and PSRAM B on uio[7], flash on uio[0];
 //   * the strap: +RD_LATE holds ui_in[0] at 1 through each reset, and the run
 //     then needs the Pmod model's +QSPI_DELAY=25 +QSPI_HOLD=12, which only
@@ -49,7 +50,7 @@
 //
 //   * a reboot (FINISH 0x7777) looks at the pins like a pin reset after rst_n
 //     rises: from the first falling clock edge with uio_oe[3] low, two samples
-//     with uio_oe 0 and uo_out 0xB9, the third with SCK and the chip selects
+//     with uio_oe 0 and uo_out 0x39, the third with SCK and the chip selects
 //     driven again. The window starts within a bound of the program's cue
 //     byte ('r', 'R'); each pin changes at most once into it and once out of
 //     it, never twice at one time stamp, and only just after a clock edge;
@@ -66,7 +67,7 @@
 //   sig  'S' (and, with +SIG_UART, the signature words raw, little-endian).
 //
 // then, within 20,000 clocks of the report, the pins must show the power-off
-// (uio_oe 0, uo_out 0xB9) and hold it for 200 clocks, so every program also
+// (uio_oe 0, uo_out 0x39) and hold it for 200 clocks, so every program also
 // exercises syscon's `off` path. For sig the bench then reads the signature
 // from the board's PSRAM, the Pmod model outside the chip, from SIG_BEGIN up
 // to SIG_END (+SIG_BEGIN=<hex> +SIG_END=<hex>), writes it to +SIG_OUT=<file>
@@ -114,7 +115,7 @@
 
 module tb_tt_um;
     localparam real    TCLK  = `TCLK_NS;  // 10 by default, as tb_qspi: the Makefile's QSPI delays assume it
-    localparam integer N_OUT = 9;     // tests/soc/tt_pins.S has the same two
+    localparam integer N_OUT = 10;     // tests/soc/tt_pins.S has the same two
     localparam integer N_IN  = 9;
 
     reg clk = 1'b0;
@@ -160,7 +161,7 @@ module tb_tt_um;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted
     reg [15:0] keys = 16'h0000;
     wire [3:0] kp_row;
-    reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[7], SCK [3], MOSI [1], DO ui_in[1]
+    reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[5], SCK [3], MOSI [1], DO ui_in[1]
     wire       sd_do_in1;
     wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, ns_hold ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
@@ -201,7 +202,7 @@ module tb_tt_um;
 
     // ── The RP2350's UART: 16 clocks a bit, the divisor tt_pins.S sets ──────
     rp2350_uart_model #(.BIT_NS(16.0 * TCLK)) rp (
-        .tx(uo_out[4]), .rx(uart_rx), .cts_n(uo_out[5]));
+        .tx(uo_out[4]), .rx(uart_rx), .cts_n(1'b0));      // RTS# is a pinmux feature only now (WO-58): CTS tied asserted
 
     // The demo board's other devices, on the pins as tests/soc programs use them
     // (docs/pins-and-peripherals.md): the SSD1331 on CS# [0], MOSI [1], D/C [2],
@@ -216,15 +217,15 @@ module tb_tt_um;
     // assignment with a delay), never an inertial `assign #`. tb/sd_spi_model.v
     // must be on the compile line (scripts/gl/run_gl.sh adds it in the GL WO).
     real      rt_out = 12.5, rt_in = 12.5;
-    reg [7:0] pd = 8'hB9;
+    reg [7:0] pd = 8'h39;
     always @(uo_out[1]) pd[1] <= #(rt_out) uo_out[1];
     always @(uo_out[3]) pd[3] <= #(rt_out) uo_out[3];
-    always @(uo_out[7]) pd[7] <= #(rt_out) uo_out[7];
+    always @(uo_out[5]) pd[5] <= #(rt_out) uo_out[5];
     reg       do_in1_r = 1'b1;
     assign    sd_do_in1 = do_in1_r;
 `ifdef TT_SD
     tri1      sd_do_c;
-    sd_spi_model sd (.fitted(sd_fit), .cs_n(pd[7]), .sck(pd[3]), .di(pd[1]),
+    sd_spi_model sd (.fitted(sd_fit), .cs_n(pd[5]), .sck(pd[3]), .di(pd[1]),
                      .expect_violations(1'b0), .do_o(sd_do_c));
     always @(sd_do_c) do_in1_r <= #(rt_in) sd_do_c;
 `endif
@@ -263,7 +264,7 @@ module tb_tt_um;
     task automatic check_reset_pins(input string when);
         begin
             if (uio_oe !== 8'h00) fail($sformatf("uio_oe = %b %s", uio_oe, when));
-            if (uo_out !== 8'hB9) fail($sformatf("uo_out = %h %s, want B9", uo_out, when));
+            if (uo_out !== 8'h39) fail($sformatf("uo_out = %h %s, want 39", uo_out, when));
         end
     endtask
 
@@ -274,7 +275,8 @@ module tb_tt_um;
     end
 
     // ── Checks on every clock ───────────────────────────────────────────────
-    wire [5:0] gpio_pins = {uo_out[7:6], uo_out[3:0]};
+    // GPIO OUT bits 6:5 and 3:0 reach uo_out[6:5] and [3:0] through the pinmux's default map (WO-58)
+    wire [5:0] gpio_pins = {uo_out[6:5], uo_out[3:0]};
     integer i;
     integer edges_q = 3;              // `edges` at the previous falling edge
     always @(negedge clk) if (reset_seen) begin
@@ -311,7 +313,7 @@ module tb_tt_um;
         // out_vals of tests/soc/tt_pins.S
         out_vals[0] = 8'h01; out_vals[1] = 8'h02; out_vals[2] = 8'h04; out_vals[3] = 8'h08;
         out_vals[4] = 8'h40; out_vals[5] = 8'h80; out_vals[6] = 8'hFF; out_vals[7] = 8'h00;
-        out_vals[8] = 8'h09;
+        out_vals[8] = 8'h09; out_vals[9] = 8'h20;
         in_pats[0] = 8'h01; in_pats[1] = 8'h02; in_pats[2] = 8'h04; in_pats[3] = 8'h10;
         in_pats[4] = 8'h20; in_pats[5] = 8'h40; in_pats[6] = 8'h80; in_pats[7] = 8'h00;
         in_pats[8] = 8'hF7;
@@ -667,9 +669,9 @@ module tb_tt_um;
                 ID_irq_stall: rp.send_byte("a" + s_ev_i);
                 ID_periph_access: begin
                     if (code == 'h10) rp.send_byte(s_last_val[7:0]);
-                    if (code == 'h20 && gpio_pins !== {s_last_val[7:6], s_last_val[3:0]})
-                        fail($sformatf("periph_access: OUT = %h, uo_out[7:6], [3:0] = %b, want %b", s_last_val,
-                                       gpio_pins, {s_last_val[7:6], s_last_val[3:0]}));
+                    if (code == 'h20 && gpio_pins !== {s_last_val[6:5], s_last_val[3:0]})
+                        fail($sformatf("periph_access: OUT = %h, uo_out[6:5], [3:0] = %b, want %b", s_last_val,
+                                       gpio_pins, {s_last_val[6:5], s_last_val[3:0]}));
                     if (code == 'h21) tb_in = 8'hA4;
                     if (code == 'h30) oled_fit = 1'b1;
                 end
@@ -733,7 +735,7 @@ module tb_tt_um;
     endtask
 
     // UART flow control: clocks the RP2350 held a character for CTS.
-    always @(posedge clk) if (soc_test && rp.tx_head != rp.tx_tail && !rp.tx_busy && uo_out[5]) s_cts_wait = s_cts_wait + 1;
+    always @(posedge clk) if (soc_test && rp.tx_head != rp.tx_tail && !rp.tx_busy && 1'b0) s_cts_wait = s_cts_wait + 1;
 
     always @(negedge clk) if (soc_test && sw_on != 0) begin
         case (sw_st)
@@ -941,7 +943,7 @@ module tb_tt_um;
     always begin : isa_poweroff
         @(posedge rep_done);
         pw_i = 0;
-        while (!(uio_oe === 8'h00 && uo_out === 8'hB9) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
+        while (!(uio_oe === 8'h00 && uo_out === 8'h39) && pw_i < 20000) begin @(negedge clk); pw_i = pw_i + 1; end
         if (pw_i >= 20000) fail("no power-off within 20000 clocks of the report");
         else begin
             pw_cyc = cyc;
@@ -964,9 +966,10 @@ module tb_tt_um;
                 // 1. an 'o' per OUT value
                 k = seen;
                 if (b !== "o") fail($sformatf("byte %0d is %h, want 'o'", seen, b));
-                if (gpio_pins !== {out_vals[k][7:6], out_vals[k][3:0]})
-                    fail($sformatf("OUT = %h: uo_out[7:6], [3:0] = %b, want %b", out_vals[k],
-                                   gpio_pins, {out_vals[k][7:6], out_vals[k][3:0]}));
+                if (gpio_pins !== {out_vals[k][6:5], out_vals[k][3:0]})
+                    fail($sformatf("OUT = %h: uo_out[6:5], [3:0] = %b, want %b", out_vals[k],
+                                   gpio_pins, {out_vals[k][6:5], out_vals[k][3:0]}));
+                if (uo_out[7] !== 1'b0) fail($sformatf("OUT = %h: uo_out[7] (audio) = %b, want 0", out_vals[k], uo_out[7]));
             end else if (seen < N_OUT + 3 * N_IN) begin
                 // 2. 'i', then the byte sent to it, then IN
                 k = (seen - N_OUT) / 3;

@@ -1,1 +1,1 @@
-cat SPI12   # recorded kill of spi_f12 (MOSI/SCK/CS leave from a flop)
+cat TT03   # uo_out[3] through a gate after its pin flop (F12 over all eight pins, WO-58)

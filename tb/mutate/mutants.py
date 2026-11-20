@@ -352,6 +352,7 @@ m("GP01", "gpio.v", "wire req   = sel && we && be[0];", "wire req   = sel && we;
 m("GP03", "gpio.v", "assign out = {out_r[7:4], p_sck,", "assign out = {out_r[7:6], out_r[7:6], p_sck,", "OUT pins 5:4 mirror pins 7:6")
 m("GP05", "gpio.v", "in_s <= in_m;", "in_s <= in;", "one-flop input synchroniser")
 m("TT01", "tt_um_alfadelta10010_alphaone_soc.v", "else        run <= !rst_sync[0];", "else        run <= 1'b1;", "reset released on the first edge")
+m("TT03", "tt_um_alfadelta10010_alphaone_soc.v", "assign uo_out  = run ? uo : UO_RESET;", "assign uo_out  = run ? {uo[7:4], (uo[3] & gpio_out[3]) | (uo[3] & ~gpio_out[3]), uo[2:0]} : UO_RESET;", "uo_out[3] through an AND/OR of its pin flop (same settled value; only the structural F12 check sees the gate)")
 m("TT02", "tt_um_alfadelta10010_alphaone_soc.v", "assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, ctl_oe, io_oe, io_oe, ctl_oe};", "assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, io_oe, io_oe, io_oe, ctl_oe};", "SCK's output enable follows the data pins")
 # ── syscon.v
 m("SY01", "syscon.v", "    wire       reboot  = fin & (wdata[15:0] == 16'h7777);\n    wire       halt    = fin & ((wdata[15:0] == 16'h5555) | (wdata[15:0] == 16'h3333));",
@@ -465,7 +466,7 @@ m('SPI08', 'spi.v', 'if (en) sck_r <= ~a_lvl;\n                cc <= baud;', "if
 m('SPI09', 'spi.v', '                if (en) sck_r <= wdata[1];\n', '', 'a CONTROL write with EN = 1 does not set SCK to the new CPOL')
 m('SPI10', 'spi.v', "bc  <= 3'd7;\n                cc  <= baud;\n                st  <= A;\n            end\n            A:", "bc  <= 3'd6;\n                cc  <= baud;\n                st  <= A;\n            end\n            A:", 'bc loaded with 6 at an idle LOAD (7-bit first byte)')
 m('SPI11', 'spi.v', 'st <= B;', "st <= (bc == 3'd0) ? IDLE : B;", 'the last B phase is dropped (IDLE entered at the last A->B edge)')
-m('SPI12', 'gpio.v', "assign out = {out_r[7:4], p_sck, out_r[2], p_mosi, out_r[0]};", "assign out = {out_r[7:4], (p_sck & spi_en) | (p_sck & ~spi_en), out_r[2], p_mosi, out_r[0]};", 'out[3] through an AND/OR of the flop (same settled value; test-wrapper sees two changes in one time step, and the structural F12 check sees the gate)')
+m('SPI12', 'gpio.v', "assign out = {out_r[7:4], p_sck, out_r[2], p_mosi, out_r[0]};", "assign out = {out_r[7:4], (p_sck & spi_en) | (p_sck & ~spi_en), out_r[2], p_mosi, out_r[0]};", 'out[3] through an AND/OR of the flop (same settled value). Since WO-58 the pinmux pin flop sits after it, so this is EQUIVALENT at the pins (no bench sees it; TT03 is the F12 mutant now)')
 m('SPI13', 'spi.v', 'if (wr_out && !en) begin', 'if (wr_out) begin', 'OUT writes to bits 1 and 3 reach the pins while EN = 1')
 m('SPI14', 'gpio.v', "out_r  <= 8'hB1;", "out_r  <= 8'h31;", 'OUT resets to 0x39 (SD CS# low)')
 m('SPI15', 'gpio.v', 'assign ready = !(req && stall);', 'assign ready = !(we && be[0] && stall);', 'sel dropped from the stall')
