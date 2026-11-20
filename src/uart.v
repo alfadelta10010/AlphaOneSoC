@@ -184,14 +184,18 @@ module uart #(
     // ── Status and interrupt ────────────────────────────────────────────────
     wire [8:0] rx_head = rx_emp ? 9'd0 : {rx_err[rx_rp], rx_mem[rx_rp]};
     wire       h_err   = rx_head[8];
-    wire       bi      = h_err && (rx_head[7:0] == 8'h00);
-    wire       fe      = h_err && (rx_head[7:0] != 8'h00);
+    // 16550A: an LSR read acknowledges the line-status condition (BI/FE and the RLS interrupt) of the head character;
+    // the entry itself stays queued until the RBR pop, and FIFOERR still counts it.
+    reg        err_ack;
+    wire       h_err_u = h_err && !err_ack;
+    wire       bi      = h_err_u && (rx_head[7:0] == 8'h00);
+    wire       fe      = h_err_u && (rx_head[7:0] != 8'h00);
     wire       temt    = tx_emp && tx_idle;
     wire [7:0] lsr     = {fen && (err_n != 0), temt, tx_emp, bi, fe, 1'b0, oe, !rx_emp};
 
     wire [4:0] trig = !fen ? 5'd1 : (rtrig == 2'd0) ? 5'd1 : (rtrig == 2'd1) ? 5'd4 :
                                     (rtrig == 2'd2) ? 5'd8 : 5'd14;
-    wire       i_rls  = elsi  && (oe || h_err);
+    wire       i_rls  = elsi  && (oe || h_err_u);
     wire       i_rda  = erbfi && (rx_n >= trig);
     reg  [9:0] cti_cnt;
     wire       cti    = (cti_cnt == 10'd640);
@@ -334,6 +338,7 @@ module uart #(
             rx_zero <= 1'b0;
             rx_chk  <= 1'b0;
             oe      <= 1'b0;
+            err_ack <= 1'b0;
             rts_n   <= 1'b1;
             rx_wp   <= {RX_AW{1'b0}};
             rx_rp   <= {RX_AW{1'b0}};
@@ -388,6 +393,12 @@ module uart #(
                 oe <= 1'b1;
             else if (rd_lsr)
                 oe <= 1'b0;
+
+            // err_ack: set by an LSR read over an erroneous head, dropped with the pop (new head) or a clear
+            if (rx_pop || fcr_clr_rx)
+                err_ack <= 1'b0;
+            else if (rd_lsr && h_err)
+                err_ack <= 1'b1;
 
             // RX FIFO. A clear beats a push; a pop and a push together keep rx_n.
             if (fcr_clr_rx) begin

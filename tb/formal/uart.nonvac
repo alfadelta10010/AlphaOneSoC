@@ -8,3 +8,5 @@ sed uart.v s/(rtrig == 2'd1) ? 5'd4 :/(rtrig == 2'd1) ? 5'd5 :/
 sed uart.v s/wire       cti    = (cti_cnt == 10'd640);/wire       cti    = (cti_cnt == 10'd1023);/
 # OE never set -> P9
 sed uart.v s/oe <= 1'b1;/oe <= 1'b0;/
+# an LSR read never acknowledges the error head -> P8b
+sed uart.v s/else if (rd_lsr \&\& h_err)/else if (rd_lsr \&\& h_err \&\& 1'b0)/

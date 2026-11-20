@@ -24,14 +24,14 @@ module uart_props (
     wire [9:0]  cti_cnt;
     wire [15:0] rx_err;
     wire        tx_idle, fen, erbfi, etbei, elsi, oe, dlab, rx_push, rx_end, rx_full, rd_rbr;
-    wire        fcr_clr_rx, fcr_clr_tx, tick, h_err;
+    wire        fcr_clr_rx, fcr_clr_tx, tick, h_err, err_ack;
     uart dut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr2(addr2), .wdata(wdata), .rdata(rdata),
               .ready(ready), .rx(rx), .tx(tx), .rts_n(rts_n), .irq(irq),
               .rx_n(rx_n), .err_n(err_n), .tx_n(tx_n), .tx_idle(tx_idle), .iid(iid), .fen(fen), .rtrig(rtrig),
               .mcr(mcr), .erbfi(erbfi), .etbei(etbei), .elsi(elsi), .oe(oe), .cti_cnt(cti_cnt), .rx_err(rx_err),
               .rx_rp(rx_rp), .rx_wp(rx_wp), .tx_rp(tx_rp), .tx_wp(tx_wp), .dlab(dlab), .rx_push(rx_push),
               .rx_end(rx_end), .rx_full(rx_full), .rd_rbr(rd_rbr), .fcr_clr_rx(fcr_clr_rx),
-              .fcr_clr_tx(fcr_clr_tx), .tick(tick), .h_err(h_err));
+              .fcr_clr_tx(fcr_clr_tx), .tick(tick), .h_err(h_err), .err_ack(err_ack));
 
 `ifdef FREE
     reg armed = 1'b1;
@@ -41,13 +41,14 @@ module uart_props (
     `define INV(x) assert (x)
 `endif
     reg rst_q = 1'b0, armed_q = 1'b0;
-    reg sel_q = 0, we_q = 0, addr2_q = 0, ready_q = 0, dlab_q = 0, oe_q = 0, rx_push_q = 0, rx_end_q = 0, rx_full_q = 0;
+    reg sel_q = 0, we_q = 0, addr2_q = 0, ready_q = 0, dlab_q = 0, oe_q = 0, rx_push_q = 0, rx_end_q = 0, rx_full_q = 0, herr_q = 0, errack_q = 0; reg [3:0] iid_q = 0;
     reg rd_rbr_q = 0, clr_rx_q = 0, clr_tx_q = 0, tick_q = 0;
     reg [3:0] be_q = 0, rx_rp_q = 0, rx_wp_q = 0; reg [4:0] rx_n_q = 0, err_n_q = 0, mcr_q = 0; reg [2:0] tx_n_q = 0;
     reg [9:0] cti_q = 0; reg [1:0] tx_rp_q = 0;
     always @(posedge clk) begin
         if (rst) armed <= 1'b1;
         rst_q <= rst; armed_q <= armed; sel_q <= sel; we_q <= we; addr2_q <= addr2; be_q <= be; ready_q <= ready;
+        herr_q <= h_err; errack_q <= err_ack; iid_q <= iid;
         dlab_q <= dlab; oe_q <= oe; rx_push_q <= rx_push; rx_end_q <= rx_end; rx_full_q <= rx_full;
         rd_rbr_q <= rd_rbr; clr_rx_q <= fcr_clr_rx; clr_tx_q <= fcr_clr_tx; tick_q <= tick;
         rx_n_q <= rx_n; err_n_q <= err_n; mcr_q <= mcr; tx_n_q <= tx_n; cti_q <= cti_cnt; rx_rp_q <= rx_rp;
@@ -67,7 +68,7 @@ module uart_props (
 
     // reference IID
     wire [4:0] trig = !fen ? 5'd1 : rtrig == 2'd0 ? 5'd1 : rtrig == 2'd1 ? 5'd4 : rtrig == 2'd2 ? 5'd8 : 5'd14;
-    wire [3:0] iid_ref = (elsi && (oe || h_err)) ? 4'h6 : (erbfi && rx_n >= trig) ? 4'h4 :
+    wire [3:0] iid_ref = (elsi && (oe || (h_err && !err_ack))) ? 4'h6 : (erbfi && rx_n >= trig) ? 4'h4 :
                          (erbfi && cti_cnt == 10'd640) ? 4'hC : (etbei && tx_n == 3'd0) ? 4'h2 : 4'h1;
     wire wr_fcr = sel && we && ready && be[2] && !addr2;
     wire lsr_rd_q = sel_q && !we_q && be_q[1] && addr2_q;
@@ -79,6 +80,7 @@ module uart_props (
             `INV(rx_n <= 5'd16);                                                                     // P2
             `INV(tx_n <= 3'd4);
             `INV(err_n == cnt);
+            `INV(!err_ack || h_err);                                                                  // ack only over an error head
             `INV(rx_wp == rx_rp + rx_n[3:0]);
             `INV(tx_wp == tx_rp + tx_n[1:0]);
             `INV(cti_cnt <= 10'd640);
@@ -92,7 +94,7 @@ module uart_props (
                 assert (rdata[9]  == oe);
                 assert (rdata[10] == 1'b0);
                 assert (!(rdata[11] && rdata[12]));
-                assert ((rdata[11] || rdata[12]) == h_err);
+                assert ((rdata[11] || rdata[12]) == (h_err && !err_ack));
                 assert (rdata[13] == (tx_n == 3'd0));
                 assert (rdata[14] == (tx_n == 3'd0 && tx_idle));
                 assert (rdata[15] == (fen && err_n != 5'd0));
@@ -111,6 +113,9 @@ module uart_props (
             if (rx_end_q && rx_full_q) assert (oe);
             if (oe && !oe_q) assert (rx_end_q && rx_full_q);
             if (oe_q && !lsr_rd_q) assert (oe);
+            if (lsr_rd_q && ready_q && herr_q && !pop_q && !clr_rx_q) assert (err_ack);               // P8b, an LSR read acks the head
+            if (err_ack && !errack_q) assert (lsr_rd_q && ready_q && herr_q);                         // ... and only that sets it
+            if (pop_q || clr_rx_q) assert (!err_ack);
             if (!oe && oe_q) assert (lsr_rd_q);
             if (clr_rx_q) assert (rx_n == 0 && err_n == 0 && rx_rp == 0 && rx_wp == 0);               // P7
             else begin
@@ -139,6 +144,7 @@ module uart_props (
         cover (armed && cti_cnt == 10'd640 && rx_n != 5'd0);
         cover (armed && iid == 4'h6); cover (armed && iid == 4'h4); cover (armed && iid == 4'hC); cover (armed && iid == 4'h2);
         cover (step && rx_push_q && h_err);
+        cover (step && iid_q == 4'h6 && iid != 4'h6 && lsr_rd_q && !rd_rbr_q && !clr_rx_q && !oe && err_ack);  // IID 6 cleared by an LSR read
         cover (step && rx_push_q && pop_q);
     end
 `endif
