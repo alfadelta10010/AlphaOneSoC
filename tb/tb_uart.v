@@ -6,12 +6,12 @@
 //   * a register model (DLAB, IER, DLL/DLM, LCR {DLAB,SBC}, FCR FEN/trigger,
 //     MCR reset 0x02, SCR) and a scoreboard predicting all 32 bits of every
 //     read, and every side effect (RBR pop, OE cleared by an LSR read);
-//   * an RX FIFO model (16 x {err, data}), FIFOERR, OE on a full FIFO, FE and
+//   * an RX FIFO model (8 x {err, data}), FIFOERR, OE on a full FIFO, FE and
 //     BI per head entry (they leave with the pop), IIR priority (RLS > RDA >
-//     CTI > THRE), `irq` on every clock, the 1/4/8/14 trigger table, the
+//     CTI > THRE), `irq` on every clock, the 1/2/4/7 trigger table, the
 //     character timeout (640 ticks of 16x clock after the last push, pop or
-//     clear, +-1 tick) and RTS# (rx_n <= 14, one clock after the change);
-//   * a TX model: a 4-deep FIFO model, a reference RECEIVER on the tx pin
+//     clear, +-1 tick) and RTS# (rx_n <= 6, one clock after the change);
+//   * a TX model: a one-deep THR model, a reference RECEIVER on the tx pin
 //     (every transition on the 16x grid, every bit exactly 16 ticks, the
 //     bytes in THR order, a frame per queued byte), THRE / TEMT from the
 //     queue and the decoded frame, THR back-pressure bounds;
@@ -23,8 +23,8 @@
 //     checks are masked inside them;
 //   * the Linux 8250 sequences as directed phases: startup (FCR 01/07/00,
 //     LSR/RBR/IIR/MSR reads, the THRE and TXEN tests), set_termios (FCR 0x81,
-//     DLAB divisor), the IRQ handler (IIR -> LSR -> RBR while DR|BI -> THR up
-//     to 16 with back-pressure while ETBEI & THRE, __stop_tx), polled receive;
+//     DLAB divisor), the IRQ handler (IIR -> LSR -> RBR while DR|BI -> THR one
+//     byte per THRE interrupt (tx-threshold), __stop_tx), polled receive;
 //   * loopback (MCR.LOOP): bytes written to THR come back through RBR; the
 //     tx pin and RTS# stay 1; MSR maps OUT2/OUT1/DTR/RTS.
 //
@@ -112,7 +112,7 @@ module tb_uart;
     endfunction
 
     // RX FIFO model
-    reg [8:0] rf [0:15];
+    reg [8:0] rf [0:7];
     integer   rf_h = 0, rf_n = 0;
     function [8:0] head;
         head = (rf_n == 0) ? 9'd0 : rf[rf_h];
@@ -125,11 +125,11 @@ module tb_uart;
         integer i;
         begin
             err_cnt = 0;
-            for (i = (m_ack ? 1 : 0); i < rf_n; i = i + 1) if (rf[(rf_h + i) % 16][8]) err_cnt = err_cnt + 1;
+            for (i = (m_ack ? 1 : 0); i < rf_n; i = i + 1) if (rf[(rf_h + i) % 8][8]) err_cnt = err_cnt + 1;
         end
     endfunction
     function integer trig_lvl;
-        trig_lvl = !m_fen ? 1 : (m_rt == 2'd0) ? 1 : (m_rt == 2'd1) ? 4 : (m_rt == 2'd2) ? 8 : 14;
+        trig_lvl = !m_fen ? 1 : (m_rt == 2'd0) ? 1 : (m_rt == 2'd1) ? 2 : (m_rt == 2'd2) ? 4 : 7;
     endfunction
 
     // TX queue model: bytes written to THR whose frame has not started on the pin
@@ -224,12 +224,12 @@ module tb_uart;
 
     task automatic apply_push(input [8:0] ent, input integer lo, input integer hi);
         begin
-            if (rf_n == 16) begin
+            if (rf_n == 8) begin
                 m_oe = 1'b1; rx_overrun = rx_overrun + 1;
                 if (cts_run) cts_oe = cts_oe + 1;
             end else begin
                 if (rf_n == 0) m_ack = 1'b0;
-                rf[(rf_h + rf_n) % 16] = ent; rf_n = rf_n + 1;
+                rf[(rf_h + rf_n) % 8] = ent; rf_n = rf_n + 1;
                 rx_pushed = rx_pushed + 1;
                 cti_lo = lo; cti_hi = hi;
             end
@@ -277,7 +277,7 @@ module tb_uart;
         end
     endfunction
     function rts_fn;
-        rts_fn = !(m_mcr[1] && !m_mcr[4] && rf_n <= 14);
+        rts_fn = !(m_mcr[1] && !m_mcr[4] && rf_n <= 6);
     endfunction
 
     // ── Monitors, every negedge ─────────────────────────────────────────────
@@ -403,7 +403,7 @@ module tb_uart;
                     if (h[8] && h[7:0] != 8'h00) fe_popped = fe_popped + 1;
                     if (h[8] && h[7:0] == 8'h00) bi_popped = bi_popped + 1;
                     rx_popped = rx_popped + 1;
-                    rf_h = (rf_h + 1) % 16; rf_n = rf_n - 1; m_ack = 1'b0;
+                    rf_h = (rf_h + 1) % 8; rf_n = rf_n - 1; m_ack = 1'b0;
                     cti_lo = p; cti_hi = p;
                 end
             end else begin
@@ -433,20 +433,17 @@ module tb_uart;
                 if (b[0]) begin
                     if (dl) begin m_dll = wd[7:0]; rst_div = 1'b1; end
                     else begin
-                        // THR: ready must have been high on the first edge unless the DUT FIFO was full
+                        // THR: ready must have been high on the first edge unless the THR was full
                         checks = checks + 1;
                         if (m_mcr[4]) begin
-                        end else if (nreq <= 3 || (nreq >= 4 && !rq_in)) begin
-                            if (nreq <= 3 && p != p_first) fail($sformatf("THR write stalled (edge %0d, asked %0d) with %0d bytes queued: ready must stay high below 4", p, p_first, nreq));
-                        end else if (nreq == 4) begin
-                            lb = rq_lastF + 160 * rq_df - rq_df - 3;
+                        end else if (nreq == 0) begin
+                            if (p != p_first) fail($sformatf("THR write stalled (edge %0d, asked %0d) with nothing queued: ready must stay high with THR empty", p, p_first));
+                        end else if (rq_in) begin
+                            // nreq-1 characters wait behind the one in THR; THR is taken once the frames ahead end
+                            lb = rq_lastF + 160 * rq_df * nreq - rq_df - 3;
                             if (rq_lastF < 0 || p < lb)
-                                fail($sformatf("THR write accepted at edge %0d with 4 queued while the frame in the shifter ends at edge %0d: ready must be low", p, rq_lastF + 160 * rq_df));
-                            stall_pend_p = p;
-                        end else begin
-                            lb = rq_lastF + 320 * rq_df - rq_df - 3;
-                            if (rq_lastF < 0 || p < lb)
-                                fail($sformatf("THR write accepted at edge %0d with %0d queued, too early", p, nreq));
+                                fail($sformatf("THR write accepted at edge %0d with %0d queued while the frame in the shifter ends at edge %0d: ready must be low", p, nreq, rq_lastF + 160 * rq_df));
+                            if (nreq == 1) stall_pend_p = p;
                         end
                         if (p > p_first) bp_writes = bp_writes + 1;
                         thr_writes = thr_writes + 1;
@@ -672,7 +669,7 @@ module tb_uart;
                 while ((lsr[0] || lsr[4]) && k < 300) begin rd8(0, v); rd8(5, lsr); k = k + 1; end
                 if (lsr[5] && m_ier[1]) begin
                     if (tx_left > 0) begin
-                        n = (tx_left > 16) ? 16 : tx_left;
+                        n = 1;                               // tx-threshold: one byte per THRE interrupt
                         repeat (n) begin wr_thr(8'h40 + tx_seq % 64); tx_seq = tx_seq + 1; end
                         tx_left = tx_left - n;
                     end else wr8(1, {4'b0, m_ier} & 8'h0D);      // __stop_tx
@@ -822,15 +819,15 @@ module tb_uart;
             wr8(3, 8'h00);
             wait_tx_drain;
         end
-        // FCR[2]: clear the TX FIFO, the shifter finishes
+        // FCR[2]: clear THR, the shifter finishes
         set_div(2);
-        for (i = 0; i < 4; i = i + 1) wr_thr(8'h10 + i);
+        for (i = 0; i < 2; i = i + 1) wr_thr(8'h10 + i);
         idle(40);
         wr8(2, 8'h85);
         wait_tx_drain;
         rd8(5, v8);
-        for (i = 0; i < 3; i = i + 1) wr_thr(8'h20 + i);
-        wr8(2, 8'h00);                                       // FEN change clears both
+        for (i = 0; i < 2; i = i + 1) wr_thr(8'h20 + i);
+        wr8(2, 8'h00);                                       // FEN change clears THR too
         wait_tx_drain;
         wr8(2, 8'h81);
         // SBC at idle: pin held 0 from the next tick
@@ -857,7 +854,7 @@ module tb_uart;
         section("rda and cti");
         set_div(1);
         for (t = 0; t < 4; t = t + 1) begin
-            n = (t == 0) ? 1 : (t == 1) ? 4 : (t == 2) ? 8 : 14;
+            n = (t == 0) ? 1 : (t == 1) ? 2 : (t == 2) ? 4 : 7;
             wr8(1, 8'h01);
             for (j = 0; j < 12; j = j + 1) begin
                 wr8(2, 8'h01 | (t << 6) | 8'h06);
@@ -878,7 +875,7 @@ module tb_uart;
         // character timeout: fewer than the trigger, then quiet
         wr8(1, 8'h01);
         for (j = 0; j < 14; j = j + 1) begin
-            wr8(2, 8'h87 | 8'h06);                  // trigger 8
+            wr8(2, 8'h87 | 8'h06);                  // trigger 4
             snd_start(1 + j % 3, 0, 0, 0, 0, 1'b0); wait_quiet;
             // wait until the window is over, polling IIR through the uncertain stretch
             k = 0;
@@ -898,7 +895,7 @@ module tb_uart;
         for (j = 0; j < 7; j = j + 1) begin
             wr8(2, 8'hC7 & 8'hC7);
             wr8(1, (j % 2) ? 8'h04 : 8'h00);        // ELSI
-            snd_start(19 + j, 0, 0, 0, 0, 1'b0); wait_quiet;
+            snd_start(11 + j, 0, 0, 0, 0, 1'b0); wait_quiet;
             rd8(5, v8); chk("LSR after overrun", v8[1:0], 2'b11);
             rd8(2, v8);
             rd8(5, v8); chk("OE cleared by the LSR read", v8[1], 1'b0);
@@ -906,9 +903,9 @@ module tb_uart;
         end
         for (j = 0; j < 8; j = j + 1) begin
             wr8(2, 8'h81); wr8(1, 8'h05);
-            snd_start(14, 30, 30, 0, 0, 1'b0); wait_quiet;
+            snd_start(7, 30, 30, 0, 0, 1'b0); wait_quiet;
             rd8(2, v8);
-            for (k = 0; k < 14; k = k + 1) begin rd8(5, v8); rd8(2, v8); rd8(0, v8); end
+            for (k = 0; k < 7; k = k + 1) begin rd8(5, v8); rd8(2, v8); rd8(0, v8); end
             rd8(5, v8);
             wr8(1, 8'h00);
         end
@@ -927,8 +924,8 @@ module tb_uart;
         section("rts");
         wr8(2, 8'hC7); wr8(1, 8'h00);
         for (j = 0; j < 3; j = j + 1) begin
-            snd_start(16, 0, 0, 0, 0, 1'b0); wait_quiet;          // fills the FIFO: rts_n tracks rx_n
-            for (k = 0; k < 4; k = k + 1) begin rd8(0, v8); end   // 12 left
+            snd_start(8, 0, 0, 0, 0, 1'b0); wait_quiet;           // fills the FIFO: rts_n tracks rx_n
+            for (k = 0; k < 4; k = k + 1) begin rd8(0, v8); end   // 4 left
             wr8(4, 8'h00); wr8(4, 8'h02);                         // RTS off/on
             rx_drain_polled;
         end
@@ -972,14 +969,14 @@ module tb_uart;
         section("loopback");
         set_div(1);
         wr8(2, 8'h81); wr8(1, 8'h00);
-        for (j = 0; j < 5; j = j + 1) begin
+        for (j = 0; j < 10; j = j + 1) begin
             wait_tx_drain; idle(4);
             wr8(4, 8'h10 | (j * 3 & 8'h0F));
             rd8(6, v8);
             mm = (j * 3) & 15;
             chk("loopback MSR", v8, {mm[3], mm[2], mm[0], mm[1], 4'b0});
             idle(4);
-            n = (j == 0) ? 3 : 16;
+            n = (j == 0) ? 3 : 8;
             loop_unc = 1'b1;
             for (i = 0; i < n; i = i + 1) wr_thr(8'h30 + i + j);
             idle((n + 1) * 160 + 200);
