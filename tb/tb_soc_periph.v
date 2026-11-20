@@ -73,7 +73,7 @@ module tb_soc_periph;
     // 12.5 + 12.5 in the SD runs; +RT_OUT=<ns> +RT_IN=<ns> override. The keypad and the
     // UART stay undelayed.
     real      rt_out = 0.0, rt_in = 0.0;
-    reg [7:0] pd = 8'h89;
+    reg [7:0] pd = 8'hB9;
     always @(gpio_out[0]) pd[0] <= #(rt_out) gpio_out[0];
     always @(gpio_out[1]) pd[1] <= #(rt_out) gpio_out[1];
     always @(gpio_out[2]) pd[2] <= #(rt_out) gpio_out[2];
@@ -183,8 +183,8 @@ module tb_soc_periph;
         end
     endtask
     // after a reboot under test: the pins stay at the reset value, and no SCK edge reaches a selected card
-    always @(posedge clk) if (rb_seen && cyc > rb_cyc + 8 && !done && gpio_out !== 8'h89)
-        fail($sformatf("%s: gpio_out = %h after the reboot, want 89", test, gpio_out));
+    always @(posedge clk) if (rb_seen && cyc > rb_cyc + 8 && !done && gpio_out !== 8'hB9)
+        fail($sformatf("%s: gpio_out = %h after the reboot, want b9", test, gpio_out));
     always @(gpio_out[3]) if (rb_seen && cyc > rb_cyc + 8 && gpio_out[7] === 1'b0)
         fail($sformatf("%s: SCK edge with the SD card selected after the reboot", test));
 
@@ -297,7 +297,8 @@ module tb_soc_periph;
                                    n_thr - ph[5], n_pop - ph[6]));
             end else if (test == "periph_access") begin
                 if (e == 32'h10) rp.send_byte(value[7:0]);
-                if (e == 32'h20 && gpio_out !== value[7:0])
+                // bits 5:4 are the UART's pins at the chip (WO-58 moves them to the pinmux), so only the other six are compared
+                if (e == 32'h20 && (gpio_out & 8'hCF) !== (value[7:0] & 8'hCF))
                     fail($sformatf("periph_access: gpio_out = %h, want %h", gpio_out, value[7:0]));
                 if (e == 32'h21) tb_in = 8'hA4;
                 if (e == 32'h30) oled_fitted = 1'b1;
@@ -359,8 +360,9 @@ module tb_soc_periph;
                      "tx_chars 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEF\015\n",
                      "console: polled\015\n", "console: fifo path, 16 at a time\015\n"};
             if (test == "irq_stall") begin
-                for (k = 0; k < 12; k = k + 1) s = {s, "AB"};
-                for (k = 0; k < 9; k = k + 1)  s = $sformatf("%sP%c", s, 8'h5A);
+                // the 4-deep TX FIFO: part A sends ABABAB per round, part C five P and the amoswap's Z
+                for (k = 0; k < 12; k = k + 1) s = {s, "ABABAB"};
+                for (k = 0; k < 9; k = k + 1)  s = $sformatf("%sPPPPP%c", s, 8'h5A);
             end
             if (test == "periph_access") s = "ABq";
             if (test == "plic_uart")
@@ -511,18 +513,21 @@ module tb_soc_periph;
             if (test == "uart_hello") begin
                 $display("uart_hello: part 1 (no polling) %0d stores waited %0d clocks; part 2 (LSR polled) %0d waited",
                          ph[5] - ph[4], ph[2] - ph[1], ph[6] - ph[5]);
-                if (ph[5] - ph[4] < 10) fail("uart_hello: fewer than 10 of 15 unpolled THR stores waited");
+                // the 4-deep TX FIFO plus the shifter take the first few stores without waiting
+                if (ph[5] - ph[4] < 6) fail("uart_hello: fewer than 6 of 15 unpolled THR stores waited");
                 if (ph[3] != ph[2]) fail("uart_hello: a THR store waited although LSR.THRE was polled");
             end
             if (test == "uart_echo") begin
                 $display("uart_echo: the RP2350 held characters for CTS %0d clocks; %0d characters sent against CTS",
                          ph[2] - ph[1], rp.tx_sent_cts_off);
-                if (ph[2] - ph[1] == 0) fail("uart_echo: flow control never held the RP2350 back");
-                if (rp.tx_sent_cts_off != 2) fail("uart_echo: want exactly Y and Z sent against CTS");
+                // 16550A (WO-50): RTS# drops only with fewer than two RX FIFO entries free, so the
+                // popping program never holds the RP2350 back and nothing is sent against CTS.
+                if (rp.tx_sent_cts_off != 0) fail("uart_echo: a character was sent against CTS");
             end
             if (test == "uart_linux") begin
                 $display("uart_linux: %0d THR stores waited (%0d clocks)", uart_waits, uart_wait);
-                if (uart_waits < 30) fail("uart_linux: tx_chars bursts did not wait on THR");
+                // the 4-deep TX FIFO and the shifter take the first few characters of each burst
+                if (uart_waits < 20) fail("uart_linux: tx_chars bursts did not wait on THR");
                 if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
             end
             if (test == "oled_spi") begin

@@ -109,7 +109,7 @@ _start:
     li   t0, 0x03
     sb   t0, MCR(s0)
     lbu  t0, IER(s0)
-    CHECK t0, 0x01, 0x120        # RDI kept; RLSI does not exist here
+    CHECK t0, 0x05, 0x120        # IER keeps RLSI and RDI (16550A: bits 3:0)
     li   t0, 0x80
     sb   t0, LCR(s0)
     lbu  t0, DLL(s0)
@@ -131,7 +131,7 @@ poll_tx:
     lbu  t0, IIR(s0)             # serial8250_default_handle_irq
     andi t1, t0, 0x01
     bnez t1, 5f
-    CHECK t0, 0x02, 0x130        # only THRI can be pending here
+    CHECK t0, 0xC2, 0x130        # only THRI can be pending here (IIR[7:6] = FIFOs enabled)
     lbu  t1, LSR(s0)             # serial_lsr_in
     andi t2, t1, LSR_DR | LSR_OE
     beqz t2, 1f
@@ -172,7 +172,7 @@ poll_tx:
     j    test_fail
 9:  WAIT_LSR s0, LSR_TEMT
     lbu  t0, IIR(s0)
-    CHECK t0, 0x01, 0x135        # THRI off, nothing received
+    CHECK t0, 0xC1, 0x135        # THRI off, nothing received
 
     # ---- 5. receive: serial8250_rx_chars() from the polled handler ----
     EVENT_P 5                      # the terminal types s_rx, CTS flow control on
@@ -182,7 +182,7 @@ poll_rx:
     lbu  t0, IIR(s0)
     andi t1, t0, 0x01
     bnez t1, 3f
-    CHECK t0, 0x04, 0x140        # RX data available
+    CHECK t0, 0xC4, 0x140        # RX data available
     lbu  t1, LSR(s0)
     li   t3, 256                 # max_count
 1:  andi t2, t1, LSR_OE
@@ -227,7 +227,7 @@ poll_rx:
 
     # ---- 6. serial8250_console_write() ----
     lbu  s8, IER(s0)             # save IER
-    CHECK s8, 0x01, 0x150
+    CHECK s8, 0x05, 0x150
     sb   zero, IER(s0)           # serial8250_clear_IER
     la   a0, s_con
 1:  lbu  a1, 0(a0)

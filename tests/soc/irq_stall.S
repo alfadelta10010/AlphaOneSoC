@@ -57,8 +57,12 @@ a_loop:
     sw   t0, 0(s3)               # mtimecmp = now + delay
     li   t1, 'A'
     li   t2, 'B'
+    sb   t1, THR(s0)             # the 4-deep TX FIFO and the shifter take five stores; the
+    sb   t2, THR(s0)             # sixth is held until the shifter finishes a character
     sb   t1, THR(s0)
-    sb   t2, THR(s0)             # held while 'A' is on the line
+    sb   t2, THR(s0)
+    sb   t1, THR(s0)
+    sb   t2, THR(s0)             # held (TX FIFO full)
 a_after:
     nop
 1:  blt  s5, s8, 1b              # the interrupt, sooner or later
@@ -131,10 +135,14 @@ c_loop:
     add  t0, t0, s6
     sw   t0, 0(s3)
     li   t1, 'P'
+    sb   t1, THR(s0)             # five 'P' fill the shifter and the TX FIFO
+    sb   t1, THR(s0)
+    sb   t1, THR(s0)
+    sb   t1, THR(s0)
     sb   t1, THR(s0)
     EVENT 5                      # the testbench counts pops and THR loads from here
     li   t0, 0x5A
-    amoswap.w t3, t0, (s0)       # read pops RBR; write (THR = 0x5A) held while 'P' goes
+    amoswap.w t3, t0, (s0)       # read pops RBR; write (THR = 0x5A) held while the TX FIFO is full
 c_after:
     EVENT 6                      # ... to here: one of each
     andi t3, t3, 0xFF

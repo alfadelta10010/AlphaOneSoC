@@ -576,8 +576,8 @@ module tb_tt_um;
                 end
                 ID_irq_stall: begin
                     s_div = 4;
-                    for (k = 0; k < 12; k = k + 1) s_want = {s_want, "AB"};
-                    for (k = 0; k < 9; k = k + 1)  s_want = $sformatf("%sP%c", s_want, 8'h5A);
+                    for (k = 0; k < 12; k = k + 1) s_want = {s_want, "ABABAB"};
+                    for (k = 0; k < 9; k = k + 1)  s_want = $sformatf("%sPPPPP%c", s_want, 8'h5A);
                     s_n_ev = 9; for (k = 0; k < 9; k = k + 1) s_ev[k] = 4;
                     for (k = 0; k < 16; k = k + 1) begin push_oled(1'b0, 8'h55); push_oled(1'b0, 8'hAA); end
                 end
@@ -1140,16 +1140,10 @@ module tb_tt_um;
         end
     end
 
-    // RTS# while a received byte waits: it must be high at some point of
-    // the stop bit, from the UART's stop-bit sample on. A program that polls
-    // LSR fast (streaming fetch) can read RBR within that half bit and drop
-    // it again before the stop bit ends, so the end alone is not the test.
-    reg rts_hi_stop = 1'b0;
-    always @(rp.tx_stops) rts_hi_stop = (uo_out[5] === 1'b1);
-    always @(posedge uo_out[5]) rts_hi_stop = 1'b1;
-    always @(rp.tx_sent)
-        if (rp.tx_sent > 0 && !rts_hi_stop && uo_out[5] !== 1'b1)
-            fail("RTS# low through the stop bit of a received byte: never raised for it");
+    // RTS# is no longer raised for a single received byte (WO-50, 16550A): it is the registered
+    // !(MCR.RTS & !LOOP & rx_n <= 14), high only while fewer than two RX FIFO entries are free (or MCR.RTS
+    // is clear). The old per-byte "RTS# high through the stop bit" check is retired; the FIFO-level rule
+    // is proved on uart.v (uart formal) and in tb_uart.
 
     // ── Run ─────────────────────────────────────────────────────────────────
     integer max_cycles = 0;
