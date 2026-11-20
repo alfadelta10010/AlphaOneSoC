@@ -25,13 +25,18 @@ for line in open(dump):
             img[addr] = int(tok, 16)
             addr += 1
 
+# The volume is at sector 0 (a FAT boot sector starts with a jump) or in partition 1 of an MBR.
+vol = 0
+if img[0] not in (0xEB, 0xE9):
+    vol = int.from_bytes(img[0x1BE + 8:0x1BE + 12], "little") * 512
 bad = []
 with tempfile.NamedTemporaryFile(suffix=".img") as t:
     t.write(img)
     t.flush()
+    target = t.name + (f"@@{vol}" if vol else "")
 
     def mtype(path):
-        r = subprocess.run(["mtype", "-i", t.name, "::" + path], capture_output=True)
+        r = subprocess.run(["mtype", "-i", target, "::" + path], capture_output=True)
         return r.stdout if r.returncode == 0 else None
 
     def want(path, data):
@@ -55,12 +60,14 @@ with tempfile.NamedTemporaryFile(suffix=".img") as t:
     want("SUB/A long file name.txt", b"long names work\n")
 
 # the two FAT copies
-res = int.from_bytes(img[14:16], "little")
-nfat = img[16]
-spf = int.from_bytes(img[22:24], "little")
+bpb = img[vol:vol + 512]
+res = int.from_bytes(bpb[14:16], "little")
+nfat = bpb[16]
+spf = int.from_bytes(bpb[22:24], "little")
+base = vol // 512
 if nfat == 2:
-    f1 = img[res * 512:(res + spf) * 512]
-    f2 = img[(res + spf) * 512:(res + 2 * spf) * 512]
+    f1 = img[(base + res) * 512:(base + res + spf) * 512]
+    f2 = img[(base + res + spf) * 512:(base + res + 2 * spf) * 512]
     if f1 != f2:
         bad.append("the two FAT copies differ")
 for b in bad:

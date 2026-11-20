@@ -76,7 +76,8 @@ int sd_init(void)
     xfer(0xFF);
     cs_low();
     r = cmd(8, 0x1AA, 0x87);
-    if (r == 0x01) {                     /* R7: the voltage and check pattern come back */
+    uint32_t hcs = 0;                    /* a v1 card is told HCS = 0 */
+    if (r == 0x01) {                     /* v2: R7 returns the voltage and check pattern */
         uint32_t v = 0;
         for (int i = 0; i < 4; i++)
             v = (v << 8) | xfer(0xFF);
@@ -84,13 +85,17 @@ int sd_init(void)
             cs_high();
             return 2;
         }
+        hcs = 0x40000000;
+    } else if (!(r & 0x04)) {            /* not v2 and not "illegal command" (v1): no card */
+        cs_high();
+        return 2;
     }
     cs_high();
     xfer(0xFF);
 
     for (int i = 0; i < 2000; i++) {     /* ACMD41 until the card leaves idle */
         cs_low();
-        r = acmd(41, 0x40000000);
+        r = acmd(41, hcs);
         cs_high();
         xfer(0xFF);
         if (r == 0x00)
@@ -181,5 +186,15 @@ int sd_write(uint32_t lba, const void *buf)
         }
     cs_high();
     xfer(0xFF);
+
+    /* The card has taken the block and finished programming; ask whether it succeeded (CMD13: R1
+     * then a second status byte, both zero when there is no error). */
+    cs_low();
+    r = cmd(13, 0, 0x01);
+    uint8_t st = xfer(0xFF);
+    cs_high();
+    xfer(0xFF);
+    if (r != 0x00 || st != 0x00)
+        return 0x20 | ((r | st) & 0x0F);
     return 0;
 }

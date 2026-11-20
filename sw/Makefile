@@ -60,7 +60,7 @@ FORCE:
 define STAMP
 $$(BUILD)/$(1)/flags: FORCE
 	@mkdir -p $$(dir $$@)
-	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC))' > $$$$t; \
+	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC)') > $$$$t; \
 	 if cmp -s $$$$t $$@; then rm -f $$$$t; else mv -f $$$$t $$@; fi
 endef
 HDRS := $(wildcard common/*.h)
@@ -71,7 +71,7 @@ $(eval $(call STAMP,loader))
 $(BUILD)/loader/loader.elf: loader/start.S loader/loader.c common/uart.c common/trap.c common/trap_entry.S \
                             $(HDRS) loader/loader.ld $(BUILD)/loader/flags
 	@mkdir -p $(dir $@)
-	$(TC)gcc $(CFLAGS) $(FREESTANDING) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -T loader/loader.ld \
+	$(TC)gcc $(CFLAGS) $(loader_CFLAGS) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -T loader/loader.ld \
 	    loader/start.S loader/loader.c common/uart.c common/trap.c common/trap_entry.S -lgcc -o $@
 $(BUILD)/loader/loader.bin: $(BUILD)/loader/loader.elf
 	$(TC)objcopy -O binary $< $@
@@ -124,12 +124,19 @@ $(FFB)/ff.c: $(TP)/fatfs/source/ff.c fatfs/ffconf.sed
 	sed -f fatfs/ffconf.sed $(TP)/fatfs/source/ffconf.h > $(FFB)/ffconf.h
 fatfs_SRC    := fatfs/fatfs_test.c fatfs/diskio_sd.c common/sd.c $(FFB)/ff.c $(FFB)/ffunicode.c $(FFB)/ffsystem.c
 fatfs_CFLAGS := -I$(FFB) -Wno-format -Wno-error
-fatfs_RUNDEP := $(BUILD)/fatfs/disk.hex
-fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk.hex +SD_DUMP=$(BUILD)/fatfs/dump.hex
-fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex
-$(BUILD)/fatfs/disk.hex: tools/mkdisk.sh tools/img2hex.py
+# DISK=fat12|fat16|mbr picks the card's image and SD=sdhc|sdsc|v1 its kind (byte addressing and
+# CMD16 for sdsc, no CMD8 either for v1): make run-fatfs DISK=mbr SD=v1. fat12 on an SDHC card is
+# the default; the image is rebuilt when DISK changes.
+DISK ?= fat12
+SD   ?= sdhc
+fatfs_TYPE   := $(if $(filter fat12,$(DISK)),FAT12,FAT16)
+fatfs_SDARG  := $(if $(filter sdsc,$(SD)),+SD_SDSC,$(if $(filter v1,$(SD)),+SD_V1,))
+fatfs_RUNDEP := $(BUILD)/fatfs/disk-$(DISK).hex
+fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG)
+fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
+$(BUILD)/fatfs/disk-%.hex: tools/mkdisk.sh tools/img2hex.py
 	@mkdir -p $(dir $@)
-	./tools/mkdisk.sh $(BUILD)/fatfs/disk.img $@
+	./tools/mkdisk.sh $(BUILD)/fatfs/disk-$*.img $@ $*
 $(BUILD)/fatfs/fatfs.elf: $(FFB)/ff.c
 $(eval $(call PAYLOAD,fatfs))
 
