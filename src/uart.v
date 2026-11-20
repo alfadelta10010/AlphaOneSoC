@@ -185,13 +185,14 @@ module uart #(
     wire [8:0] rx_head = rx_emp ? 9'd0 : {rx_err[rx_rp], rx_mem[rx_rp]};
     wire       h_err   = rx_head[8];
     // 16550A: an LSR read acknowledges the line-status condition (BI/FE and the RLS interrupt) of the head character;
-    // the entry itself stays queued until the RBR pop, and FIFOERR still counts it.
+    // the entry itself stays queued until the RBR pop; FIFOERR (LSR[7]) drops it from its count (PC16550D: cleared by an
+    // LSR read when no later entry has an error).
     reg        err_ack;
     wire       h_err_u = h_err && !err_ack;
     wire       bi      = h_err_u && (rx_head[7:0] == 8'h00);
     wire       fe      = h_err_u && (rx_head[7:0] != 8'h00);
     wire       temt    = tx_emp && tx_idle;
-    wire [7:0] lsr     = {fen && (err_n != 0), temt, tx_emp, bi, fe, 1'b0, oe, !rx_emp};
+    wire [7:0] lsr     = {fen && (err_n > err_ack), temt, tx_emp, bi, fe, 1'b0, oe, !rx_emp};
 
     wire [4:0] trig = !fen ? 5'd1 : (rtrig == 2'd0) ? 5'd1 : (rtrig == 2'd1) ? 5'd4 :
                                     (rtrig == 2'd2) ? 5'd8 : 5'd14;

@@ -10,3 +10,5 @@ sed uart.v s/wire       cti    = (cti_cnt == 10'd640);/wire       cti    = (cti_
 sed uart.v s/oe <= 1'b1;/oe <= 1'b0;/
 # an LSR read never acknowledges the error head -> P8b
 sed uart.v s/else if (rd_lsr \&\& h_err)/else if (rd_lsr \&\& h_err \&\& 1'b0)/
+# FIFOERR still counts the acknowledged head (the pre-fix LSR[7]) -> P8
+sed uart.v s/fen \&\& (err_n > err_ack)/fen \&\& (err_n != 0)/

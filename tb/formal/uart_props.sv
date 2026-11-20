@@ -97,7 +97,7 @@ module uart_props (
                 assert ((rdata[11] || rdata[12]) == (h_err && !err_ack));
                 assert (rdata[13] == (tx_n == 3'd0));
                 assert (rdata[14] == (tx_n == 3'd0 && tx_idle));
-                assert (rdata[15] == (fen && err_n != 5'd0));
+                assert (rdata[15] == (fen && err_n > {4'b0, err_ack}));                           // FIFOERR: errors among the remaining entries
                 assert (rdata[7:0] == {3'b0, mcr});
                 assert (rdata[23:16] == (mcr[4] ? {mcr[3], mcr[2], mcr[0], mcr[1], 4'b0} : 8'hB0));
             end
