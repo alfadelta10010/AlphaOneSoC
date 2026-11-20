@@ -68,40 +68,40 @@ module tb_uart_smoke;
         // 3 tx pin
         wreg(0, 8'hA5); wreg(0, 8'h3C); wait_clk(500);
         chk("tx pin n", ntx, 2); chk("tx pin 0", txlog[0], 8'hA5); chk("tx pin 1", txlog[1], 8'h3C);
-        // 4 loopback, trigger 8 (FCR 0x81): 8 bytes -> RDA
+        // 4 loopback, trigger 4 (FCR 0x81): 4 bytes -> RDA
         wreg(4, 8'h1F); rd_chk("MSR loop", 6, 8'hF0);
         wreg(1, 8'h01);
-        for (i = 0; i < 7; i = i + 1) wreg(0, 8'h10 + i);
-        wait_clk(7*170 + 100);
-        rd_chk("IIR 7 bytes", 2, 8'hC1); chk("irq 7", irq, 0);
-        wreg(0, 8'h17); wait_clk(400);
+        for (i = 0; i < 3; i = i + 1) wreg(0, 8'h10 + i);
+        wait_clk(3*170 + 100);
+        rd_chk("IIR 3 bytes", 2, 8'hC1); chk("irq 3", irq, 0);
+        wreg(0, 8'h13); wait_clk(400);
         rd_chk("IIR RDA", 2, 8'hC4); chk("irq rda", irq, 1); rd_chk("LSR dr", 5, 8'h61);
-        for (i = 0; i < 8; i = i + 1) rd_chk("rbr ordered", 0, 8'h10 + i);
+        for (i = 0; i < 4; i = i + 1) rd_chk("rbr ordered", 0, 8'h10 + i);
         rd_chk("LSR empty", 5, 8'h60); rd_chk("RBR empty reads 0", 0, 8'h00); rd_chk("IIR after drain", 2, 8'hC1);
         chk("tx marks in loop", tx, 1); chk("rts_n in loop", rts_n, 1);
-        // 5 trigger 14 (FCR 0xC1) and 32 bytes through as 2 x 16, RTS# at 15
+        // 5 trigger 7 (FCR 0xC1) and 16 bytes through as 2 x 8, RTS# at 7
         wreg(2, 8'hC1);
-        for (i = 0; i < 13; i = i + 1) wreg(0, i);
-        wait_clk(1000); rd_chk("IIR 13 < 14", 2, 8'hC1);
-        wreg(0, 8'd13); wait_clk(400); rd_chk("IIR 14", 2, 8'hC4);
-        for (i = 0; i < 14; i = i + 1) rd_chk("14 ordered", 0, i);
+        for (i = 0; i < 6; i = i + 1) wreg(0, i);
+        wait_clk(300); rd_chk("IIR 6 < 7", 2, 8'hC1);
+        wreg(0, 8'd6); wait_clk(400); rd_chk("IIR 7", 2, 8'hC4);
+        for (i = 0; i < 7; i = i + 1) rd_chk("7 ordered", 0, i);
         wreg(2, 8'h81);
         wreg(4, 8'h02);                                   // leave loopback: RTS#
         wreg(4, 8'h1F);
         for (n = 0; n < 2; n = n + 1) begin
-            for (i = 0; i < 16; i = i + 1) wreg(0, 8'h40 + 16*n + i);
-            wait_clk(16*170 + 200);
-            rd_chk("LSR 16 queued", 5, 8'h61);
-            for (i = 0; i < 16; i = i + 1) rd_chk("32 ordered", 0, 8'h40 + 16*n + i);
+            for (i = 0; i < 8; i = i + 1) wreg(0, 8'h40 + 8*n + i);
+            wait_clk(8*170 + 200);
+            rd_chk("LSR 8 queued", 5, 8'h61);
+            for (i = 0; i < 8; i = i + 1) rd_chk("16 ordered", 0, 8'h40 + 8*n + i);
         end
-        // 6 overrun: 17 bytes without a read
+        // 6 overrun: 9 bytes without a read
         wreg(2, 8'h01);
-        for (i = 0; i < 17; i = i + 1) wreg(0, 8'h80 + i);
-        wait_clk(17*170 + 300);
+        for (i = 0; i < 9; i = i + 1) wreg(0, 8'h80 + i);
+        wait_clk(9*170 + 300);
         rd_chk("LSR OE", 5, 8'h63); rd_chk("LSR OE cleared", 5, 8'h61);
-        for (i = 0; i < 16; i = i + 1) rd_chk("OE kept oldest", 0, 8'h80 + i);
+        for (i = 0; i < 8; i = i + 1) rd_chk("OE kept oldest", 0, 8'h80 + i);
         rd_chk("LSR drained", 5, 8'h60);
-        // 7 character timeout: 3 bytes at trigger 8, then quiet
+        // 7 character timeout: 3 bytes at trigger 4, then quiet
         wreg(2, 8'h81);
         wreg(0, 8'h21); wreg(0, 8'h22); wreg(0, 8'h23);
         wait_clk(3*170 + 300);
@@ -110,19 +110,19 @@ module tb_uart_smoke;
         rd_chk("pop", 0, 8'h21); rd_chk("IIR after pop", 2, 8'hC1);
         wait_clk(700); rd_chk("IIR CTI again", 2, 8'hCC);
         rd_chk("pop", 0, 8'h22); rd_chk("pop", 0, 8'h23); rd_chk("IIR cti gone", 2, 8'hC1);
-        // 8 THR back-pressure: shifter + 4 entries absorb 5 writes, the 6th waits
+        // 8 THR back-pressure: the shifter takes the first byte at once, THR the second, the third waits
         wreg(2, 8'h01); wreg(1, 8'h00);
-        for (i = 0; i < 4; i = i + 1) begin wreg(0, 8'h50 + i); chk("no stall", stall, 0); end
-        wreg(0, 8'h54); wreg(0, 8'h55); chk("6th write waits", stall > 100, 1);
-        wait_clk(7*170);
-        for (i = 0; i < 6; i = i + 1) rd_chk("bp data", 0, 8'h50 + i);
+        wreg(0, 8'h50); wreg(0, 8'h51); chk("2nd write waits only for the shifter to take THR", stall < 10, 1);
+        wreg(0, 8'h52); chk("3rd write waits a frame", stall > 100, 1);
+        wait_clk(3*170);
+        for (i = 0; i < 3; i = i + 1) rd_chk("bp data", 0, 8'h50 + i);
         // 9 FCR clears
-        wreg(2, 8'h01); wreg(0, 8'h61); wreg(0, 8'h62); wreg(0, 8'h63); wreg(0, 8'h64);
-        wreg(2, 8'h05);                                   // clear TX: the shifter finishes its frame
+        wreg(2, 8'h01); wreg(0, 8'h61); wreg(0, 8'h62);
+        wreg(2, 8'h05);                                   // clear THR: the shifter finishes its frame
         wait_clk(1000); rd_chk("LSR tx cleared", 5, 8'h61); rd_chk("one byte went", 0, 8'h61); rd_chk("no more", 5, 8'h60);
         wreg(0, 8'h71); wreg(0, 8'h72); wait_clk(400);
         rd_chk("LSR 2 queued", 5, 8'h61); wreg(2, 8'h03); rd_chk("LSR rx cleared", 5, 8'h60);
-        wreg(2, 8'h01); wreg(0, 8'h73); wait_clk(300); wreg(2, 8'h00);      // FEN change clears both FIFOs
+        wreg(2, 8'h01); wreg(0, 8'h73); wait_clk(300); wreg(2, 8'h00);      // FEN change clears the FIFO and THR
         rd_chk("FEN change clears", 5, 8'h60); rd_chk("IIR fen 0", 2, 8'h01);
         // 10 break in loopback (BI entry), FEN 1
         wreg(2, 8'h81); wreg(1, 8'h04);
@@ -139,12 +139,12 @@ module tb_uart_smoke;
         rd_chk("IIR RLS fe", 2, 8'hC6); rd_chk("LSR FE", 5, 8'hE9);
         rd_chk("FE data", 0, 8'h55); rd_chk("LSR clean", 5, 8'h60);
         rxf(8'h96, 1'b1); wait_clk(100); rd_chk("LSR good", 5, 8'h61); rd_chk("good data", 0, 8'h96);
-        // 12 RTS# follows the FIFO fill (not in loopback)
+        // 12 RTS# follows the FIFO fill (off at 7 of 8) (not in loopback)
         wreg(1, 8'h00); wreg(2, 8'h01);
         chk("rts asserted", rts_n, 0);
-        for (i = 0; i < 14; i = i + 1) rxf(i, 1'b1);
-        wait_clk(5); chk("rts 14 held", rts_n, 0);
-        rxf(8'hEE, 1'b1); wait_clk(5); chk("rts off at 15", rts_n, 1);
+        for (i = 0; i < 6; i = i + 1) rxf(i, 1'b1);
+        wait_clk(5); chk("rts 6 held", rts_n, 0);
+        rxf(8'hEE, 1'b1); wait_clk(5); chk("rts off at 7", rts_n, 1);
         wreg(2, 8'h03); wait_clk(5); chk("rts back", rts_n, 0);
         if (nbad == 0) $display("PASS %0d checks", nchk); else $display("FAIL %0d of %0d checks", nbad, nchk);
         $finish;
