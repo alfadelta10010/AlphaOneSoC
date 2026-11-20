@@ -81,7 +81,7 @@ FORMAL = {"csr.v": ["csr"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
           "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12", "bus"],
           "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap"],
-          "soc_bus.v": ["bus"], "uart.v": ["bus"],
+          "soc_bus.v": ["bus"], "uart.v": ["uart", "bus"],
           "muldiv.v": ["md07"],
           "tt_um_alfadelta10010_alphaone_soc.v": ["spi_f12"]}
 # No <name>_props.sv of their own: structural, or a define/PROPN variant of mem/spi_bb.
