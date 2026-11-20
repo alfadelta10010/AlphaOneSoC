@@ -5,7 +5,8 @@
 //   * every read (all 32 bits) is compared with the model, every cycle that has sel & !we;
 //   * meip is compared with the model every clock (registered: "some source is pending, enabled, with
 //     priority above the threshold" one clock earlier);
-//   * a claim returns the lowest id among the eligible sources (priorities are all equal when eligible),
+//   * a claim returns the lowest id among the claimable sources (pending, enabled, priority set; the threshold
+//     gates only meip, not the claim), (priorities are all equal when claimable),
 //     0 when none, and moves pending -> in service; a source in service is not re-pended; a complete of
 //     an enabled id ends the service (a complete of a disabled or out-of-range id is ignored);
 //   * only full-word writes act; reserved offsets read 0 and ignore writes (no aliasing in the 4 MB window).
@@ -49,6 +50,11 @@ module tb_plic;
         m_elig = m_pend & m_en & m_prio & {NS{!m_thr}};
     end endfunction
 
+    // claimable: pending, enabled, priority non-zero; the claim ignores the threshold (spec, Interrupt Claim Process)
+    function [NS:1] m_cand; input dummy; begin
+        m_cand = m_pend & m_en & m_prio;
+    end endfunction
+
     function [4:0] m_cid; input [NS:1] e; integer k; begin
         m_cid = 0;
         for (k = NS; k >= 1; k = k - 1) if (e[k]) m_cid = k;
@@ -60,7 +66,7 @@ module tb_plic;
         else if (a == A_PND) m_read = {22'd0, m_pend, 1'b0};
         else if (a == A_EN)  m_read = {22'd0, m_en, 1'b0};
         else if (a == A_THR) m_read = {31'd0, m_thr};
-        else if (a == A_CLM) m_read = {27'd0, m_cid(m_elig(0))};
+        else if (a == A_CLM) m_read = {27'd0, m_cid(m_cand(0))};
     end endfunction
 
     task fail; input [255:0] what; begin
@@ -77,7 +83,7 @@ module tb_plic;
         integer    k;
         begin
             #3;
-            cid = m_cid(m_elig(0));
+            cid = m_cid(m_cand(0));
             rdn = sel && !we;
             wrn = sel && we && (be == 4'b1111);
             if (rdn) begin
@@ -145,7 +151,7 @@ module tb_plic;
 
     // claim and return the id the model predicted (the bench has already checked the read)
     reg [4:0] last_claim;
-    task claim; begin last_claim = m_cid(m_elig(0)); rd_op(A_CLM); end endtask
+    task claim; begin last_claim = m_cid(m_cand(0)); rd_op(A_CLM); end endtask
 
     // ---------------- stimulus ----------------
     integer i, j, n, nrand, r;
@@ -215,7 +221,11 @@ module tb_plic;
         wr(A_EN, m_en_word(0) & ~32'h10);
         src = 0; idle; handler; idle;
         // threshold 7 / 0
-        src[2] = 1; idle; idle; wr(A_THR, 7); idle; idle; rd_op(A_CLM); wr(A_THR, 0); idle; idle; handler;
+        // spec: the claim is not affected by the threshold, so with threshold at max the pending source is claimed
+        src = 0; idle; wr(A_CLM, 2); idle; idle;        // id 2 not in service, level low
+        src[2] = 1; idle; idle; wr(A_THR, 7); idle; idle; claim;
+        if (last_claim != 2) begin fails = fails + 1; $display("FAIL thr-max claim returned %0d, want 2", last_claim); end
+        idle; wr(A_CLM, 2); idle; wr(A_THR, 0); idle; idle; handler;
         src = 0; idle; handler;
 
         // phase 4a: level drops before the claim (pending stays)
