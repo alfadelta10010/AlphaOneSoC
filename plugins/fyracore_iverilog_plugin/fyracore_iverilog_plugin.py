@@ -37,16 +37,34 @@ FYRACORE_TB = [
 
 
 class fyracore_iverilog_plugin(object):
-    """River Core DUT plugin for FyraCore on Icarus Verilog."""
+    """River Core DUT plugin for FyraCore on Icarus Verilog.
+
+    The Verilator plugin (fyracore_verilator_plugin) is a subclass: everything that is not about
+    the simulator itself, config, the Make flow, the report and the clean-up, lives only here. A
+    subclass changes the class attributes and build_command() / before_build() below."""
+
+    SIM = 'iverilog'                          # names the plugin: target fyracore_<SIM>, work dir, logs
+    TOOLS = ['iverilog', 'vvp']               # simulator tools that must be on $PATH
+    START = 'vvp ./sim_fyracore'              # how a test's Make recipe starts the simulator binary
+    BUILD_TIMEOUT = 300                       # seconds for the build
+
+    def build_command(self, sim_binary, src_files, tb_files):
+        return (f'iverilog -g2012 -o {sim_binary} '
+                f'-s tb_rivercore '
+                f'{src_files} {tb_files}')
+
+    def before_build(self):
+        """Called before the simulator is built."""
+        pass
 
     @dut_hookimpl
     def init(self, ini_config, test_list, work_dir, coverage_config,
              plugin_path, timeout):
-        self.name = 'fyracore_iverilog'
-        logger.info('FyraCore iverilog plugin: Pre-Compile Stage')
+        self.name = 'fyracore_' + self.SIM
+        logger.info(f'FyraCore {self.SIM} plugin: Pre-Compile Stage')
 
         # ----- Validate required tools -----
-        for tool in ['iverilog', 'vvp']:
+        for tool in self.TOOLS:
             if shutil.which(tool) is None:
                 logger.error(f'{tool} not found in $PATH')
                 raise SystemExit(1)
@@ -105,7 +123,7 @@ class fyracore_iverilog_plugin(object):
         self.test_list = load_yaml(test_list)
 
         # ----- Build simulator binary (one-time) -----
-        logger.info('Building FyraCore iverilog simulator')
+        logger.info(f'Building FyraCore {self.SIM} simulator')
 
         src_files = ' '.join(
             os.path.join(self.src_dir, f) for f in FYRACORE_SRC)
@@ -114,15 +132,12 @@ class fyracore_iverilog_plugin(object):
 
         self.sim_binary = os.path.join(self.sim_path, 'sim_fyracore')
 
-        iverilog_cmd = (
-            f'iverilog -g2012 -o {self.sim_binary} '
-            f'-s tb_rivercore '
-            f'{src_files} {tb_files}'
-        )
-        logger.debug(f'iverilog command: {iverilog_cmd}')
-        ret, out, err = sys_command(iverilog_cmd, 300)
+        self.before_build()
+        build_cmd = self.build_command(self.sim_binary, src_files, tb_files)
+        logger.debug(f'{self.SIM} command: {build_cmd}')
+        ret, out, err = sys_command(build_cmd, self.BUILD_TIMEOUT)
         if ret != 0:
-            logger.error(f'iverilog compilation failed:\n{err}')
+            logger.error(f'{self.SIM} compilation failed:\n{out}\n{err}')
             raise SystemExit(1)
 
         if not os.path.isfile(self.sim_binary):
@@ -133,7 +148,7 @@ class fyracore_iverilog_plugin(object):
 
     @dut_hookimpl
     def build(self):
-        logger.info('FyraCore iverilog plugin: Build Hook')
+        logger.info(f'FyraCore {self.SIM} plugin: Build Hook')
         make = makeUtil(
             makefilePath=os.path.join(self.work_dir,
                                       'Makefile.' + self.name))
@@ -209,7 +224,7 @@ class fyracore_iverilog_plugin(object):
             # bash -- so *2048 is exactly max_dump_mb under make and at most
             # twice that if a bash ever runs it, never less. It applies to
             # every file the subshell writes, so it must wrap only the
-            # simulation. Exceeding it kills vvp with SIGXFSZ and leaves a
+            # simulation. Exceeding it kills the simulator with SIGXFSZ and leaves a
             # truncated dut.dump, which the comparison stage reports as a
             # failure -- a bounded loss rather than a full disk.
             if self.max_dump_mb > 0:
@@ -225,7 +240,7 @@ class fyracore_iverilog_plugin(object):
             # trace divergence. Keep it next to the dump instead; it is a few
             # lines per test.
             sim_cmd = (
-                f'({ulimit_cmd}{timeout_cmd}vvp ./sim_fyracore '
+                f'({ulimit_cmd}{timeout_cmd}{self.START} '
                 f'+INIT_FILE={work_dir}/{test}.hex '
                 f'+DUMP_FILE=dut.dump '
                 f'+TOHOST_ADDR=$$TOHOST '
@@ -297,9 +312,9 @@ class fyracore_iverilog_plugin(object):
 
     @dut_hookimpl
     def run(self, module_dir):
-        logger.info('FyraCore iverilog plugin: Run Hook')
+        logger.info(f'FyraCore {self.SIM} plugin: Run Hook')
         pytest_file = os.path.join(
-            module_dir, 'fyracore_iverilog_plugin', 'gen_framework.py')
+            module_dir, f'fyracore_{self.SIM}_plugin', 'gen_framework.py')
         logger.debug(f'Pytest file: {pytest_file}')
 
         report_file_name = os.path.join(
@@ -332,7 +347,7 @@ class fyracore_iverilog_plugin(object):
 
     @dut_hookimpl
     def post_run(self, test_dict, config):
-        logger.info('FyraCore iverilog plugin: Post-Run Hook')
+        logger.info(f'FyraCore {self.SIM} plugin: Post-Run Hook')
 
         # config is a ConfigParser, whose get() signature is
         # get(section, option), not dict.get(key, default). Passing a dict as
