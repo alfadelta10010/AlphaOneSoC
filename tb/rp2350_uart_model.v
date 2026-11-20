@@ -9,11 +9,12 @@
 // whole number of bit times from the start edge, so a short or long bit
 // is caught, not just a wrong byte.
 //
-// Transmit: bytes queued with send_byte / send_str go out 8N1. With flow
-// control on (the board's setup) it checks CTS before each character, as
-// the PL011 does, and starts only while CTS (= RTS#) is asserted low; a
-// character already started always completes. With flow control off it
-// sends regardless, which is how an overrun is made on purpose.
+// Transmit: bytes queued with send_byte / send_str go out 8N1. Flow control
+// is off at start (the board's default map has no RTS#, WO-58) and set_flow(1)
+// turns it on: it then checks CTS before each character, as the PL011 does, and
+// starts only while CTS (= RTS#) is asserted low; a character already started
+// always completes. With flow control off it sends regardless, which is how an
+// overrun is made on purpose.
 //
 // Errors are counted in `errors` and printed as ERROR lines.
 
@@ -43,7 +44,7 @@ module rp2350_uart_model #(
     reg       tx_busy;
 
     initial begin
-        bit_ns = BIT_NS; flow = 1'b1; gap_ns = 0.0; errors = 0;
+        bit_ns = BIT_NS; flow = 1'b0; gap_ns = 0.0; errors = 0;
         rx_n = 0; rx_frames_bad = 0;
         tx_head = 0; tx_tail = 0; tx_sent = 0; tx_sent_cts_off = 0; tx_stops = 0; tx_busy = 1'b0;
         rx = 1'b1;
