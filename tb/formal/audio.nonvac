@@ -1,0 +1,8 @@
+# one extra high clock per frame (<= instead of <) -> audio_o rule / P3
+sed audio.v s/audio_o <= en \& (dc < lvl);/audio_o <= en \& (dc <= lvl);/
+# LFSR reset value 0 -> P4
+sed audio.v s/l <= 15'd1; dc <= 8'd0; lvl <= 8'd0; audio_o <= 1'b0;/l <= 15'd0; dc <= 8'd0; lvl <= 8'd0; audio_o <= 1'b0;/
+# level latched every clock -> P2
+sed audio.v s/if (dc == 8'hFF) lvl <= level;/lvl <= level;/
+# voice toggles without waiting for c == 0 -> P5
+sed audio.v s/if (c\[12\*i +: 12\] == 12'd0) begin c\[12\*i +: 12\] <= per\[12\*i +: 12\]; q\[i\] <= ~q\[i\]; end/if (c[12*i +: 12] == 12'd1) begin c[12*i +: 12] <= per[12*i +: 12]; q[i] <= ~q[i]; end/
