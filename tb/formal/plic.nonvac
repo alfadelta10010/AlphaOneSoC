@@ -1,0 +1,8 @@
+# claim picks the highest id -> P1
+sed plic.v s/for (i = NSRC; i >= 1; i = i - 1) if (elig\[i\]) cid = i;/for (i = 1; i <= NSRC; i = i + 1) if (elig[i]) cid = i;/
+# complete ignores en -> P4
+sed plic.v s/if (compl \&\& wdata == i \&\& en\[i\]) insvc/if (compl \&\& wdata == i) insvc/
+# gateway ignores insvc -> P7/P2
+sed plic.v s/if (src\[i\] \&\& !insvc\[i\]) pend/if (src[i]) pend/
+# threshold not applied -> P3
+sed plic.v s/wire \[NSRC:1\] elig = pend \& en \& prio \& {NSRC{!thr}};/wire [NSRC:1] elig = pend \& en \& prio;/
