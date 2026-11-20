@@ -190,6 +190,13 @@ int sd_write(uint32_t lba, const void *buf)
     if ((r & 0x1F) != 0x05) {            /* the data was not accepted (0x0B CRC error, 0x0D write error) */
         cs_high();
         xfer(0xFF);
+        /* The card holds the error in its status until CMD13 reads it (the bits clear on read): read it
+         * now, or the next good write's CMD13 reports this one. */
+        cs_low();
+        cmd(13, 0, 0x01);
+        xfer(0xFF);
+        cs_high();
+        xfer(0xFF);
         return 2;
     }
     cs_high();

@@ -17,7 +17,8 @@ log = open(sys.argv[1], errors="replace").read().replace("\r", "")
 bad = []
 rules = [l.rstrip("\n") for l in open(sys.argv[2])]
 want = next((l[len("=RESULT "):] for l in rules if l.startswith("=RESULT ")), "PASS")
-if f"SW-RESULT: {want}" not in log:
+import re
+if not re.search(r"^SW-RESULT: " + re.escape(want) + r"( |$)", log, re.M):
     bad.append(f"run did not end in SW-RESULT: {want}")
 for line in rules:
     if not line or line.startswith("#") or line.startswith("=RESULT "):

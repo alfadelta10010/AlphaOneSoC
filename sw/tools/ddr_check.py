@@ -7,7 +7,9 @@ The loader prints either "flash in DDR, DDR_CAP 0xk (passing points 0xMASK)" or 
 (passing points 0xMASK)". The rule: the capture point is the middle of the longest run of passing points
 1 to 6, start + length / 2, the later run on a tie; no passing point means SDR. The run must have ended in
 PASS with the flash read-back right ("0 differ") in the mode the loader chose. Prints one summary line;
-exit 1 on any disagreement.
+exit 1 on any disagreement. The mask itself is checked two ways, because the choice is only recomputed from it:
+the passing points must form one contiguous window (an eye has no holes), and ddr_matrix.sh compares every
+combination's mask with sw/tools/ddr_matrix.golden (a regression oracle, not an independent one).
 """
 import re
 import sys
@@ -42,6 +44,9 @@ for c in range(1, 7):
 want = best_start + best_len // 2 if best_len else None
 if want != k:
     bad.append(f"the rule gives {want} for mask {mask:#04x}, the loader chose {k}")
+bits = [c for c in range(1, 7) if mask >> c & 1]
+if bits and bits[-1] - bits[0] + 1 != len(bits):
+    bad.append(f"mask {mask:#04x}: the passing points are not one contiguous window")
 if mask & ~0x7E:
     bad.append(f"mask {mask:#04x} has bits outside points 1-6")
 mode = "DDR" if k is not None else "SDR"

@@ -1,0 +1,9 @@
+# As expect-late.txt with the no-stream strap high: STREAM stays 0 on the way back to SDR, and the flash never
+# streamed during the whole boot.
++ flash stays SDR: mismatch after the execute test
++ (STREAM 0, DDR 0,
++ resumes 0,
+- reset cause 0x04
+- FAIL
+- TRAP mcause
+- ERROR

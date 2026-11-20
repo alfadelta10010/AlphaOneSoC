@@ -19,7 +19,12 @@
  * has no trap handler of its own unless it sets mtvec itself. Under g the monitor
  * leaves the CLINT timer alone. Under gb it owns mtimecmp and mie.MTIE too, the
  * program must leave the UART receiver alone (the monitor looks for Ctrl-C every TICK
- * clocks and takes the byte), and Ctrl-C only works while the program keeps MIE = 1. */
+ * clocks and takes the byte), and Ctrl-C only works while the program keeps MIE = 1.
+ *
+ * Watchdog: a monitor built with DDR=1 (flagged for the loader's DDR sweep) runs with the watchdog armed at
+ * TOP 15, a reset after 34 s without a kick (and the loader then marks DDR failed). The monitor kicks it in
+ * uart_putc, uart_getc, a dump's loop and every gb tick. A program run with g has the CPU to itself and
+ * must kick it (store 0x76 to syscon + 0x10C) at least every 34 s, or use gb. */
 #include <stdio.h>
 #include <string.h>
 #include "soc.h"
@@ -321,6 +326,7 @@ static void cmd_m(char sz, int ac, char **av)
     while (n) {
         uint8_t asc[16];
         int k;
+        wdt_kick();                                     /* (a DDR image has the watchdog running) */
         if (uart_rx_ready() && uart_getc() == 3) {      /* Ctrl-C ends a long dump */
             puts("^C");
             return;
@@ -531,6 +537,7 @@ void mon_trap(struct frame *f)
     uint32_t c = f->mcause;
     if (c == 0x80000007u && break_in) {
         int stop = 0;
+        wdt_kick();
         if (uart_rx_ready())
             stop = uart_getc() == 3;
         if (!stop) {

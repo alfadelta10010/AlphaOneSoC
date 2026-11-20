@@ -1,4 +1,4 @@
 # The exc case (-DNEG_EXC): the kernel's hook or the port's handler stops the run.
 + EXCEPTION mcause=00000002
 =RESULT FAIL code=168
-- Hello
+- tick: vTaskDelay

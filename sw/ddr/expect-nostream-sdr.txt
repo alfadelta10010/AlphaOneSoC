@@ -2,5 +2,6 @@
 + flash stays SDR: no passing capture point
 + (STREAM 0, DDR 0,
 + read back from flash in SDR, 0 differ
++ resumes 0,
 - FAIL
 - ERROR

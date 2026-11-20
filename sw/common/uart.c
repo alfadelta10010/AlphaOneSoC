@@ -11,8 +11,9 @@ void uart_init(unsigned divisor)
 
 void uart_putc(int c)
 {
+    wdt_kick();                      /* a program that only prints stays alive under the DDR watchdog */
     while (!(*reg8(UART_BASE + UART_LSR) & UART_LSR_THRE))
-        ;
+        wdt_kick();
     *reg8(UART_BASE + UART_THR) = (uint8_t)c;
 }
 

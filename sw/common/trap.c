@@ -15,5 +15,11 @@ void trap_report(void)
     uart_puts(" mtval=0x");
     uart_puthex(csr_mtval(), 8);
     uart_puts("\n");
+    /* With DDR on, a trap may be the flash failing. FINISH 0x3333 is a power-off, which holds the watchdog
+     * in reset: the board would halt until a pin reset and never fall back to SDR. Spin instead, so the
+     * watchdog the loader armed (BOOT_MODE 0xD8 + k) resets the SoC and the next boot stays in SDR. */
+    if (*reg32(SYSCON_BASE + SYSCON_QSPI_CFG) & 2)
+        for (;;)
+            ;
     soc_fail(0xFF);
 }

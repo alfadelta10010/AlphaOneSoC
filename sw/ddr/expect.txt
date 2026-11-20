@@ -5,6 +5,7 @@
 - flash stays SDR
 # and the flash reads really were EDh (the model counts them)
 - EDh 0,
++ EDh 
 - FAIL
 - TRAP
 - ERROR

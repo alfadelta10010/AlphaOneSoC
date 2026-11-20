@@ -2,5 +2,6 @@
 + flash in DDR, DDR_CAP
 + (STREAM 0, DDR 1,
 + read back from flash in DDR, 0 differ
++ resumes 0,
 - FAIL
 - ERROR

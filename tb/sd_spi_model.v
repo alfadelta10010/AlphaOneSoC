@@ -76,6 +76,8 @@ module sd_spi_model #(
     integer rderr_blk = -1;                 // +SD_RDERR
     reg [7:0] wr_resp = 8'h05, sd_status = 8'h00;   // +SD_WRRESP, +SD_STATUS
     reg     cmd8bad = 1'b0, no16 = 1'b0;    // +SD_CMD8BAD, +SD_NO16
+    reg     wr_once = 1'b0;                 // +SD_WRONCE: +SD_WRRESP applies to the first write only
+    reg [7:0] st_pend = 8'h00;              // status bits a refused write left, cleared by CMD13
     reg [31:0] rs = 32'h1;
     function [31:0] rnd(input integer d);
         begin rs = rs ^ (rs << 13); rs = rs ^ (rs >> 17); rs = rs ^ (rs << 5); rnd = rs; end
@@ -91,6 +93,7 @@ module sd_spi_model #(
         if ($value$plusargs("SD_WRRESP=%h", wr_resp)) ;
         if ($value$plusargs("SD_STATUS=%h", sd_status)) ;
         cmd8bad = $test$plusargs("SD_CMD8BAD");
+        wr_once = $test$plusargs("SD_WRONCE");
         no16    = $test$plusargs("SD_NO16");
         sdsc = $test$plusargs("SD_SDSC") || v1;
         if ($value$plusargs("SD_SEED=%d", s)) rs = 32'h2545F491 ^ (s * 32'h9E3779B1);
@@ -251,7 +254,11 @@ module sd_spi_model #(
                     if (!was_app) push(r1 | 8'h04, 1'b0);
                     else begin
                         acmd41_n = acmd41_n + 1;
-                        if (acmd41_n > sd_busy_n) begin idle_st = 1'b0; ready = 1'b1; push(8'h00, 1'b0); end
+                        // HCS (arg[30]): a v1 card is not told it (the host must send 0); an SDHC card
+                        // never leaves idle for HCS = 0 (SD Physical Layer 7.2.1, 4.2.3.1)
+                        if (v1 && arg[30]) err("ACMD41 with HCS set sent to a v1 card");
+                        if (!sdsc && !arg[30]) push(8'h01, 1'b0);
+                        else if (acmd41_n > sd_busy_n) begin idle_st = 1'b0; ready = 1'b1; push(8'h00, 1'b0); end
                         else push(8'h01, 1'b0);
                     end
                 end
@@ -260,7 +267,8 @@ module sd_spi_model #(
                     push(ready ? (sdsc ? 8'h80 : 8'hC0) : 8'h80, 1'b0); push(8'hFF, 1'b0); push(8'h80, 1'b0); push(8'h00, 1'b0);
                 end
                 6'd13: begin
-                    push(r1, 1'b0); push(sd_status, 1'b0);
+                    push(r1, 1'b0); push(sd_status | st_pend, 1'b0);
+                    st_pend = 8'h00;                        // the error bits clear on read
                 end
                 6'd16: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
@@ -327,6 +335,7 @@ module sd_spi_model #(
                     if (wcnt == 2) begin
                         // the data response, busy, then store
                         push(wr_resp, 1'b0);
+                        if (wr_resp != 8'h05) st_pend = st_pend | 8'h20;   // a refused write: the status keeps "error" 
                         wbusy = 1 + rn(16);
                         for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
                         begin : store
@@ -339,6 +348,7 @@ module sd_spi_model #(
                             else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
                         end
                         n_wr_blk = n_wr_blk + 1;
+                        if (wr_once) wr_resp = 8'h05;
                         rxs = RX_IDLE;
                     end
                 end

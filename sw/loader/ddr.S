@@ -22,8 +22,10 @@
  * 0 for SDR, with bit c of the byte above it set for each capture point c that passed the sweep;
  * a1 = the path: 0 DDR on, 1 no passing point, 2 trap in the execute test, 3 a
  * checksum or block mismatch.
- * The loader is built with -DDDR_FORCE_TRAP or -DDDR_FORCE_MISMATCH (make LOADER_DEFS=...) to run
- * the two failure paths of the execute test, which no Pmod model behaviour reaches.
+ * The loader is built with -DDDR_FORCE_TRAP, -DDDR_FORCE_MISMATCH or -DDDR_FORCE_LATE_MISMATCH
+ * (make LOADER_DEFS=...) to run the failure paths of the execute test and of the checks back in
+ * flash, which no Pmod model behaviour reaches. mtvec is the PSRAM handler until label 9: a trap
+ * in those checks restores SDR and BOOT_MODE 0xDF like one in the execute test.
  * Scratch in PSRAM: the code at PS_CODE, the reference at PS_REF, in the 64 KB the stack uses
  * the top of; the payload is already loaded below them. */
     .equ SYSCON,    0x10020000
@@ -180,8 +182,7 @@ ps_nopoint:
     mv      t0, a3
     sw      t0, QCFG(s11)
 ps_done:
-    csrw    mtvec, s4
-    jr      s5
+    jr      s5                       # mtvec stays the PSRAM trap handler until the checks in flash are done
     .balign 4
 ps_end:
 
@@ -193,6 +194,9 @@ after:
     j       7f                       # a trap or a mismatch in the execute test: it is armed
 6:  li      t0, 0x76
     sw      t0, WCRR(s11)            # kick
+#ifdef DDR_FORCE_LATE_MISMATCH
+    j       8f                       # a test build: the check back in flash finds a difference
+#endif
     jal     ra, xrun                 # more flash code, in DDR
     bne     a0, s8, 8f
     la      t0, blk                  # and the block, against the PSRAM copy
@@ -208,7 +212,7 @@ after:
     jal     ra, xrun
     bne     a0, s8, 8f
     j       7f
-8:  li      t0, 1                    # a difference: SDR again
+8:  mv      t0, a3                   # a difference: SDR again, with the strap's STREAM bit
     sw      t0, QCFG(s11)
     li      t0, 0xDF
     sw      t0, BMODE(s11)
@@ -216,7 +220,8 @@ after:
     li      s9, 3
 7:  li      t0, 0xF                  # armed for good since the execute test began: TOP 15, and a kick
     sw      t0, WTORR(s11)
-9:  slli    t0, s1, 8                # a0 = (the pass mask << 8) | (DDR_CAP + 1 or 0), a1 = the path
+9:  csrw    mtvec, s4                # the loader's own handler again, now that nothing is checked from flash
+    slli    t0, s1, 8                # a0 = (the pass mask << 8) | (DDR_CAP + 1 or 0), a1 = the path
     or      a0, s10, t0
     mv      a1, s9
     lw      ra, 0(sp)

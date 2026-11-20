@@ -46,7 +46,7 @@ $(error fetch.sh failed ($(FETCH_RC)); see above)
 endif
 endif
 
-.PHONY: fatfsfull run-fatfsfull sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: ddrdt run-ddrdt fatfsfull run-fatfsfull sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -245,6 +245,11 @@ ddrdf_CFLAGS := -DDF
 ddrdf_MKFLASH := --ddr
 ddrdf_EXPECT := ddr/expect-df.txt
 $(eval $(call PAYLOAD,ddrdf))
+ddrdt_SRC := ddr/ddr_test.c
+ddrdt_CFLAGS := -DDT
+ddrdt_MKFLASH := --ddr
+ddrdt_EXPECT := ddr/expect-dt.txt
+$(eval $(call PAYLOAD,ddrdt))
 .PHONY: run-ddr-all
 run-ddr-all:
 	$(MAKE) run-ddr
@@ -252,6 +257,9 @@ run-ddr-all:
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-sdr.txt RUNARGS="+QSPI_DELAY=20"
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-trap.txt LOADER_DEFS=-DDDR_FORCE_TRAP
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-mismatch.txt LOADER_DEFS=-DDDR_FORCE_MISMATCH
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-late.txt LOADER_DEFS=-DDDR_FORCE_LATE_MISMATCH
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-late-nostream.txt LOADER_DEFS=-DDDR_FORCE_LATE_MISMATCH RUNARGS="+NO_STREAM"
+	$(MAKE) run-ddrdt
 	$(MAKE) run-ddrrb
 	$(MAKE) run-ddrwd0
 	$(MAKE) run-ddrdf
@@ -265,10 +273,12 @@ run-ddr-all:
 # make run-sdtest-all runs the variants listed in SDTESTS as name:plusargs (a comma separates two); each checks
 # sdtest/expect-<name>.txt.
 sdtest_SRC    := sdtest/sdtest.c common/sd.c
+sdtest_EXPECT := sdtest/expect-sdhc.txt
 sdtest_RUNDEP := $(BUILD)/fatfs/disk-fat12.hex
 sdtest_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-fat12.hex +SD_EXPECT
 $(eval $(call PAYLOAD,sdtest))
 SDTESTS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rderr:+SD_RDERR=123 wrerr:+SD_WRRESP=0d wrcrc:+SD_WRRESP=0b \
+           wrerr1:+SD_WRRESP=0d,+SD_WRONCE \
            staterr:+SD_STATUS=01 absent:+SD_ABSENT stuck:+SD_STUCK_DO never:+SD_BUSY=5000 \
            slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16
 .PHONY: run-sdtest-all

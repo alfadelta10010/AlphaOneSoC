@@ -20,6 +20,8 @@ extern int printf(const char *, ...);
 #define WD0_NAME "ddrwd0"
 #elif defined(RB)
 #define WD0_NAME "ddrrb"
+#elif defined(DT)
+#define WD0_NAME "ddrdt"
 #else
 #define WD0_NAME "ddrdf"
 #endif
@@ -48,12 +50,12 @@ int main(void)
     *reg32(SYSCON_BASE + SYSCON_WDT_TORR) = 1;      /* TOP 1: 131,072 to 196,608 clocks, and a kick */
     for (;;)
         ;
-#elif defined(WD0) || defined(RB) || defined(DF)
+#elif defined(WD0) || defined(RB) || defined(DF) || defined(DT)
     /* Two boots, told apart by a marker in PSRAM, which a reboot does not clear. */
     const char *name = WD0_NAME;
     if (*MARK == MAGIC) {
         *MARK = 0;
-#ifdef DF
+#if defined(DF) || defined(DT)
         printf("%s: second boot, SDR kept\n", name);
         return ddr ? 1 : 0;                         /* BOOT_MODE 0xDF kept the flash in SDR */
 #else
@@ -67,7 +69,15 @@ int main(void)
     }
     *MARK = MAGIC;
     uart_flush();
-#if defined(WD0)
+#if defined(DT)
+    /* A trap with DDR on: the loader's trap handler must spin, so the watchdog (TOP 1 here, to be quick) resets. */
+    printf("%s: first boot, an illegal instruction with DDR on\n", name);
+    uart_flush();
+    *reg32(SYSCON_BASE + SYSCON_WDT_TORR) = 1;
+    __asm__ volatile(".word 0x00000000");
+    for (;;)
+        ;
+#elif defined(WD0)
     /* A watchdog reset whose BOOT_MODE is not a DDR note: the loader must sweep again. */
     *reg8(SYSCON_BASE + SYSCON_BOOT_MODE) = 0x00;
     printf("%s: first boot, BOOT_MODE cleared, now not servicing the watchdog\n", name);
