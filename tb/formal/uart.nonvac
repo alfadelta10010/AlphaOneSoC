@@ -1,0 +1,10 @@
+# WO-49: broken copies of src/uart.v that the uart harness must FAIL. sby from a free state (uart.conf: -DFREE).
+engine sby
+# THR never back-pressures -> P1
+sed uart.v s/assign ready = !(thr_sel \&\& tx_full);/assign ready = 1'b1;/
+# RX trigger table off by one (4 -> 5) -> P4
+sed uart.v s/(rtrig == 2'd1) ? 5'd4 :/(rtrig == 2'd1) ? 5'd5 :/
+# the character timeout never sets -> P10
+sed uart.v s/wire       cti    = (cti_cnt == 10'd640);/wire       cti    = (cti_cnt == 10'd1023);/
+# OE never set -> P9
+sed uart.v s/oe <= 1'b1;/oe <= 1'b0;/
