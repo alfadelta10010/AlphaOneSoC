@@ -2,9 +2,14 @@
 // program from the QSPI Pmod model's flash, with the demo board's devices
 // on its pins (docs/pins-and-peripherals.md):
 //
-//   * tb/rp2350_uart_model.v on uart_tx / uart_rx / uart_rts_n (its CTS);
-//   * tb/ssd1331_model.v, the PmodOLEDrgb, on gpio_out[0,1,2,3,6];
-//   * tb/keypad_model.v, the PmodKYPD, on gpio_out[3:0] and gpio_in[7:4].
+//   * tb/rp2350_uart_model.v on uart_tx / uart_rx; its CTS is the chip's RTS# tap
+//     (uart_rts_n) in the UART programs and uo[5] in pinmux, which selects the
+//     RTS# feature on that pin (+UART_FLOW=1 does the same for any program);
+//   * tb/ssd1331_model.v, the PmodOLEDrgb, and tb/sd_spi_model.v (CS# = OUT bit 5)
+//     on the chip pins uo[0,1,2,3,6] and uo[5], through the pad delays;
+//   * tb/keypad_model.v, the PmodKYPD, on gpio_out[3:0] and gpio_in[7:4];
+//   * monitors on uo[7] (audio: high clocks per 256-clock frame, tone period)
+//     and uo[2] (PWM: high time and period), for audio.S, pwm_linux.S and pinmux.S.
 //   gpio_in[3] is the UART's RX line, as on the chip, and gpio_in[0] the
 //   rd_late strap (0 here).
 //
@@ -51,44 +56,46 @@ module tb_soc_periph;
     wire [3:0] qspi_io_out, pmod_io;
     wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'bxxxx);
     wire       uart_tx, uart_rts_n, uart_rx;
-    wire [7:0] gpio_out, gpio_in;
+    wire [7:0] gpio_out, gpio_in, uo;
 
     alphaone_soc #(.UART_DIV_RESET(UART_DIV)) soc (
         .clk(clk), .rst(rst), .qspi_rd_late(1'b0), .qspi_no_stream(1'b0),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
         .uart_rx(uart_rx), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),
-        .gpio_in(gpio_in), .gpio_out(gpio_out));
+        .gpio_in(gpio_in), .gpio_out(gpio_out), .uo(uo));
 
     qspi_pmod_model pmod (
         .host_sck(qspi_sck), .host_cs_n(qspi_cs_n), .host_ctl_oe(qspi_ctl_oe),
         .host_io(qspi_io_out), .host_oe(qspi_io_oe), .dev_io(pmod_io), .dev_oe(pmod_oe));
 
     // ── The board ───────────────────────────────────────────────────────────
+    // CTS: the chip's RTS# tap, or uo[5] when a program selects RTS# on that pin through the pinmux
+    reg  cts_pin = 1'b0;
     rp2350_uart_model #(.BIT_NS(16.0 * UART_DIV * TCLK)) rp (
-        .tx(uart_tx), .rx(uart_rx), .cts_n(uart_rts_n));
-    // Pad delays (WO-29 6.3): the OLED and the SD card sit behind RT_OUT on the pins they
+        .tx(uart_tx), .rx(uart_rx), .cts_n(cts_pin ? uo[5] : uart_rts_n));
+    // Pad delays (WO-29 6.3): the OLED and the SD card sit behind RT_OUT on the chip pins (uo) they
     // use, and the card's DO reaches gpio_in[1] through RT_IN. Both are transport delays
     // (a nonblocking assignment with a delay), never an inertial `assign #`. Defaults 0 + 0,
     // 12.5 + 12.5 in the SD runs; +RT_OUT=<ns> +RT_IN=<ns> override. The keypad and the
     // UART stay undelayed.
     real      rt_out = 0.0, rt_in = 0.0;
-    reg [7:0] pd = 8'hB9;
-    always @(gpio_out[0]) pd[0] <= #(rt_out) gpio_out[0];
-    always @(gpio_out[1]) pd[1] <= #(rt_out) gpio_out[1];
-    always @(gpio_out[2]) pd[2] <= #(rt_out) gpio_out[2];
-    always @(gpio_out[3]) pd[3] <= #(rt_out) gpio_out[3];
-    always @(gpio_out[6]) pd[6] <= #(rt_out) gpio_out[6];
-    always @(gpio_out[7]) pd[7] <= #(rt_out) gpio_out[7];
+    reg [7:0] pd = 8'h39;
+    always @(uo[0]) pd[0] <= #(rt_out) uo[0];
+    always @(uo[1]) pd[1] <= #(rt_out) uo[1];
+    always @(uo[2]) pd[2] <= #(rt_out) uo[2];
+    always @(uo[3]) pd[3] <= #(rt_out) uo[3];
+    always @(uo[5]) pd[5] <= #(rt_out) uo[5];
+    always @(uo[6]) pd[6] <= #(rt_out) uo[6];
     reg oled_fitted = 1'b0;
     ssd1331_model oled (
         .fitted(oled_fitted), .cs_n(pd[0]), .sck(pd[3]), .mosi(pd[1]),
         .dc(pd[2]), .res_n(pd[6]));
-    // SD card on CS# gpio_out[7], SCK [3], MOSI [1], DO -> gpio_in[1] with a pull-up
+    // SD card on CS# uo[5] (GPIO OUT bit 5), SCK uo[3], MOSI uo[1], DO -> gpio_in[1] with a pull-up
     reg     sd_used = 1'b0, sd_fitted = 1'b0, sd_ev = 1'b0, expect_fail = 1'b0;
     tri1    sd_do_c;
     reg     do_d = 1'b1;
-    sd_spi_model sd (.fitted(sd_fitted), .cs_n(pd[7]), .sck(pd[3]), .di(pd[1]),
+    sd_spi_model sd (.fitted(sd_fitted), .cs_n(pd[5]), .sck(pd[3]), .di(pd[1]),
                      .expect_violations(sd_ev), .do_o(sd_do_c));
     always @(sd_do_c) do_d <= #(rt_in) sd_do_c;
     reg        kp_fitted = 1'b0;
@@ -183,9 +190,9 @@ module tb_soc_periph;
         end
     endtask
     // after a reboot under test: the pins stay at the reset value, and no SCK edge reaches a selected card
-    always @(posedge clk) if (rb_seen && cyc > rb_cyc + 8 && !done && gpio_out !== 8'hB9)
-        fail($sformatf("%s: gpio_out = %h after the reboot, want b9", test, gpio_out));
-    always @(gpio_out[3]) if (rb_seen && cyc > rb_cyc + 8 && gpio_out[7] === 1'b0)
+    always @(posedge clk) if (rb_seen && cyc > rb_cyc + 8 && !done && (gpio_out !== 8'hB9 || uo !== 8'h39))
+        fail($sformatf("%s: gpio_out = %h, uo = %h after the reboot, want b9 and 39", test, gpio_out, uo));
+    always @(uo[3]) if (rb_seen && cyc > rb_cyc + 8 && uo[5] === 1'b0)
         fail($sformatf("%s: SCK edge with the SD card selected after the reboot", test));
 
     // The line uart_echo's RP2350 types (tests/soc/uart_echo.S has its copy).
