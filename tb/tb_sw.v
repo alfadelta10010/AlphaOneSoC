@@ -90,10 +90,10 @@ module tb_sw;
 
     reg done = 1'b0;
     req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
-        .clk(clk), .rst(rst || done), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
+        .clk(clk), .rst(rst || done || soc.rst_soc), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
         .payload({soc.dmem_addr, soc.dmem_we, soc.dmem_be, soc.dmem_we ? soc.dmem_wdata : 32'h0}));
     req_hold_check #(.W(32), .NAME("imem request")) chk_imem (
-        .clk(clk), .rst(rst || done), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
+        .clk(clk), .rst(rst || done || soc.rst_soc), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
         .payload(soc.imem_addr));
 
     // ── UART decoder: 8N1 at 16 x divisor clocks per bit ────────────────────

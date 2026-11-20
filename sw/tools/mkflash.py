@@ -6,8 +6,9 @@ model reads ($readmemh, +FLASH_FILE=) and as a raw .bin for programming.
              --entry 0x80000000 --out flash.hex [--bin flash.bin]
 
 Layout (sw/common/soc.h): the loader at flash offset 0, an image header at
-IMAGE_FLASH_OFF = 0x10000 and the payload 20 bytes behind it. The header is
-magic, load address, size, entry and the 32-bit sum of the payload words.
+IMAGE_FLASH_OFF = 0x10000 and the payload 24 bytes behind it. The header is
+magic, load address, size, entry, the 32-bit sum of the payload words and a flags word (bit 0:
+the payload services the watchdog, so the loader may switch the flash to DDR).
 """
 import argparse
 import struct
@@ -25,6 +26,8 @@ def main():
     ap.add_argument("--entry", type=lambda s: int(s, 0), default=None)
     ap.add_argument("--out", required=True)
     ap.add_argument("--bin")
+    ap.add_argument("--ddr", action="store_true",
+                    help="flag the image: the payload services the watchdog, so the loader may run the DDR sweep")
     a = ap.parse_args()
 
     loader = open(a.loader, "rb").read()
@@ -34,7 +37,7 @@ def main():
     if len(loader) > IMAGE_FLASH_OFF:
         sys.exit(f"loader is {len(loader)} bytes, over the {IMAGE_FLASH_OFF}-byte slot")
     s = sum(struct.unpack(f"<{len(image) // 4}I", image)) & 0xFFFFFFFF
-    hdr = struct.pack("<5I", IMAGE_MAGIC, a.load, len(image), entry, s)
+    hdr = struct.pack("<6I", IMAGE_MAGIC, a.load, len(image), entry, s, 1 if a.ddr else 0)
 
     flash = bytearray(loader)
     flash += b"\xff" * (IMAGE_FLASH_OFF - len(flash))

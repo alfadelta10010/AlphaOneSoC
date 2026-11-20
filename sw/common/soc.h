@@ -22,14 +22,19 @@
 #define IMAGE_FLASH_OFF 0x00010000u
 #define IMAGE_MAGIC     0x4D493141u /* "A1IM", little-endian */
 
-/* Image header, 20 bytes, then the payload at IMAGE_FLASH_OFF + 20. */
+/* Image header, 24 bytes, then the payload at IMAGE_FLASH_OFF + 24. */
 struct image_hdr {
     uint32_t magic;
     uint32_t load_addr;   /* where the payload goes in PSRAM */
     uint32_t size;        /* payload bytes, a multiple of 4 */
     uint32_t entry;       /* where to jump */
     uint32_t sum;         /* 32-bit sum of the payload words */
+    uint32_t flags;       /* IMAGE_F_* */
 };
+/* The payload services the watchdog (wdt_kick at least every 30 s), so the loader may run the
+ * boot-time DDR sweep (ROADMAP 9.1 item 8, docs/qspi-ddr.md section 6): arming the watchdog is
+ * how a crash in DDR falls back to SDR, and once armed only a reset turns it off. */
+#define IMAGE_F_DDR     0x1u
 
 /* UART (16550 subset, byte registers) */
 #define UART_THR        0
@@ -64,9 +69,21 @@ struct image_hdr {
 #define FINISH_PASS         0x5555u
 #define FINISH_FAIL         0x3333u   /* (code << 16) | FINISH_FAIL */
 #define FINISH_REBOOT       0x7777u
+#define SYSCON_STRAPS       0x10
+#define SYSCON_QSPI_CFG     0x1C           /* bit 0 STREAM, bit 1 DDR, bits 4:2 DDR_CAP */
+#define SYSCON_WDT_CR       0x100          /* DesignWare watchdog: bit 0 EN, once set only a reset clears it */
+#define SYSCON_WDT_TORR     0x104          /* TOP in [3:0]: timeout 2^(16+TOP) clocks; a write also kicks */
+#define SYSCON_WDT_CRR      0x10C          /* 0x76 kicks */
+#define RESET_CAUSE_WDT     0x4
+/* BOOT_MODE 0xD8 + k: DDR tried at capture point k; 0xDF: DDR failed (docs/qspi-ddr.md section 6) */
+#define BOOT_DDR_TRIED      0xD8
+#define BOOT_DDR_FAILED     0xDF
 
 static inline volatile uint8_t  *reg8(uint32_t a)  { return (volatile uint8_t *)a; }
 static inline volatile uint32_t *reg32(uint32_t a) { return (volatile uint32_t *)a; }
+
+/* Service the watchdog the loader armed for the DDR attempt. */
+static inline void wdt_kick(void) { *reg32(SYSCON_BASE + SYSCON_WDT_CRR) = 0x76; }
 
 /* mtime, read so that a carry between the halves cannot give a wrong value. */
 static inline uint64_t mtime_read(void)

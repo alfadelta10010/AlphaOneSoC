@@ -1,0 +1,7 @@
+# The execute test's checksum is taken as wrong (-DDDR_FORCE_MISMATCH): SDR again, watchdog at TOP 15.
++ flash stays SDR: mismatch after the execute test
++ DDR 0, DDR_CAP
++ read back from flash in SDR, 0 differ
+- FAIL
+- TRAP mcause
+- ERROR

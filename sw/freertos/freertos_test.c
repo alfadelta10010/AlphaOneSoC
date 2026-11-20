@@ -74,6 +74,7 @@ void freertos_risc_v_application_interrupt_handler(uint32_t mcause)
 static volatile uint32_t lat_on, lat_n, lat_max, lat_sum;
 void vApplicationTickHook(void)
 {
+    wdt_kick();                         /* an image flagged for the DDR sweep must service the watchdog */
     if (!lat_on)
         return;
     uint32_t fired_for = *reg32(CLINT_MTIMECMP) - CLK_PER_TICK;

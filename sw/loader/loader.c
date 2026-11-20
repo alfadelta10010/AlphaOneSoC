@@ -5,6 +5,8 @@
  *            RESET_CAUSE so the next boot sees only its own cause
  *   -        finds the image header at flash offset IMAGE_FLASH_OFF, checks
  *            it, copies the payload to PSRAM, checks the copy's sum
+ *   rule 8   if the image asks for it (IMAGE_F_DDR), the boot-time DDR sweep (ddr.S) and the
+ *            switch of the flash reads to DDR, or the reason it stays SDR
  *   -        fence.i, then jumps to the image's entry with a0 = hartid 0 and
  *            a1 = 0 (no device tree yet)
  *
@@ -17,6 +19,11 @@
  *   4 sum mismatch after the copy.
  */
 #include "soc.h"
+
+/* ddr.S: the sweep, the execute test and the switch. The low word is DDR_CAP + 1 when DDR is on
+ * and 0 when the flash stays SDR, with the mask of the capture points that passed in the byte
+ * above; the high word is the path, which says why (see ddr.S). */
+extern uint64_t ddr_sweep(void);
 
 #define LOAD_LIMIT (PSRAM_BASE + PSRAM_SIZE - 0x10000u)   /* the top 64 KB are the stack */
 
@@ -51,7 +58,7 @@ void loader_main(void)
     const struct image_hdr *h = (const struct image_hdr *)(FLASH_BASE + IMAGE_FLASH_OFF);
     const uint32_t *src = (const uint32_t *)(FLASH_BASE + IMAGE_FLASH_OFF + sizeof *h);
     uint32_t magic = h->magic, load = h->load_addr, size = h->size,
-             entry = h->entry, want = h->sum;
+             entry = h->entry, want = h->sum, flags = h->flags;
 
     if (magic != IMAGE_MAGIC)
         fail(1, "no image (bad magic)");
@@ -72,6 +79,40 @@ void loader_main(void)
         sum += dst[i];
     if (sum != want)
         fail(4, "sum mismatch after the copy");
+
+    if (flags & IMAGE_F_DDR) {
+        /* Rule 8. A crash with DDR on ended in the watchdog: BOOT_MODE 0xD8 + k and the WDT
+         * cause say so, and so does 0xDF (DDR failed); both keep SDR and no sweep runs. */
+        uint32_t k1 = 0, mask = 0, path;
+        if (mode == BOOT_DDR_FAILED) {
+            path = 5;
+        } else if ((mode - BOOT_DDR_TRIED) < 8 && (cause & RESET_CAUSE_WDT)) {
+            path = 4;
+        } else {
+            uint64_t r = ddr_sweep();             /* a0 = DDR_CAP + 1 or 0, a1 = the path */
+            k1 = (uint32_t)r & 0xFF;
+            mask = ((uint32_t)r >> 8) & 0xFF;
+            path = (uint32_t)(r >> 32);
+        }
+        if (path >= 4)
+            *reg8(SYSCON_BASE + SYSCON_BOOT_MODE) = BOOT_DDR_FAILED;
+        if (k1) {
+            print_kv("flash in DDR, DDR_CAP ", k1 - 1, 1);
+            print_kv(" (passing points ", mask, 2);
+            uart_puts(")");
+        } else {
+            static const char *const why[] = {"", "no passing capture point", "trap in the execute test",
+                                              "mismatch after the execute test", "a watchdog reset with DDR on",
+                                              "DDR failed on an earlier boot"};
+            uart_puts("flash stays SDR: ");
+            uart_puts(why[path]);
+            if (path < 4) {
+                print_kv(" (passing points ", mask, 2);
+                uart_puts(")");
+            }
+        }
+        uart_puts("\n");
+    }
 
     print_kv("sum ok, jumping to ", entry, 8);
     uart_puts("\n");

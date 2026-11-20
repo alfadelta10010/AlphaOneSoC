@@ -1,12 +1,14 @@
 # Bare-metal software for AlphaOneSoC (docs/ROADMAP.md section 9).
 #
-#   make hello | monitor | fatfs | freertos | coremark | dhrystone      build the loader, the payload and its flash image
-#   make run-hello | run-coremark | run-dhrystone | run-monitor | run-fatfs | run-freertos
+#   make hello | monitor | fatfs | freertos | ddr | ddrwd | coremark | dhrystone      build the loader, the payload and its flash image
+#   make run-hello | run-coremark | run-dhrystone | run-monitor | run-fatfs | run-freertos | run-ddr | run-ddrwd | run-ddr-all
 #                                          ... and run it on the SoC bench (Verilator), check the output
 #   make bench                             build the software bench only
 #   make fetch                             fetch the third-party sources (CoreMark, Dhrystone, Embench, FatFs, FreeRTOS) at pinned commits
 #
 # Knobs:  BENCH_OPT=-O2 (the benchmarks' optimisation flags)   CM_ITER=1 (CoreMark iterations)
+#         DDR=1 (flag the image for the loader's DDR sweep: it must service the watchdog; the monitor,
+#         FreeRTOS and the ddr payloads do)
 #         CFLAGS=-Os (everything else)   RUNARGS=+MAX_CYCLES=...
 #
 # Output goes to ../build/sw (make clean here removes only that).
@@ -44,7 +46,7 @@ $(error fetch.sh failed ($(FETCH_RC)); see above)
 endif
 endif
 
-.PHONY: bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: ddr ddrwd run-ddr run-ddrwd bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -60,19 +62,19 @@ FORCE:
 define STAMP
 $$(BUILD)/$(1)/flags: FORCE
 	@mkdir -p $$(dir $$@)
-	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC)') > $$$$t; \
+	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC) DDR=$$(DDR))' > $$$$t; \
 	 if cmp -s $$$$t $$@; then rm -f $$$$t; else mv -f $$$$t $$@; fi
 endef
 HDRS := $(wildcard common/*.h)
 
 # ── the loader ──────────────────────────────────────────────────────────────
-loader_CFLAGS := $(FREESTANDING)
+loader_CFLAGS := $(FREESTANDING) $(LOADER_DEFS)
 $(eval $(call STAMP,loader))
-$(BUILD)/loader/loader.elf: loader/start.S loader/loader.c common/uart.c common/trap.c common/trap_entry.S \
+$(BUILD)/loader/loader.elf: loader/start.S loader/loader.c loader/ddr.S common/uart.c common/trap.c common/trap_entry.S \
                             $(HDRS) loader/loader.ld $(BUILD)/loader/flags
 	@mkdir -p $(dir $@)
 	$(TC)gcc $(CFLAGS) $(loader_CFLAGS) -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments -T loader/loader.ld \
-	    loader/start.S loader/loader.c common/uart.c common/trap.c common/trap_entry.S -lgcc -o $@
+	    loader/start.S loader/loader.c loader/ddr.S common/uart.c common/trap.c common/trap_entry.S -lgcc -o $@
 $(BUILD)/loader/loader.bin: $(BUILD)/loader/loader.elf
 	$(TC)objcopy -O binary $< $@
 
@@ -91,7 +93,7 @@ $$(BUILD)/$(1)/$(1).bin: $$(BUILD)/$(1)/$(1).elf
 $$(BUILD)/$(1)/flash.hex: $$(BUILD)/$(1)/$(1).bin $$(BUILD)/loader/loader.bin tools/mkflash.py
 	python3 tools/mkflash.py --loader $$(BUILD)/loader/loader.bin --image $$< \
 	    --entry 0x$$$$($$(TC)nm $$(BUILD)/$(1)/$(1).elf | awk '$$$$3=="_start"{print $$$$1}') \
-	    --out $$@ --bin $$(BUILD)/$(1)/flash.bin
+	    --out $$@ --bin $$(BUILD)/$(1)/flash.bin $$($(1)_MKFLASH) $$(if $$(DDR),--ddr)
 $(1): $$(BUILD)/$(1)/flash.hex
 run-$(1): $(1) $$(BUILD)/bench/sim $$($(1)_RUNDEP)
 	cd $$(BUILD)/$(1) && $$(SIMRUN) +FLASH_FILE=$$(BUILD)/$(1)/flash.hex +UART_DIV=$$(UART_DIVISOR) $$($(1)_RUNARGS) $$(RUNARGS) | tee run.log
@@ -186,6 +188,28 @@ $(foreach b,$(EMB_LIST),$(eval $(call EMBENCH,$(b))))
 embench: $(addprefix embench-,$(EMB_LIST))
 embench-score:
 	python3 tools/embench_report.py $(EMB)/baseline-data/speed.json $(GSF) $(BUILD)
+
+# Rung 1's boot-time DDR sweep (loader/ddr.S): an image flagged --ddr asks the loader for it and
+# promises to service the watchdog. ddr checks what the sweep left; ddrwd is the fallback, a
+# payload that stops servicing the watchdog with DDR on. The default Pmod model timing has
+# passing capture points; make run-ddr ddr_EXPECT=ddr/expect-sdr.txt RUNARGS=+QSPI_DELAY=<ns> runs the
+# case where none does. LOADER_DEFS=-DDDR_FORCE_TRAP (or -DDDR_FORCE_MISMATCH) builds the loader so that the
+# execute test fails that way. run-ddr-all runs all five.
+ddr_SRC     := ddr/ddr_test.c
+ddr_MKFLASH := --ddr
+$(eval $(call PAYLOAD,ddr))
+ddrwd_SRC     := ddr/ddr_test.c
+ddrwd_CFLAGS  := -DWD
+ddrwd_MKFLASH := --ddr
+ddrwd_EXPECT  := ddr/expect-wd.txt
+$(eval $(call PAYLOAD,ddrwd))
+.PHONY: run-ddr-all
+run-ddr-all:
+	$(MAKE) run-ddr
+	$(MAKE) run-ddrwd
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-sdr.txt RUNARGS="+QSPI_DELAY=20"
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-trap.txt LOADER_DEFS=-DDDR_FORCE_TRAP
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-mismatch.txt LOADER_DEFS=-DDDR_FORCE_MISMATCH
 
 # ── the bench ───────────────────────────────────────────────────────────────
 # Verilator by default. The same bench builds with Icarus (the reference simulator, about 30x

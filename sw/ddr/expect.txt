@@ -1,0 +1,10 @@
+# The default Pmod model timing has passing capture points: the loader switches the flash to DDR.
++ flash in DDR, DDR_CAP
++ DDR 1, DDR_CAP
++ read back from flash in DDR, 0 differ
+- flash stays SDR
+# and the flash reads really were EDh (the model counts them)
+- EDh 0,
+- FAIL
+- TRAP
+- ERROR

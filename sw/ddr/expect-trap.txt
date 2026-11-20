@@ -1,0 +1,9 @@
+# The execute test traps (loader built with -DDDR_FORCE_TRAP): the trap handler restores SDR and the
+# watchdog it armed is set to TOP 15, so the payload runs on (a reboot would print the loader twice).
++ flash stays SDR: trap in the execute test
++ DDR 0, DDR_CAP
++ read back from flash in SDR, 0 differ
+>=1 AlphaOne loader
+- FAIL
+- TRAP mcause
+- ERROR

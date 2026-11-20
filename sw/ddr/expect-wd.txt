@@ -1,0 +1,9 @@
+# Boot 1: DDR on, the payload stops servicing the watchdog; boot 2: the loader keeps SDR.
++ flash in DDR, DDR_CAP
++ ddrwd: first boot, DDR on, not servicing the watchdog now
++ flash stays SDR: a watchdog reset with DDR on
++ ddrwd: second boot, the flash is SDR again
+>=2 AlphaOne loader
+- FAIL
+- TRAP
+- ERROR

@@ -24,7 +24,7 @@ int uart_rx_ready(void)
 int uart_getc(void)
 {
     while (!uart_rx_ready())
-        ;
+        wdt_kick();                  /* a prompt may wait for a long time: service the watchdog */
     return *reg8(UART_BASE + UART_RBR);
 }
 
