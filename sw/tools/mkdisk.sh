@@ -15,8 +15,9 @@ KIND=${3:-fat12}
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 rm -f "$IMG"
-dd if=/dev/zero of="$IMG" bs=512 count=8192 status=none
+dd if=/dev/zero of="$IMG" bs=512 count=8192 status=none   # (tiny: 256 sectors formatted in it)
 case "$KIND" in
+tiny)  VOL=$IMG; mformat -i "$VOL" -T 256 -h 4 -s 16 -c 1 -v ALPHAONE :: ;;      # 128 KB, for the full-card test
 fat12) VOL=$IMG; mformat -i "$VOL" -T 8192 -h 4 -s 16 -v ALPHAONE :: ;;
 fat16) VOL=$IMG; mformat -i "$VOL" -T 8192 -h 4 -s 16 -c 1 -v ALPHAONE :: ;;
 mbr)   python3 -I - "$IMG" <<'PY'

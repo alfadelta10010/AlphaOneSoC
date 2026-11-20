@@ -6,6 +6,7 @@
 + DATA.BIN: 16384 bytes
 + seek to 9000 ok
 + OUT.BIN: 3000 bytes written and read back
++ edge cases ok
 - FAIL
 - TRAP
 - ERROR

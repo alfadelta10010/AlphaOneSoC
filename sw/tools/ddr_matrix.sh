@@ -29,7 +29,7 @@ for c in "${combos[@]}"; do
 done > "$OUT/list"
 run_one() {
   IFS='|' read -r i c <<< "$1"
-  (cd "$OUT" && timeout 300 "$B/bench/sim" +FLASH_FILE="$B/ddr/flash.hex" +UART_DIV=34 $c +MAX_CYCLES=12000000 > "$OUT/run-$i.log" 2>&1)
+  (cd "$OUT" && timeout 300 ${SIM:-$B/bench/sim} +FLASH_FILE="$B/ddr/flash.hex" +UART_DIV=34 $c +MAX_CYCLES=12000000 > "$OUT/run-$i.log" 2>&1)
   if ! grep -q "flash in DDR\|flash stays SDR" "$OUT/run-$i.log"; then
     echo "$i|NOBOOT|$c"
   else

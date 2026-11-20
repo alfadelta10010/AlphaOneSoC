@@ -13,6 +13,7 @@ import sys
 import tempfile
 
 dump = sys.argv[1]
+fsck_only = "--fsck-only" in sys.argv         # the small-card run: files that must survive, FILL.BIN gone, FATs equal
 img = bytearray(8192 * 512)
 addr = 0
 for line in open(dump):
@@ -50,14 +51,22 @@ with tempfile.NamedTemporaryFile(suffix=".img") as t:
         if mtype(path) is not None:
             bad.append(f"{path} is still there")
 
-    want("RENAMED.BIN", bytes((13 * i + 5) & 255 for i in range(3000)))
-    gone("OUT.BIN")
-    gone("TRASH.TXT")
-    want("APPEND.TXT", b"first line\nsecond line\n")
-    want("NEW/LOG.TXT", b"boot 42, ok\n")
-    want("HELLO.TXT", b"Hello from the SD card\n")
-    want("DATA.BIN", bytes((7 * i + 3) & 255 for i in range(16384)))
-    want("SUB/A long file name.txt", b"long names work\n")
+    if fsck_only:
+        gone("FILL.BIN")
+        gone("MORE.BIN")
+        want("HELLO.TXT", b"Hello from the SD card\n")
+        want("DATA.BIN", bytes((7 * i + 3) & 255 for i in range(16384)))
+    else:
+        want("EMPTY.TXT", b"")
+        gone("EDGE.BIN")
+        gone("OUT.BIN")
+        want("RENAMED.BIN", bytes((13 * i + 5) & 255 for i in range(3000)))
+        gone("TRASH.TXT")
+        want("APPEND.TXT", b"first line\nsecond line\n")
+        want("NEW/LOG.TXT", b"boot 42, ok\n")
+        want("HELLO.TXT", b"Hello from the SD card\n")
+        want("DATA.BIN", bytes((7 * i + 3) & 255 for i in range(16384)))
+        want("SUB/A long file name.txt", b"long names work\n")
 
 # the two FAT copies
 bpb = img[vol:vol + 512]

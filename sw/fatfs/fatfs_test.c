@@ -20,6 +20,67 @@ static uint8_t buf[1024];
 static uint8_t pat_data(unsigned i) { return (i * 7 + 3) & 0xFF; }     /* DATA.BIN, mkdisk.sh */
 static uint8_t pat_out(unsigned i)  { return (i * 13 + 5) & 0xFF; }    /* OUT.BIN, written here */
 
+#ifdef FULL
+/* A small card, filled until it is full: the short write, no free cluster, a new file refused, and
+ * everything given back when the file goes. */
+static int full_test(void)
+{
+    FIL f;
+    UINT n;
+    FATFS *pfs;
+    DWORD free0, free1;
+    CHECK(f_mount(&fs, "", 1));
+    CHECK(f_getfree("", &free0, &pfs));
+    printf("small card: %u free clusters of %u sectors\n", (unsigned)free0, (unsigned)fs.csize);
+    CHECK(f_open(&f, "FILL.BIN", FA_CREATE_ALWAYS | FA_WRITE));
+    unsigned total = 0;
+    for (;;) {
+        for (unsigned i = 0; i < 512; i++)
+            buf[i] = pat_out(total + i);
+        FRESULT r = f_write(&f, buf, 512, &n);
+        if (r)
+            FAIL("f_write = %d at %u", (int)r, total);
+        total += n;
+        if (n < 512)
+            break;                                  /* full: a short write, not an error */
+    }
+    CHECK(f_close(&f));
+    printf("filled: %u bytes written\n", total);
+    CHECK(f_getfree("", &free1, &pfs));
+    if (free1 != 0)
+        FAIL("%u clusters still free after filling", (unsigned)free1);
+    if (total > free0 * fs.csize * 512 || total < (free0 - 1) * fs.csize * 512)
+        FAIL("%u bytes written into %u free clusters", total, (unsigned)free0);
+    FRESULT r = f_open(&f, "MORE.BIN", FA_CREATE_NEW | FA_WRITE);
+    if (r == FR_OK) {                               /* the directory entry fits, its data cannot */
+        r = f_write(&f, buf, 512, &n);
+        if (r == FR_OK && n)
+            FAIL("wrote into a full card");
+        f_close(&f);
+        f_unlink("MORE.BIN");
+    }
+    CHECK(f_open(&f, "FILL.BIN", FA_READ));
+    for (unsigned off = 0; off < total;) {
+        CHECK(f_read(&f, buf, 512, &n));
+        if (!n)
+            FAIL("FILL.BIN ends at %u of %u", off, total);
+        for (UINT i = 0; i < n; i++)
+            if (buf[i] != pat_out(off + i))
+                FAIL("FILL.BIN byte %u", off + i);
+        off += n;
+    }
+    CHECK(f_close(&f));
+    CHECK(f_unlink("FILL.BIN"));
+    CHECK(f_getfree("", &free1, &pfs));
+    if (free1 != free0)
+        FAIL("%u free clusters after the delete, want %u", (unsigned)free1, (unsigned)free0);
+    printf("full card ok\n");
+    CHECK(f_mount(0, "", 0));
+    printf("PASS\n");
+    return 0;
+}
+#endif
+
 int main(void)
 {
     FRESULT r;
@@ -29,6 +90,9 @@ int main(void)
     FILINFO fi;
 
     printf("FatFs R%d on the SD card\n", FF_DEFINED);
+#ifdef FULL
+    return full_test();
+#endif
     r = f_mount(&fs, "", 1);
     if (r)
         FAIL("f_mount = %d", (int)r);
@@ -138,6 +202,95 @@ int main(void)
     r = f_stat("TRASH.TXT", &fi);
     if (r != FR_NO_FILE)
         FAIL("TRASH.TXT still there (%d)", (int)r);
+
+    /* edge cases: errors FatFs must give, names, empty and truncated files, sizes at a cluster boundary */
+#define EXPECT(call, want) do { FRESULT r_ = (call); if (r_ != (want)) FAIL("%s = %d, want %s", #call, (int)r_, #want); } while (0)
+    EXPECT(f_open(&f, "NOSUCH.TXT", FA_READ), FR_NO_FILE);
+    EXPECT(f_open(&f, "NODIR/X.TXT", FA_WRITE | FA_CREATE_NEW), FR_NO_PATH);
+    EXPECT(f_open(&f, "SUB", FA_READ), FR_NO_FILE);                    /* a directory is not a file */
+    EXPECT(f_mkdir("SUB"), FR_EXIST);
+    EXPECT(f_rename("HELLO.TXT", "DATA.BIN"), FR_EXIST);
+    EXPECT(f_unlink("SUB"), FR_DENIED);                                 /* not empty */
+    EXPECT(f_unlink("NOSUCH.TXT"), FR_NO_FILE);
+    EXPECT(f_open(&f, "OUT.BIN", FA_WRITE | FA_CREATE_NEW), FR_OK);     /* OUT.BIN was renamed away */
+    CHECK(f_close(&f));
+    EXPECT(f_open(&f, "OUT.BIN", FA_WRITE | FA_CREATE_NEW), FR_EXIST);
+    CHECK(f_unlink("OUT.BIN"));
+    CHECK(f_open(&f, "hello.txt", FA_READ));                            /* names ignore case */
+    CHECK(f_close(&f));
+
+    CHECK(f_open(&f, "EMPTY.TXT", FA_CREATE_ALWAYS | FA_WRITE));        /* an empty file, read to its end */
+    CHECK(f_write(&f, buf, 0, &n));
+    if (n)
+        FAIL("a zero-length write wrote %u", (unsigned)n);
+    CHECK(f_close(&f));
+    CHECK(f_stat("EMPTY.TXT", &fi));
+    if (fi.fsize)
+        FAIL("EMPTY.TXT is %u bytes", (unsigned)fi.fsize);
+    CHECK(f_open(&f, "EMPTY.TXT", FA_READ));
+    CHECK(f_read(&f, buf, 16, &n));
+    if (n)
+        FAIL("read %u bytes of an empty file", (unsigned)n);
+    CHECK(f_close(&f));
+
+    /* a 120-character name */
+    char longname[130];
+    memset(longname, 'n', 120);
+    strcpy(longname + 120, ".txt");
+    CHECK(f_open(&f, longname, FA_CREATE_NEW | FA_WRITE));
+    CHECK(f_close(&f));
+    CHECK(f_stat(longname, &fi));
+    if (strcmp(fi.fname, longname))
+        FAIL("the long name came back as %s", fi.fname);
+    CHECK(f_unlink(longname));
+
+    /* sizes at a cluster boundary, then a truncate and a seek past the end */
+    unsigned cl = (unsigned)fs.csize * 512;
+    static const int deltas[] = {-1, 0, 1};
+    for (unsigned k = 0; k < 3; k++) {
+        unsigned len = 2 * cl + deltas[k];
+        CHECK(f_open(&f, "EDGE.BIN", FA_CREATE_ALWAYS | FA_WRITE));
+        for (unsigned off2 = 0; off2 < len;) {
+            unsigned c = len - off2 < 512 ? len - off2 : 512;
+            for (unsigned i = 0; i < c; i++)
+                buf[i] = pat_out(off2 + i);
+            CHECK(f_write(&f, buf, c, &n));
+            if (n != c)
+                FAIL("short write at %u", off2);
+            off2 += c;
+        }
+        CHECK(f_close(&f));
+        CHECK(f_open(&f, "EDGE.BIN", FA_READ));
+        if (f_size(&f) != len)
+            FAIL("EDGE.BIN is %u, want %u", (unsigned)f_size(&f), len);
+        for (unsigned off2 = 0; off2 < len;) {
+            CHECK(f_read(&f, buf, 512, &n));
+            if (!n)
+                FAIL("EDGE.BIN ends at %u of %u", off2, len);
+            for (UINT i = 0; i < n; i++)
+                if (buf[i] != pat_out(off2 + i))
+                    FAIL("EDGE.BIN byte %u", off2 + i);
+            off2 += n;
+        }
+        CHECK(f_lseek(&f, len + 1000));                                 /* read-only: stops at the end */
+        if (f_tell(&f) != len)
+            FAIL("a seek past the end went to %u", (unsigned)f_tell(&f));
+        CHECK(f_read(&f, buf, 8, &n));
+        if (n)
+            FAIL("read %u bytes at the end", (unsigned)n);
+        CHECK(f_close(&f));
+    }
+    CHECK(f_open(&f, "EDGE.BIN", FA_READ | FA_WRITE));                  /* the last one, 2 clusters + 1 */
+    CHECK(f_lseek(&f, 700));
+    CHECK(f_truncate(&f));
+    CHECK(f_close(&f));
+    CHECK(f_stat("EDGE.BIN", &fi));
+    if (fi.fsize != 700)
+        FAIL("truncated to %u, want 700", (unsigned)fi.fsize);
+    CHECK(f_unlink("EDGE.BIN"));
+    DWORD nfree2;
+    CHECK(f_getfree("", &nfree2, &pfs));
+    printf("edge cases ok, %u free clusters\n", (unsigned)nfree2);
 
     CHECK(f_mount(0, "", 0));
     printf("PASS\n");

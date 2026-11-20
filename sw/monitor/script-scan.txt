@@ -1,0 +1,3 @@
+# Every CSR number, 000 to fff: the monitor lists the ones that answer (make run-monitor-scan).
+PROMPT	csr scan
+PROMPT	q

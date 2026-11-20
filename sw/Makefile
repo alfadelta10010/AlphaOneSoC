@@ -46,7 +46,7 @@ $(error fetch.sh failed ($(FETCH_RC)); see above)
 endif
 endif
 
-.PHONY: sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: fatfsfull run-fatfsfull sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -110,8 +110,15 @@ monitor_CFLAGS := -Wno-format   # uint32_t is long on this target; the mini prin
 monitor_EXPECT := monitor/expect.txt
 monitor_RUNDEP := $(BUILD)/monitor/in.hex
 monitor_RUNARGS := +UART_IN=$(BUILD)/monitor/in.hex +MAX_CYCLES=150000000   # a stalled session fails in seconds
-$(BUILD)/monitor/in.hex: monitor/script.txt tools/mkscript.py $(BUILD)/monitor/monitor.elf
-	python3 tools/mkscript.py monitor/script.txt $@ --elf $(BUILD)/monitor/monitor.elf
+# MON_SCRIPT picks the session the bench plays (monitor/script-scan.txt: every CSR number, see run-monitor-scan)
+MON_SCRIPT ?= monitor/script.txt
+$(BUILD)/monitor/in.hex: $(MON_SCRIPT) tools/mkscript.py $(BUILD)/monitor/monitor.elf FORCE
+	python3 tools/mkscript.py $(MON_SCRIPT) $@.new --elf $(BUILD)/monitor/monitor.elf
+	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@
+.PHONY: run-monitor-scan
+run-monitor-scan:
+	$(MAKE) run-monitor MON_SCRIPT=monitor/script-scan.txt monitor_EXPECT=monitor/expect-scan.txt
+	python3 tools/csr_scan_check.py $(BUILD)/monitor/run.log
 $(eval $(call PAYLOAD,monitor))
 
 # Rung 4: FatFs on the SD card. ff.c reads ffconf.h from its own directory, so the sources
@@ -141,6 +148,15 @@ $(BUILD)/fatfs/disk-%.hex: tools/mkdisk.sh tools/img2hex.py
 	./tools/mkdisk.sh $(BUILD)/fatfs/disk-$*.img $@ $*
 $(BUILD)/fatfs/fatfs.elf: $(FFB)/ff.c
 $(eval $(call PAYLOAD,fatfs))
+# The same test with a 128 KB card filled until it is full (-DFULL): make run-fatfsfull
+fatfsfull_SRC    := $(fatfs_SRC)
+fatfsfull_CFLAGS := $(fatfs_CFLAGS) -DFULL
+fatfsfull_RUNDEP := $(BUILD)/fatfs/disk-tiny.hex
+fatfsfull_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-tiny.hex +SD_DUMP=$(BUILD)/fatfs/dump-tiny.hex
+fatfsfull_EXPECT := fatfs/expect-full.txt
+fatfsfull_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump-tiny.hex --fsck-only
+$(BUILD)/fatfsfull/fatfsfull.elf: $(FFB)/ff.c
+$(eval $(call PAYLOAD,fatfsfull))
 
 # Rung 5: FreeRTOS-Kernel V11.1.0 with its upstream RISC-V port (M-mode, CLINT tick, heap_4).
 FR := $(TP)/freertos
@@ -262,6 +278,35 @@ run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 	  (cd $(BUILD)/sdtest && $(SIMRUN) +FLASH_FILE=$(BUILD)/sdtest/flash.hex +UART_DIV=$(UART_DIVISOR) $(sdtest_RUNARGS) $$a $(RUNARGS) > run-$$n.log 2>&1); \
 	  python3 tools/check_run.py $(BUILD)/sdtest/run-$$n.log sdtest/expect-$$n.txt || exit 1; \
 	done; echo "sdtest: all variants ok"
+
+# ── everything ──────────────────────────────────────────────────────────────
+# make check runs every test of the ladder on the bench (about 25 minutes of Verilator on one core): the
+# runs one after the other, each checking its own expect file, then the damaged-image and timing-matrix
+# tools. check-bench adds the benchmarks (CoreMark, Dhrystone, Embench: about 30 minutes more, in parallel).
+# SIM=<command> runs the tools on another bench build, for example SIM="vvp build/sw/bench/tb_sw.vvp".
+.PHONY: check check-bench
+check:
+	$(MAKE) run-hello
+	$(MAKE) run-monitor
+	$(MAKE) run-monitor DDR=1
+	$(MAKE) run-monitor-scan
+	$(MAKE) run-fatfs DISK=fat12 SD=sdhc
+	$(MAKE) run-fatfs DISK=fat16 SD=sdsc
+	$(MAKE) run-fatfs DISK=mbr SD=v1
+	$(MAKE) run-fatfsfull
+	$(MAKE) run-freertos
+	$(MAKE) run-freertos DDR=1
+	$(MAKE) run-fr-all
+	$(MAKE) run-ddr-all
+	$(MAKE) run-sdtest-all
+	tools/loader_neg.sh
+	tools/ddr_matrix.sh
+	@echo "make check: everything passed"
+check-bench:
+	$(MAKE) run-dhrystone
+	$(MAKE) run-coremark CM_ITER=70 RUNARGS=+MAX_CYCLES=2000000000
+	$(MAKE) embench
+	tools/run_embench.sh 3
 
 # ── the bench ───────────────────────────────────────────────────────────────
 # Verilator by default. The same bench builds with Icarus (the reference simulator, about 30x
