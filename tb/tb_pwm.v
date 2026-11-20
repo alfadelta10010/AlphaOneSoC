@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
-// pwm (src/pwm.v) against a cycle model written from the WO-54 specification (SiFive pwm0 layout, four
-// 16-bit comparators on a scaled counter), not from the RTL. pwm_o, irq and every read word are compared
+// pwm (src/pwm.v) against a cycle model written from the WO-54 specification (SiFive pwm0 layout, two built
+// of four 16-bit comparators, WO-63: pwmcmp2/3 read 0, writes ignored, ip/pwm_o/irq[3:2] constant 0), not from the RTL. pwm_o, irq and every read word are compared
 // every clock. Independent oracle (from Linux pwm-sifive.c, not the RTL): scale/cmp from the driver's arithmetic,
 // period 2^(16+scale), high clocks (65536-cmp)<<scale, pin = ip, reset cmp 0xFFFF, CMP/CFG readbacks. Directed phases, then a seeded constrained-random phase (+SEED=, +CYCLES=)
 // with coverage floors. Inputs change on the negative edge and are sampled on the positive one.
@@ -36,10 +36,10 @@ module tb_pwm;
     always @(posedge clk) begin
         if (rst) begin
             m_scale = 0; m_sticky = 0; m_zc = 0; m_always = 0; m_one = 0; m_ip = 0; m_pre = 0; m_s = 0;
-            for (k = 0; k < 4; k = k + 1) m_cmp[k] = 16'hFFFF;
+            for (k = 0; k < 4; k = k + 1) m_cmp[k] = (k < 2) ? 16'hFFFF : 16'h0000;
             mv = 1;
         end else if (mv) begin
-            for (k = 0; k < 4; k = k + 1) ge[k] = (m_s >= m_cmp[k]);
+            for (k = 0; k < 4; k = k + 1) ge[k] = (k < 2) && (m_s >= m_cmp[k]);
             en = m_always | m_one;
             mod = 1 << m_scale;
             tick = en && ((m_pre % mod) == mod - 1);
@@ -52,7 +52,7 @@ module tb_pwm;
             else if (zr) begin m_pre = 0; m_s = 0; end
             else if (en) begin m_pre = (m_pre + 1) % 32768; if (tick) m_s = (m_s + 1) % 65536; end
             if (zr || wrap) m_one = 0;
-            if (sel & we & (addr == 4'd0) & be[3]) begin m_ip = wdata[31:28]; n_l3 = n_l3 + 1; end
+            if (sel & we & (addr == 4'd0) & be[3]) begin m_ip = wdata[31:28] & 4'b0011; n_l3 = n_l3 + 1; end
             else begin
                 if ((ge & ~m_ip) != 0) n_ipset = n_ipset + 1;
                 if (m_sticky && (m_ip & ~ge) != 0) n_sticky = n_sticky + 1;
@@ -62,7 +62,7 @@ module tb_pwm;
             if (sel & we & (addr == 4'd0) & be[1]) begin
                 m_sticky = wdata[8]; m_zc = wdata[9]; m_always = wdata[12]; m_one = wdata[13];
             end
-            for (k = 0; k < 4; k = k + 1) if (sel & we & (addr == 4'd8 + k)) begin
+            for (k = 0; k < 2; k = k + 1) if (sel & we & (addr == 4'd8 + k)) begin
                 if (be[0]) m_cmp[k][7:0]  = wdata[7:0];
                 if (be[1]) m_cmp[k][15:8] = wdata[15:8];
             end
@@ -147,7 +147,7 @@ module tb_pwm;
         integer sc, c, n, want, per;
         reg prev, r1;
         begin
-            r1 = 0;
+            r1 = 0; ch = ch & 1;     // only channels 0 and 1 are built
             sc = drv_scale(period_ns); c = drv_cmp(period_ns, duty_ns);
             wr(4'd8 + ch, c);                              // PWMCMP
             wr(4'd0, (32'd1 << 12) | sc);                  // PWMCFG = EN_ALWAYS | scale (full word, others 0)
@@ -231,7 +231,7 @@ module tb_pwm;
         wr(4'd8, 32'hFFFF); wr(4'd9, 32'hFFFF); wr(4'd10, 32'hFFFF); wr(4'd11, 32'hFFFF);
         // reset readback from the datasheet: cmp 0xFFFF, cfg 0, pwmcount/pwms 0
         chk_rd(4'd0, 0); chk_rd(4'd2, 0); chk_rd(4'd4, 0);
-        chk_rd(4'd8, 32'hFFFF); chk_rd(4'd9, 32'hFFFF); chk_rd(4'd10, 32'hFFFF); chk_rd(4'd11, 32'hFFFF);
+        chk_rd(4'd8, 32'hFFFF); chk_rd(4'd9, 32'hFFFF); chk_rd(4'd10, 0); chk_rd(4'd11, 0);
         // pwm-sifive.c sequence: 1 ms period -> scale 0; 100 ms -> scale 6; 30 s -> scale 14 (readback only)
         for (sc = 0; sc < 4; sc = sc + 1) begin
             drv_one(sc, 1000000, 0, 1);
@@ -250,7 +250,7 @@ module tb_pwm;
             errors = errors + 1; $display("FAIL oracle scales %0d %0d %0d", drv_scale(1000000), drv_scale(100000000), drv_scale(30000000000));
         end
         // cmp written below s: a running counter, cmp0 jumped under s, ip follows at once (a one-clock delay)
-        wr(4'd8, 32'hFFFF); cfg(0, 0, 0, 1, 0); idle(200); wr(4'd10, 32'd3); wr(4'd10, 32'hFFFF); idle(5);
+        wr(4'd8, 32'hFFFF); cfg(0, 0, 0, 1, 0); idle(200); wr(4'd9, 32'd3); wr(4'd9, 32'hFFFF); wr(4'd10, 32'd3); wr(4'd11, 32'd3); rd(4'd10); rd(4'd11); idle(5);
         wr(4'd0, 0); wr(4'd2, 0);
         // zerocmp timer, sticky, software clear on lane 3 (sb), period (cmp0+1) * 2^scale
         for (sc = 0; sc < 8; sc = sc + 1) begin

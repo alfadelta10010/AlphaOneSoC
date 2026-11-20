@@ -8,6 +8,8 @@
 #            and, after the clear, no second interrupt in 3000 clocks (claim 0).
 #   no sticky: ip follows the comparator (high while s >= cmp0), enalways off stops the count (PWM_S holds).
 # Handler-free: the program clears ip[0] by `sb zero, 3(pwm)` and completes the claim.
+# WO-63: only comparators 0 and 1 are built. Part 0 writes cmp2 = cmp3 = 0 with the counter running: a built
+# comparator would raise ip[2]/ip[3] (PLIC sources 7 and 8) at once; the PLIC pending word must stay 0.
 #include "periph4.h"
 #define TOL 400
 .macro PERIOD_RUN cfg, cmp, expect, code
@@ -49,6 +51,17 @@ _start:
     MB_INIT
     li   s0, PWM
     PLIC_SETUP (1 << SRC_PWM0)
+    sw   zero, PWM_CMP0+8(s0)     # cmp2 = 0 (not built)
+    sw   zero, PWM_CMP0+12(s0)    # cmp3 = 0 (not built)
+    li   t0, 0x1000
+    sw   t0, PWM_CFG(s0)          # enalways, scale 0
+    DELAY 200
+    li   t6, PLIC + PL_PEND
+    lw   t0, 0(t6)                # PLIC pending word: sources 7 and 8 (comparators 2, 3) never pend
+    andi t0, t0, 0x180
+    CHECK t0, 0, 0x01
+    sw   zero, PWM_CFG(s0)
+    sw   zero, PWM_COUNT(s0)
     PERIOD_RUN 0x1300, 4000, 20005, 0x10
     PERIOD_RUN 0x1302, 1000, 20005, 0x20
     sw   zero, PWM_COUNT(s0)      # restart the count
