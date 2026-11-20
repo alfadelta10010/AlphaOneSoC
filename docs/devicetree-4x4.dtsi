@@ -46,8 +46,7 @@
 
 		/* CLINT at 0x0200_0000: the board file's timer; timebase-frequency = the core clock. */
 
-		/* 16550A, byte registers (WO-49, in progress). tx-threshold is left out: tx_loadsz
-		 * stays 16 (4 bytes without a stall, the rest paced at line rate). */
+		/* 16550A, byte registers (WO-49). */
 		uart0: serial@10000000 {
 			compatible = "ns16550a";
 			reg = <0x10000000 0x100>;
@@ -56,6 +55,7 @@
 			clocks = <&clk_core>;
 			clock-frequency = <62500000>;
 			fifo-size = <16>;
+			tx-threshold = <12>;	/* a 16-byte TX burst freezes the CPU ~0.95 ms and there is no RTS#, so RX could overrun */
 			interrupt-parent = <&plic>;
 			interrupts = <1>;
 		};
