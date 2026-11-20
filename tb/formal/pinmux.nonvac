@@ -1,0 +1,10 @@
+# lane 1 writes nibble 1 instead of nibble 0 -> P4
+sed pinmux.v s/if (w \&\& be\[k\/2\])/if (w \&\& be[(k==1)?1:k\/2])/
+# reset value 0xB9 -> P2
+sed pinmux.v s/parameter \[7:0\] UO_RESET = 8'h39/parameter [7:0] UO_RESET = 8'hB9/
+# code 2 selects audio -> P1
+sed pinmux.v s/3'd2:    mux\[j\] = rts_n;/3'd2:    mux[j] = audio;/
+# pin flop bypassed: uo takes the default function regardless of the codes -> P1
+sed pinmux.v s/uo <= mux;/uo <= dflt;/
+# read-back stores bit 3 -> P3
+sed pinmux.v s/{1'b0, codes\[3\*i +: 3\]}/{codes[3*i +: 3]==3'd7, codes[3*i +: 3]}/
