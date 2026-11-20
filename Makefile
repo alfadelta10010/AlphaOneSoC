@@ -39,7 +39,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
-        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
+        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test
 
@@ -171,7 +171,7 @@ test-syscon: $(BUILD_DIR)
 # The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
 # Each bench prints its seed; rerun one failure with its +SEED=.
 SEEDS ?= 1 2 3 4 5 6 7 8
-SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_gpio tb_spi tb_plic tb_gamepad tb_pwm tb_audio tb_pinmux
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio tb_spi tb_plic tb_gamepad tb_pwm tb_audio tb_pinmux
 test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio test-spi test-plic test-gamepad test-pwm test-audio test-pinmux
 	@for s in $(SEEDS); do for t in $(SEEDED); do \
 		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
@@ -236,7 +236,12 @@ test-pmod-dtr:
 # (baud error, glitches, framing errors, overruns), RTS# and back-pressure
 # checks, and a constrained-random run (+SEED=, +NRAND= for more).
 test-uart: $(BUILD_DIR)
-	@echo "=== Testing UART (smoke, until WO-50) ==="
+	@echo "=== Testing UART (16550A spec-model bench) ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart.v
+	@$(call run_tb,tb_uart)
+
+test-uart-smoke: $(BUILD_DIR)
+	@echo "=== Testing UART (smoke) ==="
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_uart_smoke $(SRC_DIR)/uart.v $(TB_DIR)/tb_uart_smoke.v
 	@$(call run_tb,tb_uart_smoke)
 
