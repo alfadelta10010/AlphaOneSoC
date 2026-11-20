@@ -111,13 +111,14 @@ module bus_props (
     always @(*) begin
         assume (!d_req || w_mem || w_io);                                           // PMA
         if (p_ok && p_hold) begin                                                    // core contract
-            assume (d_req && d_addr == p_addr && d_we == p_we && d_be == p_be && d_wdata == p_wdata);
+            assume (d_req && d_addr == p_addr && d_we == p_we && d_be == p_be && (!p_we || d_wdata == p_wdata));
         end
         if (armed) begin
             assert (uart_ready || uart_sel);                                        // B4
             assert (gpio_ready || gpio_sel);
             // B1
             if (ph_s) assert (!sel_any);
+            if (ph_s && p_ok) assert (d_req && w_io);                               // ph implies an IO request
             if (ph_s) assert (!mem_req && !uart_sel);
             assert (({3'b0, mem_req} + clint_sel + plic_sel + uart_sel + gpio_sel + syscon_sel +
                      gamepad_sel + pinmux_sel + pwm_sel + audio_sel) <= 6'd1);
