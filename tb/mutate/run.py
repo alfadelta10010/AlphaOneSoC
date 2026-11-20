@@ -53,7 +53,7 @@ UNIT = {
     "soc_bus.v": [], "alphaone_soc.v": [],
     "uart.v": ["test-uart"], "gpio.v": ["test-gpio", "test-spi"], "spi.v": ["test-spi"],
     "syscon.v": ["test-syscon"],
-    "gamepad.v": ["test-gamepad"], "pwm.v": ["test-pwm"], "audio.v": ["test-audio"], "pinmux.v": ["test-pinmux"],
+    "plic.v": ["test-plic"], "gamepad.v": ["test-gamepad"], "pwm.v": ["test-pwm"], "audio.v": ["test-audio"], "pinmux.v": ["test-pinmux"],
     "tt_um_alfadelta10010_alphaone_soc.v": [],
 }
 # Optional unit benches added later; used when the Makefile has the target.
@@ -77,7 +77,7 @@ FORMAL = {"csr.v": ["csr"],
           "fyracore.v": ["core_hold", "core_req", "core_fetch", "core_df"],
           "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"],
-          "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "audio.v": ["audio"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
+          "plic.v": ["plic"], "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "audio.v": ["audio"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
           "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12", "bus"],
           "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap"],
