@@ -321,11 +321,11 @@ m("SB02", "soc_bus.v", "assign gpio_sel   = phase1 && is_io && (io_idx == 2'd1);
 m("SB03", "soc_bus.v", "assign clint_sel  = phase1 && !d_addr[28] && !d_addr[27];", "assign clint_sel  = phase1 && !d_addr[27];", "IO accesses also select the CLINT")
 m("SB03b", "soc_bus.v", "assign clint_sel  = phase1 && !d_addr[28] && !d_addr[27];", "assign clint_sel  = phase1 && !d_addr[28];", "PLIC writes also land in the CLINT (WO-46 review must-do)")
 m("SB04", "soc_bus.v", "wire phase1   = io_req && !ph;", "wire phase1   = io_req;", "selects held in phase 2: double pop / claim / write")
-m("SB06", "soc_bus.v", "if (io_done) io_q <= io_rdata;", "if (ph) io_q <= io_rdata;", "io_q captured one cycle late")
+m("SB06", "soc_bus.v", "always @(posedge clk) io_q <= io_rdata;", "always @(posedge clk) if (ph) io_q <= io_rdata;", "io_q captured one cycle late")
 m("SB07", "soc_bus.v", "assign d_ready = is_mem ? mem_ready : ph;", "assign d_ready = is_mem ? mem_ready : io_ready;", "no second phase, stale io_q")
 m("SB08", "soc_bus.v", "else if (io_done) ph <= 1'b1;", "else if (phase1) ph <= 1'b1;", "ph leaves phase 1 without io_ready")
-# SB05 (io_q captured every clock) is an EQUIVALENT mutant: io_q is read only in phase 2 and the last capture
-# before it is the phase-1 completing edge either way (the bus proof still PROVES with it).
+# SB05 (io_q captured every clock) is the design now (WO-58 C0): io_q is read only in phase 2 and the last
+# capture before it is the phase-1 completing edge either way (the bus proof still PROVES with it).
 m("QS01", "qspi_ctrl.v", ": ((3'b001 << cs_sel) & {2'b11, !we});", ": (3'b001 << cs_sel);", "a write may select the flash")
 m("QS02", "qspi_ctrl.v", "default: io_sdr = 4'b1111;       // mode byte 0xFF, and idle", "default: io_sdr = 4'b1010;       // mode byte 0xFF, and idle", "flash mode byte 0xAA (continuous read)")
 m("QS03", "qspi_ctrl.v", ":  (state == S_DATA &&  sck));", ":  (state == S_DATA && !sck));", "rd_late=0 samples on the wrong clock")

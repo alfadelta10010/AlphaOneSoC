@@ -6,10 +6,10 @@ sed soc_bus.v s/assign gpio_sel   = phase1 \&\& is_io \&\& (io_idx == 2'd1);/ass
 sed soc_bus.v s/assign clint_sel  = phase1 \&\& !d_addr\[28\] \&\& !d_addr\[27\];/assign clint_sel  = phase1 \&\& !d_addr[27];/
 # select held in phase 2 (SB04) -> B1/B2
 sed soc_bus.v s/wire phase1   = io_req \&\& !ph;/wire phase1   = io_req;/
-# SB05 (io_q captured every clock) is an EQUIVALENT mutant: io_q is read only in phase 2, and the last
-# capture before it is the phase-1 completing edge either way; the bus PROVES it equal, so it is not listed.
+# SB05 (io_q captured every clock) is the design now (WO-58 C0): io_q is read only in phase 2, and the last
+# capture before it is the phase-1 completing edge either way; the bus PROVES it.
 # io_q captured one cycle late (SB06) -> B3
-sed soc_bus.v s/if (io_done) io_q <= io_rdata;/if (ph) io_q <= io_rdata;/
+sed soc_bus.v s/always @(posedge clk) io_q <= io_rdata;/always @(posedge clk) if (ph) io_q <= io_rdata;/
 # d_ready = io_ready for IO, no second phase (SB07) -> B3
 sed soc_bus.v s/assign d_ready = is_mem ? mem_ready : ph;/assign d_ready = is_mem ? mem_ready : io_ready;/
 # ph leaves phase 1 without io_ready (SB08) -> B3

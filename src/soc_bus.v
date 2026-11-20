@@ -9,7 +9,8 @@
 //
 //   phase 1 (ph = 0): the target's select is high. The access completes on
 //     the edge where select and the target's ready are both high; that edge
-//     captures the read data into io_q and sets ph. UART TX / SPI
+//     captures the read data into io_q (io_q is loaded every clock, and is read
+//     only in phase 2, where the last load was that edge) and sets ph. UART TX / SPI
 //     back-pressure keeps the target's ready low, which lengthens phase 1.
 //   phase 2 (ph = 1): every IO select is low; d_ready is high and d_rdata is
 //     io_q; the core completes and ph clears on the next edge.
@@ -98,7 +99,7 @@ module soc_bus (
         else if (io_done) ph <= 1'b1;
         else if (ph)      ph <= 1'b0;
     end
-    always @(posedge clk) if (io_done) io_q <= io_rdata;
+    always @(posedge clk) io_q <= io_rdata;     // read only in phase 2; the last capture before it is the completing edge
 
     assign d_ready = is_mem ? mem_ready : ph;
     assign d_rdata = is_mem ? mem_rdata : io_q;
