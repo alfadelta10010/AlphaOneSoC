@@ -28,13 +28,15 @@ module spi_bb_props (
 );
     wire [31:0] rdata;
     wire        ready;
-    wire [7:0]  out;
+    wire [7:0]  out, in_sync;
+    wire        spi_irq;
     gpio dut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr(addr), .wdata(wdata),
-              .rdata(rdata), .ready(ready), .in(in), .out(out));
+              .rdata(rdata), .ready(ready), .in(in), .out(out), .in_sync(in_sync), .spi_irq(spi_irq));
 
     reg armed = 1'b0;
     // ---- the model
-    reg [7:0] o_s;                      // OUT bits 0,2,6,7
+    reg [1:0] ien_s;
+    reg [7:0] o_s;                      // OUT bits 0,2,4-7
     reg       en_s, cpol_s, cpha_s;
     reg [7:0] baud_s;
     reg [7:0] bb_s, txd_s, rxsh_s, rxlast_s;
@@ -48,7 +50,7 @@ module spi_bb_props (
     wire       txe_s = !busy_s && !bba_s;
     wire       txr_s = !bba_s;
     wire       req   = sel && we && be[0];
-    wire       ready_s = !(req && (addr == 4'd9 ? bba_s : !txe_s));
+    wire       ready_s = !(req && (addr == 4'd9 ? bba_s : addr == 4'd10 ? 1'b0 : !txe_s));
     wire       acc   = req && ready;
     wire       sample = busy_s && ((baud_s == 8'd0) ? !phase_s : (phase_s && hp_s + 8'd1 == baud_s));
     wire       drive = en_s && busy_s;
@@ -60,7 +62,7 @@ module spi_bb_props (
     always @(posedge clk) begin
         if (rst) begin
             armed <= 1'b1;
-            o_s <= 8'h81; en_s <= 0; cpol_s <= 1; cpha_s <= 1; baud_s <= 8'hFF;
+            o_s <= 8'hB1; ien_s <= 2'b00; en_s <= 0; cpol_s <= 1; cpha_s <= 1; baud_s <= 8'hFF;
             bb_s <= 0; txd_s <= 0; rxsh_s <= 0; rxlast_s <= 0;
             bba_s <= 0; busy_s <= 0; phase_s <= 0; hp_s <= 0; bitk_s <= 0; sck_s <= 1; mosi_s <= 0;
         end else begin
@@ -90,11 +92,12 @@ module spi_bb_props (
             if (acc) begin
                 case (addr)
                 4'd0:  begin
-                           o_s <= {wdata[7:6], 3'b000, wdata[2], 1'b0, wdata[0]};
+                           o_s <= {wdata[7:4], 1'b0, wdata[2], 1'b0, wdata[0]};
                            if (!en_s) begin sck_s <= wdata[3]; mosi_s <= wdata[1]; end
                        end
                 4'd3:  begin en_s <= wdata[0]; if (wdata[0]) sck_s <= cpol_s; end
                 4'd9:  begin bb_s <= wdata[7:0]; bba_s <= 1; end
+                4'd10: ien_s <= wdata[1:0];
                 4'd11: begin cpol_s <= wdata[1]; cpha_s <= wdata[0]; if (en_s) sck_s <= wdata[1]; end
                 4'd12: baud_s <= wdata[7:0];
                 default: ;
@@ -116,8 +119,8 @@ module spi_bb_props (
 `endif
         if (armed) begin
             assert (ready == ready_s);                                              // E5 (stall rule on the timeline)
-            assert (out[5:4] == 2'b00);
-            assert (out[0] == o_s[0] && out[2] == o_s[2] && out[6] == o_s[6] && out[7] == o_s[7]);
+            assert (out[0] == o_s[0] && out[2] == o_s[2] && out[7:4] == o_s[7:4]);
+            assert (spi_irq == ((!bba_s && ien_s[1]) || (txe_s && ien_s[0])));            // IRQ on the timeline
             assert (out[3] == exp_sck);                                             // E1
             assert (out[1] == exp_mosi);                                            // E2
             if (addr == 4'd3)  assert (rdata == {23'b0, !txe_s, 7'b0, en_s});

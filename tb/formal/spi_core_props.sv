@@ -45,10 +45,10 @@ module spi_core_props (
     input  wire       clk, rst,
     input  wire       en, miso,
     input  wire [7:0] wdata,
-    input  wire       wr_tx, wr_ctl, wr_baud, wr_en, wr_out
+    input  wire       wr_tx, wr_ctl, wr_baud, wr_en, wr_out, wr_st
 );
     wire [7:0] rxdata, txdata, baud_o;
-    wire       txe, txr, p_mosi, p_sck;
+    wire       txe, txr, p_mosi, p_sck, irq;
     wire [1:0] control;
     wire [1:0] st;
     wire [7:0] sr, bb, cc, baud;
@@ -56,9 +56,9 @@ module spi_core_props (
     wire       bba, cpol, cpha;
 
     spi dut (.clk(clk), .rst(rst), .en(en), .miso(miso), .wdata(wdata),
-             .wr_tx(wr_tx), .wr_ctl(wr_ctl), .wr_baud(wr_baud), .wr_en(wr_en), .wr_out(wr_out),
+             .wr_tx(wr_tx), .wr_ctl(wr_ctl), .wr_baud(wr_baud), .wr_en(wr_en), .wr_out(wr_out), .wr_st(wr_st),
              .rxdata(rxdata), .txdata(txdata), .txe(txe), .txr(txr), .control(control),
-             .baud_o(baud_o), .p_mosi(p_mosi), .p_sck(p_sck),
+             .baud_o(baud_o), .p_mosi(p_mosi), .p_sck(p_sck), .irq(irq),
              .st(st), .sr(sr), .bb(bb), .bba(bba), .cc(cc), .bc(bc),
              .cpol(cpol), .cpha(cpha), .baud(baud));
 
@@ -104,14 +104,19 @@ module spi_core_props (
     end
 
     // ---- the contract with gpio (assumed here, proved in spi_bus)
-    wire [4:0] strobes = {wr_tx, wr_ctl, wr_baud, wr_en, wr_out};
+    wire [5:0] strobes = {wr_tx, wr_ctl, wr_baud, wr_en, wr_out, wr_st};   // gpio: wr_st is a different slot from the rest
+    // irq = (txr & txren) | (txe & txeen); the enables are internal, so the IRQ rules
+    // are stated on what a STATUS write does to irq (no shadow state to drift in induction)
+    reg wr_st_q = 1'b0, txr_q = 1'b0, txe_q2 = 1'b0, irq_q = 1'b0;  reg [1:0] stw_q = 2'd0;
+    always @(posedge clk) begin wr_st_q <= wr_st; txr_q <= txr; txe_q2 <= txe; irq_q <= irq; stw_q <= wdata[1:0]; end
     always @(*) begin
-        assume ((strobes & (strobes - 5'd1)) == 5'd0);                       // AC1
+        assume ((strobes & (strobes - 6'd1)) == 6'd0);                       // AC1
         assume (!(wr_tx && bba));                                           // AC2
         assume (!((wr_ctl || wr_baud || wr_en || wr_out) && !txe));         // AC3
         assume (!(en != en_q && !txe_q && !rst_q));                         // AC4
         assume (!(en && !en_q && (rst_q || !wr_en_q)));                     // AC5
         assume (!(wr_en_q && !rst_q && !en));                               // AC6
+        // wr_st is exempt from AC3: STATUS writes never wait
     end
 
     // ---- closed forms
@@ -131,6 +136,11 @@ module spi_core_props (
     always @(*) begin
         // ---- state invariants
         if (armed) begin
+            // ---- IRQ
+            if (irq) assert (txr);                                                       // IRQ1: no enable, no flag, no irq
+            if (rst_q) assert (!irq);                                                    // IRQ2: enables reset to 0
+            if (wr_st_q && !rst_q) assert (irq == ((txr && stw_q[1]) || (txe && stw_q[0])));  // IRQ3: STATUS write sets the enables
+            if (!wr_st_q && !rst_q && txr == txr_q && txe == txe_q2) assert (irq == irq_q);  // IRQ4: enables only move on a STATUS write
             assert (st != 2'd3);                                                                // C1
             if (busy) assert (cc <= baud);                                                      // C2
             if (en && st == A)    assert (p_sck == a_lvl);                                      // C3

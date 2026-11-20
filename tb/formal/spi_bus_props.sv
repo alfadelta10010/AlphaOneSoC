@@ -19,13 +19,14 @@ module spi_bus_props (
 );
     wire [31:0] rdata;
     wire        ready;
-    wire [7:0]  out;
+    wire [7:0]  out, in_sync;
+    wire        spi_irq;
     wire        x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out, x_miso, x_bba, x_cpol, x_cpha, spi_en;
     wire [1:0]  x_st;
     wire [7:0]  x_bb, x_sr, x_baud, in_m, in_s, out_r;
 
     gpio dut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr(addr), .wdata(wdata),
-              .rdata(rdata), .ready(ready), .in(in), .out(out),
+              .rdata(rdata), .ready(ready), .in(in), .out(out), .in_sync(in_sync), .spi_irq(spi_irq),
               .x_wr_tx(x_wr_tx), .x_wr_ctl(x_wr_ctl), .x_wr_baud(x_wr_baud), .x_wr_en(x_wr_en),
               .x_wr_out(x_wr_out), .x_miso(x_miso), .x_st(x_st), .x_bba(x_bba), .x_bb(x_bb),
               .x_sr(x_sr), .x_baud(x_baud), .x_cpol(x_cpol), .x_cpha(x_cpha),
@@ -40,20 +41,24 @@ module spi_bus_props (
     reg armed = 1'b0;               // a reset has been applied; every assert is gated on it
     always @(posedge clk) if (rst) armed <= 1'b1;
     reg rst_q = 1'b0, spw_q = 1'b0, txe_q = 1'b0, bba_q = 1'b0, en_q = 1'b0, wr_en_q = 1'b0;
+    reg wrst_q = 1'b0, txr_q = 1'b0, irq_q = 1'b0;
     reg [5:2] addr_q = 0;  reg [31:0] wdata_q = 0;  reg [7:0] in_q = 0, in_m_q = 0, out_r_q = 0;
     reg [7:0] bb_q = 0, baud_q = 0, out_q = 0;  reg cpol_q = 0, cpha_q = 0, ctl_q = 0;
     always @(posedge clk) begin
+        wrst_q <= wr_st; txr_q <= txr; irq_q <= spi_irq;
         rst_q <= rst; spw_q <= spw; txe_q <= txe; bba_q <= x_bba; en_q <= spi_en; wr_en_q <= x_wr_en;
         addr_q <= addr; wdata_q <= wdata; in_q <= in; in_m_q <= in_m; out_r_q <= out_r; out_q <= out;
         bb_q <= x_bb; baud_q <= x_baud; cpol_q <= x_cpol; cpha_q <= x_cpha;
     end
 
     wire [4:0] strobes = {x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out};
+    wire       wr_st = spw && addr == 4'd10;   // STATUS write (spi.v's wr_st; the enables are internal)
     wire       req = sel && we && be[0];
 
     always @(*) if (armed) begin
         // ---- the guarantees for spi_core's assumptions
-        assert ((strobes & (strobes - 5'd1)) == 5'd0);                              // G1 (AC1)
+        assert ((strobes & (strobes - 5'd1)) == 5'd0);
+        assert (!(wr_st && (|strobes)));                                            // G1b (AC1 with wr_st)                              // G1 (AC1)
         assert (!(x_wr_tx && x_bba));                                               // G2 (AC2)
         assert (!((x_wr_ctl || x_wr_baud || x_wr_en || x_wr_out) && !txe));         // G3 (AC3)
         assert (!(spi_en != en_q && !txe_q && !rst_q));                             // G4 (AC4)
@@ -63,9 +68,15 @@ module spi_bus_props (
         assert (ready || req);                                                      // B1
         if (sel && !we) assert (ready);                                             // B2
         if (req && addr == 4'd9)  assert (!ready == x_bba);                         // B3
-        if (req && addr != 4'd9)  assert (!ready == !txe);                          // B4
+        if (req && addr != 4'd9 && addr != 4'd10) assert (!ready == !txe);           // B4
+        if (req && addr == 4'd10) assert (ready);                                   // B4b: STATUS writes never wait
         if (!(sel && we && be[0])) assert (ready);                                  // B5 (no stall without lane 0)
-        assert (out[5:4] == 2'b00);
+        assert (in_sync == in_s);
+        // spi_irq = (TXR & en1) | (TXE & en0), the enables set by a STATUS write (spi_core proves the same rules)
+        if (spi_irq) assert (txr);                                                  // IRQ1
+        if (rst_q) assert (!spi_irq);                                               // IRQ2
+        if (wrst_q && !rst_q) assert (spi_irq == ((txr && wdata_q[1]) || (txe && wdata_q[0])));  // IRQ3
+        if (!wrst_q && !rst_q && txr == txr_q && txe == txe_q) assert (spi_irq == irq_q);        // IRQ4
         assert (x_miso == in_m[1]);                                                 // B9
         // ---- B8: the read mux
         if (addr == 4'd0)  assert (rdata == {24'b0, out});
@@ -79,7 +90,7 @@ module spi_bus_props (
         if (addr == 4'd2 || (addr >= 4'd4 && addr <= 4'd7) || addr >= 4'd13) assert (rdata == 32'h0);
         // ---- B7
         if (rst_q) begin
-            assert (out == 8'h89 && !spi_en);
+            assert (out == 8'hB9 && !spi_en);
             if (addr == 4'd3) assert (rdata == 32'h0);
         end
         // ---- B5, B6 as transitions: nothing but an accepted write (to its own slot) changes a register
@@ -91,7 +102,7 @@ module spi_bus_props (
             if (!bba_q && x_bba)    assert (spw_q && addr_q == 4'd9);
             if (x_bb != bb_q)       assert ((spw_q && addr_q == 4'd9) || bba_q);
             if (spw_q && addr_q == 4'd0) begin                                      // B6
-                assert (out[0] == wdata_q[0] && out[2] == wdata_q[2] && out[6] == wdata_q[6] && out[7] == wdata_q[7]);
+                assert (out[0] == wdata_q[0] && out[2] == wdata_q[2] && out[7:4] == wdata_q[7:4]);
                 if (en_q) assert (out[1] == out_q[1] && out[3] == out_q[3]);
                 else      assert (out[1] == wdata_q[1] && out[3] == wdata_q[3]);
             end
