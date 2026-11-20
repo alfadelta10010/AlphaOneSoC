@@ -183,6 +183,10 @@ module tb_syscon_soc;
     reg [31:0] value = 0, value2 = 0;
     integer n_fin = 0, n_wdt = 0, n_off = 0;        // reboots by FINISH / watchdog, power-offs
     integer n_loads = 0, n_stores = 0, n_events = 0, n_values = 0;
+    reg         ld_pend = 1'b0;                 // a syscon load's select edge was seen; its data reaches the core next
+    reg  [31:0] ld_word = 0, ld_mask = 0;
+    reg  [15:0] ld_off = 0;
+    integer n_core_loads = 0;
     integer cls_rb [0:3];                           // bus state at the reset of each reboot
     integer cls_off [0:3];                          // ... at the E1 of a power-off or fail halt
     integer cls_all [0:3];                          // ... and of every reset (power-off too)
@@ -376,6 +380,18 @@ module tb_syscon_soc;
             if ((soc.syscon_rdata & mask) !== (word & mask))
                 fail($sformatf("syscon load +%h: got %h, want %h (lanes %b)",
                                {soc.dmem_addr[15:2], 2'b00}, soc.syscon_rdata & mask, word & mask, be));
+        end
+
+        // what the core receives, one phase later through the bus's io_q, is the word compared above
+        if (ld_pend && soc.dmem_req === 1'b1 && soc.dmem_ready === 1'b1 && soc.dmem_we === 1'b0) begin
+            ld_pend = 1'b0;
+            n_core_loads = n_core_loads + 1;
+            if ((soc.dmem_rdata & ld_mask) !== (ld_word & ld_mask))
+                fail($sformatf("syscon load +%h: the core received %h, want %h (lanes %b)",
+                               ld_off, soc.dmem_rdata & ld_mask, ld_word & ld_mask, be));
+        end
+        if (!held && sc_rd) begin
+            ld_pend = 1'b1; ld_word = word; ld_mask = mask; ld_off = {soc.dmem_addr[15:2], 2'b00};
         end
 
         // ---- model update ---------------------------------------------------
@@ -607,6 +623,8 @@ module tb_syscon_soc;
                 fail($sformatf("%s: %0d pin resets injected, want %0d", test, n_prst, exp_prst));
             if (n_loads < min_loads)
                 fail($sformatf("%s: %0d syscon loads checked, want at least %0d", test, n_loads, min_loads));
+            if (n_core_loads + 2 < n_loads)
+                fail($sformatf("%s: the core received %0d of the %0d syscon loads checked", test, n_core_loads, n_loads));
             // coverage floors: the scenario each test is for really happened
             if (test == "syscon_wdt_split") begin
                 if (cls_rb[1] < 1) fail("syscon_wdt_split: no watchdog reboot landed between the halves of a split fetch");
