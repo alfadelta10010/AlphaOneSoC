@@ -34,14 +34,16 @@
 //
 //   Watchdog, Synopsys DesignWare layout (snps,dw-wdt), +0x100..+0x1FF:
 //   +0x100  WDT_CR      R/W (lane 0). [0] EN: a write with bit 0 = 1 sets it;
-//                       nothing but a reset clears it. [1] RESP_MODE reads 0.
+//                       nothing but a reset clears it. [1] RMOD (RESP_MODE),
+//                       written by every CR write, 0 after any reset: 0 = an
+//                       expiry reboots; 1 = interrupt mode (see Watchdog).
 //   +0x104  WDT_TORR    R/W (lane 0). [3:0] TOP, reads {TOP, TOP} in [7:0];
 //                       0xFF (TOP 15) after any reset. A write also kicks.
 //   +0x108  WDT_CCVR    reads 0.
 //   +0x10C  WDT_CRR     W: 0x76 in lane 0 kicks; any other value is ignored.
 //                       Reads 0.
-//   +0x110  WDT_STAT    reads 0.
-//   +0x114  WDT_EOI     reads 0.
+//   +0x110  WDT_STAT    R. [0] = the interrupt-mode flag (wdt_irq); 0 in RMOD 0.
+//   +0x114  WDT_EOI     reads 0; a read clears the flag (the DW clear-on-read).
 //   +0x1F4  COMP_PARAMS_1  reads 0x40 (USE_FIX_TOP: timeout TOP = 2^(16+TOP)
 //                       clocks). The rest of the window reads 0.
 //
@@ -87,6 +89,14 @@
 // whatever moved it; Linux never writes mtime). A TORR write kicks and makes
 // no tick of its own (switching the tapped bit could look like an edge). Once
 // enabled it cannot be stopped, as in the DW part. CCVR reads 0.
+//
+// Interrupt mode (RMOD = 1, DW two-stage). The first expiry, with the flag
+// `stat` clear, sets it and restarts the period instead of rebooting; an
+// expiry while it is still set reboots as in RMOD 0 (RESET_CAUSE.WDT). A kick
+// or a TORR write (both kick) and a read of WDT_EOI clear it; a same-cycle
+// expiry wins (the interrupt is not lost). wdt_irq = stat, a level for PLIC
+// source 9. Linux's dw_wdt ISR reads WDT_STAT only (it never reads EOI) and
+// the flag then drops at the next ping. rmod and stat are on rst_soc.
 
 `default_nettype none
 
@@ -109,14 +119,15 @@ module syscon #(
     output wire        qspi_stream_en, // QSPI_CFG.STREAM
     output wire        qspi_ddr,       // QSPI_CFG.DDR
     output wire [2:0]  qspi_ddr_cap,   // QSPI_CFG.DDR_CAP
-    input  wire [15:0] wdt_tap         // mtime[29:14]
+    input  wire [15:0] wdt_tap,        // mtime[29:14]
+    output wire        wdt_irq         // watchdog interrupt-mode flag (PLIC source 9)
 );
 
     reg       rq, rq2, off, strap_q, strap_ns_q;
     reg       cfg_stream, cfg_ddr;
     reg [2:0] cfg_cap;
     reg [2:0] cause;
-    reg       en, tprev;
+    reg       en, tprev, rmod, stat;
     reg [3:0] top;
     reg [1:0] cnt;
     reg [7:0] boot_mode;
@@ -140,19 +151,27 @@ module syscon #(
     wire       kick    = wwr & (widx == 6'd3) & (wdata[7:0] == 8'h76);
     wire       tap     = wdt_tap[top];
     wire       tick    = tap & ~tprev;
-    wire       fire    = en & tick & (cnt == 2'd2) & ~rst_soc;
+    wire       eoi     = sel & ~we & whit & (widx == 6'd5) & ~rst_soc;   // +0x114 read
+    wire       expire  = en & tick & (cnt == 2'd2) & ~rst_soc;
+    wire       first   = expire & rmod & ~stat;     // interrupt, not reboot
+    wire       fire    = expire & ~first;
 
     always @(posedge clk) begin
         if (rst_soc) begin
             en    <= 1'b0;
+            rmod  <= 1'b0;
+            stat  <= 1'b0;
             top   <= 4'hF;
             cnt   <= 2'd0;
             tprev <= 1'b0;
         end else begin
             tprev <= w_torr | tap;
             if (w_cr & wdata[0]) en <= 1'b1;
+            if (w_cr) rmod <= wdata[1];
+            if (first) stat <= 1'b1;
+            else if (kick | w_torr | eoi) stat <= 1'b0;
             if (w_torr) top <= wdata[3:0];
-            if (~en | kick | w_torr) cnt <= 2'd0;
+            if (~en | kick | w_torr | first) cnt <= 2'd0;
             else if (tick) cnt <= cnt + 2'd1;
         end
     end
@@ -190,13 +209,15 @@ module syscon #(
     end
 
     assign rst_soc = rst | rq | off;
+    assign wdt_irq = stat;
     assign rd_late = rst ? strap_rd_late : strap_q;
     assign qspi_stream_en = cfg_stream;
     assign qspi_ddr       = cfg_ddr;
     assign qspi_ddr_cap   = cfg_cap;
 
-    assign rdata = whit         ? (widx == 6'd0  ? {31'b0, en}
+    assign rdata = whit         ? (widx == 6'd0  ? {30'b0, rmod, en}
                                  : widx == 6'd1  ? {24'b0, top, top}
+                                 : widx == 6'd4  ? {31'b0, stat}   // +0x110
                                  : widx == 6'd61 ? 32'h0000_0040   // +0x1F4
                                  :                 32'h0000_0000)
                  : ~hit         ? 32'h0000_0000
