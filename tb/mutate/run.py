@@ -58,7 +58,7 @@ UNIT = {
 }
 # Optional unit benches added later; used when the Makefile has the target.
 UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
-SOC_FILES = {"mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
+SOC_FILES = {"plic.v", "mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
              "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
 
 # formal: run.sh's inner limits are 1800 s (yosys) and PDR_TIMEOUT + 600 = 1800 s (sby, pdr
@@ -74,10 +74,10 @@ TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1
 # box). Every pdr harness's PDR_TIMEOUT (1200 s) + 600 is below TIMEOUT["formal"].
 MEM = ["mem_flash", "mem_tcem", "mem_arb", "mem_ld"]
 FORMAL = {"csr.v": ["csr"],
-          "fyracore.v": ["core_hold", "core_req", "core_fetch", "core_df"],
+          "fyracore.v": ["core_hold", "core_req", "core_req_cov", "core_fetch", "core_df"],
           "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"],
-          "plic.v": ["plic"], "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "audio.v": ["audio"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
+          "plic.v": ["plic", "bus"], "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "audio.v": ["audio"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
           "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12", "bus"],
           "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap"],
