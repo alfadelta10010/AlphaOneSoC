@@ -68,6 +68,8 @@ module tb_rivercore;
     // switched off by making BASE > TOP -- a window that matches nothing.
     parameter IO1_BASE = 32'hFFFF_FFFF;
     parameter IO1_TOP  = 32'h0000_0000;
+    parameter IO2_BASE = 32'hFFFF_FFFF;  // Spike's PLIC is a documented divergence: closed like IO1
+    parameter IO2_TOP  = 32'h0000_0000;
 
 `ifdef SOC_TB
     // ── The whole SoC ────────────────────────────────────────────────────
@@ -116,7 +118,9 @@ module tb_rivercore;
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
-        .PMA_IO1_TOP (IO1_TOP)
+        .PMA_IO1_TOP (IO1_TOP),
+        .PMA_IO2_BASE(IO2_BASE),
+        .PMA_IO2_TOP (IO2_TOP)
     ) soc (
         .clk        (clk),
         .rst        (rst),
@@ -194,7 +198,9 @@ module tb_rivercore;
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
-        .PMA_IO1_TOP (IO1_TOP)
+        .PMA_IO1_TOP (IO1_TOP),
+        .PMA_IO2_BASE(IO2_BASE),
+        .PMA_IO2_TOP (IO2_TOP)
     ) cpu(
         .clk         (clk),
         .rst         (rst),

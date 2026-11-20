@@ -50,8 +50,10 @@ module fyracore #(
     parameter [31:0] PMA_RAM_TOP  = 32'h80FF_FFFF,
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // CLINT
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
-    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon
-    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF
+    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon, PWM/audio
+    parameter [31:0] PMA_IO1_TOP  = 32'h1003_FFFF,
+    parameter [31:0] PMA_IO2_BASE = 32'h0C00_0000,  // PLIC (4 MB: priorities, pending, enables, context 0 at +0x200000)
+    parameter [31:0] PMA_IO2_TOP  = 32'h0C3F_FFFF
 )(
     input  wire        clk,
     input  wire        rst,
@@ -719,7 +721,8 @@ module fyracore #(
     wire ex_pma_in_rom = in_win(alu_r, PMA_ROM_BASE, PMA_ROM_TOP);
     wire ex_pma_in_ram = in_win(alu_r, PMA_RAM_BASE, PMA_RAM_TOP);
     wire ex_pma_in_io  = in_win(alu_r, PMA_IO0_BASE, PMA_IO0_TOP) ||
-                         in_win(alu_r, PMA_IO1_BASE, PMA_IO1_TOP);
+                         in_win(alu_r, PMA_IO1_BASE, PMA_IO1_TOP) ||
+                         in_win(alu_r, PMA_IO2_BASE, PMA_IO2_TOP);
     // LR/SC need a reservation set, which only PSRAM can provide -- an IO
     // window is not idempotent and has no reservation set to track, and flash
     // cannot be written. The reference model agrees about IO: its reservable()

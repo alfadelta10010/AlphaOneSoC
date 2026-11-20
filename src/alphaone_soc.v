@@ -50,7 +50,9 @@ module alphaone_soc #(
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
     parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,
-    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF,
+    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF,  // 0x1003_FFFF once PWM/audio land, WO-58
+    parameter [31:0] PMA_IO2_BASE = 32'hFFFF_FFFF,  // opened by the PLIC integration, WO-51
+    parameter [31:0] PMA_IO2_TOP  = 32'h0000_0000,
     // UART divisor out of reset: 34 = 114,890 baud at the documented 62.5 MHz clock
     parameter [15:0] UART_DIV_RESET = 16'd34
 )(
@@ -89,7 +91,9 @@ module alphaone_soc #(
         .PMA_IO0_BASE(PMA_IO0_BASE),
         .PMA_IO0_TOP (PMA_IO0_TOP),
         .PMA_IO1_BASE(PMA_IO1_BASE),
-        .PMA_IO1_TOP (PMA_IO1_TOP)
+        .PMA_IO1_TOP (PMA_IO1_TOP),
+        .PMA_IO2_BASE(PMA_IO2_BASE),
+        .PMA_IO2_TOP (PMA_IO2_TOP)
     ) cpu (
         .clk         (clk),
         .rst         (rst_soc),
