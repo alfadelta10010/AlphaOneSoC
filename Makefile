@@ -305,13 +305,13 @@ define MB_FLAGS
 case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|syscon_reboot) d=;; *) d=1;; esac; \
 	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
 endef
-SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode
+SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode plic_uart
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
 	@echo "=== Testing the peripherals through the SoC ==="
 	@mkdir -p $(SOC_PERIPH_DIR)
 	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
-		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
@@ -346,7 +346,7 @@ test-soc-spi: $(BUILD_DIR)
 	@echo "=== Testing the SD card and the shared SPI bus through the SoC (62.5 MHz) ==="
 	@mkdir -p $(SOC_SPI_DIR)
 	@$(IVERILOG) -g2012 -DTCLK_NS=16.0 -o $(SOC_SPI_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
-		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
@@ -400,7 +400,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
 	@mkdir -p $(SYSCON_SOC_DIR)
 	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(SYSCON_SOC_DIR)/sim -s tb_syscon_soc $(SRC_FILES) \
-		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
@@ -426,7 +426,7 @@ test-syscon-soc: $(BUILD_DIR)
 #   NO_STREAM          ui_in[2] = 1 through reset: QSPI_CFG.STREAM stays 0
 # then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
 # strap at 0 and at 1 (RD_LATE, 25 ns).
-WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v \
+WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v \
                 $(SRC_DIR)/uart.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+NO_STREAM"
