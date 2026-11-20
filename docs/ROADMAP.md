@@ -864,12 +864,12 @@ of `sw/Makefile`. Output goes to `build/sw`.
   sweep of `tests/soc/ddr_sweep.S` from PSRAM: DDR_CAP 1 to 6 against an SDR copy of a flash block, the
   middle of the longest passing run, an execute test from flash under the watchdog (TOP 1) and a trap
   handler, then the watchdog at TOP 15 and the payload runs with the flash in DDR. A watchdog reset with
-  BOOT_MODE 0xD8 + k, or BOOT_MODE 0xDF, keeps SDR with no sweep; the strap's STREAM bit is kept. It prints
+  BOOT_MODE 0xD8 + k, or BOOT_MODE 0xDF, keeps SDR with no sweep; the strap's STREAM bit is kept through the sweep and every fall back to SDR (the `+NO_STREAM` runs require that the Pmod model sees no stream continuation, `resumes 0`, during the whole boot). It prints
   the chosen point and the mask of passing points, or why the flash stays SDR. Tests (`make run-ddr-all`):
   DDR on, the watchdog fallback, no passing point, a forced trap and a forced mismatch in the execute test,
   a soft reboot and a watchdog reset without a DDR note (the sweep runs again), BOOT_MODE 0xDF, no flag,
   `+NO_STREAM`, `+RD_LATE`; `tools/ddr_matrix.sh` boots 54 combinations of device delay, rd_late and SCK/IO
-  skew and recomputes the rule from the printed mask (51 pass, 18 of them with DDR on, none fail; 3 are
+  skew and recomputes the rule from the printed mask, requires one contiguous window and compares every mask with `tools/ddr_matrix.golden` (a regression oracle, measured on this bench, not an independent model of the window) (51 pass, 18 of them with DDR on, none fail; 3 are
   timings where SDR itself cannot boot). On this bench the default timing has one passing point (cap 1).
 * **Bench** (`tb/tb_sw.v`): the SoC at 62.5 MHz, the QSPI Pmod model, an SD
   card on the SPI pins (`+SD_IMAGE=<hex>` gives it a disk, `+SD_DUMP=<file>`
@@ -922,13 +922,12 @@ benchmarks). Besides the runs above: the loader against 13 damaged images (`tool
 blank flash, a size or load address that does not fit, an unaligned one, an entry outside the image, a wrong
 sum, unknown flag bits); the monitor's edge cases (bad input, misaligned and faulting accesses, backspace, an
 overlong line, the illegal-instruction, load-fault and return stops) and every one of the 4096 CSR numbers
-(136 answer, exactly the set `csr.v` implements); FatFs on FAT12, FAT16 and an MBR with SDHC, standard-capacity
+(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16 and an MBR with SDHC, standard-capacity
 and v1 cards, its error codes, empty, 120-character-named, truncated and cluster-boundary files, and a card
 filled until it is full; the SD driver against a card told to fail 13 ways (`make run-sdtest-all`: data error
 token, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
 refused CMD16 ...); FreeRTOS's five fault paths (`make run-fr-all`: stack overflow, allocation failure,
-assertion, illegal instruction, unhandled interrupt). The same runs go through Icarus
-(`make bench-icarus`, `SIMRUN=`, `SIM=`).
+assertion, illegal instruction, unhandled interrupt). Icarus (`make bench-icarus`, `SIMRUN=`, `SIM=`) gave the same results on the commits before the 2026-11-20 review fixes for the hello, monitor, CSR-scan, FatFs, FreeRTOS, FreeRTOS fault-path, DDR and damaged-image runs; its SD-variant and matrix runs, and everything after the review fixes, ran on Verilator only. The review fixes were checked by mutation: without the CMD13 that clears the status after a refused write, `wrerr1` fails; with a trap that powers off instead of spinning under DDR, `ddrdt` fails; with the late-mismatch path forcing STREAM on, the no-stream run fails.
 
 **Results, GCC 14.2 `-O2`, code and data in PSRAM.** Measured first on main
 `a2f7285` (fetch reuse, SPI, syscon) at 60 MHz, and again on `32cac47` (PR #16,
