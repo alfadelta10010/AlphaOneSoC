@@ -1,5 +1,6 @@
 #!/bin/bash
-# The DDR sweep over a grid of Pmod timings, on the bench that make -C sw bench built:
+# The DDR sweep over a grid of Pmod timings (TIMEOUT=<s> per run, default 300: Verilator needs about 20 s, Icarus about
+# 30 times that, so give it TIMEOUT=7200), on the bench that make -C sw bench built:
 #   make -C sw ddr bench && sw/tools/ddr_matrix.sh [jobs]
 # For every combination of the device's output delay (+QSPI_DELAY, +QSPI_HOLD), the rd_late strap and
 # extra skew on the SCK and IO paths (+QSPI_SCK_DLY_PS, +QSPI_IO_DLY_PS) it boots the ddr payload and
@@ -29,7 +30,7 @@ for c in "${combos[@]}"; do
 done > "$OUT/list"
 run_one() {
   IFS='|' read -r i c <<< "$1"
-  (cd "$OUT" && timeout 300 ${SIM:-$B/bench/sim} +FLASH_FILE="$B/ddr/flash.hex" +UART_DIV=34 $c +MAX_CYCLES=12000000 > "$OUT/run-$i.log" 2>&1)
+  (cd "$OUT" && timeout ${TIMEOUT:-300} ${SIM:-$B/bench/sim} +FLASH_FILE="$B/ddr/flash.hex" +UART_DIV=34 $c +MAX_CYCLES=12000000 > "$OUT/run-$i.log" 2>&1)
   if ! grep -q "AlphaOne loader" "$OUT/run-$i.log" || grep -q "instret=0$" "$OUT/run-$i.log"; then
     echo "$i|NOBOOT|$c"            # SDR itself cannot read the flash: no banner, nothing retired
   elif ! grep -q "flash in DDR\|flash stays SDR" "$OUT/run-$i.log"; then
