@@ -557,7 +557,7 @@ module tb_syscon_soc;
         if ($test$plusargs("MB_UART") && !$value$plusargs("MB_DIV=%d", mb_div)) mb_div = UART_DIV;   // the MB_UART build's divisor
         #1 rp.set_baud(16.0 * mb_div * TCLK);
         if (test == "syscon_regs") begin
-            fin_noise_ok = 1'b1; min_loads = 302;
+            fin_noise_ok = 1'b1; min_loads = 296;   // 302 minus the 6 loads at 0x1002_0020, now the pinmux (WO-58)
         end else if (test == "syscon_reboot") begin
             exp_fin_reboots = 4; exp_events = 1; exp_values = 5; min_loads = 13;
         end else if (test == "syscon_wdt_split") begin
