@@ -16,7 +16,8 @@ been synthesised; nothing here is measured unless it cites a run.
 
 | Decision (user, 2026-10-23 unless dated) | Consequence |
 |---|---|
-| **Stay at 3x4 (12 tiles).** A 4x4 slot was considered and not taken. | Every addition below must fit the current die. |
+| ~~**Stay at 3x4 (12 tiles).** A 4x4 slot was considered and not taken.~~ **Superseded 2026-11-20: see the next row.** | Everything up to PR #16 was judged against the 3x4 die; a 3x4 revision is already submitted, so the 4x4 work is an upgrade. |
+| (2026-11-20) **4x4 (16 tiles) on sky26d; add a PLIC, a 16550A UART with FIFOs and interrupt, a gamepad Pmod receiver, a timer/PWM, an audio block and an output pinmux (a feature overlay), with a new default pin map** (`uo_out[0]` OLED CS#, `[1]` MOSI, `[2]` D/C, `[3]` SCK, `[4]` UART TX, `[5]` SD CS#, `[6]` RES#/VCCEN, `[7]` AUDIO; RTS# a pinmux feature; the gamepad on `ui_in[4..6]` replaces the keypad). Work orders WO-46..62 (`localFiles/wo-4x4/INDEX-4x4.md`). The 4x4 baseline harden of main passed sign-off (`localFiles/harden-4x4-2026-11-20/RESULTS.md`): routing 53.27 % / overflow 0, hold +0.053 ns at min_ff (thinner than 3x4's +0.091). **Routing, not placement area, is the limit:** the bundle fits under the 3x4 ceiling (71.83 % / 117) only with every IO read registered (measured 66.04 % / 16, against 78.26 % / 4,290 combinational). **A memory-side read cache is still an open decision** (go/no-go 2026-11-27, WO-62, droppable): no cache option fits beside the whole peripheral set, so it needs cuts the user chooses. | The RTL for the integrated harden is due about 2026-11-26; the final figures come from that harden, one 4x4 harden of the integrated tree plus the full regression. Status of each block: `docs/pins-and-peripherals.md`. |
 | The SPI transmitter becomes a **general SPI controller**, with an **SD card and the OLED** on one bus. | Section 1.1. Merged (PR #14). |
 | **syscon** gets reboot, power-off and the rest of what a syscon block usually does. | Section 1.2. Merged (PR #12). |
 | Order: **lock the RTL**, then the **Verilator port and Linux bring-up**, then **FPGA ports** as a stretch goal. | Sections 1-2, then 3-4, then 5. |
@@ -596,8 +597,9 @@ Considered on 2026-10-22, kept for later:
   core runs breaks that; only short bounded bursts are allowed, which is what
   the PSRAM gets today.
 * **Instruction cache:** 256 B direct-mapped from two more RF macros plus
-  tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. Needs
-  the 4x4 slot that was not taken.
+  tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. The 4x4
+  slot now exists, but the peripheral set takes about 86 % of its placed-area
+  headroom, so a cache needs cuts (WO-62, droppable, open).
   Size it first with a cache simulator on a Spike Linux trace.
 * **JTAG debug module** (halt, resume, abstract register access; the demo
   board's RP2350 as the probe): about 17,000-34,000 µm² (*estimate*, a
@@ -605,8 +607,9 @@ Considered on 2026-10-22, kept for later:
   costs no pins but is non-standard.
 * **Code-size extensions** (Zcb; Zcmp push/pop): fewer bytes fetched. Zcmp
   needs a sequencer and kernel support checked.
-* **UART interrupt with an RX FIFO**, a small interrupt controller, a
-  timer/PWM block. (The watchdog is built, in syscon.)
+* ~~**UART interrupt with an RX FIFO**, a small interrupt controller, a
+  timer/PWM block.~~ Decided and in progress on the 4x4 branch (PLIC WO-47,
+  16550A WO-49, PWM committed). The watchdog is built, in syscon.
 * **A standard peripheral bus** (Wishbone, OBI or APB) behind `soc_bus`, so
   existing open-source peripherals drop in.
 * **Parameterise the core** (PMP entries, C, M unit kind, memory map) for
@@ -618,7 +621,7 @@ Considered on 2026-10-22, kept for later:
 Not worth doing while memory-bound: Zba/Zbb, a faster multiplier, forwarding,
 vectored mtvec, a faster core clock (QSPI is pad-limited). Rejected earlier:
 SCK = core clock (pads), flash continuous read or QPI (decided 2026-09-26),
-a PLIC (all devices are polled).
+a PLIC (all devices polled; reversed 2026-11-20, the 4x4 branch builds one with a 16550A UART with FIFOs).
 
 ## 8. Order
 
@@ -647,8 +650,10 @@ has been run yet.
 
 What software gets: RV32IMAC with Zicsr, Zicntr and Zifencei; M and U modes;
 4 PMP entries; no S-mode and no MMU. The CLINT's timer and software
-interrupts are the only interrupts: there is no PLIC, and every device is
-polled. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
+interrupts are the only interrupts on the 3x4 submission: it has no PLIC and
+every device is polled. The 4x4 branch adds a PLIC at `0x0C00_0000` (WO-47,
+in progress) and interrupt-driven devices, so the interrupt ladder rungs
+can use them once they land. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
 16 MB of PSRAM at `0x8000_0000`. An ns16550 subset UART, GPIO, the tiny_spi
 controller with an SD card and the OLED, and syscon (reboot, power-off,
 reset cause, boot mode, watchdog). About 1.5 million instructions per second
