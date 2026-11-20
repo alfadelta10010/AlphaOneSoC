@@ -7,6 +7,7 @@
 //   0x2000_0000  flash   16 MB  read, execute        QSPI CS0
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
+//   0x0C00_0000  PLIC    4 MB, 9 sources, UART = source 1 (src/plic.v)
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
@@ -51,8 +52,8 @@ module alphaone_soc #(
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
     parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,
     parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF,  // 0x1003_FFFF once PWM/audio land, WO-58
-    parameter [31:0] PMA_IO2_BASE = 32'hFFFF_FFFF,  // opened by the PLIC integration, WO-51
-    parameter [31:0] PMA_IO2_TOP  = 32'h0000_0000,
+    parameter [31:0] PMA_IO2_BASE = 32'h0C00_0000,  // PLIC, 4 MB
+    parameter [31:0] PMA_IO2_TOP  = 32'h0C3F_FFFF,
     // UART divisor out of reset: 34 = 114,890 baud at the documented 62.5 MHz clock
     parameter [15:0] UART_DIV_RESET = 16'd34
 )(
@@ -83,7 +84,7 @@ module alphaone_soc #(
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire [3:0]  dmem_be;
     wire        dmem_req, dmem_we, dmem_ready;
-    wire        timer_irq, sw_irq;
+    wire        timer_irq, sw_irq, meip;
     wire [63:0] mtime;
 
     fyracore #(
@@ -110,7 +111,7 @@ module alphaone_soc #(
         .dmem_rdata  (dmem_rdata),
         .dmem_ready  (dmem_ready),
         .timer_irq   (timer_irq),
-        .external_irq(1'b0),           // no PLIC
+        .external_irq(meip),
         .sw_irq      (sw_irq),
         .mtime_in    (mtime),
         .fencei_flush(),               // nothing caches instructions
@@ -132,7 +133,12 @@ module alphaone_soc #(
     wire [2:0]  qspi_ddr_cap;
     wire [31:0] syscon_rdata;
 
+    wire        plic_sel, uart_irq;
+    wire [31:0] plic_rdata;
+
     soc_bus bus (
+        .clk         (clk),
+        .rst         (rst_soc),
         .d_req       (dmem_req),
         .d_addr      (dmem_addr),
         .d_rdata     (dmem_rdata),
@@ -142,6 +148,8 @@ module alphaone_soc #(
         .mem_ready   (mem_d_ready),
         .clint_sel   (clint_sel),
         .clint_rdata (clint_rdata),
+        .plic_sel    (plic_sel),
+        .plic_rdata  (plic_rdata),
         .uart_sel    (uart_sel),
         .uart_rdata  (uart_rdata),
         .uart_ready  (uart_ready),
@@ -241,6 +249,20 @@ module alphaone_soc #(
         .mtime_out(mtime)
     );
 
+    // ── PLIC ────────────────────────────────────────────────────────────────
+    plic #(.NSRC(9)) plic_inst (
+        .clk  (clk),
+        .rst  (rst_soc),
+        .sel  (plic_sel),
+        .we   (dmem_we),
+        .be   (dmem_be),
+        .addr (dmem_addr[21:2]),
+        .wdata(dmem_wdata),
+        .rdata(plic_rdata),
+        .src  ({8'b0, uart_irq}),
+        .meip (meip)
+    );
+
     // ── UART ────────────────────────────────────────────────────────────────
     uart #(
         .DIV_RESET(UART_DIV_RESET)
@@ -254,6 +276,7 @@ module alphaone_soc #(
         .wdata(dmem_wdata),
         .rdata(uart_rdata),
         .ready(uart_ready),
+        .irq  (uart_irq),
         .rx   (uart_rx),
         .tx   (uart_tx),
         .rts_n(uart_rts_n)

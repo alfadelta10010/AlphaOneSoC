@@ -363,7 +363,7 @@ module tb_syscon_soc;
         if (!s_rst && s_rsoc !== 1'b1) begin
             if (soc.uart_ready !== 1'b1 && !soc.uart_sel) fail("UART ready low while not selected");
             if (soc.gpio_ready !== 1'b1 && !soc.gpio_sel) fail("GPIO ready low while not selected");
-            if (soc.syscon_sel === 1'b1 && soc.dmem_ready !== 1'b1) fail("syscon held ready low");
+            if (soc.syscon_sel === 1'b1 && soc.bus.io_ready !== 1'b1) fail("an IO target held ready low at syscon");
         end
 
         // ---- syscon load against the model ---------------------------------
