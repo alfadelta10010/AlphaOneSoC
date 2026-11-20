@@ -25,6 +25,10 @@
 //     the bench puts a pull-up (tri1) on the card side.
 //   * +SD_STUCK_DO makes DO read 1 whenever it would be driven (a negative
 //     control).
+//   * card kinds: +SD_SDSC makes it a standard-capacity v2 card (OCR bit 30 = 0, so READ and
+//     WRITE take a byte address, a multiple of 512; CMD16 sets the block length, which must
+//     be 512), +SD_V1 a v1 card as well (CMD8 is an illegal command, R1 0x05). Default: SDHC.
+//     CMD13 (SEND_STATUS) answers an R2 of 0x0000 (R1, then no error bits).
 //   * a real disk: with DISK_BLKS > 1 and `use_disk` set by the bench (tb_sw does it for
 //     +SD_IMAGE=<byte-hex>), reads and writes go to the `disk` array, so a FAT image
 //     can be mounted, written to and read back (+SD_DUMP in tb_sw writes it out).
@@ -63,6 +67,7 @@ module sd_spi_model #(
     reg     ready = 1'b0;                   // out of idle (ACMD41 returned 0x00)
 
     integer sd_busy_n = 3, stuck = 0;
+    reg     sdsc = 1'b0, v1 = 1'b0;         // +SD_SDSC, +SD_V1
     reg [31:0] rs = 32'h1;
     function [31:0] rnd(input integer d);
         begin rs = rs ^ (rs << 13); rs = rs ^ (rs >> 17); rs = rs ^ (rs << 5); rnd = rs; end
@@ -73,6 +78,8 @@ module sd_spi_model #(
     initial begin : plusargs
         integer s;
         if ($value$plusargs("SD_BUSY=%d", sd_busy_n)) ;
+        v1   = $test$plusargs("SD_V1");
+        sdsc = $test$plusargs("SD_SDSC") || v1;
         if ($value$plusargs("SD_SEED=%d", s)) rs = 32'h2545F491 ^ (s * 32'h9E3779B1);
         else rs = 32'h2545F491;
         if (rs == 0) rs = 1;
@@ -220,8 +227,10 @@ module sd_spi_model #(
             case (c)
                 6'd0:  begin if (crc_ok) begin idle_st = 1'b1; ready = 1'b0; acmd41_n = 0; r1 = 8'h01; end push(r1, 1'b0); end
                 6'd8:  begin
-                    push(r1, 1'b0);
-                    if (crc_ok && arg[11:0] == 12'h1AA) begin push(8'h00, 1'b0); push(8'h00, 1'b0); push(8'h01, 1'b0); push(8'hAA, 1'b0); end
+                    if (v1) push(r1 | 8'h04, 1'b0);
+                    else push(r1, 1'b0);
+                    if (v1) ;
+                    else if (crc_ok && arg[11:0] == 12'h1AA) begin push(8'h00, 1'b0); push(8'h00, 1'b0); push(8'h01, 1'b0); push(8'hAA, 1'b0); end
                     else r1 = r1 | 8'h04;
                 end
                 6'd55: begin app = 1'b1; push(r1, 1'b0); end
@@ -235,16 +244,25 @@ module sd_spi_model #(
                 end
                 6'd58: begin
                     push(r1, 1'b0);
-                    push(ready ? 8'hC0 : 8'h80, 1'b0); push(8'hFF, 1'b0); push(8'h80, 1'b0); push(8'h00, 1'b0);
+                    push(ready ? (sdsc ? 8'h80 : 8'hC0) : 8'h80, 1'b0); push(8'hFF, 1'b0); push(8'h80, 1'b0); push(8'h00, 1'b0);
+                end
+                6'd13: begin
+                    push(r1, 1'b0); push(8'h00, 1'b0);
+                end
+                6'd16: begin
+                    if (!ready) push(r1 | 8'h04, 1'b0);
+                    else if (arg != 32'd512) push(r1 | 8'h40, 1'b0);
+                    else push(8'h00, 1'b0);
                 end
                 6'd17: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
-                    else if (use_disk && arg >= DISK_BLKS) begin err("CMD17 beyond the disk"); push(8'h40, 1'b0); end
-                    else begin push(8'h00, 1'b0); push_block(arg); end
+                    else if (sdsc && arg[8:0] != 9'd0) begin err("CMD17 byte address not a multiple of 512"); push(8'h40, 1'b0); end
+                    else if (use_disk && (sdsc ? arg >> 9 : arg) >= DISK_BLKS) begin err("CMD17 beyond the disk"); push(8'h40, 1'b0); end
+                    else begin push(8'h00, 1'b0); push_block(sdsc ? arg >> 9 : arg); end
                 end
                 6'd18: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
-                    else begin push(8'h00, 1'b0); stream = 1'b1; stream_blk = arg; end
+                    else begin push(8'h00, 1'b0); stream = 1'b1; stream_blk = sdsc ? arg >> 9 : arg; end
                 end
                 6'd12: begin
                     // abandon the stream; a stuff byte, R1b, busy
@@ -255,8 +273,9 @@ module sd_spi_model #(
                 end
                 6'd24: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
-                    else if (use_disk && arg >= DISK_BLKS) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
-                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = arg; end
+                    else if (sdsc && arg[8:0] != 9'd0) begin err("CMD24 byte address not a multiple of 512"); push(8'h40, 1'b0); end
+                    else if (use_disk && (sdsc ? arg >> 9 : arg) >= DISK_BLKS) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
+                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = sdsc ? arg >> 9 : arg; end
                 end
                 default: push(r1 | 8'h04, 1'b0);
             endcase
