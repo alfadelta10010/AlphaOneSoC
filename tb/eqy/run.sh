@@ -51,7 +51,7 @@ NL_MD5=71d75961e9e64b995d551afdec157aff
 LIB="$PDK_ROOT/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
 TOP=tt_um_alfadelta10010_alphaone_soc
 # The harden's sources, in resolved.json's order.
-SRCS="tt_um_alfadelta10010_alphaone_soc.v alphaone_soc.v fyracore.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v muldiv.v pmp.v regFile.v rf_top.v signExt.v qspi_ctrl.v mem_ctrl.v soc_bus.v plic.v uart.v gpio.v spi.v syscon.v"
+SRCS="tt_um_alfadelta10010_alphaone_soc.v alphaone_soc.v fyracore.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v muldiv.v pmp.v regFile.v rf_top.v signExt.v qspi_ctrl.v mem_ctrl.v soc_bus.v plic.v uart.v gamepad.v pwm.v audio.v pinmux.v gpio.v spi.v syscon.v"
 # FSM registers that synthesis recoded one-hot (kept as buses in gold and gate).
 FSMS="soc.cpu.exwb_memSize soc.cpu.muldiv_inst.st soc.qspi.state soc.gpio_inst.spi_inst.st"
 B="$ROOT/build/eqy"

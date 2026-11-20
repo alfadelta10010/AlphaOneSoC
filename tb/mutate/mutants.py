@@ -317,13 +317,15 @@ m("MC06", "mem_ctrl.v", "wire [1:0] st_lane  = d_be[0] ? 2'd0 : d_be[1] ? 2'd1 :
 m("MC07", "mem_ctrl.v", "wire chip_b = second ? next_page[13] : a23;", "wire chip_b = a23;", "split fetch's second half stays on PSRAM A")
 m("MC08", "mem_ctrl.v", "assign i_ready = q_done && !gnt_d && (second || !split);", "assign i_ready = q_done && !gnt_d;", "split fetch completes after its first half")
 m("SB01", "soc_bus.v", "wire io_ready = uart_ready && gpio_ready;", "wire io_ready = uart_ready;", "GPIO back-pressure ignored")
-m("SB02", "soc_bus.v", "assign gpio_sel   = phase1 && is_io && (io_idx == 2'd1);", "assign gpio_sel   = phase1 && is_io && (io_idx == 2'd2);", "GPIO decoded at the syscon slot")
+m("SB02", "soc_bus.v", "wire gpio_slot   = phase1 && is_io && (io_idx == 2'd1);", "wire gpio_slot   = phase1 && is_io && (io_idx == 2'd2);", "GPIO decoded at the syscon slot")
 m("SB03", "soc_bus.v", "assign clint_sel  = phase1 && !d_addr[28] && !d_addr[27];", "assign clint_sel  = phase1 && !d_addr[27];", "IO accesses also select the CLINT")
 m("SB03b", "soc_bus.v", "assign clint_sel  = phase1 && !d_addr[28] && !d_addr[27];", "assign clint_sel  = phase1 && !d_addr[28];", "PLIC writes also land in the CLINT (WO-46 review must-do)")
 m("SB04", "soc_bus.v", "wire phase1   = io_req && !ph;", "wire phase1   = io_req;", "selects held in phase 2: double pop / claim / write")
 m("SB06", "soc_bus.v", "always @(posedge clk) io_q <= io_rdata;", "always @(posedge clk) if (ph) io_q <= io_rdata;", "io_q captured one cycle late")
 m("SB07", "soc_bus.v", "assign d_ready = is_mem ? mem_ready : ph;", "assign d_ready = is_mem ? mem_ready : io_ready;", "no second phase, stale io_q")
 m("SB08", "soc_bus.v", "else if (io_done) ph <= 1'b1;", "else if (phase1) ph <= 1'b1;", "ph leaves phase 1 without io_ready")
+m("SB09", "soc_bus.v", "assign gamepad_sel = gpio_slot && gp_hit;", "assign gamepad_sel = io_req && is_io && (io_idx == 2'd1) && gp_hit;", "gamepad carve select held in phase 2 (GPSTAT W1C acts twice: harmless, only bus B1/B6 sees it)")
+m("SB10", "soc_bus.v", "assign syscon_sel  = syscon_slot && !pmx_hit;", "assign syscon_sel  = syscon_slot;", "pinmux carve also selects syscon (both answer)")
 # SB05 (io_q captured every clock) is the design now (WO-58 C0): io_q is read only in phase 2 and the last
 # capture before it is the phase-1 completing edge either way (the bus proof still PROVES with it).
 m("QS01", "qspi_ctrl.v", ": ((3'b001 << cs_sel) & {2'b11, !we});", ": (3'b001 << cs_sel);", "a write may select the flash")

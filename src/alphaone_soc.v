@@ -7,18 +7,27 @@
 //   0x2000_0000  flash   16 MB  read, execute        QSPI CS0
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
-//   0x0C00_0000  PLIC    4 MB, 9 sources, UART = source 1 (src/plic.v)
+//   0x0C00_0000  PLIC    4 MB, 9 sources (src/plic.v): 1 UART, 2 SPI, 3 gamepad, 4 GPIO input change
+//                        (not built, 0), 5-8 PWM cmp0-3, 9 watchdog (not built, 0)
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
-//                        straps, watchdog at +0x100 (src/syscon.v)
+//                        straps, watchdog at +0x100 (src/syscon.v); the pinmux
+//                        at 0x1002_0020 (src/pinmux.v) is carved out of it
+//   0x1003_0000  PWM     4 x 16-bit, SiFive pwm0 layout (src/pwm.v)
+//   0x1003_0100  audio   3 square voices + noise, 8-bit PWM DAC (src/audio.v)
+//   The GPIO window's +0x10 / +0x14 (every 64-byte alias) is the gamepad receiver
+//   (GAMEPAD, GPSTAT, src/gamepad.v); the carves are decoded in soc_bus.
 //
-// Chip pins (docs/pins-and-peripherals.md): the UART's TX and RTS# are
-// uo_out[4] and [5], and RX is ui_in[3]; gpio_out drives the other six
-// uo_out pins (gpio_out[5:4] are always 0 -- those pins are the UART's),
-// and gpio_in reads all eight ui_in pins, RX and the rd_late strap
-// included. The TinyTapeout top level
-// (src/tt_um_alfadelta10010_alphaone_soc.v) maps these to the pins.
+// Chip pins (docs/pins-and-peripherals.md): every uo_out pin is one flop of the
+// pinmux (`uo`), after the mux of its default function and the features
+// software can select (GPIO OUT, RTS#, audio, PWM0-3). Defaults: [0] OLED CS#
+// = OUT[0], [1] MOSI = OUT[1], [2] D/C = OUT[2], [3] SCK = OUT[3], [4] UART TX,
+// [5] SD CS# = OUT[5], [6] RES#/VCCEN = OUT[6], [7] audio. RX is ui_in[3], the
+// gamepad's LATCH / CLOCK / DATA are ui_in[4] / [5] / [6], and gpio_in reads all
+// eight ui_in pins, RX and the rd_late strap included. uart_tx, uart_rts_n and
+// gpio_out are the pre-mux signals, kept as taps for the benches. The TinyTapeout
+// top level (src/tt_um_alfadelta10010_alphaone_soc.v) maps `uo` to the pins.
 //
 // qspi_rd_late is a strap for the QSPI read-sampling point: 0 samples two
 // clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick
@@ -51,7 +60,7 @@ module alphaone_soc #(
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
     parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,
-    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF,  // 0x1003_FFFF once PWM/audio land, WO-58
+    parameter [31:0] PMA_IO1_TOP  = 32'h1003_FFFF,
     parameter [31:0] PMA_IO2_BASE = 32'h0C00_0000,  // PLIC, 4 MB
     parameter [31:0] PMA_IO2_TOP  = 32'h0C3F_FFFF,
     // UART divisor out of reset: 34 = 114,890 baud at the documented 62.5 MHz clock
@@ -74,7 +83,9 @@ module alphaone_soc #(
     output wire       uart_rts_n,
     // GPIO (out[1] / out[3] are MOSI / SCK while the SPI controller is on)
     input  wire [7:0] gpio_in,
-    output wire [7:0] gpio_out
+    output wire [7:0] gpio_out,
+    // uart_tx, uart_rts_n and gpio_out above are pre-mux taps; the pins are
+    output wire [7:0] uo
 );
 
     // ── Core ────────────────────────────────────────────────────────────────
@@ -136,6 +147,9 @@ module alphaone_soc #(
     wire        plic_sel, uart_irq, gpio_spi_irq;
     wire [7:0]  gpio_in_sync;
     wire [31:0] plic_rdata;
+    wire        gamepad_sel, pinmux_sel, pwm_sel, audio_sel, gamepad_irq, audio_o;
+    wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata, audio_rdata;
+    wire [3:0]  pwm_o, pwm_irq;
 
     soc_bus bus (
         .clk         (clk),
@@ -158,7 +172,15 @@ module alphaone_soc #(
         .gpio_rdata  (gpio_rdata),
         .gpio_ready  (gpio_ready),
         .syscon_sel  (syscon_sel),
-        .syscon_rdata(syscon_rdata)
+        .syscon_rdata(syscon_rdata),
+        .gamepad_sel (gamepad_sel),
+        .gamepad_rdata(gamepad_rdata),
+        .pinmux_sel  (pinmux_sel),
+        .pinmux_rdata(pinmux_rdata),
+        .pwm_sel     (pwm_sel),
+        .pwm_rdata   (pwm_rdata),
+        .audio_sel   (audio_sel),
+        .audio_rdata (audio_rdata)
     );
 
     // ── syscon ──────────────────────────────────────────────────────────────
@@ -260,7 +282,12 @@ module alphaone_soc #(
         .addr (dmem_addr[21:2]),
         .wdata(dmem_wdata),
         .rdata(plic_rdata),
-        .src  ({7'b0, gpio_spi_irq, uart_irq}),   // 1 UART, 2 SPI; 3-9 tied 0 until WO-58
+        .src  ({1'b0,          // 9 watchdog (WO-61, not built)
+                pwm_irq,       // 8..5 PWM cmp3..0
+                1'b0,          // 4 GPIO input change (not built)
+                gamepad_irq,   // 3
+                gpio_spi_irq,  // 2
+                uart_irq}),    // 1
         .meip (meip)
     );
 
@@ -296,8 +323,67 @@ module alphaone_soc #(
         .ready(gpio_ready),
         .in   (gpio_in),
         .out  (gpio_out),
-        .in_sync(gpio_in_sync),     // for the gamepad receiver (WO-58)
+        .in_sync(gpio_in_sync),     // for the gamepad receiver
         .spi_irq(gpio_spi_irq)
+    );
+
+    // ── Gamepad receiver (GPIO slot +0x10 / +0x14) ─────────────────────────
+    gamepad gamepad_inst (
+        .clk    (clk),
+        .rst    (rst_soc),
+        .sel    (gamepad_sel),
+        .we     (dmem_we),
+        .be     (dmem_be),
+        .addr2  (dmem_addr[2]),
+        .wdata  (dmem_wdata),
+        .rdata  (gamepad_rdata),
+        .latch_s(gpio_in_sync[4]),
+        .pclk_s (gpio_in_sync[5]),
+        .data_s (gpio_in_sync[6]),
+        .irq    (gamepad_irq)
+    );
+
+    // ── PWM (0x1003_0000) and audio (0x1003_0100) ──────────────────────────
+    pwm pwm_inst (
+        .clk   (clk),
+        .rst   (rst_soc),
+        .sel   (pwm_sel),
+        .we    (dmem_we),
+        .be    (dmem_be),
+        .addr  (dmem_addr[5:2]),
+        .wdata (dmem_wdata),
+        .rdata (pwm_rdata),
+        .pwm_o (pwm_o),
+        .irq   (pwm_irq)
+    );
+
+    audio audio_inst (
+        .clk    (clk),
+        .rst    (rst_soc),
+        .sel    (audio_sel),
+        .we     (dmem_we),
+        .be     (dmem_be),
+        .addr   (dmem_addr[4:2]),
+        .wdata  (dmem_wdata),
+        .rdata  (audio_rdata),
+        .audio_o(audio_o)
+    );
+
+    // ── Pinmux (0x1002_0020): the uo_out pin flops ─────────────────────────
+    pinmux pinmux_inst (
+        .clk  (clk),
+        .rst  (rst_soc),
+        .sel  (pinmux_sel),
+        .we   (dmem_we),
+        .be   (dmem_be),
+        .wdata(dmem_wdata),
+        .rdata(pinmux_rdata),
+        .dflt ({audio_o, gpio_out[6], gpio_out[5], uart_tx, gpio_out[3:0]}),
+        .gpio (gpio_out),
+        .rts_n(uart_rts_n),
+        .audio(audio_o),
+        .pwm  (pwm_o),
+        .uo   (uo)
     );
 
 endmodule

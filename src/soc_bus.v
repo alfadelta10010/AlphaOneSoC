@@ -34,12 +34,18 @@
 //
 //   addr[31]          PSRAM    0x8000_0000   -> memory controller
 //   addr[29]          flash    0x2000_0000   -> memory controller
-//   addr[28]          IO       0x1000_0000   -> addr[17:16]: 0 UART, 1 GPIO, 2 syscon
+//   addr[28]          IO       0x1000_0000   -> addr[17:16]: 0 UART, 1 GPIO, 2 syscon, 3 PWM / audio
+//                                             slot 3: addr[8] = 0 PWM (0x1003_0000), 1 audio (0x1003_0100)
+//                                             GPIO slot carve: addr[5:3] == 3'b010 (+0x10..+0x17 of every
+//                                             64-byte alias) is the gamepad (GAMEPAD, GPSTAT), gpio.v never
+//                                             sees it; syscon slot carve: addr[15:2] == 14'h0008
+//                                             (0x1002_0020, no alias) is the pinmux, syscon.v never sees it
 //   addr[27]          PLIC     0x0C00_0000   (PMA IO2 is the only admitted range with bit 27
 //                                             set below 0x1000_0000)
 //   none of those     CLINT    0x0200_0000
 //
-// syscon (src/syscon.v) decodes its own offset bits and never holds ready low.
+// syscon (src/syscon.v) decodes its own offset bits and never holds ready low. The gamepad,
+// PWM, audio and pinmux never hold ready low either, so io_ready ANDs only the UART's and the GPIO's.
 
 module soc_bus (
     input  wire        clk,
@@ -67,7 +73,15 @@ module soc_bus (
     input  wire [31:0] gpio_rdata,
     input  wire        gpio_ready,
     output wire        syscon_sel,
-    input  wire [31:0] syscon_rdata
+    input  wire [31:0] syscon_rdata,
+    output wire        gamepad_sel,
+    input  wire [31:0] gamepad_rdata,
+    output wire        pinmux_sel,
+    input  wire [31:0] pinmux_rdata,
+    output wire        pwm_sel,
+    input  wire [31:0] pwm_rdata,
+    output wire        audio_sel,
+    input  wire [31:0] audio_rdata
 );
 
     wire is_mem = d_addr[31] | d_addr[29];
@@ -86,12 +100,21 @@ module soc_bus (
     assign clint_sel  = phase1 && !d_addr[28] && !d_addr[27];
     assign plic_sel   = phase1 && !d_addr[28] && d_addr[27];
     assign uart_sel   = phase1 && is_io && (io_idx == 2'd0);
-    assign gpio_sel   = phase1 && is_io && (io_idx == 2'd1);
-    assign syscon_sel = phase1 && is_io && (io_idx == 2'd2);
+    wire gpio_slot   = phase1 && is_io && (io_idx == 2'd1);
+    wire syscon_slot = phase1 && is_io && (io_idx == 2'd2);
+    wire gp_hit      = (d_addr[5:3] == 3'b010);         // gamepad carve of the GPIO slot
+    wire pmx_hit     = (d_addr[15:2] == 14'h0008);      // pinmux carve of the syscon slot
+    assign gpio_sel    = gpio_slot && !gp_hit;
+    assign gamepad_sel = gpio_slot && gp_hit;
+    assign syscon_sel  = syscon_slot && !pmx_hit;
+    assign pinmux_sel  = syscon_slot && pmx_hit;
+    assign pwm_sel     = phase1 && is_io && (io_idx == 2'd3) && !d_addr[8];
+    assign audio_sel   = phase1 && is_io && (io_idx == 2'd3) &&  d_addr[8];
 
     wire [31:0] io_rdata = d_addr[28] ? ((io_idx == 2'd0) ? uart_rdata   :
-                                         (io_idx == 2'd1) ? gpio_rdata   :
-                                         (io_idx == 2'd2) ? syscon_rdata : 32'h0000_0000) :
+                                         (io_idx == 2'd1) ? (gp_hit  ? gamepad_rdata : gpio_rdata)   :
+                                         (io_idx == 2'd2) ? (pmx_hit ? pinmux_rdata  : syscon_rdata) :
+                                         d_addr[8]        ? audio_rdata : pwm_rdata) :
                            d_addr[27] ? plic_rdata : clint_rdata;
 
     always @(posedge clk) begin

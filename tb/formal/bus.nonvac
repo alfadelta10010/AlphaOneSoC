@@ -1,7 +1,7 @@
 # GPIO back-pressure ignored (SB01) -> B3/B4
 sed soc_bus.v s/wire io_ready = uart_ready \&\& gpio_ready;/wire io_ready = uart_ready;/
 # GPIO decoded at the syscon slot (SB02) -> B6
-sed soc_bus.v s/assign gpio_sel   = phase1 \&\& is_io \&\& (io_idx == 2'd1);/assign gpio_sel   = phase1 \&\& is_io \&\& (io_idx == 2'd2);/
+sed soc_bus.v s/wire gpio_slot   = phase1 \&\& is_io \&\& (io_idx == 2'd1);/wire gpio_slot   = phase1 \&\& is_io \&\& (io_idx == 2'd2);/
 # IO accesses also select the CLINT (SB03) -> B6
 sed soc_bus.v s/assign clint_sel  = phase1 \&\& !d_addr\[28\] \&\& !d_addr\[27\];/assign clint_sel  = phase1 \&\& !d_addr[27];/
 # select held in phase 2 (SB04) -> B1/B2
@@ -20,3 +20,7 @@ sed soc_bus.v s/assign clint_sel  = phase1 \&\& !d_addr\[28\] \&\& !d_addr\[27\]
 sed uart.v s/assign ready = !(thr_sel [&][&] tx_full)/assign ready = !tx_full/   # ready low while not selected -> B4
 # same for gpio -> B4
 sed gpio.v s/ready = !(req [\&][\&] stall)/ready = !stall/
+# gamepad carve select held in phase 2 (SB09) -> B1/B6
+sed soc_bus.v s/assign gamepad_sel = gpio_slot \&\& gp_hit;/assign gamepad_sel = io_req \&\& is_io \&\& (io_idx == 2'd1) \&\& gp_hit;/
+# pinmux carve also selects syscon (SB10) -> B1/B6
+sed soc_bus.v s/assign syscon_sel  = syscon_slot \&\& !pmx_hit;/assign syscon_sel  = syscon_slot;/

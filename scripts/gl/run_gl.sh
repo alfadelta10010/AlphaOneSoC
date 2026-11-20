@@ -40,7 +40,7 @@ while IFS='|' read -r name hex args; do
 done < "$LIST"
 [ "$nref" -eq 0 ] || { echo "run_gl.sh: $nref list line(s) without a SIG_REF file: nothing simulated" | tee -a "$OUT/STATUS" >&2; exit 1; }
 if [ "${RTL:-0}" = 1 ]; then
-  SRC="$R/src/alu.v $R/src/branchCtrl.v $R/src/clint.v $R/src/compressed_decoder.v $R/src/controller.v $R/src/csr.v $R/src/decoder.v $R/src/fyracore.v $R/src/muldiv.v $R/src/pmp.v $R/src/regFile.v $R/src/regs.v $R/src/rf_top.v $R/src/signExt.v $R/src/qspi_ctrl.v $R/src/mem_ctrl.v $R/src/soc_bus.v $R/src/plic.v $R/src/uart.v $R/src/gpio.v $R/src/spi.v $R/src/syscon.v $R/src/alphaone_soc.v $R/src/tt_um_alfadelta10010_alphaone_soc.v"
+  SRC="$R/src/alu.v $R/src/branchCtrl.v $R/src/clint.v $R/src/compressed_decoder.v $R/src/controller.v $R/src/csr.v $R/src/decoder.v $R/src/fyracore.v $R/src/muldiv.v $R/src/pmp.v $R/src/regFile.v $R/src/regs.v $R/src/rf_top.v $R/src/signExt.v $R/src/qspi_ctrl.v $R/src/mem_ctrl.v $R/src/soc_bus.v $R/src/plic.v $R/src/uart.v $R/src/gamepad.v $R/src/pwm.v $R/src/audio.v $R/src/pinmux.v $R/src/gpio.v $R/src/spi.v $R/src/syscon.v $R/src/alphaone_soc.v $R/src/tt_um_alfadelta10010_alphaone_soc.v"
   DEFS=""
 else
   : "${NETLIST:?NETLIST= or RTL=1}"
