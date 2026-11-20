@@ -6,3 +6,7 @@ sed audio.v s/l <= 15'd1; dc <= 8'd0; lvl <= 8'd0; audio_o <= 1'b0;/l <= 15'd0; 
 sed audio.v s/if (dc == 8'hFF) lvl <= level;/lvl <= level;/
 # voice toggles without waiting for c == 0 -> P5
 sed audio.v s/if (c\[12\*i +: 12\] == 12'd0) begin c\[12\*i +: 12\] <= per\[12\*i +: 12\]; q\[i\] <= ~q\[i\]; end/if (c[12*i +: 12] == 12'd1) begin c[12*i +: 12] <= per[12*i +: 12]; q[i] <= ~q[i]; end/
+# voice 2 volume ignored -> P6
+sed audio.v s/+ (q\[2\] ? {2'b0, vol\[11:8\]} : 6'd0)/+ 6'd0/
+# noise not mixed -> P6
+sed audio.v s/+ (l\[0\] ? {2'b0, nvol} : 6'd0)/+ 6'd0/

@@ -55,6 +55,8 @@ module audio_props (
     wire w_q  = sel_q && we_q;
     wire b_q  = pre_q[3:0] == 4'hF;
     wire [7:0] level_q = pcm_q ? smp_q : {sum_q, 2'b00};
+    wire [5:0] sum_ref = (q[0] ? {2'b0, vol[3:0]}  : 6'd0) + (q[1] ? {2'b0, vol[7:4]} : 6'd0)
+                       + (q[2] ? {2'b0, vol[11:8]} : 6'd0) + (l[0] ? {2'b0, nvol}    : 6'd0);
     wire [6:0] nm_q = (7'd1 << nrate_q) - 7'd1;
     wire nt_q = b_q && ((pre_q[10:4] & nm_q) == nm_q);
     wire [8:0] mn = (dc < lvl) ? {1'b0, dc} : {1'b0, lvl};
@@ -78,6 +80,7 @@ module audio_props (
             endcase
             assert (l != 15'd0);                                                                      // P4
             assert (sum <= 6'd60);                                                                    // P6
+            assert (sum == sum_ref);                                                                  // P6: the mixer
             if (gv && dc != 8'd0) assert (gh == mn);                                                  // P3 invariant
         end
         if (step) begin
