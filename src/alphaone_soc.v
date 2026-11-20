@@ -133,7 +133,8 @@ module alphaone_soc #(
     wire [2:0]  qspi_ddr_cap;
     wire [31:0] syscon_rdata;
 
-    wire        plic_sel, uart_irq;
+    wire        plic_sel, uart_irq, gpio_spi_irq;
+    wire [7:0]  gpio_in_sync;
     wire [31:0] plic_rdata;
 
     soc_bus bus (
@@ -259,7 +260,7 @@ module alphaone_soc #(
         .addr (dmem_addr[21:2]),
         .wdata(dmem_wdata),
         .rdata(plic_rdata),
-        .src  ({8'b0, uart_irq}),
+        .src  ({7'b0, gpio_spi_irq, uart_irq}),   // 1 UART, 2 SPI; 3-9 tied 0 until WO-58
         .meip (meip)
     );
 
@@ -294,7 +295,9 @@ module alphaone_soc #(
         .rdata(gpio_rdata),
         .ready(gpio_ready),
         .in   (gpio_in),
-        .out  (gpio_out)
+        .out  (gpio_out),
+        .in_sync(gpio_in_sync),     // for the gamepad receiver (WO-58)
+        .spi_irq(gpio_spi_irq)
     );
 
 endmodule
