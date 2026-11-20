@@ -1,0 +1,6 @@
+if BOARD_ALPHAONE
+
+config BUILD_OUTPUT_BIN
+	default y
+
+endif # BOARD_ALPHAONE

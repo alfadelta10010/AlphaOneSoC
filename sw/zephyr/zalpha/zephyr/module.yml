@@ -1,0 +1,6 @@
+name: alphaone
+build:
+  settings:
+    board_root: .
+    soc_root: .
+    dts_root: .

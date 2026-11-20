@@ -1,0 +1,13 @@
+identifier: alphaone
+name: AlphaOneSoC simulation bench
+type: mcu
+arch: riscv
+toolchain:
+  - zephyr
+  - cross-compile
+ram: 16000
+testing:
+  default: true
+supported:
+  - serial
+  - uart

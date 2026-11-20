@@ -1,0 +1,2 @@
+config BOARD_ALPHAONE
+	select SOC_ALPHAONE_SOC

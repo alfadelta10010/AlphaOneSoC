@@ -1,0 +1,19 @@
+if SOC_ALPHAONE_SOC
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	default 62500000
+
+config RISCV_SOC_INTERRUPT_INIT
+	default n
+
+config NUM_IRQS
+	default 16
+
+config PMP_SLOTS
+	default 4
+
+# the cross-compile toolchain variant does not declare TLS support; this gcc has it (userspace needs it)
+config TOOLCHAIN_SUPPORTS_THREAD_LOCAL_STORAGE
+	default y
+
+endif # SOC_ALPHAONE_SOC
