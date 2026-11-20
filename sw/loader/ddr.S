@@ -46,6 +46,8 @@ ddr_sweep:
     sw      s\n, 4 + 4*\n(sp)
     .endr
     li      s11, SYSCON
+    lw      a3, QCFG(s11)
+    andi    a3, a3, 1                # a3 = STREAM as the no-stream strap left it: the sweep keeps it
     jal     ra, xrun                 # the SDR checksum
     mv      s8, a0
     la      s7, blk
@@ -74,7 +76,7 @@ ps_start:
     j       ps_entry                 # offset 0, 4 bytes
     .option pop
 ps_trap:                             # offset 4 = mtvec
-    li      t0, 1
+    mv      t0, a3
     sw      t0, QCFG(s11)            # SDR
     li      t0, 0xDF
     sw      t0, BMODE(s11)
@@ -111,7 +113,7 @@ ps_entry:
     bnez    t2, 4b
     addi    s2, s2, -1
     bnez    s2, 3b
-    li      t0, 1
+    mv      t0, a3
     sw      t0, QCFG(s11)            # SDR again
     beqz    s3, 10f                  # taken only on a known zero: an X from a floating pin
     j       5f                       # (simulation) must not read as a pass
@@ -152,7 +154,8 @@ ps_entry:
     sw      t0, WTORR(s11)           # TOP 1, kicked
     sw      t0, WCR(s11)             # armed, for good
     slli    t0, s0, 2
-    ori     t0, t0, 3
+    ori     t0, t0, 2
+    or      t0, t0, a3
     sw      t0, QCFG(s11)            # DDR on at k
 #ifdef DDR_FORCE_TRAP
     ebreak                           # a test build: a trap in the execute test
@@ -161,7 +164,7 @@ ps_entry:
 #ifndef DDR_FORCE_MISMATCH           # (a test build: the checksum is taken as wrong)
     beq     a0, s8, exec_ok
 #endif
-    li      t0, 1
+    mv      t0, a3
     sw      t0, QCFG(s11)
     li      t0, 0xDF
     sw      t0, BMODE(s11)
@@ -174,7 +177,7 @@ exec_ok:
 ps_nopoint:
     li      t0, 0xDF
     sw      t0, BMODE(s11)           # BOOT_MODE = DDR failed
-    li      t0, 1
+    mv      t0, a3
     sw      t0, QCFG(s11)
 ps_done:
     csrw    mtvec, s4

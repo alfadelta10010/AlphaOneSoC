@@ -19,6 +19,9 @@
 // +SD_DUMP=<file> writes the disk out when the run ends, for the host to check. A card error
 // (SD model `errors`) turns a PASS into a FAIL.
 //
+// +NO_STREAM holds the no-stream strap high through the pin reset (flash streaming off at reset);
+// +RD_LATE the rd_late strap.
+//
 // +UART_IN=<hex> feeds the chip's UART receiver (sw/tools/mkscript.py builds the file
 // from a script): each step waits until the program's output ends in a given text, then
 // sends a line at the baud rate the program has set. That is how the monitor is driven.
@@ -46,6 +49,10 @@ module tb_sw;
     wire [3:0] qspi_io_in = pmod_oe ? pmod_io : (qspi_io_oe ? qspi_io_out : 4'bxxxx);
     wire       uart_tx, uart_rts_n;
     reg        uart_rx_r = 1'b1;
+    reg        no_stream = 1'b0;           // +NO_STREAM: the strap pin (ui_in[2]) high, streaming off at reset
+    initial no_stream = $test$plusargs("NO_STREAM");
+    reg        rd_late = 1'b0;             // +RD_LATE: the rd_late strap (use with +QSPI_DELAY / +QSPI_HOLD)
+    initial rd_late = $test$plusargs("RD_LATE");
     wire [7:0] gpio_out;
     tri1       sd_do;
     wire [7:0] gpio_in = {6'b000000, sd_do, 1'b0};
@@ -53,7 +60,7 @@ module tb_sw;
     // The chip's own reset divisor (34); software sets the one it wants. Flash streaming
     // is on, as it is by default (the strap pin low).
     alphaone_soc soc (
-        .clk(clk), .rst(rst), .qspi_no_stream(1'b0), .qspi_rd_late(1'b0),
+        .clk(clk), .rst(rst), .qspi_no_stream(no_stream), .qspi_rd_late(rd_late),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
         .uart_rx(uart_rx_r), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),

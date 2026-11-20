@@ -7,18 +7,20 @@ expect.txt has one rule per line:
   + text     the log must contain this text (fixed string)
   - text     the log must not contain it
   >=N text   the log must contain it at least N times
+  =RESULT t  the run must end in 'SW-RESULT: t' (for example 'FAIL code=2') instead of PASS
   # ...      comment
-and the run must have ended in 'SW-RESULT: PASS'. Exit 1 listing every miss.
+and the run must have ended in 'SW-RESULT: PASS' (or the =RESULT line's text). Exit 1 listing every miss.
 """
 import sys
 
 log = open(sys.argv[1], errors="replace").read().replace("\r", "")
 bad = []
-if "SW-RESULT: PASS" not in log:
-    bad.append("run did not end in SW-RESULT: PASS")
-for line in open(sys.argv[2]):
-    line = line.rstrip("\n")
-    if not line or line.startswith("#"):
+rules = [l.rstrip("\n") for l in open(sys.argv[2])]
+want = next((l[len("=RESULT "):] for l in rules if l.startswith("=RESULT ")), "PASS")
+if f"SW-RESULT: {want}" not in log:
+    bad.append(f"run did not end in SW-RESULT: {want}")
+for line in rules:
+    if not line or line.startswith("#") or line.startswith("=RESULT "):
         continue
     if line.startswith(">="):
         n, _, text = line[2:].partition(" ")
