@@ -1,0 +1,9 @@
+# A watchdog reset whose BOOT_MODE is not a DDR note (the payload cleared it): the loader sweeps again.
+>=2 flash in DDR, DDR_CAP
++ reset cause 0x04
++ ddrwd0: second boot, DDR on again
+>=2 AlphaOne loader
+- flash stays SDR
+- FAIL
+- TRAP mcause
+- ERROR

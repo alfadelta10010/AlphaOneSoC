@@ -46,7 +46,7 @@ $(error fetch.sh failed ($(FETCH_RC)); see above)
 endif
 endif
 
-.PHONY: ddr ddrwd run-ddr run-ddrwd bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -62,7 +62,7 @@ FORCE:
 define STAMP
 $$(BUILD)/$(1)/flags: FORCE
 	@mkdir -p $$(dir $$@)
-	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC) DDR=$$(DDR))' > $$$$t; \
+	@t=$$@.$$$$$$$$.new; printf '%s\n' '$$(subst ','\'',$$(TC) $$(CFLAGS) $$($(1)_CFLAGS) $$(LDLIBS) $$($(1)_SRC) $$($(1)_MKFLASH) DDR=$$(DDR))' > $$$$t; \
 	 if cmp -s $$$$t $$@; then rm -f $$$$t; else mv -f $$$$t $$@; fi
 endef
 HDRS := $(wildcard common/*.h)
@@ -194,7 +194,7 @@ embench-score:
 # payload that stops servicing the watchdog with DDR on. The default Pmod model timing has
 # passing capture points; make run-ddr ddr_EXPECT=ddr/expect-sdr.txt RUNARGS=+QSPI_DELAY=<ns> runs the
 # case where none does. LOADER_DEFS=-DDDR_FORCE_TRAP (or -DDDR_FORCE_MISMATCH) builds the loader so that the
-# execute test fails that way. run-ddr-all runs all five.
+# execute test fails that way. run-ddr-all runs every case (reboots, BOOT_MODE 0xDF, no flag, no-stream, late sampling).
 ddr_SRC     := ddr/ddr_test.c
 ddr_MKFLASH := --ddr
 $(eval $(call PAYLOAD,ddr))
@@ -203,6 +203,21 @@ ddrwd_CFLAGS  := -DWD
 ddrwd_MKFLASH := --ddr
 ddrwd_EXPECT  := ddr/expect-wd.txt
 $(eval $(call PAYLOAD,ddrwd))
+ddrrb_SRC := ddr/ddr_test.c
+ddrrb_CFLAGS := -DRB
+ddrrb_MKFLASH := --ddr
+ddrrb_EXPECT := ddr/expect-rb.txt
+$(eval $(call PAYLOAD,ddrrb))
+ddrwd0_SRC := ddr/ddr_test.c
+ddrwd0_CFLAGS := -DWD0
+ddrwd0_MKFLASH := --ddr
+ddrwd0_EXPECT := ddr/expect-wd0.txt
+$(eval $(call PAYLOAD,ddrwd0))
+ddrdf_SRC := ddr/ddr_test.c
+ddrdf_CFLAGS := -DDF
+ddrdf_MKFLASH := --ddr
+ddrdf_EXPECT := ddr/expect-df.txt
+$(eval $(call PAYLOAD,ddrdf))
 .PHONY: run-ddr-all
 run-ddr-all:
 	$(MAKE) run-ddr
@@ -210,6 +225,14 @@ run-ddr-all:
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-sdr.txt RUNARGS="+QSPI_DELAY=20"
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-trap.txt LOADER_DEFS=-DDDR_FORCE_TRAP
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-mismatch.txt LOADER_DEFS=-DDDR_FORCE_MISMATCH
+	$(MAKE) run-ddrrb
+	$(MAKE) run-ddrwd0
+	$(MAKE) run-ddrdf
+	$(MAKE) run-ddr ddr_MKFLASH= ddr_EXPECT=ddr/expect-noflag.txt
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-nostream.txt RUNARGS="+NO_STREAM"
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-nostream-sdr.txt RUNARGS="+NO_STREAM +QSPI_DELAY=20"
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-any.txt RUNARGS="+RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30"
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-any.txt RUNARGS="+NO_STREAM +RD_LATE +QSPI_DELAY=36 +QSPI_HOLD=30"
 
 # ── the bench ───────────────────────────────────────────────────────────────
 # Verilator by default. The same bench builds with Icarus (the reference simulator, about 30x
