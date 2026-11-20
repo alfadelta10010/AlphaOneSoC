@@ -2,7 +2,7 @@
 # (source 3). Needs the bench's gamepad model (+GAMEPAD=1) running a scripted sequence; each EVENT n
 # tells the bench to switch to step n and the program waits for the interrupt that the new frame raises.
 #   start  before any frame: GAMEPAD reads 0 (no pad present), GPSTAT 0, no interrupt
-#   step 1 pad 0 present, buttons 0x123; pad 1 absent        -> GAMEPAD 0x00000123
+#   step 1 pad 0 present, buttons 0x123; pad 1 absent        -> GAMEPAD 0x00008123 (pr0 is bit 15)
 #   step 2 pad 0 0x123 and pad 1 0x456 present                -> GAMEPAD 0x84568123
 #   step 3 pad 0 absent, pad 1 0x456                          -> GAMEPAD 0x84560000
 #   step 4 both absent                                        -> GAMEPAD 0
@@ -31,7 +31,8 @@ _start:
     WAIT_MEIP 0x10
     CLAIM SRC_PAD, 0x11
     lw   t1, G_PAD(s0)
-    CHECK t1, 0x00000123, 0x12
+    li   t2, 0x00008123
+    CHECKR t1, t2, 0x12
     lw   t1, G_PADSTAT(s0)
     CHECK t1, 3, 0x13
     li   t1, 3

@@ -1,10 +1,12 @@
 # Pinmux feature selection (0x1002_0020): codes 0 DEFAULT, 1 GPIO OUT[i], 2 RTS#, 3 AUDIO, 4-7 PWM0-3.
 #   1  read-back: every code 0..7 on every pin (word code * 0x11111111) reads back as written
 #      (bit 4i+3 reads 0); reset value 0.
-#   2  RTS# on uo_out[5] (code 2, giving up the SD CS#), the RP2350 model's flow control on (+UART_FLOW=1,
-#      CTS = uo_out[5]): cue 1 = the bench pastes 64 characters (pattern 0x20 + (7n + 3) mod 95); the
-#      program reads them slowly (a delay of 3 characters between pops, the FIFO full otherwise): 64 in
-#      order, none lost, OE 0.
+#   2  RTS# on uo_out[5] (code 2, giving up the SD CS#), the RP2350 model's flow control on (the bench
+#      does this for pinmux, CTS = uo_out[5]), interrupts off: cue 1 = the bench pastes 64 characters
+#      (pattern 0x20 + (7n + 3) mod 95). First the program reads nothing for 24 character times: the
+#      16-deep FIFO fills, RTS# goes high and the model holds the rest (cue 8: the bench checks pin 5
+#      high and 14..17 characters sent). Then the program drains, slowly (3 character times between
+#      pops): the model resumes, 64 in order, none lost, OE 0, no character sent against CTS.
 #   3  back to the default: pin 5 = GPIO OUT bit 5 (SD CS#) again; cue 2 with OUT bit 5 low then high.
 #   4  GPIO on pin 4 (UART TX gives way: OUT bit 4 drives the pin, reset high) and pin 7 (OUT bit 7, reset 1):
 #      cue 3 with both low, cue 4 both high, cue 5 pinmux back to 0.
@@ -41,7 +43,9 @@ _start:
     li   s3, 0                    # received
     li   s4, 0                    # mismatches
     EVENT_P 1
-    li   s5, 60000
+    DELAY (24 * CHAR_CLKS)        # read nothing: RTS# must stop the paste
+    EVENT_P 8
+    li   s5, 4000
 2:  lbu  t1, LSR(s0)
     andi t2, t1, 2
     CHECK t2, 0, 0x04             # no overrun
@@ -60,7 +64,9 @@ _start:
     beq  t2, t1, 5f
     addi s4, s4, 1
 5:  addi s3, s3, 1
-    li   s5, 60000
+    li   t2, 64
+    beq  s3, t2, 4f
+    li   s5, 4000
     DELAY (3 * CHAR_CLKS)
     j    2b
 4:  CHECK s3, 64, 0x05

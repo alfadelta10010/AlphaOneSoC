@@ -103,7 +103,12 @@ module tb_soc_periph;
     wire [3:0] kp_row;
     keypad_model kp (.col(gpio_out[3:0]), .pressed(keys), .row(kp_row));
     reg [7:0]  tb_in = 8'h00;
-    assign gpio_in = {kp_fitted ? kp_row : tb_in[7:4], uart_rx, tb_in[2], sd_used ? do_d : tb_in[1], 1'b0};
+    // The gamepad Pmod's LATCH / CLOCK / DATA on ui_in[4] / [5] / [6]; the model idles high until enabled
+    wire       gp_latch, gp_clock, gp_data;
+    gamepad_model gp (.latch(gp_latch), .clock(gp_clock), .data(gp_data));
+    reg        gp_on = 1'b0;                  // gamepad.S / +GAMEPAD=1: the Pmod drives ui_in[6:4]
+    wire [3:0] hi_in = kp_fitted ? kp_row : gp_on ? {tb_in[7], gp_data, gp_clock, gp_latch} : tb_in[7:4];
+    assign gpio_in = {hi_in, uart_rx, tb_in[2], sd_used ? do_d : tb_in[1], 1'b0};
 
     // ── Checks on every clock ───────────────────────────────────────────────
     reg done = 1'b0, passed = 1'b0, failed = 1'b0;
@@ -142,6 +147,7 @@ module tb_soc_periph;
                 fail("interrupt injected while a data request waits");
             if (uart_tx !== 1'b0 && uart_tx !== 1'b1) fail("uart_tx is X");
             if (uart_rts_n !== 1'b0 && uart_rts_n !== 1'b1) fail("uart_rts_n is X");
+            if (^uo === 1'bx) fail("uo is X");
             if (soc.uart_inst.wr_thr) n_thr = n_thr + 1;
             if (soc.uart_inst.rd_rbr) n_pop = n_pop + 1;
             if (soc.uart_sel && !soc.uart_ready) begin
@@ -164,6 +170,79 @@ module tb_soc_periph;
     reg [31:0] result = 0, value = 0, value2 = 0;
     integer    rx_fin = 0, oled_fin = 0, res_fin = 0;
     wire       mb = soc.dmem_req && soc.dmem_we && soc.dmem_ready && soc.dmem_addr[31:16] == 16'h1002;
+
+    // ── PWM and audio monitors (pwm_linux, pinmux, audio) ───────────────────
+    reg  [31:0] m2_eh = 0, m2_ep = 0, m7_eh = 0, m7_ep = 0;
+    reg         m2_clr = 1'b0, m7_clr = 1'b0;
+    wire [31:0] m2_hi_ok, m2_per_ok, m2_n_hi, m2_n_pulse, m7_hi_ok, m7_per_ok, m7_n_hi, m7_n_pulse;
+    pin_meter m2 (.clk(clk), .pin(uo[2]), .clr(m2_clr), .exp_hi(m2_eh), .exp_per(m2_ep),
+                  .hi_ok(m2_hi_ok), .per_ok(m2_per_ok), .n_hi(m2_n_hi), .n_pulse(m2_n_pulse));
+    pin_meter m7 (.clk(clk), .pin(uo[7]), .clr(m7_clr), .exp_hi(m7_eh), .exp_per(m7_ep),
+                  .hi_ok(m7_hi_ok), .per_ok(m7_per_ok), .n_hi(m7_n_hi), .n_pulse(m7_n_pulse));
+    always @(posedge clk) begin if (m2_clr) m2_clr <= 1'b0; if (m7_clr) m7_clr <= 1'b0; end
+
+    // audio: the high clocks of uo[7] in every 256-clock DAC frame. The pin lags the block's frame
+    // counter dc by three clocks (audio_o flop, pin flop, this sample), so a frame starts at dc == 2.
+    integer au_acc = 0, au_n = 0, au_hi = 0;
+    integer au_fr [0:511];
+    always @(posedge clk) if (!rst && test == "audio") begin
+        if (soc.audio_inst.dc == 8'd2) begin
+            if (au_n < 512) au_fr[au_n] = au_acc;
+            au_n = au_n + 1; au_acc = 0;
+        end
+        if (uo[7] === 1'b1) begin au_acc = au_acc + 1; au_hi = au_hi + 1; end
+    end
+    task automatic au_eval(input integer ph);
+        integer i, n, ons, first, last, bad, trans, want;
+        real per;
+        begin
+            n = (au_n < 512) ? au_n : 512;
+            ons = 0; first = -1; last = -1; bad = 0; trans = 0;
+            for (i = 5; i < n - 4; i = i + 1) begin
+                if (ph <= 4 && au_fr[i] != 0 && au_fr[i] != 60) bad = bad + 1;
+                if (ph == 5 && au_fr[i] != 128) bad = bad + 1;
+                if (ph == 6 && au_fr[i] != 0)   bad = bad + 1;
+                if (ph == 7 && au_fr[i] != 255) bad = bad + 1;
+                if ((au_fr[i] != 0) != (au_fr[i-1] != 0)) trans = trans + 1;
+                if (au_fr[i] != 0 && au_fr[i-1] == 0) begin
+                    ons = ons + 1; if (first < 0) first = i; last = i;
+                end
+            end
+            if (ph == 8) begin
+                if (au_hi != 0) fail($sformatf("audio phase 8: EN 0 but uo[7] was high %0d clocks", au_hi));
+            end else if (n < 20) fail($sformatf("audio phase %0d: only %0d frames seen", ph, n));
+            else if (bad != 0) fail($sformatf("audio phase %0d: %0d of %0d frames with a wrong high count", ph, bad, n));
+            else if (ph <= 3) begin
+                want = (ph == 1) ? 1024 : (ph == 2) ? 1280 : 1312;
+                if (ons < 10) fail($sformatf("audio phase %0d: %0d tone periods in %0d frames", ph, ons, n));
+                else begin
+                    per = 256.0 * (last - first) / (ons - 1);
+                    $display("audio phase %0d: tone period %0.1f clocks (want %0d), %0d periods, level 60 per frame", ph, per, want, ons);
+                    if (per < want * 0.99 || per > want * 1.01) fail($sformatf("audio phase %0d: tone period %0.1f clocks, want %0d", ph, per, want));
+                end
+            end else if (ph == 4) begin
+                $display("audio phase 4: noise, %0d level changes in %0d frames", trans, n);
+                if (trans < 30) fail($sformatf("audio phase 4: noise made %0d level changes in %0d frames", trans, n));
+            end else
+                $display("audio phase %0d: %0d frames, every one with %0d high clocks", ph, n, ph == 5 ? 128 : ph == 6 ? 0 : 255);
+            au_n = 0; au_hi = 0; au_acc = 0;
+        end
+    endtask
+
+    // PWM on a pin: a phase needs one rising-edge distance and one high time of the expected size
+    task automatic pw_eval(input integer pin, input integer ph, input [31:0] hi_ok, per_ok, n_pulse);
+        begin
+            $display("%s phase %0d on uo[%0d]: %0d pulses, %0d with the expected high time, %0d with the expected period",
+                     test, ph, pin, n_pulse, hi_ok, per_ok);
+            if (hi_ok < 1 || per_ok < 1)
+                fail($sformatf("%s phase %0d: uo[%0d] had %0d pulses, %0d of the expected high time, %0d of the expected period",
+                               test, ph, pin, n_pulse, hi_ok, per_ok));
+        end
+    endtask
+    // sd_cs: the pin flop follows OUT one clock later
+    realtime t_g5 = 0.0, t_u5 = 0.0;
+    always @(gpio_out[5]) t_g5 = $realtime;
+    always @(uo[5])       t_u5 = $realtime;
 
     // sd_reboot_a / _b: FINISH 0x7777 is the reboot under test (WO-29 8)
     reg     rb_seen = 1'b0;
@@ -278,7 +357,7 @@ module tb_soc_periph;
                 if (e >= 1 && e <= 3) send_pat(e == 1 ? 5 : e == 2 ? 16 : 40);
                 if (e == 4) send_pat(8);
                 if (e == 5) brk_go = brk_go + 1;
-                if (e == 6 || e == 7) send_pat(1);
+                if (e == 6 || e == 7 || e == 8) send_pat(1);
             end else if (test == "uart_linux") begin
                 if (e == 4 && !mb_uart) rp.set_baud(16.0 * 3 * TCLK);
                 if (e == 5) begin rp.set_flow(1'b1); rp.send_str("ls -l /dev\015"); end
@@ -289,6 +368,52 @@ module tb_soc_periph;
                     if (oled.n_expected == 0)
                         fail("oled_spi: a byte at DIV 1 (80 ns SCK) raised no SSD1331 timing error");
                 end
+            end else if (test == "gamepad") begin
+                case (e)
+                    1: begin gp.present0 = 1'b1; gp.pad0 = 12'h123; end
+                    2: begin gp.present1 = 1'b1; gp.pad1 = 12'h456; end
+                    3: gp.present0 = 1'b0;
+                    4: gp.present1 = 1'b0;
+                    default: ;
+                endcase
+            end else if (test == "pwm_linux") begin
+                if (e >= 2 && e <= 4) pw_eval(2, e - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
+                m2_clr <= 1'b1;
+                case (e)
+                    1: begin m2_eh = 32'h4001;  m2_ep = 32'h10000; end
+                    2: begin m2_eh = 32'h8002;  m2_ep = 32'h20000; end
+                    3: begin m2_eh = 32'h20004; m2_ep = 32'h40000; end
+                    default: ;
+                endcase
+            end else if (test == "audio") begin
+                if (e >= 2) au_eval(e - 1);
+            end else if (test == "sd_cs") begin
+                if (e == 1 || e == 2) begin
+                    if (uo[5] !== (e == 2)) fail($sformatf("sd_cs cue %0d: uo[5] = %b", e, uo[5]));
+                    if (t_u5 - t_g5 != TCLK)
+                        fail($sformatf("sd_cs cue %0d: uo[5] followed OUT bit 5 after %0.1f ns, want one clock (%0.1f)", e, t_u5 - t_g5, TCLK));
+                end
+                if (e == 3 || e == 4) begin
+                    // OUT bits 7 and 4 move without reaching their pins: audio (low) and UART TX (idle high) stay
+                    if (uo[5] !== 1'b1 || uo[7] !== 1'b0 || uo[4] !== 1'b1)
+                        fail($sformatf("sd_cs cue %0d: uo = %b, want uo[5] 1, uo[7] 0, uo[4] 1", e, uo));
+                end
+            end else if (test == "pinmux") begin
+                if (e == 1) send_pat(64);
+                if (e == 8) begin
+                    // RTS# on uo[5]: nothing was read for 24 characters, so the 16-deep FIFO is nearly full,
+                    // RTS# is deasserted (pin high) and the model holds the rest of the paste
+                    if (uo[5] !== 1'b1) fail("pinmux cue 8: RTS# (uo[5]) still asserted with the RX FIFO nearly full");
+                    if (rp.tx_sent < 14 || rp.tx_sent > 17)
+                        fail($sformatf("pinmux cue 8: the model sent %0d characters before CTS went off, want 14..17", rp.tx_sent));
+                    if (rp.tx_pending() == 0) fail("pinmux cue 8: the model has nothing left to send (flow control did not hold it)");
+                end
+                if (e == 2 && uo[5] !== 1'b0) fail("pinmux cue 2: uo[5] high after OUT bit 5 went low");
+                if (e == 3 && (uo[4] !== 1'b0 || uo[7] !== 1'b0)) fail($sformatf("pinmux cue 3: uo[4], uo[7] = %b %b, want 0 0", uo[4], uo[7]));
+                if (e == 4 && (uo[4] !== 1'b1 || uo[7] !== 1'b1)) fail($sformatf("pinmux cue 4: uo[4], uo[7] = %b %b, want 1 1", uo[4], uo[7]));
+                if (e == 5 && (uo[4] !== 1'b1 || uo[7] !== 1'b0)) fail($sformatf("pinmux cue 5: uo[4], uo[7] = %b %b, want 1 0", uo[4], uo[7]));
+                if (e == 6) begin m7_eh = 32'h4001; m7_ep = 32'h10000; m7_clr <= 1'b1; end
+                if (e == 7) begin pw_eval(7, 6, m7_hi_ok, m7_per_ok, m7_n_pulse); m7_clr <= 1'b1; end
             end else if (test == "keypad") begin
                 if (e == 1) keys = kp_sets[kp_set];
             end else if (test == "irq_stall") begin
@@ -304,9 +429,11 @@ module tb_soc_periph;
                                    n_thr - ph[5], n_pop - ph[6]));
             end else if (test == "periph_access") begin
                 if (e == 32'h10) rp.send_byte(value[7:0]);
-                // bits 5:4 are the UART's pins at the chip (WO-58 moves them to the pinmux), so only the other six are compared
-                if (e == 32'h20 && (gpio_out & 8'hCF) !== (value[7:0] & 8'hCF))
+                // all eight OUT bits are real (WO-52); the chip pins that follow them by default are uo[6:5] and [3:0]
+                if (e == 32'h20 && gpio_out !== value[7:0])
                     fail($sformatf("periph_access: gpio_out = %h, want %h", gpio_out, value[7:0]));
+                if (e == 32'h20 && {uo[6:5], uo[3:0]} !== {value[6:5], value[3:0]})
+                    fail($sformatf("periph_access: uo = %h, want OUT bits 6:5 and 3:0 of %h", uo, value[7:0]));
                 if (e == 32'h21) tb_in = 8'hA4;
                 if (e == 32'h30) oled_fitted = 1'b1;
             end
@@ -467,7 +594,14 @@ module tb_soc_periph;
     initial begin
         if (!$value$plusargs("TEST=%s", test)) test = "";
         is_rb = (test == "sd_reboot_a") || (test == "sd_reboot_b");
-        sd_used = (test.len() >= 3 && test.substr(0, 2) == "sd_") || test == "spi_mixed";
+        sd_used = ((test.len() >= 3 && test.substr(0, 2) == "sd_") && test != "sd_cs") || test == "spi_mixed";
+        if ($value$plusargs("UART_FLOW=%d", k)) cts_pin = (k != 0);
+        if (test == "pinmux") cts_pin = 1'b1;
+        if (cts_pin) rp.set_flow(1'b1);
+        if (test == "gamepad" || $test$plusargs("GAMEPAD")) begin
+            gp_on = 1'b1; gp.present0 = 1'b0; gp.present1 = 1'b0; gp.pad0 = 12'h0; gp.pad1 = 12'h0;
+            #100 gp.enable = 1'b1;
+        end
         sd_fitted = sd_used && test != "sd_absent";
         expect_fail = $test$plusargs("EXPECT_FAIL");
         if (sd_used) begin rt_out = 12.5; rt_in = 12.5; end
@@ -520,8 +654,10 @@ module tb_soc_periph;
             if (test == "uart_hello") begin
                 $display("uart_hello: part 1 (no polling) %0d stores waited %0d clocks; part 2 (LSR polled) %0d waited",
                          ph[5] - ph[4], ph[2] - ph[1], ph[6] - ph[5]);
-                // the 4-deep TX FIFO plus the shifter take the first few stores without waiting
-                if (ph[5] - ph[4] < 6) fail("uart_hello: fewer than 6 of 15 unpolled THR stores waited");
+                // the 4-deep TX FIFO plus the shifter take the first few stores without waiting; the
+                // exact count (measured, stable: the stores are paced by the flash fetches) pins the depth,
+                // so a deeper or shallower FIFO shows
+                if (ph[5] - ph[4] != 8) fail($sformatf("uart_hello: %0d of 15 unpolled THR stores waited, want exactly 8", ph[5] - ph[4]));
                 if (ph[3] != ph[2]) fail("uart_hello: a THR store waited although LSR.THRE was polled");
             end
             if (test == "uart_echo") begin
@@ -533,9 +669,21 @@ module tb_soc_periph;
             end
             if (test == "uart_linux") begin
                 $display("uart_linux: %0d THR stores waited (%0d clocks)", uart_waits, uart_wait);
-                // the 4-deep TX FIFO and the shifter take the first few characters of each burst
-                if (uart_waits < 20) fail("uart_linux: tx_chars bursts did not wait on THR");
+                // the 4-deep TX FIFO and the shifter take the first few characters of each burst; the
+                // exact count (measured) pins the depth
+                if (uart_waits != 28) fail($sformatf("uart_linux: %0d THR stores waited, want exactly 28", uart_waits));
                 if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
+            end
+            if (test == "audio") au_eval(8);
+            if (test == "pwm_linux") begin
+                if (m2_n_hi != 0) fail($sformatf("pwm_linux phase 4: uo[2] high %0d clocks after PWM off and the default map", m2_n_hi));
+            end
+            if (test == "pinmux") begin
+                $display("pinmux: the model held %0d clocks for CTS, %0d characters sent against CTS, %0d sent", cts_wait, rp.tx_sent_cts_off, rp.tx_sent);
+                if (rp.tx_sent != 64) fail($sformatf("pinmux: the RP2350 sent %0d characters, want 64", rp.tx_sent));
+                if (cts_wait == 0) fail("pinmux: RTS# never held the RP2350 back");
+                if (rp.tx_sent_cts_off != 0) fail("pinmux: a character was sent against CTS");
+                if (m7_n_hi != 0) fail($sformatf("pinmux: uo[7] high %0d clocks after PWM0 left the pin", m7_n_hi));
             end
             if (test == "oled_spi") begin
                 $display("oled_spi: %0d SSD1331 bytes, %0d GPIO clocks waited, %0d RES# pulses, %0d timing violations flagged on the deliberate DIV 1 byte",
@@ -563,5 +711,34 @@ module tb_soc_periph;
         else if (errors == 0) $display("PASS tb_soc_periph %s (%0d cycles)", test, cyc);
         else             $display("FAIL tb_soc_periph %s: %0d errors", test, errors);
         $finish;
+    end
+endmodule
+
+// A pin monitor for the PWM outputs: per period, the high time and the distance between rising edges,
+// in clocks. A phase sets the expected values and pulses clr; hi_ok counts pulses of exactly exp_hi
+// clocks, per_ok counts rising-edge distances of exactly exp_per, n_hi every high clock since clr.
+module pin_meter (
+    input  wire clk, pin, clr,
+    input  wire [31:0] exp_hi, exp_per,
+    output reg  [31:0] hi_ok, per_ok, n_hi, n_pulse
+);
+    integer c = 0, rise = -1, prev_rise = -1;
+    reg     p = 1'b0;
+    initial begin hi_ok = 0; per_ok = 0; n_hi = 0; n_pulse = 0; end
+    always @(posedge clk) begin
+        c <= c + 1;
+        if (clr) begin hi_ok = 0; per_ok = 0; n_hi = 0; n_pulse = 0; rise = -1; prev_rise = -1; end
+        else begin
+            if (pin === 1'b1) n_hi = n_hi + 1;
+            if (pin === 1'b1 && p === 1'b0) begin
+                prev_rise = rise; rise = c;
+                if (prev_rise >= 0 && rise - prev_rise == exp_per) per_ok = per_ok + 1;
+            end
+            if (pin !== 1'b1 && p === 1'b1 && rise >= 0) begin
+                n_pulse = n_pulse + 1;
+                if (c - rise == exp_hi) hi_ok = hi_ok + 1;
+            end
+        end
+        p <= (pin === 1'b1);
     end
 endmodule
