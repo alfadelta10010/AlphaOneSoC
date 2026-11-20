@@ -59,6 +59,8 @@
 + 10020004 RESET_CAUSE
 # gb and Ctrl-C, resume
 + ^C
+# the two break-ins and a Ctrl-C that ends a million-byte dump
+>=3 ^C
 # two break-ins, the second after a faulting probe and an x: the program still runs in M-mode
 >=2 stopped: interrupt 7 at pc=
 - instruction access fault

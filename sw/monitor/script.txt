@@ -27,6 +27,8 @@ PROMPT	csr 7c0
 PROMPT	csr scan 300 310
 PROMPT	csr scan f00 f20
 PROMPT	p
+PROMPT	mb 80000000 1000000
+\n	^C
 PROMPT	gb {demo_spin}
 \n	^C
 PROMPT	r

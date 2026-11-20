@@ -4,7 +4,7 @@
  *   r [reg [val]]        the 31 registers and pc of the stopped program; one, or set one
  *   csr [num|name [val]] every CSR the core has; read or write one by name or number
  *   csr scan [lo hi]     try every CSR number, list the ones that exist
- *   m[b|h|w] addr [n]    dump n bytes, halfwords or words (default 16 words)
+ *   m[b|h|w] addr [n]    dump n bytes, halfwords or words (default 16 words; Ctrl-C ends it)
  *   w[b|h|w] addr val    write one
  *   p                    the peripheral registers: CLINT, UART, GPIO/SPI, syscon
  *   i                    ids, ISA, counters, reset cause
@@ -319,6 +319,10 @@ static void cmd_m(char sz, int ac, char **av)
     while (n) {
         uint8_t asc[16];
         int k;
+        if (uart_rx_ready() && uart_getc() == 3) {      /* Ctrl-C ends a long dump */
+            puts("^C");
+            return;
+        }
         printf("%08x:", a);
         for (k = 0; k < per && n; k++, n--, a += w) {
             uart_putc(' ');
