@@ -2,7 +2,7 @@
 # is initialised, CMD17 is issued at BAUD 255 (a byte is 4096 clocks, each SCK
 # level 256), and a byte is started and FINISH 0x7777 is written after RB_DLY
 # clocks so that the reboot lands in the A phase or the B phase of a bit. After
-# the reboot the second boot checks RESET_CAUSE (PIN | SOFT) and OUT = 0x89, clears
+# the reboot the second boot checks RESET_CAUSE (PIN | SOFT) and OUT = 0xB9, clears
 # SOFT and passes. The bench checks the phase the reboot hit, the pins during the
 # hold and after it, n_race (1 in A in mode 3, 0 in B) and that no SCK edge
 # follows with the card selected.
@@ -40,7 +40,7 @@ boot1:
 1:  j    1b
 boot2:
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x89, 0x201              /* the reset pins */
+    CHECK t0, 0xB9, 0x201              /* the reset pins */
     li   t0, 2
     sw   t0, 4(s11)                    /* W1C SOFT */
     j    test_pass

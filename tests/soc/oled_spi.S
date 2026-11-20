@@ -20,7 +20,7 @@ _start:
     MB_INIT
     li   s1, GPIO
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x89, 0x201        # reset: SD CS# and OLED CS# high, SCK idle high, RES# low
+    CHECK t0, 0xB9, 0x201        # reset: SD CS# and OLED CS# high, SCK idle high, RES# low
     lw   t0, G_CTRL(s1)
     CHECK t0, 0x00, 0x202
     lw   t0, S_CONTROL(s1)

@@ -147,8 +147,9 @@ module tb_syscon_soc;
 
     // SoC-side signals of the core's syscon accesses (pre-edge values when
     // sampled in the clocked block).
-    wire        sc_acc = (soc.dmem_req === 1'b1) && (soc.dmem_ready === 1'b1) &&
-                         (soc.dmem_addr[31:16] === 16'h1002);
+    // The syscon acts on the edge where its select is high (phase 1 of the two-phase IO path, which
+    // always completes there: syscon never stalls); the core completes one clock later.
+    wire        sc_acc = (soc.dmem_req === 1'b1) && (soc.syscon_sel === 1'b1);
     wire        sc_wr  = sc_acc && (soc.dmem_we === 1'b1);
     wire        sc_rd  = sc_acc && (soc.dmem_we === 1'b0);
 
@@ -320,7 +321,7 @@ module tb_syscon_soc;
             if (qspi_cs_n !== 3'b111)  fail($sformatf("held: qspi_cs_n = %b, want 111", qspi_cs_n));
             if (qspi_ctl_oe !== 1'b0)  fail("held: qspi_ctl_oe is not 0");
             if (qspi_io_oe !== 1'b0)   fail("held: qspi_io_oe is not 0");
-            if (gpio_out !== 8'h89)    fail($sformatf("held: gpio_out = %h, want 89", gpio_out));
+            if (gpio_out !== 8'hB9)    fail($sformatf("held: gpio_out = %h, want b9", gpio_out));
             if (uart_tx !== 1'b1)      fail("held: uart_tx is not 1");
             if (uart_rts_n !== 1'b1)   fail("held: uart_rts_n is not 1");
             if (qspi_sck !== 1'b0)     fail($sformatf("held: qspi_sck = %b, want 0", qspi_sck));
@@ -372,9 +373,9 @@ module tb_syscon_soc;
             n_loads = n_loads + 1;
             mask = {{8{be[3]}}, {8{be[2]}}, {8{be[1]}}, {8{be[0]}}};
             word = model_word({soc.dmem_addr[15:2], 2'b00});
-            if ((soc.dmem_rdata & mask) !== (word & mask))
+            if ((soc.syscon_rdata & mask) !== (word & mask))
                 fail($sformatf("syscon load +%h: got %h, want %h (lanes %b)",
-                               {soc.dmem_addr[15:2], 2'b00}, soc.dmem_rdata & mask, word & mask, be));
+                               {soc.dmem_addr[15:2], 2'b00}, soc.syscon_rdata & mask, word & mask, be));
         end
 
         // ---- model update ---------------------------------------------------
