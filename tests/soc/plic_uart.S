@@ -12,15 +12,21 @@
 #   cue 6  a character with source 1 at priority 0 (masked): no interrupt, claim reads 0; priority
 #          back to 1: the interrupt arrives
 #   cue 7  a character with the source disabled in the enable word: the same
+#   cue 8  the Linux EOI path (irq-sifive-plic.c), interrupts off, mip polled: one character below the
+#          trigger, so the CTI interrupt stays asserted until RBR is read. Claim 1; disable the source
+#          and complete: a completion of a disabled source is ignored, so the gateway stays closed and,
+#          although the UART still asserts, re-enabling raises no new interrupt (claim 0, MEIP clear);
+#          complete with the source enabled: the gateway reopens and the asserting UART is pending
+#          again (claim 1); drain it; then the driver's own EOI (enable, complete, disable) and
+#          re-enable: nothing pending
 # Every received byte is checked against the pattern in order, so a byte popped twice (a select held
-# in the bus's second phase) or lost shows as a mismatch. Final checks: 71 characters received, OE 0,
-# 0 mismatches, 1 break, 0 spurious claims, the masked / disabled phases took no interrupt.
-# Handler: t0-t4, s-registers 1, 3-7, 10, a2, a3; main code keeps off them while interrupts are on.
-#include "periph.h"
-#define PLIC      0x0C000000
+# in the bus's second phase) or lost shows as a mismatch. Final checks: 72 characters received, OE 0,
+# 0 mismatches, 1 break, 0 spurious claims, 0 claims of a source other than 1 (the SPI is source 2, the
+# gamepad 3, the PWM comparators 5-8: none is enabled here), the masked / disabled phases took no
+# interrupt.
+# Handler: t0-t4, s-registers 1, 3-7, 10, a1-a3; main code keeps off them while interrupts are on.
+#include "periph4.h"
 #define PL_PRIO   0x04
-#define PL_EN     0x2000
-#define PL_CTX    0x200000       /* threshold at +0, claim / complete at +4 */
 #define ECHO_BUF  0x80000100
 
     .section .text.init
@@ -32,6 +38,7 @@ _start:
     li   s2, PLIC
     li   a4, PLIC + PL_CTX
     li   s1, 0                   # characters received
+    li   a1, 0                   # claims of a source other than 1
     li   s3, 0                   # interrupts taken
     li   s4, 0                   # OE seen
     li   s5, 0                   # claims that returned 0
@@ -138,13 +145,57 @@ _start:
     li   a5, 71
     jal  ra, wait_rx
 
-    # ---- results (interrupts off) ----
+    # ---- the Linux EOI path, polled (interrupts off) ----
     csrci mstatus, 8
-    CHECK s1, 71, 0x40
+    EVENT 8
+    li   a6, 400000
+17: csrr t5, mip
+    srli t5, t5, 11
+    andi t5, t5, 1
+    bnez t5, 18f
+    addi a6, a6, -1
+    bnez a6, 17b
+    li   a7, 0
+    li   a6, 0x60
+    j    test_fail
+18: lw   t0, 4(a4)
+    CHECK t0, 1, 0x61            # claim: the UART
+    li   t2, PLIC + PL_EN
+    sw   zero, 0(t2)             # the source disabled
+    sw   t0, 4(a4)               # completed while disabled: ignored, the gateway stays closed
+    li   t0, 2
+    sw   t0, 0(t2)               # enabled again, the UART still asserts
+    DELAY 20
+    lw   t0, 4(a4)
+    CHECK t0, 0, 0x62            # nothing pending
+    NO_MEIP 0x63
+    li   t0, 1
+    sw   t0, 4(a4)               # completed with the source enabled: the gateway reopens
+    DELAY 20
+    lw   t0, 4(a4)
+    CHECK t0, 1, 0x64            # the asserting UART is pending again
+    lbu  t1, RBR(s0)             # the character (pattern byte 71 = 0x20 + 25), the interrupt drops
+    CHECK t1, 0x39, 0x65
+    addi s1, s1, 1
+    li   t0, 2
+    sw   t0, 0(t2)               # the driver's EOI: enable ...
+    li   t0, 1
+    sw   t0, 4(a4)               # ... complete ...
+    sw   zero, 0(t2)             # ... disable
+    li   t0, 2
+    sw   t0, 0(t2)               # and back on
+    DELAY 20
+    lw   t0, 4(a4)
+    CHECK t0, 0, 0x66
+    NO_MEIP 0x67
+
+    # ---- results ----
+    CHECK s1, 72, 0x40
     CHECK s4, 0, 0x41            # no overrun
     CHECK s6, 0, 0x42            # every byte in order, none twice
     CHECK s7, 1, 0x43
     CHECK s5, 0, 0x44            # no spurious claim
+    CHECK a1, 0, 0x48            # no claim of another source
     CHECK a2, ECHO_BUF + 8, 0x45
     CHECKR a3, a2, 0x46
     blt  s3, s10, 7f
@@ -174,7 +225,7 @@ handler:
     addi s5, s5, 1               # spurious
     mret
 1:  li   t1, 1
-    bne  t0, t1, 9f              # only source 1 is wired
+    bne  t0, t1, 9f              # not the UART: counted (a1), completed
 10: lbu  t1, IIR(s0)
     andi t2, t1, 1
     bnez t2, 8f                  # IIR == 1: nothing left
@@ -221,6 +272,7 @@ handler:
     j    13b
 8:  sw   t0, 4(a4)               # complete
     mret
-9:  sw   t0, 4(a4)
+9:  addi a1, a1, 1
+    sw   t0, 4(a4)
     mret
     EPILOGUE
