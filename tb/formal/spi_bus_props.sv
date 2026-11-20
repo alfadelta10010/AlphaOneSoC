@@ -57,8 +57,8 @@ module spi_bus_props (
 
     always @(*) if (armed) begin
         // ---- the guarantees for spi_core's assumptions
-        assert ((strobes & (strobes - 5'd1)) == 5'd0);
-        assert (!(wr_st && (|strobes)));                                            // G1b (AC1 with wr_st)                              // G1 (AC1)
+        assert ((strobes & (strobes - 5'd1)) == 5'd0);                              // G1 (AC1)
+        assert (!(wr_st && (|strobes)));                                            // G1b (AC1 with wr_st)
         assert (!(x_wr_tx && x_bba));                                               // G2 (AC2)
         assert (!((x_wr_ctl || x_wr_baud || x_wr_en || x_wr_out) && !txe));         // G3 (AC3)
         assert (!(spi_en != en_q && !txe_q && !rst_q));                             // G4 (AC4)
