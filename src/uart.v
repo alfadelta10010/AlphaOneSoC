@@ -27,13 +27,14 @@
 //
 // Registers and what is kept of them:
 //   IER  bits 3:0 (EDSSI, ELSI, ETBEI, ERBFI); EDSSI is stored, MSI never fires.
-//   FCR  [0] FEN, [1] clear RX FIFO (and the timeout), [2] clear TX FIFO (the
-//        shifter finishes its frame), [7:6] RX trigger 1/4/8/14 (stored).
-//        A write that changes FEN also clears both FIFOs (16550). A clear
+//   FCR  [0] FEN, [1] clear RX FIFO (and the timeout), [2] clear the TX holding
+//        register (the shifter finishes its frame), [7:6] RX trigger
+//        1/2/4/7 (stored; Linux's PORT_16550A writes code 2 = 4 bytes).
+//        A write that changes FEN also clears the RX FIFO and THR (16550). A clear
 //        beats a push in the same clock.
 //   IIR  {FEN, FEN, 2'b00, IID}: 6 RLS (ELSI & (OE | head entry has an
 //        error)), 4 RDA (ERBFI & rx_n >= trigger), C character timeout
-//        (ERBFI & cti), 2 THRE (ETBEI & TX FIFO empty), 1 none. THRE is a
+//        (ERBFI & cti), 2 THRE (ETBEI & THR empty), 1 none. THRE is a
 //        LEVEL: reading IIR does not clear it (departure from the 16550;
 //        Linux's __stop_tx clears ETBEI when it has nothing to send, and its
 //        THRE test needs the interrupt on both IIR reads). `irq` = IID != 1,
@@ -50,29 +51,35 @@
 //        OE is sticky (a frame completed with the RX FIFO full: the new
 //        character is dropped, the FIFO kept), cleared by an LSR read; BI/FE
 //        describe the head entry and leave with its pop, NOT with an LSR
-//        read (departure); THRE = TX FIFO empty; TEMT = THRE and the shifter
+//        read (departure); THRE = THR empty; TEMT = THR empty and the shifter
 //        idle; FIFOERR = FEN & any queued entry with an error.
 //   MSR  0xB0 (CTS, DSR, DCD asserted, no delta bits). In loopback
 //        {OUT2, OUT1, DTR, RTS, 4'b0}.
 //   SCR  8-bit scratch, resets 0.
 //
-// RX FIFO: RX_N (16) x 9 bits {err, data}; err = 1 with data 0 is a break
+// RX FIFO: RX_N (8) x 9 bits {err, data}; err = 1 with data 0 is a break
 // (BI), err = 1 with data != 0 a framing error (FE). It buffers whatever
 // FEN says (departure: a 16450 would overrun at the second character). RBR
-// reads 0x00 when it is empty. The trigger is 1/4/8/14 with FEN, 1 without.
+// reads 0x00 when it is empty. The trigger is 1/2/4/7 with FEN, 1 without
+// (departures from the 16550A's 1/4/8/14 to fit an 8-entry FIFO; code 2, which
+// Linux uses, leaves 4 character times, ~350 us at 115200 baud, before an overrun).
 // Character timeout: a counter of 16x ticks restarts on every push, pop,
 // clear and while the FIFO is empty; at 640 ticks (4 characters) it holds
 // and cti is set until the next restart.
 //
-// TX FIFO: 4 x 8. A THR write with the FIFO full does not complete: `ready`
-// stays low (only while the write is selected) until the shifter takes an
-// entry, and the write lands on the cycle it does. The bus paces the driver
-// at line rate. A word store that writes THR and the other lanes while full
-// writes them once, when THR is taken.
+// TX: one holding register THR in front of the shifter (16450 style, a departure
+// from the 16550A's 16-byte TX FIFO; IIR[7:6] still reads 11 so autoconfig sees
+// FIFOs). THRE = THR empty, TEMT = THR and shifter empty. A THR write with THR
+// full does not complete: `ready` stays low (only while the write is selected)
+// until the shifter takes the character, and the write lands on the cycle it
+// does, so the bus paces the driver at line rate (the CPU waits up to one frame,
+// ~87 us at 115200 baud). A word store that writes THR and the other lanes
+// while full writes them once, when THR is taken. The Linux device tree gives
+// tx-threshold so the driver writes one byte per THRE interrupt anyway.
 //
 // RTS# (a pinmux feature, the default pin map no longer carries it):
-// registered !(MCR.RTS & !LOOP & rx_n <= 14): asserted while two or more
-// entries are free, so a sender that checks CTS before each character
+// registered !(MCR.RTS & !LOOP & rx_n <= 6): asserted while two or more
+// entries are free (of 8), so a sender that checks CTS before each character
 // (the demo board's RP2350) never overruns.
 //
 // Loopback (MCR.LOOP): the receiver's input is the internal TX serial value
@@ -100,8 +107,7 @@
 
 module uart #(
     parameter [15:0] DIV_RESET = 16'd34,   // 114,890 baud at 62.5 MHz
-    parameter        RX_AW     = 4,        // RX FIFO 2^RX_AW entries (trigger table assumes 4)
-    parameter        TX_AW     = 2         // TX FIFO 2^TX_AW entries
+    parameter        RX_AW     = 3         // RX FIFO 2^RX_AW entries (trigger table and RTS# assume 3)
 )(
     input  wire        clk,
     input  wire        rst,
@@ -112,7 +118,7 @@ module uart #(
     input  wire        addr2,      // dmem_addr[2]: 0 = offsets 0-3, 1 = offsets 4-7
     input  wire [31:0] wdata,
     output wire [31:0] rdata,
-    output wire        ready,      // low only while a THR write waits on a full TX FIFO
+    output wire        ready,      // low only while a THR write waits on a full THR
     // Pins
     input  wire        rx,         // asynchronous
     output reg         tx,
@@ -120,7 +126,6 @@ module uart #(
     output wire        irq         // level, = (IIR[0] == 0)
 );
     localparam RX_N = 1 << RX_AW;
-    localparam TX_N = 1 << TX_AW;
 
     // ── Registers ───────────────────────────────────────────────────────────
     reg        dlab;
@@ -138,18 +143,17 @@ module uart #(
     reg [RX_N-1:0]  rx_err;              // per-entry error flag (break/framing)
     reg [RX_AW-1:0] rx_wp, rx_rp;
     reg [RX_AW:0]   rx_n, err_n;
-    reg [7:0]       tx_mem [0:TX_N-1];
-    reg [TX_AW-1:0] tx_wp, tx_rp;
-    reg [TX_AW:0]   tx_n;
+    reg [7:0]       thr_d;               // the TX holding register
+    reg             thr_v;               // ... holds a character the shifter has not taken
 
     wire rx_full = (rx_n == RX_N);
-    wire tx_full = (tx_n == TX_N);
+    wire tx_full = thr_v;
     wire rx_emp  = (rx_n == 0);
-    wire tx_emp  = (tx_n == 0);
+    wire tx_emp  = !thr_v;
 
     // ── Transmitter ─────────────────────────────────────────────────────────
     // tx_sh holds the frame still to send, LSB first: {stop, data, start}
-    // taken from the TX FIFO head, shifted right with 0 fill once per bit.
+    // taken from the holding register, shifted right with 0 fill once per bit.
     // The stop bit is the last 1 in it, so the frame is done when the register
     // is all zeros: idle is tx_sh == 0 and needs no bit counter.
     //
@@ -194,8 +198,8 @@ module uart #(
     wire       temt    = tx_emp && tx_idle;
     wire [7:0] lsr     = {fen && (err_n > err_ack), temt, tx_emp, bi, fe, 1'b0, oe, !rx_emp};
 
-    wire [4:0] trig = !fen ? 5'd1 : (rtrig == 2'd0) ? 5'd1 : (rtrig == 2'd1) ? 5'd4 :
-                                    (rtrig == 2'd2) ? 5'd8 : 5'd14;
+    wire [4:0] trig = !fen ? 5'd1 : (rtrig == 2'd0) ? 5'd1 : (rtrig == 2'd1) ? 5'd2 :
+                                    (rtrig == 2'd2) ? 5'd4 : 5'd7;
     wire       i_rls  = elsi  && (oe || h_err_u);
     wire       i_rda  = erbfi && (rx_n >= trig);
     reg  [9:0] cti_cnt;
@@ -262,31 +266,22 @@ module uart #(
         end
     end
 
-    // ── TX FIFO and shifter ─────────────────────────────────────────────────
-    wire tx_pop  = tx_idle && !tx_emp && !fcr_clr_tx;
-    wire tx_push = wr_thr && !fcr_clr_tx;
+    // ── TX holding register and shifter ─────────────────────────────────────
+    wire tx_pop  = tx_idle && thr_v && !fcr_clr_tx;
+    wire tx_push = wr_thr && !fcr_clr_tx;      // wr_thr implies !thr_v (ready)
 
     always @(posedge clk) begin
-        if (tx_push) tx_mem[tx_wp] <= wdata[7:0];
+        if (tx_push) thr_d <= wdata[7:0];
         if (rst) begin
-            tx_wp <= {TX_AW{1'b0}};
-            tx_rp <= {TX_AW{1'b0}};
-            tx_n  <= {(TX_AW+1){1'b0}};
+            thr_v <= 1'b0;
             tx_sh <= 10'd0;
             tx_ph <= 4'd0;
             tx    <= 1'b1;
         end else begin
-            if (fcr_clr_tx) begin
-                tx_wp <= {TX_AW{1'b0}};
-                tx_rp <= {TX_AW{1'b0}};
-                tx_n  <= {(TX_AW+1){1'b0}};
-            end else begin
-                if (tx_push) tx_wp <= tx_wp + 1'b1;
-                if (tx_pop)  tx_rp <= tx_rp + 1'b1;
-                tx_n <= tx_n + {{TX_AW{1'b0}}, tx_push} - {{TX_AW{1'b0}}, tx_pop};
-            end
+            if (fcr_clr_tx || tx_pop) thr_v <= 1'b0;
+            else if (tx_push)         thr_v <= 1'b1;
             if (tx_pop) begin
-                tx_sh <= {1'b1, tx_mem[tx_rp], 1'b0};
+                tx_sh <= {1'b1, thr_d, 1'b0};
                 tx_ph <= 4'd0;
             end else if (tick && !tx_idle) begin
                 tx_ph <= tx_ph + 4'd1;
@@ -421,7 +416,7 @@ module uart #(
                 cti_cnt <= cti_cnt + 10'd1;
 
             // RTS#: two or more entries free, RTS set, not in loopback.
-            rts_n <= !(mcr[1] && !mcr[4] && (rx_n <= 5'd14));
+            rts_n <= !(mcr[1] && !mcr[4] && (rx_n <= 4'd6));
         end
     end
 
