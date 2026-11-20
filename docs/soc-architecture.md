@@ -13,15 +13,19 @@ apart, this document says which one won and why.
 | Flash | `0x2000_0000` | 16 MB | read, execute | W25Q128JV on QSPI CS0 |
 | PSRAM | `0x8000_0000` | 16 MB | read, write, execute, LR/SC, AMO | 2x 8 MB PSRAM on QSPI CS1 (A) / CS2 (B), `addr[23]` picks the chip |
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
-| PLIC | `0x0C00_0000` | — | reserved, not implemented (accesses fault) | — |
-| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550-compatible subset, byte registers, polled (`docs/pins-and-peripherals.md`) |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]` (`docs/pins-and-peripherals.md`) |
-| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps (section "syscon") |
+| PLIC | `0x0C00_0000` | 4 MB | read, write, AMO; its own PMA window IO2 (committed, c60b579); the PLIC itself is WO-47, in progress, and until it lands the window is closed | `src/plic.v`: `sifive,plic-1.0.0` subset, 9 sources, 1 context (`docs/pins-and-peripherals.md` 7) |
+| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550A, byte registers, FIFOs, interrupt 1 (WO-49, in progress; the 3x4 submission has the polled subset) (`docs/pins-and-peripherals.md`) |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` an optional input-change interrupt (WO-52, in progress) (`docs/pins-and-peripherals.md`) |
+| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps (section "syscon"); `+0x20` is the PINMUX word (`src/pinmux.v`), carved out in `soc_bus`, and `+0x24` is reserved for CACHE_CTL (WO-62, droppable) |
+| PWM | `0x1003_0000` | 64 KB slot | read, write, AMO | `src/pwm.v`: sifive,pwm0 layout, 4 comparators; the second IO slot, `addr[17:16] = 3` (WO-58, in progress) |
+| Audio | `0x1003_0100` | in the PWM slot, `addr[8]` | read, write, AMO | `src/audio.v`: 3 square voices + noise, 8-bit PWM DAC (WO-58, in progress) |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
 7) from the core's PMA check, before anything reaches the bus. The windows are
-`fyracore` parameters (`PMA_ROM_*`, `PMA_RAM_*`, `PMA_IO0_*`, `PMA_IO1_*`);
-the defaults are this map.
+`fyracore` parameters (`PMA_ROM_*`, `PMA_RAM_*`, `PMA_IO0_*`, `PMA_IO1_*`,
+`PMA_IO2_*`); the defaults are this map. IO1 runs to `0x1003_FFFF` (it was
+`0x1002_FFFF`) and IO2 is the PLIC's 4 MB window. The 4x4 branch's decision
+and the harden numbers are in `docs/ROADMAP.md` section 0.
 
 * **Flash is read-only.** A store, AMO or SC to it is a store access fault
   (cause 7) and an LR is a load access fault (cause 5): flash has no write
@@ -84,9 +88,28 @@ held request (see `src/fyracore.v`), which is all a single-master bus needs.
   `addr[17:16]`), otherwise the CLINT;
 * a read-data and ready mux.
 
-It has no registers. Peripherals answer with combinational read data, and
-in the cycle they are selected, so a peripheral access is one cycle -- except
-for back-pressure: the UART holds a THR write, and the GPIO block a write to the SPI controller, until it is ready. An IO target may hold `ready` low only
+**Three carves** sit on top of that decode (WO-58, in progress): the PLIC is
+selected by `addr[27]` (its own PMA window); in the GPIO slot, offsets
+`0x10`-`0x17` of every 64-byte alias go to the gamepad and `gpio.v` never sees
+them; in the syscon slot, `0x1002_0020` goes to the pinmux and `syscon.v`
+still reads 0 there, so its proofs stand. PWM and audio are IO slot 3
+(`addr[8]` picks between them). The new targets never hold `ready` low.
+
+**Registered IO read path (WO-51, in progress; decision D14).** The 3x4
+submission has no registers in `soc_bus`: peripherals answer with
+combinational read data in the cycle they are selected. The 4x4 bus has one
+state flop `ph` and a 32-bit `io_q`. Selects are high only in phase 1; the
+target acts, and `io_q` captures the read data, on the edge where
+`sel && ready`; the core completes one clock later (`d_ready = ph`, data from
+`io_q`) while every select is low, so a pop, a claim, a W1C or a write acts
+exactly once. The memory path is unchanged. Why: with combinational read
+data the area-agent's real-block routing screen failed (global-route usage
+78.26 %, overflow 4,290, against the 3x4 ceiling 71.83 % / 117); with it
+registered it passed (66.04 % / 16) for 32 flops and 632 µm². The bundle
+fits under the 3x4 routing ceiling only this way. Cost: one clock per IO
+access.
+
+Before that change an access was one cycle, except for back-pressure: the UART holds a THR write, and the GPIO block a write to the SPI controller, until it is ready. An IO target may hold `ready` low only
 on a cycle its own select is high, so the bus simply ANDs the IO readies. A
 peripheral with a side effect (a UART RX pop, a THR load) acts only on the
 cycle its select and its `ready` are both high; the request strobe
@@ -265,9 +288,16 @@ reset (`docs/pins-and-peripherals.md`).
   `mtime >= mtimecmp` compare out of the path into the core's interrupt and
   next-PC logic, at the cost of one flop and one cycle of latency.
 * `mtimecmp` resets to all-ones, so no timer interrupt is pending out of reset.
-* No PLIC. With a polled UART, Linux needs no external interrupt; the `0x0C00_0000`
-  window is reserved for one if that changes. `docs/pins-and-peripherals.md`
-  explains why interrupts would not make the console faster on this core.
+* **PLIC at `0x0C00_0000`** (4x4 branch; WO-47 in progress, integration
+  WO-51). One context (hart 0, M-mode), 9 level-triggered sources: 1 UART,
+  2 SPI, 3 gamepad, 4 GPIO input change, 5-8 PWM comparators, 9 watchdog
+  (optional, WO-61). Its output `meip` is registered, like MTIP, and drives the
+  core's `external_irq`, so `mip.MEIP` is no longer constant 0. The 3x4
+  submission has no PLIC and every device is polled; the earlier reasoning
+  (a polled console at 87 µs a character gains nothing from an interrupt per
+  character) still holds for a UART without FIFOs, and the 16550A's FIFOs and
+  trigger levels are what make the UART interrupt worth taking
+  (`docs/pins-and-peripherals.md` 2 and 7).
 * Registered MTIP is legal: Priv §3.2.1 says MTIP reflects the comparison
   "eventually, but not necessarily immediately". Linux's CLINT driver sets
   MTIE before it writes `mtimecmp` (low word, then high), with MIE off, and
@@ -345,7 +375,7 @@ two-flop hand-over on the reset.
 | Edge | `rst_soc` before it | At the edge |
 |---|---|---|
 | E0 | 0 | The store completes; `rq` <- 1, RESET_CAUSE.SOFT <- 1 |
-| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0xB9`, pc <- the reset vector; `rq2` <- 1 |
+| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0x39` (the 3x4 design: `0xB9`), pc <- the reset vector; `rq2` <- 1 |
 | E2 | 1 | Still in reset; `rq` <- 0, `rq2` <- 0 |
 | E3 | 0 | First running edge: `ctl_oe` <- 1 (SCK and the chip selects driven idle), the start-up sequence starts 8 clocks later, the core fetches `0x2000_0000` |
 
@@ -362,8 +392,8 @@ A store of `0x5555` (or the fail value `0x3333`) sets `off`, which holds
 
 * The QSPI pins are released. The Pmod's 10 kΩ pull-ups hold every chip
   select high, so the flash and both PSRAMs deselect and drop to standby.
-* `uo_out` = `0xB9`: UART idle, RTS# not ready, the OLED in reset with its
-  panel supply off.
+* `uo_out` = `0x39` (the 3x4 design: `0xB9`): UART idle, SD CS# high, the OLED in reset with its
+  panel supply off, audio low (WO-58, in progress).
 * The clock keeps running. Nothing gates a clock yet, so only the clock tree
   and the flops' clock pins toggle; `mtime` stops, because the CLINT is in
   reset.
