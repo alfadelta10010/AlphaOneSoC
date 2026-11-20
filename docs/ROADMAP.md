@@ -589,7 +589,7 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 
 ## 4. Linux bring-up
 
-The top rung of the software ladder (section 9), after FreeRTOS. Plan in
+**Status (2026-11-21): NOMMU M-mode Linux boots to a shell on the SoC bench** and powers off through syscon (9.5, `sw/linux`). The plan below is what was done, except the SD root filesystem and the peripheral drivers. The top rung of the software ladder (section 9), after FreeRTOS. Plan in
 `localFiles/PROGRESS-2026-10-12.md` section 7. In short:
 
 1. **Spike golden boot.** KianV's nommu buildroot recipe
@@ -792,9 +792,9 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 | 3 | **Monitor** (`sw/monitor`, a C monitor; mecrisp-quintus Forth is left for later) | A prompt over UART that reports any register or memory location: the 31 registers and pc of a stopped program, every CSR, any address, the peripheral registers. The first thing to run on returned silicon | **Done** (9.4). No RTL change: a timer tick looks for Ctrl-C, since the UART has no interrupt line |
 | 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | **Done** (`sw/fatfs`, 9.4). FatFs R0.16 on a 4 MB FAT image through the SoC bench's SD card |
 | 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | **Done** (`sw/freertos`, 9.4). Upstream port, 100 Hz tick; U-mode tasks under PMP are not part of it |
-| 6 | **Zephyr** | Atomics, U-mode with PMP (userspace), its ns16550 and CLINT drivers, and its kernel test suite (twister) | Medium. KianV's Zephyr port (`localFiles/kianRiscV`) is a starting point. Check that 4 PMP entries are enough for userspace. The test suite needs Verilator |
-| 7 | **NuttX** | POSIX, the `nsh` shell, FAT on SD over SPI, ELF programs loaded without an MMU: the closest rung to Linux | Medium. Its 16550 serial driver expects an interrupt line; check for a polled console |
-| 8 | **Linux, NOMMU, M-mode** | Section 4 | Large |
+| 6 | **Zephyr** | Atomics, U-mode with PMP (userspace), its ns16550 and CLINT drivers, and its kernel test suite (twister) | **Started** (`sw/zephyr`, 9.5): boots, hello and the synchronization sample pass, userspace limited by 4 PMP slots; kernel tests unfinished |
+| 7 | **NuttX** | POSIX, the `nsh` shell, FAT on SD over SPI, ELF programs loaded without an MMU: the closest rung to Linux | **Started** (`sw/nuttx`, 9.5): `nsh` boots, a scripted session and poweroff pass; ELF and SD not done |
+| 8 | **Linux, NOMMU, M-mode** | Section 4 | **Boots to a shell on the bench** (`sw/linux`, 9.5), commands and poweroff through syscon; no SD, no GPIO or SPI drivers yet |
 
 Optional, anywhere after rung 1:
 
@@ -919,6 +919,18 @@ of `sw/Makefile`. Output goes to `build/sw`.
   Embench-IoT are fetched at pinned commits by `sw/fetch.sh`; none of their
   source is in this repository. `BENCH_OPT` (default `-O2`) and `CM_ITER` set
   the flags and CoreMark's iterations.
+
+### 9.5 Zephyr, NuttX and Linux on the bench (2026-11-21)
+
+Recipes in `sw/zephyr`, `sw/nuttx` and `sw/linux` (patches, configs, scripts: none of the OSes' own source), overview in `sw/README-os.md`. All built on the sandbox and run on the software bench through the flash loader; every UART is polled (no interrupt line, no PLIC). No RTL or loader defect turned up in any of them. None has been run on Icarus.
+
+| OS | Result | What is missing |
+|---|---|---|
+| Zephyr 4.5.0, board `alphaone` | `hello_world` 3.38 M clocks; `samples/synchronization` 41.3 M clocks (threads and semaphores on the CLINT tick at 100 Hz); `hello_world_user` (userspace, 4 PMP slots) 8.84 M clocks | `tests/kernel/mem_protect/userspace` fails at once: "no free partition slots" (Zephyr's default memory domain needs more than 4 PMP entries); `samples/userspace/shared_mem` printed nothing in 10 minutes (cause unknown); the kernel tests (`common`, `mutex`, ...) were not finished (7 and 5 PASS lines, no FAIL, then stopped: the loaded sandbox gave them about 0.1 M clocks/s) |
+| NuttX 12.11.0, rv-virt 32-bit flat/NOMMU | `nsh` prompt; `help`, `ls /`, `echo`, `ps`, `free`, `uname -a`, `sleep 1`, `hello`, `poweroff`: 11 of 11 output checks, `SW-RESULT: PASS`, 124 M clocks, 2.7 M instructions (also from a clean `run-nuttx.sh`) | pthread test, ELF programs from ROMFS, FAT on SD (needs a `tiny_spi` mmcsd driver); the bench's UART input needs one character per echo (`mkscript_slow.py`): NuttX's receiver is one byte deep |
+| Linux 6.8-rc1, NOMMU, M-mode, buildroot with C on, HZ 30 | Spike: shell, `uname`, `/proc/cpuinfo` (rv32imac), poweroff. Bench: kernel at `Run /init` after 11.63 s (727 M clocks), `/proc/cpuinfo` shows `rv32imac_zicntr_zicsr_zifencei_zihpm`, typed `uname -a` and `echo shell-ok` answer, `poweroff` ends in `reboot: Power down` and `SW-RESULT: PASS`: **2,052,552,077 clocks, 35,175,734 instructions, 71 minutes of Verilator**, and the bench's `+UART_DIV=34` check passed (the 8250 driver programmed divisor 34) | SD card, GPIO and SPI drivers, a larger rootfs; the kernel is not relocatable (it loads at 0x8000_0000, stub at +0x201000, DTB at +0x202000) |
+
+On the Linux run the loader's copy of the 2 MB image takes about 12 minutes of the 71. The boot's 35 M instructions in 2.05 G clocks is 58 clocks an instruction, against 38 to 43 on the benchmarks, because the loader's flash reads and the kernel's page-sized copies are not streamed. The Pmod model's "samples checked" counter is a 32-bit integer and printed a negative number on this run; it is only a counter.
 
 **What is tested, and how** (`make -C sw check`, about 25 minutes of Verilator; `check-bench` adds the
 benchmarks). Besides the runs above: the loader against 13 damaged images (`tools/loader_neg.sh`: bad magic,
