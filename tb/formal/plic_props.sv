@@ -1,5 +1,5 @@
 // WO-47: PLIC (src/plic.v), NSRC = 9, free src and bus inputs. State exposed by run.sh PRE (plic.conf).
-//   P1 claim read value is 0 (nothing eligible) or the lowest eligible id
+//   P1 claim read value is 0 (nothing claimable) or the lowest claimable id (pend&en&prio, threshold ignored)
 //   P2 insvc[i] -> !pend[i] (invariant)
 //   P3 meip == |elig of the previous cycle
 //   P4 complete clears insvc[i] only when en[i]; P5 non-full-word writes change nothing
@@ -31,6 +31,8 @@ module plic_props (
     wire step = armed_q && !rst_q;
     wire [N:1] elig   = pend & en & prio & {N{!thr}};
     wire [N:1] elig_q = pend_q & en_q & prio_q & {N{!thr_q}};
+    wire [N:1] cand   = pend & en & prio;
+    wire [N:1] cand_q = pend_q & en_q & prio_q;
     wire wr_q    = sel_q && we_q && be_q == 4'b1111;
     wire claimr  = sel && !we && addr == 20'h80001;
     wire claimr_q = sel_q && !we_q && addr_q == 20'h80001;
@@ -43,7 +45,7 @@ module plic_props (
     reg [4:0] lo, lo_q; integer k;
     always @(*) begin
         lo = 0; lo_q = 0;
-        for (k = N; k >= 1; k = k - 1) begin if (elig[k]) lo = k; if (elig_q[k]) lo_q = k; end
+        for (k = N; k >= 1; k = k - 1) begin if (cand[k]) lo = k; if (cand_q[k]) lo_q = k; end
     end
 
     integer j;
@@ -84,6 +86,7 @@ module plic_props (
         cover (step && compl_q && (insvc_q & ~insvc) != 0);                                           // a completion
         cover (step && (done_q & src_q & pend) != 0);                                                 // re-pend after completion, src held
         cover (step && (pend_q & en_q & prio_q) != 0 && !thr_q && meip);                              // meip high, thr 0
+        cover (step && thr_q && claimr_q && lo_q != 0);                                               // claim succeeds with threshold up
         cover (step && (pend_q & en_q & prio_q) != 0 && thr_q && !meip);                              // meip low, thr 1, same pend
     end
 `endif

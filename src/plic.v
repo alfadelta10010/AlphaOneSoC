@@ -6,6 +6,7 @@
 // Only full-word writes (be == 4'b1111) take effect. The claim is a read with sel set; the target never stalls
 // (no ready port), so soc_bus's sel is the single cycle the claim happens in. meip is registered (one clock
 // of latency, like MTIP) and drops two clocks after a claim. Equal priorities: lowest id wins.
+// The threshold gates only meip; a claim ignores it (spec, Interrupt Claim Process).
 module plic #(parameter NSRC = 9) (
     input  wire            clk,
     input  wire            rst,
@@ -21,14 +22,15 @@ module plic #(parameter NSRC = 9) (
     reg [NSRC:1] pend, en, prio, insvc;
     reg          thr;
 
-    wire [NSRC:1] elig = pend & en & prio & {NSRC{!thr}};
+    wire [NSRC:1] cand = pend & en & prio;               // claimable: the claim ignores the threshold (spec)
+    wire [NSRC:1] elig = cand & {NSRC{!thr}};            // notification (meip) only
 
-    // lowest eligible id, else 0
+    // lowest claimable id, else 0
     reg [4:0] cid;
     integer i;
     always @(*) begin
         cid = 5'd0;
-        for (i = NSRC; i >= 1; i = i - 1) if (elig[i]) cid = i;
+        for (i = NSRC; i >= 1; i = i - 1) if (cand[i]) cid = i;
     end
 
     wire rd    = sel & ~we;
