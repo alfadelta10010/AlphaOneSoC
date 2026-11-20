@@ -714,7 +714,7 @@ a PLIC (all devices are polled).
    three. The harden is done (2026-11-01, 1.6 item 2).
 4. The software ladder's bare-metal rungs and FreeRTOS (9.2, rungs 1-5), on
    the current benches; they can start before the lock and become its
-   checkpoints. The boot-time DDR sweep (9.1 item 8) belongs to the loader.
+   checkpoints. The boot-time DDR sweep (9.1 item 8) is in the loader (9.4).
 5. Solver stack and riscv-formal (2.2 items 1-2), in parallel with step 6.
 6. Verilator port (3), then the upper rungs: Zephyr or NuttX, and Linux
    bring-up (4).
@@ -852,12 +852,25 @@ of `sw/Makefile`. Output goes to `build/sw`.
 * **Loader** (`sw/loader`): runs in place from flash and keeps the boot
   contract (9.1): mtvec first, UART divisor 34, RESET_CAUSE and BOOT_MODE read
   and RESET_CAUSE cleared. It copies the image at flash offset 0x10000
-  (20-byte header: magic, load address, size, entry, word sum) to PSRAM,
+  (24-byte header: magic, load address, size, entry, word sum, flags) to PSRAM,
   checks the sum, runs `fence.i` and jumps with `a0 = 0` (hartid) and
-  `a1 = 0` (no device tree yet). 1,222 bytes. The SPI controller is left
+  `a1 = 0` (no device tree yet). about 3.9 KB with the DDR sweep. The SPI controller is left
   disabled, so rules 4 and 5 are for whoever uses it (rung 4).
   `sw/tools/mkflash.py` builds the flash image, as the byte hex the Pmod
   model reads and as a raw `.bin` for programming.
+* **Boot-time DDR sweep** (`sw/loader/ddr.S`, boot contract rule 8): an image built with
+  `mkflash.py --ddr` (`make ... DDR=1`) promises to service the watchdog (`wdt_kick`, at least every 30 s:
+  the monitor does it while it waits for a key, FreeRTOS in its tick hook), and the loader then runs the
+  sweep of `tests/soc/ddr_sweep.S` from PSRAM: DDR_CAP 1 to 6 against an SDR copy of a flash block, the
+  middle of the longest passing run, an execute test from flash under the watchdog (TOP 1) and a trap
+  handler, then the watchdog at TOP 15 and the payload runs with the flash in DDR. A watchdog reset with
+  BOOT_MODE 0xD8 + k, or BOOT_MODE 0xDF, keeps SDR with no sweep; the strap's STREAM bit is kept. It prints
+  the chosen point and the mask of passing points, or why the flash stays SDR. Tests (`make run-ddr-all`):
+  DDR on, the watchdog fallback, no passing point, a forced trap and a forced mismatch in the execute test,
+  a soft reboot and a watchdog reset without a DDR note (the sweep runs again), BOOT_MODE 0xDF, no flag,
+  `+NO_STREAM`, `+RD_LATE`; `tools/ddr_matrix.sh` boots 54 combinations of device delay, rd_late and SCK/IO
+  skew and recomputes the rule from the printed mask (51 pass, 18 of them with DDR on, none fail; 3 are
+  timings where SDR itself cannot boot). On this bench the default timing has one passing point (cap 1).
 * **Bench** (`tb/tb_sw.v`): the SoC at 62.5 MHz, the QSPI Pmod model, an SD
   card on the SPI pins (`+SD_IMAGE=<hex>` gives it a disk, `+SD_DUMP=<file>`
   writes the disk out at the end; a card error fails the run), a UART
@@ -904,6 +917,19 @@ of `sw/Makefile`. Output goes to `build/sw`.
   source is in this repository. `BENCH_OPT` (default `-O2`) and `CM_ITER` set
   the flags and CoreMark's iterations.
 
+**What is tested, and how** (`make -C sw check`, about 25 minutes of Verilator; `check-bench` adds the
+benchmarks). Besides the runs above: the loader against 13 damaged images (`tools/loader_neg.sh`: bad magic,
+blank flash, a size or load address that does not fit, an unaligned one, an entry outside the image, a wrong
+sum, unknown flag bits); the monitor's edge cases (bad input, misaligned and faulting accesses, backspace, an
+overlong line, the illegal-instruction, load-fault and return stops) and every one of the 4096 CSR numbers
+(136 answer, exactly the set `csr.v` implements); FatFs on FAT12, FAT16 and an MBR with SDHC, standard-capacity
+and v1 cards, its error codes, empty, 120-character-named, truncated and cluster-boundary files, and a card
+filled until it is full; the SD driver against a card told to fail 13 ways (`make run-sdtest-all`: data error
+token, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
+refused CMD16 ...); FreeRTOS's five fault paths (`make run-fr-all`: stack overflow, allocation failure,
+assertion, illegal instruction, unhandled interrupt). The same runs go through Icarus
+(`make bench-icarus`, `SIMRUN=`, `SIM=`).
+
 **Results, GCC 14.2 `-O2`, code and data in PSRAM.** Measured first on main
 `a2f7285` (fetch reuse, SPI, syscon) at 60 MHz, and again on `32cac47` (PR #16,
 streaming flash reads and DDR) at 62.5 MHz on 2026-11-10: **every figure came
@@ -923,13 +949,12 @@ million clocks: the run below is 70 iterations.
 | FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,186 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **5,988 clocks on average, 9,014 at most** | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
-* The boot-time DDR sweep of 9.1 item 8 belongs to the loader; the loader does not run it, so
-  flash reads stay SDR (streaming on, the reset state) and rule 8 is not covered by rung 1.
-* The SD driver and FatFs have run only against a model that always answers CMD8 and always
-  reports SDHC, on a FAT12 image without a partition table: the standard-capacity path
-  (byte addressing, CMD16), a v1 card, FAT16/FAT32 and an MBR-partitioned card are not
-  exercised. No CMD13 is sent after a write.
+* FAT32 (a 33 MB image is too big for the bench's disk array), a card larger than 2 GB, multi-block
+  commands (CMD18, CMD25: the driver reads and writes one block at a time), CRC16 on data (checked by
+  neither side) and a write that the card never finishes (the 1,000,000-byte busy limit is not run).
 * FreeRTOS runs in M-mode only; the upstream port has no U-mode tasks under PMP.
+* Silicon: the DDR sweep's windows come from the Pmod model; the sweep exists to measure the real ones
+  (docs/qspi-ddr.md 7).
 
 All three say the same thing: the core retires an instruction every 38 to 43
 clocks, because every instruction word comes over QSPI (about 3% of a
