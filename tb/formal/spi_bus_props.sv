@@ -5,7 +5,7 @@
 // a register write use a strobe computed here from the ports (`spw`), not
 // gpio's own, so a wrong decode in gpio is a failure.
 // White-box names, exposed from the committed RTL by run.sh (PRE): gpio's
-// spi_en, in_m, in_s, out_r, and spi_inst's wr_tx wr_ctl wr_baud wr_en wr_out
+// spi_en, in_m, in_s, out_r, and spi_inst's wr_tx wr_ctl wr_baud wr_en wr_out wr_st
 // miso st bba bb sr baud cpol cpha (renamed x_*). The port map is WO-28 1.2:
 // slot (addr[5:2]) 0 OUT, 1 IN, 3 SPICTL, 8 RXDATA, 9 TXDATA, 10 STATUS,
 // 11 CONTROL, 12 BAUD, others reserved.
@@ -21,14 +21,14 @@ module spi_bus_props (
     wire        ready;
     wire [7:0]  out, in_sync;
     wire        spi_irq;
-    wire        x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out, x_miso, x_bba, x_cpol, x_cpha, spi_en;
+    wire        x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out, x_wr_st, x_miso, x_bba, x_cpol, x_cpha, spi_en;
     wire [1:0]  x_st;
     wire [7:0]  x_bb, x_sr, x_baud, in_m, in_s, out_r;
 
     gpio dut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr(addr), .wdata(wdata),
               .rdata(rdata), .ready(ready), .in(in), .out(out), .in_sync(in_sync), .spi_irq(spi_irq),
               .x_wr_tx(x_wr_tx), .x_wr_ctl(x_wr_ctl), .x_wr_baud(x_wr_baud), .x_wr_en(x_wr_en),
-              .x_wr_out(x_wr_out), .x_miso(x_miso), .x_st(x_st), .x_bba(x_bba), .x_bb(x_bb),
+              .x_wr_out(x_wr_out), .x_wr_st(x_wr_st), .x_miso(x_miso), .x_st(x_st), .x_bba(x_bba), .x_bb(x_bb),
               .x_sr(x_sr), .x_baud(x_baud), .x_cpol(x_cpol), .x_cpha(x_cpha),
               .spi_en(spi_en), .in_m(in_m), .in_s(in_s), .out_r(out_r));
 
@@ -51,14 +51,14 @@ module spi_bus_props (
         bb_q <= x_bb; baud_q <= x_baud; cpol_q <= x_cpol; cpha_q <= x_cpha;
     end
 
-    wire [4:0] strobes = {x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out};
-    wire       wr_st = spw && addr == 4'd10;   // STATUS write (spi.v's wr_st; the enables are internal)
+    wire [5:0] strobes = {x_wr_st, x_wr_tx, x_wr_ctl, x_wr_baud, x_wr_en, x_wr_out};
+    wire       wr_st = spw && addr == 4'd10;   // the spec's STATUS write; x_wr_st is spi's real port (G1b)
     wire       req = sel && we && be[0];
 
     always @(*) if (armed) begin
         // ---- the guarantees for spi_core's assumptions
-        assert ((strobes & (strobes - 5'd1)) == 5'd0);                              // G1 (AC1)
-        assert (!(wr_st && (|strobes)));                                            // G1b (AC1 with wr_st)
+        assert ((strobes & (strobes - 6'd1)) == 6'd0);                              // G1 (AC1, six strobes with wr_st)
+        assert (x_wr_st == wr_st);                                                  // G1b: the real wr_st wire is the spec's decode
         assert (!(x_wr_tx && x_bba));                                               // G2 (AC2)
         assert (!((x_wr_ctl || x_wr_baud || x_wr_en || x_wr_out) && !txe));         // G3 (AC3)
         assert (!(spi_en != en_q && !txe_q && !rst_q));                             // G4 (AC4)
