@@ -3,8 +3,8 @@
 // asynchronous TinyTapeout Gamepad Pmod model (100 kHz +-5 % clock, data set half a period before each
 // rising clock, latch after the last bit, random report gaps, random phase against clk) through a
 // two-flop synchroniser, as gpio has. The cycle model predicts GAMEPAD, GPSTAT and irq on every clock.
-// An independent frame oracle (what the Pmod sent: 24 bits load both pads, 12 bits load pad 0 and mark
-// pad 1 absent, any other count is ignored) checks the model's loaded value after every frame.
+// An independent frame oracle (what the Pmod sent: 12 or 24 bits load pad 0 from the last 12 bits, pad 1
+// is not kept and reads 0, any other count is ignored) checks the model's loaded value after every frame.
 // Seeded (+SEED=, +FRAMES=), floors enforced, bus reads/writes random on every clock.
 module tb_gamepad;
     reg         clk = 0, rst = 1, sel = 0, we = 0, addr2 = 0;
@@ -28,28 +28,28 @@ module tb_gamepad;
     // ------------------------------------------------------------ cycle model (from the spec text)
     reg        mv = 0, m_pp, m_lp, m_chg, m_ie;
     integer    m_nb;
-    reg [23:0] m_sh, m_d;
+    reg [11:0] m_sh, m_d;
     reg        pr, lr, ldn, w1c;
-    reg [23:0] dn;
+    reg [11:0] dn;
     integer    n_load = 0, n_chg = 0, n_ign = 0, n_race = 0, n_same = 0, n_abs = 0, n_12 = 0, n_ident = 0;
     always @(posedge clk) begin
         if (rst) begin
-            m_pp = 0; m_lp = 0; m_chg = 0; m_ie = 0; m_nb = 0; m_sh = 24'hFFFFFF; m_d = 24'hFFFFFF; mv = 1;
+            m_pp = 0; m_lp = 0; m_chg = 0; m_ie = 0; m_nb = 0; m_sh = 12'hFFF; m_d = 12'hFFF; mv = 1;
         end else if (mv) begin
             pr = p2 & ~m_pp; lr = l2 & ~m_lp;
             ldn = lr && (m_nb == 24 || m_nb == 12);
-            dn = (lr && m_nb == 24) ? m_sh : {12'hFFF, m_sh[11:0]};
+            dn = m_sh;
             w1c = sel & we & be[0] & addr2 & wdata[0];
             if (lr && !ldn) n_ign = n_ign + 1;
             if (ldn) begin
                 n_load = n_load + 1;
                 if (m_nb == 12) n_12 = n_12 + 1;
                 if (dn != m_d) n_chg = n_chg + 1; else n_ident = n_ident + 1;
-                if (dn[11:0] == 12'hFFF || dn[23:12] == 12'hFFF) n_abs = n_abs + 1;
+                if (dn == 12'hFFF) n_abs = n_abs + 1;
                 if (w1c) n_race = n_race + 1;
                 if (pr) n_same = n_same + 1;
             end
-            if (pr) m_sh = {m_sh[22:0], d2};
+            if (pr) m_sh = {m_sh[10:0], d2};
             if (lr) m_nb = 0; else if (pr && m_nb != 31) m_nb = m_nb + 1;
             if (ldn && dn != m_d) m_chg = 1; else if (w1c) m_chg = 0;
             if (ldn) m_d = dn;
@@ -58,11 +58,11 @@ module tb_gamepad;
         end
     end
     function [31:0] mrd(input a2);
-        reg pr0, pr1;
+        reg pr0;
         begin
-            pr0 = (m_d[11:0] != 12'hFFF); pr1 = (m_d[23:12] != 12'hFFF);
+            pr0 = (m_d != 12'hFFF);
             if (a2) mrd = {30'b0, m_ie, m_chg};
-            else mrd = {pr1, 3'b0, pr1 ? m_d[23:12] : 12'h0, pr0, 3'b0, pr0 ? m_d[11:0] : 12'h0};
+            else mrd = {16'h0, pr0, 3'b0, pr0 ? m_d : 12'h0};
         end
     endfunction
 
@@ -94,7 +94,7 @@ module tb_gamepad;
 
     // ------------------------------------------------------------ Pmod model and frame oracle
     reg [63:0] v, vlast;
-    reg [23:0] o_d = 24'hFFFFFF;
+    reg [11:0] o_d = 12'hFFF;
     integer half, nb, i, n_frames = 0, kind, gapc;
     reg        same_cycle;
     reg [11:0] pa, pb;
@@ -118,8 +118,7 @@ module tb_gamepad;
             end
             // oracle: what a loaded frame is; the same-cycle latch sees one bit fewer and the stream shifted
             eff = sc ? n - 1 : n;
-            if (eff == 24) o_d = sc ? val[24:1] : val[23:0];
-            else if (eff == 12) o_d = {12'hFFF, (sc ? val[12:1] : val[11:0])};
+            if (eff == 24 || eff == 12) o_d = sc ? val[12:1] : val[11:0];
             repeat (12) @(posedge clk);
             @(negedge clk);
             checks = checks + 1;
@@ -159,7 +158,7 @@ module tb_gamepad;
             if (kind % 7 != 6) vlast = v;
             // report gap 0.2 .. 2 ms (mostly the short end)
             if (rnd(0) % 5 == 0) #(200000 + rnd(0) % 1800000); else #(200000 + rnd(0) % 100000);
-            if (kind % 37 == 36) begin @(negedge clk); rst = 1; o_d = 24'hFFFFFF; @(negedge clk); @(negedge clk); rst = 0; end
+            if (kind % 37 == 36) begin @(negedge clk); rst = 1; o_d = 12'hFFF; @(negedge clk); @(negedge clk); rst = 0; end
         end
         // floors continue with extra full frames if one is short
         while (n_load < 100 || n_chg < 20 || n_ign < 10 || n_race < 5 || n_same < 1 || n_abs < 5 || n_12 < 10) begin

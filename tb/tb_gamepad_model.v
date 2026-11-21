@@ -34,7 +34,7 @@ module tb_gamepad_model;
     task check(input [11:0] b0, input pr0, input [11:0] b1, input pr1, input expchg);
         reg [31:0] exp;
         begin
-            exp = {pr1, 3'b0, pr1 ? b1 : 12'h0, pr0, 3'b0, pr0 ? b0 : 12'h0};
+            exp = {16'h0, pr0, 3'b0, pr0 ? b0 : 12'h0};                // pad 1 is not kept: its fields read 0
             rd(0); checks = checks + 1;
             if (v !== exp) begin errors = errors + 1; $display("GAMEPAD %h expected %h", v, exp); end
             rd(1); checks = checks + 1;
@@ -48,7 +48,7 @@ module tb_gamepad_model;
         #1000 pad.enable = 1;
         // two pads
         pad.pad0 = 12'hA5C; pad.pad1 = 12'h3D2; pad.present0 = 1; pad.present1 = 1; settle;
-        check(12'hA5C, 1, 12'h3D2, 1, 1);
+        check(12'hA5C, 1, 12'h3D2, 1, 1);                           // pad 1 reports are dropped
         settle; check(12'hA5C, 1, 12'h3D2, 1, 0);                   // same frame again: no change
         // one pad (pad 1 absent: all ones)
         pad.pad0 = 12'h801; pad.present1 = 0; settle;
@@ -58,7 +58,7 @@ module tb_gamepad_model;
         check(12'h000, 0, 12'h000, 0, 1);
         // pad 1 only
         pad.present1 = 1; pad.pad1 = 12'h7FE; settle;
-        check(12'h000, 0, 12'h7FE, 1, 1);
+        check(12'h000, 0, 12'h7FE, 1, 0);                           // no change: pad 1 is not kept
         // all buttons but one released and the all-ones corner: 0xFFE is present
         pad.present0 = 1; pad.pad0 = 12'hFFE; pad.pad1 = 12'h001; settle;
         check(12'hFFE, 1, 12'h001, 1, 1);
