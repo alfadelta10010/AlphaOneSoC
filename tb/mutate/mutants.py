@@ -325,7 +325,9 @@ m("SB06", "soc_bus.v", "always @(posedge clk) io_q <= io_rdata;", "always @(pose
 m("SB07", "soc_bus.v", "assign d_ready = is_mem ? mem_ready : ph;", "assign d_ready = is_mem ? mem_ready : io_ready;", "no second phase, stale io_q")
 m("SB08", "soc_bus.v", "else if (io_done) ph <= 1'b1;", "else if (phase1) ph <= 1'b1;", "ph leaves phase 1 without io_ready")
 m("SB09", "soc_bus.v", "assign gamepad_sel = gpio_slot && gp_hit;", "assign gamepad_sel = io_req && is_io && (io_idx == 2'd1) && gp_hit;", "gamepad carve select held in phase 2 (GPSTAT W1C acts twice: harmless, only bus B1/B6 sees it)")
-m("SB10", "soc_bus.v", "assign syscon_sel  = syscon_slot && !pmx_hit;", "assign syscon_sel  = syscon_slot;", "pinmux carve also selects syscon (both answer)")
+m("SB10", "soc_bus.v", "assign syscon_sel  = syscon_slot && !pmx_hit && !cch_hit;", "assign syscon_sel  = syscon_slot && !cch_hit;", "pinmux carve also selects syscon (both answer)")
+m("SB11", "soc_bus.v", "assign syscon_sel  = syscon_slot && !pmx_hit && !cch_hit;", "assign syscon_sel  = syscon_slot && !pmx_hit;", "CACHE_CTL carve also selects syscon (both answer)")
+m("SB12", "soc_bus.v", "assign cache_sel   = syscon_slot && cch_hit;", "assign cache_sel   = is_io && cch_hit;", "CACHE_CTL select held in phase 2")
 # SB05 (io_q captured every clock) is the design now (WO-58 C0): io_q is read only in phase 2 and the last
 # capture before it is the phase-1 completing edge either way (the bus proof still PROVES with it).
 m("QS01", "qspi_ctrl.v", ": ((3'b001 << cs_sel) & {2'b11, !we});", ": (3'b001 << cs_sel);", "a write may select the flash")
@@ -581,3 +583,16 @@ m('UA17', 'uart.v', "(rtrig == 2'd2) ? 5'd4 :", "(rtrig == 2'd2) ? 5'd8 :", 'RX 
 m('UA18', 'uart.v', "assign ready = !(thr_sel && tx_full);\n    wire wr      = sel && we && ready;", "assign ready = 1'b1;\n    wire wr      = sel && we && !(thr_sel && tx_full);", 'a THR write while THR is full is dropped instead of stalling (WO-63)')
 m('UA19', 'uart.v', 'wire fcr_clr_tx = wr_fcr && (wdata[18] || (wdata[16] != fen));', 'wire fcr_clr_tx = wr_fcr && (wdata[16] != fen);', 'FCR bit 2 does not clear THR (WO-63)')
 m("PL14", "plic.v", "wire [NSRC:1] cand = pend & en & prio;", "wire [NSRC:1] cand = pend & en & prio & {NSRC{!thr}};", "claim honours the threshold (spec: it must ignore it)")
+
+# ── cache.v (WO-62)
+m("C01", "cache.v", "wire        hit       = tmatch && (valid[kidx] || fill_here);", "wire        hit       = (valid[kidx] || fill_here);", "tag compare ignored in the hit")
+m("C02", "cache.v", "if (snoop && tmatch) begin", "if (1'b0 && snoop && tmatch) begin", "store snoop dropped")
+m("C03", "cache.v", "dead <= 1'b1;\n            end\n            if (fencei_flush)", "dead <= 1'b0;\n            end\n            if (fencei_flush)", "a store that hits the line being filled does not kill the fill")
+m("C04", "cache.v", "(kword < fcnt)", "(kword <= fcnt)", "early restart one word early")
+m("C05", "cache.v", "if (fencei_flush) begin", "if (1'b0 && fencei_flush) begin", "FENCE.I flush ignored")
+m("C06", "cache.v", "if (off) begin", "if (1'b0) begin", "cold start on EN rising missing")
+m("C07", "cache.v", "{rb_data[15:0], ra_data[31:16]}", "{ra_data[15:0], ra_data[31:16]}", "straddle high half from port A")
+m("C08", "cache.v", "fill_idx, fcnt, 2'b00}", "fill_idx, fcnt + 2'd1, 2'b00}", "fill address word order")
+m("C09", "cache.v", ": f_addr;\n    assign f_ready", ": f_addr + 32'd4;\n    assign f_ready", "pass-through address off by a word")
+m("C10", "cache.v", "valid[fill_idx] <= !dead;", "valid[fill_idx] <= 1'b1;", "a fill that ended dead still sets valid")
+m("C11", "cache.v", "&& !fill_active && en;", "&& !fill_active;", "takeover starts while a fill is on the way out")

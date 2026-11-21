@@ -20,7 +20,11 @@ sed soc_bus.v s/assign clint_sel  = phase1 \&\& !d_addr\[28\] \&\& !d_addr\[27\]
 sed uart.v s/assign ready = !(thr_sel [&][&] tx_full)/assign ready = !tx_full/   # ready low while not selected -> B4
 # same for gpio -> B4
 sed gpio.v s/ready = !(req [\&][\&] stall)/ready = !stall/
-# gamepad carve select held in phase 2 (SB09) -> B1/B6
+# gamepad carve select held in phase 2 (SB11) -> B1/B6
 sed soc_bus.v s/assign gamepad_sel = gpio_slot \&\& gp_hit;/assign gamepad_sel = io_req \&\& is_io \&\& (io_idx == 2'd1) \&\& gp_hit;/
-# pinmux carve also selects syscon (SB10) -> B1/B6
+# pinmux carve also selects syscon (SB12) -> B1/B6
 sed soc_bus.v s/assign syscon_sel  = syscon_slot \&\& !pmx_hit;/assign syscon_sel  = syscon_slot;/
+# CACHE_CTL carve missing from the syscon exclusion: syscon and cache selected together (SB11) -> B1/B6
+sed soc_bus.v s/assign syscon_sel  = syscon_slot \&\& !pmx_hit \&\& !cch_hit;/assign syscon_sel  = syscon_slot \&\& !pmx_hit;/
+# CACHE_CTL selected outside phase 1 (SB12) -> B1/B6
+sed soc_bus.v s/assign cache_sel   = syscon_slot \&\& cch_hit;/assign cache_sel   = is_io \&\& cch_hit;/
