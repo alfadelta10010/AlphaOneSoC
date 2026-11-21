@@ -1,2 +1,17 @@
 cat GP01   # recorded kill of spi_bus
 cat SPI02   # recorded kill of spi_bus
+# WO-69 input-change interrupt mutants (the GI01-GI06 catalogue entries land with the shared mutants file)
+# IP ignores falling edges -> I4a
+sed gpio.v s/| (in_s ^ in_p);/| (in_s \& ~in_p);/
+# W1C clears every bit -> I4b
+sed gpio.v s/? wdata\[7:0\] : 8'h00)/? 8'hFF : 8'h00)/
+# irq ignores IE -> I1
+sed gpio.v s/assign in_irq = |(in_ip \& in_ie);/assign in_irq = |in_ip;/
+# slots 6 and 7 stall while the SPI is busy -> B4c
+sed gpio.v s/ || addr == S_IE || addr == S_IP) ? 1'b0/) ? 1'b0/
+# a same-clock W1C beats the edge -> I4a
+sed gpio.v s/in_ip <= (in_ip \& ~((wr \&\& addr == S_IP) ? wdata\[7:0\] : 8'h00)) | (in_s ^ in_p);/in_ip <= (in_ip | (in_s ^ in_p)) \& ~((wr \&\& addr == S_IP) ? wdata[7:0] : 8'h00);/
+# reset leaves IP set (phantom edge after reset) -> I3
+sed gpio.v s/in_ip <= 8'h00;/in_ip <= 8'hFF;/
+# reset leaves IE set -> I3
+sed gpio.v s/in_ie <= 8'h00;/in_ie <= 8'h01;/
