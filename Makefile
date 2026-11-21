@@ -312,7 +312,7 @@ case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|sysco
 	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
 endef
 SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode plic_uart \
-	gamepad pwm_linux pwm_timer audio pinmux sd_cs
+	gamepad pwm_linux pwm_timer audio tune pinmux sd_cs
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
 	@echo "=== Testing the peripherals through the SoC ==="

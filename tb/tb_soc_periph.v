@@ -181,51 +181,47 @@ module tb_soc_periph;
                   .hi_ok(m7_hi_ok), .per_ok(m7_per_ok), .n_hi(m7_n_hi), .n_pulse(m7_n_pulse));
     always @(posedge clk) begin if (m2_clr) m2_clr <= 1'b0; if (m7_clr) m7_clr <= 1'b0; end
 
-    // audio: the high clocks of uo[7] in every 256-clock DAC frame. The pin lags the block's frame
-    // counter dc by three clocks (audio_o flop, pin flop, this sample), so a frame starts at dc == 2.
-    integer au_acc = 0, au_n = 0, au_hi = 0;
-    integer au_fr [0:511];
-    always @(posedge clk) if (!rst && test == "audio") begin
-        if (soc.audio_inst.dc == 8'd2) begin
-            if (au_n < 512) au_fr[au_n] = au_acc;
-            au_n = au_n + 1; au_acc = 0;
+    // audio (one square voice, WO-63): the rising edges of uo[7]. Every phase restarts the voice (EN off, then
+    // on), so every distance between two consecutive rising edges is exactly the tone period, 32 * 2^O * (P + 1)
+    // clocks (the pin lags the block by a constant). The same monitor serves audio.S and tune.S.
+    integer au_n = 0, au_hi = 0, au_last = 0;
+    reg     au_prev = 1'b0;
+    integer au_dist [0:127];
+    always @(posedge clk) if (!rst && (test == "audio" || test == "tune")) begin
+        if (uo[7] === 1'b1) au_hi = au_hi + 1;
+        if (uo[7] === 1'b1 && !au_prev) begin
+            if (au_n > 0 && au_n < 128) au_dist[au_n - 1] = cyc - au_last;
+            au_last = cyc; au_n = au_n + 1;
         end
-        if (uo[7] === 1'b1) begin au_acc = au_acc + 1; au_hi = au_hi + 1; end
+        au_prev = (uo[7] === 1'b1);
     end
-    task automatic au_eval(input integer ph);
-        integer i, n, ons, first, last, bad, trans, want;
-        real per;
+    function integer au_want(input integer ph);
         begin
-            n = (au_n < 512) ? au_n : 512;
-            ons = 0; first = -1; last = -1; bad = 0; trans = 0;
-            for (i = 5; i < n - 4; i = i + 1) begin
-                if (ph <= 4 && au_fr[i] != 0 && au_fr[i] != 60) bad = bad + 1;
-                if (ph == 5 && au_fr[i] != 128) bad = bad + 1;
-                if (ph == 6 && au_fr[i] != 0)   bad = bad + 1;
-                if (ph == 7 && au_fr[i] != 255) bad = bad + 1;
-                if ((au_fr[i] != 0) != (au_fr[i-1] != 0)) trans = trans + 1;
-                if (au_fr[i] != 0 && au_fr[i-1] == 0) begin
-                    ons = ons + 1; if (first < 0) first = i; last = i;
-                end
+            if (test == "tune")
+                case (ph)
+                    1: au_want = 32 * 2963;  2: au_want = 32 * 3955;  3: au_want = 32 * 3733;  4: au_want = 32 * 3325;
+                    5: au_want = 32 * 3733;  6: au_want = 32 * 3955;  7: au_want = 64 * 2219;  8: au_want = 64 * 2219;
+                    default: au_want = 0;
+                endcase
+            else au_want = (ph == 1) ? 1024 : (ph == 2) ? 1280 : (ph == 3) ? 1312 : 0;
+        end
+    endfunction
+    task automatic au_eval(input integer ph);
+        integer i, bad, want, last_ph, min_n;
+        begin
+            want = au_want(ph); last_ph = (test == "tune") ? 9 : 4;
+            min_n = (test == "tune") ? 3 : 40;
+            if (ph == last_ph) begin
+                if (au_hi != 0) fail($sformatf("%0s phase %0d: EN 0 but uo[7] was high %0d clocks", test, ph, au_hi));
+            end else if (au_n < min_n) fail($sformatf("%0s phase %0d: only %0d rising edges", test, ph, au_n));
+            else begin
+                bad = 0;
+                for (i = 0; i < au_n - 1 && i < 127; i = i + 1) if (au_dist[i] != want) bad = bad + 1;
+                $display("%0s phase %0d: %0d rising edges, tone period %0d clocks (want %0d), %0d wrong",
+                         test, ph, au_n, au_dist[0], want, bad);
+                if (bad != 0) fail($sformatf("%0s phase %0d: %0d of %0d periods not %0d clocks", test, ph, bad, au_n - 1, want));
             end
-            if (ph == 8) begin
-                if (au_hi != 0) fail($sformatf("audio phase 8: EN 0 but uo[7] was high %0d clocks", au_hi));
-            end else if (n < 20) fail($sformatf("audio phase %0d: only %0d frames seen", ph, n));
-            else if (bad != 0) fail($sformatf("audio phase %0d: %0d of %0d frames with a wrong high count", ph, bad, n));
-            else if (ph <= 3) begin
-                want = (ph == 1) ? 1024 : (ph == 2) ? 1280 : 1312;
-                if (ons < 10) fail($sformatf("audio phase %0d: %0d tone periods in %0d frames", ph, ons, n));
-                else begin
-                    per = 256.0 * (last - first) / (ons - 1);
-                    $display("audio phase %0d: tone period %0.1f clocks (want %0d), %0d periods, level 60 per frame", ph, per, want, ons);
-                    if (per < want * 0.99 || per > want * 1.01) fail($sformatf("audio phase %0d: tone period %0.1f clocks, want %0d", ph, per, want));
-                end
-            end else if (ph == 4) begin
-                $display("audio phase 4: noise, %0d level changes in %0d frames", trans, n);
-                if (trans < 30) fail($sformatf("audio phase 4: noise made %0d level changes in %0d frames", trans, n));
-            end else
-                $display("audio phase %0d: %0d frames, every one with %0d high clocks", ph, n, ph == 5 ? 128 : ph == 6 ? 0 : 255);
-            au_n = 0; au_hi = 0; au_acc = 0;
+            au_n = 0; au_hi = 0;
         end
     endtask
 
@@ -385,8 +381,8 @@ module tb_soc_periph;
                     3: begin m2_eh = 32'h20004; m2_ep = 32'h40000; end
                     default: ;
                 endcase
-            end else if (test == "audio") begin
-                if (e >= 2) au_eval(e - 1);
+            end else if (test == "audio" || test == "tune") begin
+                if (e >= 2) au_eval(e - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
             end else if (test == "sd_cs") begin
                 if (e == 1 || e == 2) begin
                     if (uo[5] !== (e == 2)) fail($sformatf("sd_cs cue %0d: uo[5] = %b", e, uo[5]));
@@ -675,7 +671,8 @@ module tb_soc_periph;
                 if (uart_waits != 25) fail($sformatf("uart_linux: %0d THR stores waited, want exactly 25", uart_waits));
                 if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
             end
-            if (test == "audio") au_eval(8);
+            if (test == "audio") au_eval(4);
+            if (test == "tune") au_eval(9);
             if (test == "pwm_linux") begin
                 if (m2_n_hi != 0) fail($sformatf("pwm_linux phase 4: uo[2] high %0d clocks after PWM off and the default map", m2_n_hi));
             end
