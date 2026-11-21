@@ -373,9 +373,9 @@ module tb_soc_periph;
             end else if (test == "gamepad") begin
                 case (e)
                     1: begin gp.present0 = 1'b1; gp.pad0 = 12'h123; end
-                    2: begin gp.present1 = 1'b1; gp.pad1 = 12'h456; end
+                    2: begin gp.present1 = 1'b1; gp.pad1 = 12'h456; end   // pad 1 is not kept: nothing changes
                     3: gp.present0 = 1'b0;
-                    4: gp.present1 = 1'b0;
+                    4: begin gp.present1 = 1'b0; gp.present0 = 1'b1; gp.pad0 = 12'h0AA; end
                     default: ;
                 endcase
             end else if (test == "pwm_linux") begin
