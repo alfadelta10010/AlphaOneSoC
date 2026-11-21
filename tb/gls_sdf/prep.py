@@ -1,21 +1,30 @@
 # Ported unchanged from localFiles/setup-timing-2026-10-14/tools/gls-sdf/prep.py (the 2026-10-18 SDF recipe;
 # sandbox ~/regr/rfm/gls-sdf/prep.py) for WO-34 (tb/gls_sdf/run_glitch.sh).
 # prep.py <pnl.v> <sdf> <out pnl> <out sdf> : make a LibreLane netlist + SDF simulate in Icarus.
-#  - The macro instance \soc.cpu.rf.rf_macro becomes rf_macro_i (Icarus's SDF reader cannot
-#    resolve the escaped dots), and the macro's own CELL block is dropped (its bit-indexed
-#    IOPATHs do not parse; rf_top_timing.v carries the same 4.0 ns).
+#  - The macro instances \soc.cpu.rf.rf_macro and (4x4 netlists) \soc.icache.data_mem become rf_macro_i and
+#    icache_data_mem_i (Icarus's SDF reader cannot resolve the escaped dots; each one that is present is
+#    renamed, at least one must be), and every rf_top CELL block is dropped (its bit-indexed IOPATHs do not
+#    parse; rf_top_timing.v carries the same 4.0 ns for both).
 #  - Icarus ignores SDF INTERCONNECT, so every wire delay is put into the netlist instead: the
 #    load pin is reconnected to a wire of its own, driven by `assign #(rise, fall)` from the net,
 #    and the INTERCONNECT entries are removed from the SDF so nothing counts twice.
 import re, sys
 nl, sdf, onl, osdf = sys.argv[1:]
 t = open(nl).read()
-assert t.count('\\soc.cpu.rf.rf_macro ') == 1
-t = t.replace('\\soc.cpu.rf.rf_macro ', 'rf_macro_i ')
+MACROS = [('soc.cpu.rf.rf_macro', 'rf_macro_i'), ('soc.icache.data_mem', 'icache_data_mem_i')]
 s = open(sdf).read()
-blk = re.search(r' \(CELL\n  \(CELLTYPE "rf_top"\)\n.*?\n \)\n', s, re.S)
-s = s[:blk.start()] + s[blk.end():]
-s = s.replace('soc\\.cpu\\.rf\\.rf_macro', 'rf_macro_i')
+n_ren = 0
+for old, new in MACROS:
+    c = t.count('\\' + old + ' ')
+    assert c <= 1, (old, c)
+    if c:
+        t = t.replace('\\' + old + ' ', new + ' ')
+        s = s.replace(old.replace('.', '\\.'), new)
+        n_ren += 1
+assert n_ren >= 1, 'no macro instance found in the netlist'
+s, n_cell = re.subn(r' \(CELL\n  \(CELLTYPE "rf_top"\)\n.*?\n \)\n', '', s, flags=re.S)
+assert n_cell >= 1, 'no rf_top CELL block in the SDF'
+print(f'{n_ren} macro instance(s) renamed, {n_cell} rf_top CELL block(s) dropped')
 assert '\\' not in s
 
 ic = {}
