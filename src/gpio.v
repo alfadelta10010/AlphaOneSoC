@@ -16,7 +16,35 @@
 //   0x08          reserved: reads 0, writes ignored.
 //   0x0C  SPICTL  bit 0 EN: 1 = the SPI engine owns out[1] and out[3].
 //                 bit 8 BUSY (read only) = !TXE. Resets to 0.
-//   0x10-0x1C     reserved.
+//   0x10, 0x14    not this block's: the SoC bus carves them out for the gamepad
+//                 (GAMEPAD, GPSTAT); at this block's pins they read 0.
+//   0x18  IN_IE   read/write [7:0], resets to 0: per-bit enable of the
+//                 input-change interrupt.
+//   0x1C  IN_IP   read [7:0]: bit i is set by any edge (either direction) of
+//                 the synchronised in[i], whatever IN_IE says. Write with
+//                 be[0]: W1C, every bit set in wdata[7:0] is cleared. An edge
+//                 in the same clock as a clear of its bit wins (set again), so
+//                 no edge is lost. Resets to 0.
+//                 in_irq = |(IN_IP & IN_IE), a level, straight from flops.
+//                 Neither slot ever waits, read or write.
+//                 Recipe: clear IN_IP, then set IN_IE (an edge seen while
+//                 disabled stays pending and fires the moment IE is set).
+//                 Gamepad: with the gamepad Pmod fitted, ui_in[4..6] toggle
+//                 every frame; leave IE[6:4] at 0 and use GPSTAT's IRQ
+//                 (PLIC source 3).
+//                 MISO: bit 1 is the SD card's MISO; while the SD is in use
+//                 it toggles with every byte, so leave IE[1] at 0 then.
+//                 RX wake: bit 3 is the UART RX pin, whose idle level is high, so
+//                 a start bit is a falling edge: IE[3] wakes a `wfi` on the
+//                 first character's start bit, before the UART has the byte
+//                 (read it after its own interrupt).
+//   Edge detection: in_p is in_s one clock later (the same synchroniser
+//   chain, never reset); IN_IP sets when in_s != in_p. No phantom edge after
+//   reset: setting is blocked while rst is high, in_p keeps following in_s
+//   through the reset, so the first clock after reset sees in_s == in_p
+//   whatever the pins hold (the chain is never reset, so a syscon reboot
+//   does not disturb it either). Reset must last 3 clocks from power-up to
+//   fill the chain.
 //   0x20  RXDATA  read only: the byte received with the last byte sent;
 //                 valid once TXE = 1.
 //   0x24  TXDATA  write: put a byte in the holding register. Read: that
@@ -61,13 +89,15 @@ module gpio (
     input  wire [7:0]  in,         // asynchronous
     output wire [7:0]  out,
     output wire [7:0]  in_sync,    // the synchronised inputs (gamepad)
-    output wire        spi_irq
+    output wire        spi_irq,
+    output wire        in_irq      // |(IN_IP & IN_IE), level
 );
 
-    localparam [3:0] S_OUT = 4'd0, S_IN = 4'd1, S_CTL = 4'd3,
+    localparam [3:0] S_OUT = 4'd0, S_IN = 4'd1, S_CTL = 4'd3, S_IE = 4'd6, S_IP = 4'd7,
                      S_RX = 4'd8, S_TX = 4'd9, S_ST = 4'd10, S_CON = 4'd11, S_BAUD = 4'd12;
 
-    reg [7:0] in_m, in_s;          // synchroniser
+    reg [7:0] in_m, in_s, in_p;    // synchroniser; in_p = in_s one clock later
+    reg [7:0] in_ie, in_ip;        // input-change interrupt enable / pending
     reg [7:0] out_r;               // bits 7:4, 2, 0 only; 3 and 1 live in spi's pin flops
     reg       spi_en;
 
@@ -76,7 +106,8 @@ module gpio (
     wire       s_txe, s_txr, p_mosi, p_sck;
 
     wire req   = sel && we && be[0];
-    wire stall = (addr == S_TX) ? !s_txr : (addr == S_ST) ? 1'b0 : !s_txe;
+    wire stall = (addr == S_TX) ? !s_txr :
+                 (addr == S_ST || addr == S_IE || addr == S_IP) ? 1'b0 : !s_txe;
     assign ready = !(req && stall);
     wire   wr    = req && ready;
     assign in_sync = in_s;
@@ -110,6 +141,8 @@ module gpio (
 
     assign rdata = (addr == S_OUT)  ? {24'b0, out} :
                    (addr == S_IN)   ? {24'b0, in_s} :
+                   (addr == S_IE)   ? {24'b0, in_ie} :
+                   (addr == S_IP)   ? {24'b0, in_ip} :
                    (addr == S_CTL)  ? {23'b0, !s_txe, 7'b0, spi_en} :
                    (addr == S_RX)   ? {24'b0, s_rx} :
                    (addr == S_TX)   ? {24'b0, s_tx} :
@@ -121,6 +154,20 @@ module gpio (
     always @(posedge clk) begin
         in_m <= in;
         in_s <= in_m;
+        in_p <= in_s;
+    end
+
+    assign in_irq = |(in_ip & in_ie);
+
+    always @(posedge clk) begin
+        if (rst) begin
+            in_ie <= 8'h00;
+            in_ip <= 8'h00;
+        end else begin
+            if (wr && addr == S_IE)
+                in_ie <= wdata[7:0];
+            in_ip <= (in_ip & ~((wr && addr == S_IP) ? wdata[7:0] : 8'h00)) | (in_s ^ in_p);
+        end
     end
 
     always @(posedge clk) begin
