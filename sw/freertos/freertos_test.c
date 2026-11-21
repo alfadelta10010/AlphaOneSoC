@@ -41,14 +41,14 @@ static uint32_t now(void) { return (uint32_t)mtime_read(); }
 void vAssertCalled(const char *file, int line)
 {
     printf("\nASSERT %s:%d\n", file, line);
-    soc_fail(0xA5);
+    soc_crash(0xA5);
 }
-void vApplicationMallocFailedHook(void) { printf("\nmalloc failed\n"); soc_fail(0xA6); }
+void vApplicationMallocFailedHook(void) { printf("\nmalloc failed\n"); soc_crash(0xA6); }
 void vApplicationStackOverflowHook(TaskHandle_t t, char *name)
 {
     (void)t;
     printf("\nstack overflow in %s\n", name);
-    soc_fail(0xA7);
+    soc_crash(0xA7);
 }
 void vApplicationIdleHook(void) { }
 
@@ -61,12 +61,12 @@ void freertos_risc_v_application_exception_handler(uint32_t mcause, uint32_t a1,
     __asm__ volatile("csrr %0, mepc" : "=r"(epc));
     __asm__ volatile("csrr %0, mtval" : "=r"(tval));
     printf("\nEXCEPTION mcause=%08x mepc=%08x mtval=%08x\n", (unsigned)mcause, (unsigned)epc, (unsigned)tval);
-    soc_fail(0xA8);
+    soc_crash(0xA8);
 }
 void freertos_risc_v_application_interrupt_handler(uint32_t mcause)
 {
     printf("\nINTERRUPT mcause=%08x\n", (unsigned)mcause);
-    soc_fail(0xA9);
+    soc_crash(0xA9);
 }
 
 /* Compare match to tick hook: the compare has already moved on to the next tick when the hook

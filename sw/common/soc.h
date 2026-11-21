@@ -119,5 +119,16 @@ static inline void soc_pass(void) __attribute__((noreturn));
 static inline void soc_pass(void) { soc_finish(FINISH_PASS); }
 static inline void soc_fail(unsigned n) __attribute__((noreturn));
 static inline void soc_fail(unsigned n) { soc_finish(((uint32_t)n << 16) | FINISH_FAIL); }
+/* A payload's crash exit. With DDR on a crash may be the flash failing, and FINISH 0x3333 is a power-off that
+ * holds the watchdog in reset: the board would halt until a pin reset and never fall back to SDR. Spin
+ * instead, so the watchdog the loader armed resets the SoC and the next boot stays in SDR. */
+static inline void soc_crash(unsigned n) __attribute__((noreturn));
+static inline void soc_crash(unsigned n)
+{
+    if (*reg32(SYSCON_BASE + SYSCON_QSPI_CFG) & 2)
+        for (;;)
+            ;
+    soc_fail(n);
+}
 
 #endif

@@ -571,7 +571,7 @@ void mon_fatal(void)
     __asm__ volatile("csrr %0, mepc" : "=r"(e));
     __asm__ volatile("csrr %0, mtval" : "=r"(t));
     printf("\nMONITOR TRAP mcause=%08x mepc=%08x mtval=%08x\n", c, e, t);
-    soc_fail(0xFE);
+    soc_crash(0xFE);
 }
 
 static void start(void)
