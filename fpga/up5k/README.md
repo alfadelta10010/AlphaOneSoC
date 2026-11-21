@@ -17,7 +17,7 @@ simulation before the sky26d lock. The core itself is validated 1-to-1 elsewhere
 | `rtl/fpga_top.v` | the tapeout wrapper instance, `ena=1`, `uio` through `SB_IO` tristates, optional `-DINTCLK` |
 | `third_party/picorv32/` | picorv32 `ef203c2`, unmodified, ISC licence |
 | `up5k.pcf` | pins, `tt_fpga_fabricfoxv2.pcf` from tt-support-tools (source and commit in its header) |
-| `fw/` | test firmware (T1 uart, T2 flash, T3 psram, T4 cache), `-march=rv32ic -mabi=ilp32` |
+| `fw/` | test firmware (T1 uart, T2 flash, T3 psram, T4 cache), `-march=rv32i -mabi=ilp32` |
 | `sim/` | golden-reference bench (Icarus) on the pin's QSPI Pmod and RP2350 UART models |
 | `scripts/`, `Makefile`, `build.sh` | everything runs on the sandbox; `scripts/sync.sh` copies the pin (git archive, never the working tree) and this directory there |
 
@@ -33,10 +33,10 @@ for c in 0 1 2 3; do scripts/run_vl.sh $c; done          # Verilator: build/vl/c
 # (thermal watchdog) for both.
 ```
 
-Measured at the committed `F_MHZ=18`, seed 1 (`build/pnr.log`): **5050 / 5280 LCs (95 %)**, 6 / 30 EBR (picorv32
-register file 4, the cache's data RAM 2), nextpnr post-route fmax **22.28 MHz** (18 MHz = 0.81 x fmax).
-LC 95 % does not meet the WO's 85 % limit: see the report; picorv32 without the C extension is 88 %
-(4673 LCs), without C / catch traps / two-stage shifter 86 % (4562), the rest of the SoC is about 3,100 LUT4.
+Measured at the committed `F_MHZ=18`, seed 1, picorv32 **without the C extension** (`build/pnr.log`, pin `1f2a473`):
+**4673 / 5280 LCs (88 %)**, 6 / 30 EBR (picorv32 register file 4, the cache's data RAM 2), nextpnr post-route
+fmax **22.42 MHz** (18 MHz = 0.80 x fmax, limit 0.85). With C it was 5050 LCs (95 %), which failed the 90 % limit; the
+rest of the SoC is about 3,100 LUT4. With the WO-68 burst RTL (HEAD a732aaa) a probe measured 4694 LCs / 22.96 MHz.
 `build.sh` writes `build/MANIFEST` (PIN, sha256 of every file used) and fails if a pin file differs.
 `scripts/port_check.sh` (A2) diffs the `fyracore` parameter and port list against the pin's.
 `cfg` is the QSPI_CFG the firmware sets at boot: bit 0 STREAM, bit 1 DDR (cfg 1 = streaming, SDR is
@@ -44,10 +44,12 @@ the hardware default image; cfg 2 and 3 need the -IM part). T2 additionally loop
 
 ## Running it on the board
 
-1. **Flash the firmware image to the Pmod first**, before the FPGA is configured, so `uio` is hi-Z and
-   the RP2350 can drive the flash pins: `build/sim/cfg1/fw.bin` (flat, flash offset 0, entry 0x2000_0000)
-   with the demo board's flash-programming path for the QSPI Pmod (tt-micropython-firmware; the exact command
-   was not checked in this WO, it needs a first run on the board).
+1. **Flash the firmware image to the Pmod first**, before the bitstream is loaded, so `uio` is hi-Z and the RP2350 can
+   drive the flash pins. Use the Tiny Tapeout Flasher web app (https://tinytapeout.github.io/tinytapeout-flasher,
+   Chromium, WebSerial): connect to the board, **Flash ID must read `ef7018`** (`000000` = wiring or not configured),
+   pick `build/sim/cfg1/fw.bin` (flat, entry 0x2000_0000) and flash it at offset 0. UNCONFIRMED until the first board
+   run: whether the FPGA breakout needs "ROM project 0" selected for the flasher, and whether an unconfigured iCE40
+   leaves `uio` hi-Z.
 2. Load the bitstream: copy `build/up5k.bin` to `/bitstreams` on the demo board and enable it from the REPL, or
    `tt_fpga.py configure --upload` (FPGA awaits configuration at reset; the RP2350 loads it over SPI).
 3. Set the RP2350 project clock to **18 MHz** (same value as `F_MHZ`; the UART divisor in the image
@@ -64,13 +66,19 @@ the hardware default image; cfg 2 and 3 need the -IM part). T2 additionally loop
 
 ## NOT 1-to-1 with the tapeout
 
-* **The CPU.** picorv32 (rv32ic, no M/A/Zicsr, no CSRs, no traps handled, no interrupts, no PMP, no
+* **The CPU.** picorv32 (rv32i, no C/M/A/Zicsr, no CSRs, no traps handled, no interrupts, no PMP, no
   `fence.i`). Its memory port is word-aligned and fetches whole words; fyracore fetches from a halfword
-  pc and keeps half-words (so the cache and `mem_ctrl` see different request streams and timing).
+  pc and keeps half-words (so the cache and `mem_ctrl` see different request streams and timing). fyracore's compressed-instruction fetches from a halfword PC, including a 32-bit instruction that straddles two words, are covered only by simulation evidence, not by the UP5K, because picorv32 (rv32i here) issues only aligned word fetches.
   picorv32 does not touch `fencei_flush`, `timer_irq`, `external_irq`, `sw_irq`; the interrupt wires
   (UART IRQ -> PLIC pending bit) are only **polled**. Trap/CSR/privilege, AMO/LR/SC, PMP, the watchdog reboot
   loop and CLINT interrupts are not exercised by this image (the watchdog, reboot, CLINT compare and the
   GPIO/SPI/PWM/gamepad/pinmux pins are the later WO-F2).
+* **Concurrent fetch + data access.** picorv32 never raises `imem_req` and `dmem_req` together, so the `soc_bus` /
+  `mem_ctrl` arbitration of a concurrent fetch and data access, and the repeated-fetch reuse path, are not
+  exercised here (Arty later).
+* **Power-up state.** The FPGA starts every flop at 0, the ASIC starts random. Covered in simulation by
+  `scripts/run_vl_rand.sh` (random initial values, cfg1), not on the board.
+* **Golden origin.** The golden comes from Verilator (2-state); an Icarus run of cfg1 matched it.
 * **`rf_top`** (also inside the cache) is a block-RAM model, not the sky130 macro: same sync-read behaviour,
   none of the macro's timing, write-through or hold behaviour.
 * **Pads and clock speed.** FPGA IO cells instead of sky130 pads, a clock of 18 MHz instead of 62.5 MHz,
@@ -83,8 +91,12 @@ the hardware default image; cfg 2 and 3 need the -IM part). T2 additionally loop
 
 ## Golden transcripts (`golden/cfg0..3.txt`)
 
-Verilator run of the bench at `F_MHZ=18`, pin `1f2a473`: all four images `ALL PASS`, 34-40 M cycles, the
-Pmod model's setup/hold checks and the `fyracore` contract assertions silent, no UART frame errors. The
-non-`INFO` lines are identical for the four images; the `INFO` lines carry the chosen `DDR_CAP`
-(0 and 1 pass at 18 MHz, 1 is picked) and the cache loop ticks (about 1.3 M off, 0.11 M on). On hardware the
-passing `DDR_CAP` set and the tick counts will differ and are not compared.
+Verilator run of the bench at `F_MHZ=18`, pin `1f2a473`, rv32i picorv32: all four images `ALL PASS` (cfg0..2 regenerated
+2026-11-21 after dropping C; cfg3: see the WO-F1b report), 40-48 M cycles, the Pmod model's setup/hold checks and the `fyracore`
+contract assertions silent, no UART frame errors. The non-`INFO` lines are identical for the four images; the `INFO` lines
+carry the chosen `DDR_CAP` and the cache loop ticks. On hardware the passing `DDR_CAP` set and the tick counts will differ
+and are not compared.
+
+`scripts/run_vl_rand.sh` (random power-up flops, cfg1, seeds 1 and 2): both `ALL PASS`, non-`INFO` lines identical to
+`golden/cfg1.txt`, assertions silent. The bench arms the Pmod model only after reset (the pins glitch before the first reset
+edge with random flops; the model's SCK-before-CS check flagged that at t=0).

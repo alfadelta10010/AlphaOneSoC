@@ -5,6 +5,6 @@ INFO flash ddr cfg=2 cap_pass_mask=00000003 cap=1
 INFO flash ddr cfg=3 cap_pass_mask=00000003 cap=1
 PASS flash 7 checks
 PASS psram 106 checks
-INFO cache loop ticks off=1335107 on=113321
+INFO cache loop ticks off=1559214 on=113695
 PASS cache 15 checks
 ALL PASS
