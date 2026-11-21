@@ -8,20 +8,49 @@
 // cycle after, so the parameters are derived here from the held request and
 // two bits of state, and nothing is copied.
 //
-// Arbitration: data first. The pipeline only issues a new data request on
-// the cycle after a fetch completes or after a fetch-word-reuse hit (an
-// instruction taken from the kept halfword with no fetch). At most every
-// other IF/EX load is a hit, so few data accesses run between consecutive
-// fetches (up to four: two back-to-back AMOs, a read and a write each, behind
-// fetches that already completed; bounded by tb/formal core_df) and a fetch
-// waits a bounded time (449/482 clocks at most with streaming, 442/456 without;
-// rd_late 0/1, measured by simulation, not proved); and
-// serving the data request first means the fetch that follows a load is not
-// read before the load and then thrown away while the load stalls the
-// pipeline (fetch-first would do that on every load, forever, on a pipeline
-// that refetches while stalled). The grant is latched rather than inferred
-// from which request is high, so a request that appears mid-transaction
-// cannot redirect its reply.
+// Arbitration: data first. With the instruction cache off (CACHE_CTL.EN = 0, the reset
+// state) the i-port is the core's fetch port and the pipeline only issues a new data
+// request on the cycle after a fetch completes or after a fetch-word-reuse hit (an
+// instruction taken from the kept halfword with no fetch). At most every other
+// IF/EX load is a hit, so few data accesses run between consecutive fetches (up to
+// four: two back-to-back AMOs, a read and a write each, behind fetches that already
+// completed; bounded by tb/formal core_df) and a fetch waits a bounded time (449/482
+// clocks at most with streaming, 442/456 without; rd_late 0/1, measured by
+// simulation, not proved). That statement, M-A4 and P_LI in tb/formal/mem_props.sv are
+// EN = 0 statements. Serving the data request first means the fetch that follows a
+// load is not read before the load and then thrown away while the load stalls the
+// pipeline (fetch-first would do that on every load, forever, on a pipeline that
+// refetches while stalled). The grant is latched rather than inferred from which
+// request is high, so a request that appears mid-transaction cannot redirect its
+// reply.
+//
+// With the cache on (EN = 1, src/cache.v) the i-port requester is the cache: one
+// aligned 4-byte word per request (never split: a word address has pc[1] = 0), four
+// words per line fill, one fill at a time. Two things differ from EN = 0:
+//   * A fill word can be starved. The core runs from cache hits and keeps issuing
+//     data requests, which win the arbitration, so the word may wait behind any
+//     number of them. That is not a deadlock: the core is not waiting for that
+//     fill, and as soon as it misses it stalls, its data traffic stops (core_df
+//     still bounds it) and the fill drains.
+//   * A data request can wait behind one fill word (the transaction in flight when
+//     it appears; data first applies from the next grant on). That is one memory
+//     transaction, shorter than the split fetch behind which ML1's 182/183 is
+//     already measured, so ML1 (which assumes nothing about the i-port beyond
+//     M-A1/M-A2) is unchanged.
+//   The wait the core sees on a fetch miss, derived from the RTL (not proved): at
+//   most DF_N = 4 data transactions between its fetch handshakes (core_df, it
+//   issues no more once stalled), plus up to 3 words left in the fill that was
+//   running when it missed (a fill's first word has arrived before the core can
+//   miss elsewhere), plus up to 4 words of its own fill, plus 3 clocks (hit
+//   latency after the word is written), each transaction at most T clocks (PSRAM
+//   word 42/43 for rd_late 0/1: the 40/41-clock CS run + start/done; flash
+//   57/58, the CS0-low run, a streamed follow-up word is 18):
+//     (4 + 3 + 4) * T + 3:  PSRAM code and data  11 * 43 + 3 = 476 clocks
+//                           flash code, PSRAM data  4 * 43 + 7 * 58 + 3 = 581 clocks
+//                           PSRAM code, flash data  4 * 58 + 7 * 43 + 3 = 536 clocks
+//   A data transaction between two fill words breaks the flash stream, which is why
+//   every word is priced at the full 58. With no data traffic a flash line fill
+//   is about 57 + 3 * 18 = 111 clocks and a PSRAM fill 4 * 42 = 168.
 //
 // Requests are sampled only while qspi_ctrl is idle, and it is never idle on
 // the cycle it reports done. That matters: on its ready cycle the core still

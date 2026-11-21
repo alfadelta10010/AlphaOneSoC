@@ -8,11 +8,13 @@
 //   P_ARB    MD1 data first; MD2 split halves are consecutive; MD3 split iff
 //            i_addr[31] && &i_addr[9:1], second half on the right chip
 //   P_LD     ML1 held d_req answered within LD clocks (no M-A4)
-//   P_LI     ML2 held i_req answered within LI clocks (needs M-A4)
+//   P_LI     ML2 held i_req answered within LI clocks (needs M-A4); an EN = 0 statement (instruction cache off), see
+//            src/mem_ctrl.v: with the cache on the i-port requester is the cache and M-A4 is not discharged for it
 // Assumptions: M-A1 a request not yet answered is held unchanged; M-A2 PMA (stores to
 // flash are NOT excluded: the engine's backstop is under test); M-A3 rd_late stable
 // while !rst (syscon holds the strap); M-A4 (P_LI, ifndef NO_DF_ASSUME) at most DF_N
-// data handshakes between two fetch handshakes (core_df_props.sv discharges it).
+// data handshakes between two fetch handshakes (core_df_props.sv discharges it for the core's fetch port, i.e. EN = 0).
+// M-A1/M-A2 hold for EN = 1 too: cache.v keeps its request held and its fills in the two windows (cache_props E, cache_ind).
 // Every assert is gated on `armed` (set only by rst). No white-box access.
 `ifndef DF_N
 `define DF_N 4
