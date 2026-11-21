@@ -9,8 +9,14 @@ that shows each of the registers; its step-2 rows are the reset values.
 Writes OUT_DIR/consts.vh (a mask and a value per register, for
 lemma_props.sv) and OUT_DIR/consts.txt (one `name[idx] <bit>` per bit, which
 the gold script ties once the lemma is PROVED).
+
+A register declared [N:K] with K != 0 (plic pend/insvc are [NSRC:1]) is a port
+of width N-K+1 whose LSB is bit K: the sat trace prints it by position, and
+lemma_props.sv declares the port [N-K:0], so the mask and the value are made
+by position (index - K). K is read from OUT_DIR/exposed.il (the design the
+reset trace ran on); a register missing there stops the script.
 """
-import collections, re, sys
+import collections, os, re, sys
 
 cand = [l.strip() for l in open(sys.argv[1]) if l.strip()]
 vals = {}
@@ -22,18 +28,31 @@ regs = collections.defaultdict(list)
 for c in cand:
     m = re.match(r"^(.*)\[(\d+)\]$", c)
     regs[m.group(1)].append(int(m.group(2)))
+offset = {}
+for l in open(os.path.join(sys.argv[3], "exposed.il")):
+    m = re.match(r"^\s*wire (?:width (\d+) )?(?:offset (\d+) )?.*?\\(\S+)\s*$", l)
+    if m and m.group(3) in regs:
+        offset[m.group(3)] = (int(m.group(1) or 1), int(m.group(2) or 0))
 vh, txt = [], []
 for r in sorted(regs):
     if r not in vals:
         sys.exit(f"no reset value for {r} in {sys.argv[2]}")
-    bits = vals[r][::-1]            # index 0 = lsb
+    if r not in offset:
+        sys.exit(f"no wire {r} in exposed.il")
+    width, off = offset[r]
+    bits = vals[r][::-1]            # position 0 = lsb = bit `off`
+    if len(bits) != width or width > 32:
+        sys.exit(f"{r}: trace width {len(bits)}, exposed.il width {width} (32 at most)")
     mask = val = 0
     for i in sorted(regs[r]):
-        if bits[i] not in "01":
-            sys.exit(f"{r}[{i}] reset value is {bits[i]}")
-        mask |= 1 << i
-        val |= int(bits[i]) << i
-        txt.append(f"{r}[{i}] {bits[i]}")
+        p = i - off
+        if not 0 <= p < width:
+            sys.exit(f"{r}[{i}] is outside [{off + width - 1}:{off}]")
+        if bits[p] not in "01":
+            sys.exit(f"{r}[{i}] reset value is {bits[p]}")
+        mask |= 1 << p
+        val |= int(bits[p]) << p
+        txt.append(f"{r}[{i}] {bits[p]}")
     mid = r.replace(".", "_")
     vh.append(f"`define LM_{mid} 32'h{mask:08x}")
     vh.append(f"`define LV_{mid} 32'h{val:08x}")

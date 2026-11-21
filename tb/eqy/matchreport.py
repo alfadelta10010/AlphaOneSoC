@@ -13,17 +13,21 @@ EQY's matches:
   rename    the same flop under another name (an alias, or the explicit rule)
   recode    a bit of an FSM register (nomatch on both sides, init = reset state)
   tied      one of the constant bits of CONSTS.txt (no gate flop, none expected)
-  unused    out_r[4], out_r[5] of the gpio block (no fan-out, none expected)
+  unused    gpio bits with no fan-out (3x4: out_r[4], [5]; none in 4x4, the pinmux reads them)
+  memaddr   a memory read port's address register (memory_dff + memory_map, see
+            accounting.py MEMRD): private in gold, anonymous in the netlist, so not matched by
+            name; EQY keeps it as state inside the partitions that read the memory
   UNMATCHED a direct or rename flop that EQY did not match: reported, never patched
 
 Exit status 1 if the counts differ from the work order's table.
 """
 import collections, json, re, sys
 
-EXPECT = dict(direct=1377, rename=7, recode=11, tied=186, unused=2, UNMATCHED=0)
+EXPECT = dict(direct=1925, rename=11, recode=11, tied=192, unused=0, memaddr=3, UNMATCHED=0)
 RECODE = {"soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state",
           "soc.gpio_inst.spi_inst.st"}
-UNUSED = {"soc.gpio_inst.out_r[4]", "soc.gpio_inst.out_r[5]"}
+UNUSED = set()
+MEMRD_GOLD = re.compile(r"^\$\\?(soc\.uart_inst\.rx_mem)\$rdreg\[\d+\]\$q(\[\d+\])?$")   # accounting.py MEMRD
 
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
 EXPLICIT_RENAME = {"soc.cpu.imem_addr[0]": "soc.cpu.if_pc_next[0]"}
@@ -68,6 +72,8 @@ for cn, c in g["cells"].items():
         base = re.sub(r"\[\d+\]$", "", prim)
         if base in RECODE:
             cls["recode"].append(prim)     # not matched by design: init + nomatch
+        elif all(MEMRD_GOLD.match(n) for n in ns):
+            cls["memaddr"].append(prim)    # not matched by design: no common name
         elif prim in tied or any(n in tied for n in ns):
             cls["tied"].append(prim)
         elif prim in UNUSED:

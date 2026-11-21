@@ -1,13 +1,16 @@
 // RTL lemma for the equivalence check (tb/eqy/run.sh, stage lemma).
 //
-// Synthesis removed 186 flops that hold a constant once the chip has been
+// Synthesis removed 192 flops that hold a constant once the chip has been
 // reset (184 CSR bits: the WARL-hardwired bits of mstatus, mie, mtvec, mepc,
 // mcounteren, mcountinhibit, misa, pmpcfg0, the pipeline's trap_cause and
-// trap_pc; plus gpio out_r[1] and [3], which live in spi's pin flops), and
+// trap_pc; gpio out_r[1] and [3], which live in spi's pin flops; and the PLIC's
+// pend and insvc bits of sources 4, 7 and 8, whose inputs are tied 0: source 4
+// is 1'b0 in alphaone_soc.v, sources 7 and 8 are pwm irq[3:2], which pwm.v
+// drives 0 because comparators 2 and 3 are not built), and
 // re-encoded four FSMs one-hot, leaving the unlisted codes out. This file
 // proves, on the RTL and from any state, that both are sound:
 //
-//   L1  once a reset has been applied, every one of the 186 bits equals its
+//   L1  once a reset has been applied, every one of the 192 bits equals its
 //       reset value, whatever the pins do afterwards
 //   L2  once a reset has been applied, exwb_memSize is never 3, muldiv's st
 //       is never 6 or 7, qspi's state is never 7, and spi's st is never 3
@@ -15,7 +18,9 @@
 // The masks and values come from the generated consts.vh (run.sh): the mask
 // is the list of removed bits that tb/eqy/accounting.py found, the value is
 // what the RTL's own reset gives those bits (read off a solver trace), so
-// none of the 186 is typed here. The design's internal nets are brought out
+// none of the 192 is typed here. pend and insvc are declared [NSRC:1]; their
+// ports here are [8:0] (position = index - 1), and lemma_gen.py makes their
+// masks by position. The design's internal nets are brought out
 // as ports by yosys's `expose` (hierarchical references are not supported),
 // and rst_soc is the reset that reaches every flop of the SoC.
 //
@@ -41,6 +46,7 @@ module lemma_props (
     wire [31:0] pc, ifex_pc;
     wire [1:0]  exwb_memSize;
     wire [2:0]  muldiv_st; wire [3:0] qspi_state;
+    wire [8:0]  plic_pend, plic_insvc;     // pend[9:1], insvc[9:1]
 
     tt_um_alfadelta10010_alphaone_soc dut (
         .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in), .uio_out(uio_out),
@@ -62,7 +68,9 @@ module lemma_props (
         .\soc.cpu.muldiv_inst.st (muldiv_st),
         .\soc.qspi.state (qspi_state),
         .\soc.gpio_inst.out_r (gpio_out_r),
-        .\soc.gpio_inst.spi_inst.st (spi_st));
+        .\soc.gpio_inst.spi_inst.st (spi_st),
+        .\soc.plic_inst.pend (plic_pend),
+        .\soc.plic_inst.insvc (plic_insvc));
 
     // A reset edge has happened: rst_soc is high at a clock edge, and every
     // flop of the SoC takes its reset value at that edge.
@@ -82,6 +90,8 @@ module lemma_props (
     wire ok_trap_cause    = !armed || ((trap_cause    & `LM_soc_cpu_csr_unit_trap_cause)    == `LV_soc_cpu_csr_unit_trap_cause);
     wire ok_trap_pc       = !armed || ((trap_pc       & `LM_soc_cpu_csr_unit_trap_pc)       == `LV_soc_cpu_csr_unit_trap_pc);
     wire ok_gpio_out_r    = !armed || ((gpio_out_r    & `LM_soc_gpio_inst_out_r)            == `LV_soc_gpio_inst_out_r);
+    wire ok_plic_pend     = !armed || ((plic_pend     & `LM_soc_plic_inst_pend)             == `LV_soc_plic_inst_pend);
+    wire ok_plic_insvc    = !armed || ((plic_insvc    & `LM_soc_plic_inst_insvc)            == `LV_soc_plic_inst_insvc);
     wire ok_spi_st        = !armed || (spi_st != 2'b11);                       // L2
     wire ok_memSize       = !armed || (exwb_memSize != 2'b11);                 // L2
     wire ok_st            = !armed || (muldiv_st != 3'b110 && muldiv_st != 3'b111);   // L2
@@ -98,5 +108,6 @@ module lemma_props (
         assert (ok_trap_pc);       assert (ok_memSize);        assert (ok_st);
         assert (ok_state);         assert (ok_pc_aligned);
         assert (ok_gpio_out_r);    assert (ok_spi_st);
+        assert (ok_plic_pend);     assert (ok_plic_insvc);
     end
 endmodule

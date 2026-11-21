@@ -11,7 +11,10 @@ single-bit nets (gold: splitnets -format []). Classifies every gold flop bit:
            it is the bit's own (first, public) name
   rename   the same flop under another net name (an alias of the gold bit)
   recode   a bit of an FSM register that synthesis recoded one-hot
-  removed  no gate flop: the constant CSR bits, the unused gpio bits
+  removed  no gate flop: the constant bits (CSR, gpio, PLIC), the unused gpio bits
+  memaddr  the read-address register that yosys's memory_dff + memory_map build for a
+           read port of a memory array (MEMRD below): a copy of the address flop, in gold
+           named $\<mem>$rdreg[<port>]$q, in the netlist an anonymous flop (_NNNNN_ / netNNNN)
 
 and writes OUT_DIR/accounting.txt, consts.cand (the removed bits that are
 not the unused gpio bits, one `name[idx]` per line) and OUT_DIR/renames.txt.
@@ -19,8 +22,12 @@ Exit status 1 if a count differs from the table of the work order.
 """
 import collections, json, re, sys
 
-EXPECT = dict(direct=1377, rename=7, recode_gold=11, recode_gate=22, removed=188,
-              gold=1583, gate=1406)
+# 4x4 (hd netlist 757ba9e9, RTL 1f2a473): 1925 direct = 1861 named flops + the 64 bits of
+# uart rx_mem (gold memory_map words rx_mem[k][b] = the netlist's rx_mem[k][b]); cand = 184 CSR
+# + gpio out_r[1], [3] + PLIC pend/insvc of the tied-0 sources 4, 7, 8; unused = 0 (the pinmux
+# reads gpio out_r[7:4] now); memaddr = rx_mem's read-address register, 3 bits on each side.
+EXPECT = dict(direct=1925, rename=11, recode_gold=11, recode_gate=22, removed=192,
+              gold=2142, gate=1961, cand=192, unused=0, memaddr_gold=3, memaddr_gate=3)
 RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, 6),
           "soc.qspi.state": (4, 10), "soc.gpio_inst.spi_inst.st": (2, 3)}
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
@@ -28,7 +35,17 @@ INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
 # the RTL if_pc_next[0] = (pc + 2 or 4)[0] = pc[0], a combinational copy of the
 # pc[0] flop; synthesis folded the two nets and kept the name if_pc_next[0].
 EXPLICIT_RENAME = {"soc.cpu.imem_addr[0]": "soc.cpu.if_pc_next[0]"}
-UNUSED = {"soc.gpio_inst.out_r[4]", "soc.gpio_inst.out_r[5]"}
+# gold flop bits with no fan-out that synthesis removed (3x4: gpio out_r[4], [5]; in 4x4 the pinmux
+# reads them, so they are direct matches and the set is empty)
+UNUSED = set()
+# memory -> (address flop, address width): the read port's address register that memory_dff
+# merges into the port and memory_map rebuilds as a plain flop, a copy of the address flop
+# (rx_rp: same D, so the same value from any equal start). gold: Q net $\<mem>$rdreg[0]$q;
+# netlist: anonymous. tb/eqy/run.sh's gold read maps memories the way the harden's synth does
+# (memory -nomap; memory_map), so both sides hold the copy and EQY compares the read mux.
+MEMRD = {"soc.uart_inst.rx_mem": ("soc.uart_inst.rx_rp", 3)}
+MEMRD_GOLD = re.compile(r"^\$\\?(%s)\$rdreg\[\d+\]\$q(\[\d+\])?$" % "|".join(re.escape(m) for m in MEMRD))
+ANON = re.compile(r"^(_\d+_|net\d+)$")
 
 
 def netbits(mod):
@@ -64,6 +81,7 @@ def main():
         for n in ns:
             gate_q[n] = (cn, ty)
     cls = collections.defaultdict(list)
+    memaddr_gold, memaddr_gate = [], []
     renames = []
     recode_gold, recode_gate = [], []
     for cn, ty, b, ns in gf:
@@ -71,6 +89,8 @@ def main():
         base = re.sub(r"\[\d+\]$", "", prim)
         if base in RECODE:
             recode_gold.append(prim)
+        elif all(MEMRD_GOLD.match(n) for n in ns):
+            memaddr_gold.append(prim)
         elif prim in gate_q:
             cls["direct"].append(prim)
         else:
@@ -90,11 +110,18 @@ def main():
     unused = sorted(x for x in cls["removed"] if x in UNUSED)
     got = dict(direct=len(cls["direct"]), rename=len(cls["rename"]),
                recode_gold=len(recode_gold), recode_gate=len(recode_gate),
-               removed=len(cls["removed"]), gold=len(gf), gate=len(tf))
-    # gate flops with a Q net that no gold bit explains
+               removed=len(cls["removed"]), gold=len(gf), gate=len(tf), cand=len(cand),
+               unused=len(unused), memaddr_gold=len(memaddr_gold))
+    # gate flops with a Q net that no gold bit explains; the anonymous ones are the memory read
+    # address registers (their count must equal gold's), every other one is a stray
     gold_names = {n for _, _, _, ns in gf for n in ns} | set(EXPLICIT_RENAME.values())
-    stray = sorted(ns[0] for cn, ty, b, ns in tf
-                   if not any(x in gold_names or re.sub(r"\[\d+\]$", "", x) in RECODE for x in ns))
+    stray = []
+    for cn, ty, b, ns in tf:
+        if any(x in gold_names or re.sub(r"\[\d+\]$", "", x) in RECODE for x in ns):
+            continue
+        (memaddr_gate if all(ANON.match(x) for x in ns) else stray).append(ns[0])
+    stray.sort()
+    got["memaddr_gate"] = len(memaddr_gate)
     lines = ["flop accounting (gold = RTL, gate = hardened netlist)",
              f"  gold flop bits            {got['gold']:5d}  (expect {EXPECT['gold']})",
              f"  gate flops                {got['gate']:5d}  (expect {EXPECT['gate']})",
@@ -103,11 +130,12 @@ def main():
              f"  recoded FSM bits, gold    {got['recode_gold']:5d}  (expect {EXPECT['recode_gold']})",
              f"  recoded FSM bits, gate    {got['recode_gate']:5d}  (expect {EXPECT['recode_gate']})",
              f"  removed by synthesis      {got['removed']:5d}  (expect {EXPECT['removed']})",
-             f"    constant bits (CSR + gpio out_r[1], [3]) {len(cand):5d}  (expect 186)",
-             f"    unused gpio bits        {len(unused):5d}  (expect 2)",
+             f"    constant bits (CSR + gpio out_r[1], [3] + PLIC pend/insvc 4, 7, 8) {len(cand):5d}  (expect {EXPECT['cand']})",
+             f"    unused gpio bits        {len(unused):5d}  (expect {EXPECT['unused']})",
+             f"  memory read-address register, gold {got['memaddr_gold']:5d}  (expect {EXPECT['memaddr_gold']}): {sorted(memaddr_gold)}",
+             f"  memory read-address register, gate {got['memaddr_gate']:5d}  (expect {EXPECT['memaddr_gate']}): {sorted(memaddr_gate)}",
              f"  gate flops no gold bit explains: {len(stray)} {stray}"]
-    bad = [k for k in EXPECT if got[k] != EXPECT[k]] + (["cand"] if len(cand) != 186 else []) \
-        + (["unused"] if len(unused) != 2 else []) + (["stray"] if stray else [])
+    bad = [k for k in EXPECT if got[k] != EXPECT[k]] + (["stray"] if stray else [])
     lines.append("renames: " + "; ".join(f"{a} -> {b}" for a, b in renames))
     lines.append("MATCH" if not bad else "DIFFERENCE in: " + ", ".join(bad))
     open(out + "/accounting.txt", "w").write("\n".join(lines) + "\n")
