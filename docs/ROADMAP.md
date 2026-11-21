@@ -531,7 +531,7 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
     software bench (`tb/tb_sw.v`, 9.4) runs the loader and hello world in
     1,967,772 clocks in both simulators, instruction for instruction (on `32cac47`,
     with streaming flash reads, 1,894,652 in both: re-checked 2026-11-11; hello now
-    also prints its mcycle line, 2,057,515 in both) Getting
+    also prints its mcycle line, 2,076,382 in both) Getting
     there found one testbench race, not an RTL difference: releasing reset
     with `rst <= 0` in a process that waits on the clock edge made Verilator
     release the QSPI pins a clock earlier than Icarus. A bench must release
@@ -864,7 +864,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
   sweep of `tests/soc/ddr_sweep.S` from PSRAM: DDR_CAP 1 to 6 against an SDR copy of a flash block, the
   middle of the longest passing run, an execute test from flash under the watchdog (TOP 1) and a trap
   handler, then the watchdog at TOP 15 and the payload runs with the flash in DDR. A watchdog reset with
-  BOOT_MODE 0xD8 + k, or BOOT_MODE 0xDF, keeps SDR with no sweep; the strap's STREAM bit is kept through the sweep and every fall back to SDR (the `+NO_STREAM` runs require that the Pmod model sees no stream continuation, `resumes 0`, during the whole boot). It prints
+  BOOT_MODE 0xD8 + k, or BOOT_MODE 0xDF, keeps SDR with no sweep; the strap's STREAM bit is kept through the sweep's trial points and every fall back to SDR (`tb_sw` raises an ERROR if `QSPI_CFG.STREAM` is ever 1 under `+NO_STREAM`, and the `+NO_STREAM` runs require that the Pmod model sees no stream continuation, `resumes 0`, during the whole boot). It prints
   the chosen point and the mask of passing points, or why the flash stays SDR. Tests (`make run-ddr-all`):
   DDR on, the watchdog fallback, no passing point, a forced trap and a forced mismatch in the execute test,
   a soft reboot and a watchdog reset without a DDR note (the sweep runs again), BOOT_MODE 0xDF, no flag,
@@ -879,9 +879,12 @@ of `sw/Makefile`. Output goes to `build/sw`.
   watcher on syscon FINISH. It prints `SW-RESULT: PASS|FAIL|TIMEOUT` with
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
-  monitor's scripted session give the same clocks on both, 2,057,515 and 41,736,094
-  (1,014,564 instructions); FatFs (66,143,453 clocks, 76 blocks read, 27 written) and
-  FreeRTOS (49,047,478 clocks, the same costs) are likewise identical, checked 2026-11-11.
+  monitor's scripted session give the same clocks on both, 2,076,382 and 56.9 million
+  (1.59 million instructions); FatFs (108.2 million clocks, 123 blocks read, 69 written) and
+  FreeRTOS (49,077,894 clocks, the same costs) are the Verilator figures. The monitor, FatFs and
+  FreeRTOS runs were identical on Icarus when compared 2026-11-11, before the later fixes changed
+  the counts; on the current tree Icarus was re-run 2026-11-21 for hello, the DDR cases and the
+  51-run timing matrix (the SD variants are in progress).
 * **FatFs** (`sw/fatfs`, `make -C sw run-fatfs`): ChaN's FatFs R0.16 (long
   file names, relative paths, `f_printf`) on `sw/common/sd.c`, an SD card
   driver on the SPI controller that keeps the boot contract's rules 4 and 5
@@ -944,8 +947,8 @@ million clocks: the run below is 70 iterations.
 | Dhrystone 2.2 (500 runs) | 16,697 clocks per run; 59.9 Dhrystones/s per MHz; **0.034 DMIPS/MHz**; all 14 final values correct | |
 | CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
 | Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
-| FatFs, mount to delete | 66 million clocks in all; 76 blocks read, 27 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
-| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,186 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **5,988 clocks on average, 9,014 at most** | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
+| FatFs, mount to delete | 108 million clocks in all; 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
+| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,186 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
 * FAT32 (a 33 MB image is too big for the bench's disk array), a card larger than 2 GB, multi-block

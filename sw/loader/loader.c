@@ -11,8 +11,8 @@
  *            a1 = 0 (no device tree yet)
  *
  * Rules 4 and 5 (SPI enable, SD init) belong to the code that uses the SPI;
- * the loader leaves the SPI controller disabled. Rule 6: the watchdog is not
- * touched. Rule 1 (mtvec) is in start.S.
+ * the loader leaves the SPI controller disabled. Rule 6: the watchdog is left
+ * alone unless the image asks for DDR; the sweep in ddr.S then arms it (TOP 1 for the execute test, TOP 15 after). Rule 1 (mtvec) is in start.S.
  *
  * Failures print one line and stop through syscon FINISH with a code:
  *   1 bad magic, 2 payload does not fit PSRAM, 3 entry outside the payload,
