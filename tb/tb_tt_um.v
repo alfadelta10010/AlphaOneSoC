@@ -205,8 +205,21 @@ module tb_tt_um;
     // RTS# on uo_out[5]. rp_gate = 0 hides uo_out[4] from the model while pinmux.S makes it a GPIO pin (the break
     // it drives there is not UART traffic); see soc_event.
     reg  cts_pin = 1'b0, rp_gate = 1'b1;
+    // pm4_ok: uo_out[4] is the UART's TX pin only while its pinmux code is 0 (RTL: read from the pinmux, three clocks
+    // after the code returns to 0 so that the pin flop has settled; closed at once when the code changes). pinmux.S's
+    // read-back loop (every code on every pin) and its GPIO phase otherwise drive a long low there, which is a break
+    // to the model, not traffic. A gate-level netlist has no hierarchy: the cue-2 gate above is all it has.
+    wire pm4_now;
+    reg  pm4_d1 = 1'b1, pm4_d2 = 1'b1;
+`ifndef GL_TEST
+    assign pm4_now = (dut.soc.pinmux_inst.codes[14:12] == 3'd0);
+`else
+    assign pm4_now = 1'b1;
+`endif
+    always @(posedge clk) begin pm4_d1 <= pm4_now; pm4_d2 <= pm4_d1; end
+    wire pm4_ok = pm4_now & pm4_d1 & pm4_d2;
     rp2350_uart_model #(.BIT_NS(16.0 * TCLK)) rp (
-        .tx(rp_gate ? uo_out[4] : 1'b1), .rx(uart_rx), .cts_n(cts_pin ? uo_out[5] : 1'b0));
+        .tx((rp_gate & pm4_ok) ? uo_out[4] : 1'b1), .rx(uart_rx), .cts_n(cts_pin ? uo_out[5] : 1'b0));
     // pinmux.S cue 2 closes the gate; the first rise of uo_out[4] after it is the program's GPIO store of 1 (cue 4's
     // side), long before cue 5's frame starts
     always @(posedge uo_out[4]) if (!rp_gate) rp_gate = 1'b1;
