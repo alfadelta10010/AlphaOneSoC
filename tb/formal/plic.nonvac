@@ -1,5 +1,5 @@
 # claim picks the highest id -> P1
-sed plic.v s/for (i = NSRC; i >= 1; i = i - 1) if (cand\[i\]) cid = i;/for (i = 1; i <= NSRC; i = i + 1) if (cand[i]) cid = i;/
+sed plic.v s/for (j = NSRC; j >= 1; j = j - 1) if (cand\[j\]) cid = j;/for (j = 1; j <= NSRC; j = j + 1) if (cand[j]) cid = j;/
 # complete ignores en -> P4
 sed plic.v s/if (compl \&\& wdata == i \&\& en\[i\]) insvc/if (compl \&\& wdata == i) insvc/
 # gateway ignores insvc -> P7/P2
@@ -8,3 +8,7 @@ sed plic.v s/if (src\[i\] \&\& !insvc\[i\]) pend/if (src[i]) pend/
 sed plic.v s/wire \[NSRC:1\] elig = cand \& {NSRC{!thr}};/wire [NSRC:1] elig = cand;/
 # claim honours the threshold again -> P1
 sed plic.v s/wire \[NSRC:1\] cand = pend \& en \& prio; /wire [NSRC:1] cand = pend \& en \& prio \& {NSRC{!thr}}; /
+# priority 0 does not mask the source: the claimable set ignores prio
+sed plic.v s/wire \[NSRC:1\] cand = pend \& en \& prio; /wire [NSRC:1] cand = pend \& en; /
+# claim returns an id although cid is 0 (nothing pending): claim without cid != 0
+sed plic.v s/wire claim = rd \& a_clm \& (cid != 5'd0);/wire claim = rd \& a_clm;/
