@@ -1,0 +1,10 @@
+INFO banner ddr_cap=1 pass_mask=00000003
+INFO banner pin=1f2a473 F_CLK=18000000 div=10 cfg=3 straps=00000000 qcfg=00000007
+PASS uart 85 checks
+INFO flash ddr cfg=2 cap_pass_mask=00000003 cap=1
+INFO flash ddr cfg=3 cap_pass_mask=00000003 cap=1
+PASS flash 7 checks
+PASS psram 106 checks
+INFO cache loop ticks off=380501 on=112384
+PASS cache 15 checks
+ALL PASS
