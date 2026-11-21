@@ -3,7 +3,8 @@
 // a define so each sidecar proves one cluster by pdr:
 //   P_FLASH  MF1 a write never selects CS0; MF2 IO0 in a CS0 window is a prefix of
 //            0xEB or 0xFF (the device-level form: no 06h, no write); MF3 mode byte FFh
-//   P_TCEM   MT1 a PSRAM CS run <= 64 clocks (tCEM 8 us at the 8 MHz floor);
+//   P_TCEM   MT1 a PSRAM CS run <= 64 clocks (tCEM 8 us at the 8 MHz floor); with BURST_FREE (the cache's
+//            line-burst qualifier free, M-A5) MT1b a run <= LPB clocks (tCEM 8 us at a 13 MHz floor), MT1c only after a qualifier;
 //            MT1t the measured PSRAM / flash runs; MT2 CS high >= 2 clocks (tCPH)
 //   P_ARB    MD1 data first; MD2 split halves are consecutive; MD3 split iff
 //            i_addr[31] && &i_addr[9:1], second half on the right chip
@@ -28,6 +29,10 @@
 `define LF0 57
 `define LF1 58
 `endif
+`ifndef LPB
+`define LPB 104          // a 4-word PSRAM line burst: 20 + 3 * 8 SCK = 88 clocks plus the gaps; the proof's worst case
+                         // (rd_late = 1, counterexample at LPB 100) is 101 clocks, so 104 = 101 + 3 margin: tCEM 8 us holds at clk >= 13 MHz
+`endif
 `ifndef S_MAX
 `define S_MAX 125
 `endif
@@ -39,28 +44,28 @@
 `endif
 module mem_props (
     input  wire        clk, rst,
-    input  wire        i_req, d_req, d_we,
+    input  wire        i_req, i_burst, d_req, d_we,
     input  wire [31:0] i_addr, d_addr, d_wdata,
     input  wire [3:0]  d_be, io_in,
     input  wire        rd_late,
     input  wire        stream_en    // free: streaming on, off and toggling are all covered (WO-54a)
 );
     wire [31:0] i_rdata, d_rdata, q_wdata, q_rdata;
-    wire        i_ready, d_ready, q_start, q_we, q_idle, q_done;
+    wire        i_ready, d_ready, q_start, q_we, q_idle, q_done, q_burst;
     wire [1:0]  q_cs, q_nbytes_m1;
     wire [23:0] q_addr;
     wire        sck, ctl_oe, io_oe;
     wire [2:0]  cs_n;
     wire [3:0]  io_out;
 
-    mem_ctrl memc (.clk(clk), .rst(rst), .i_req(i_req), .i_addr(i_addr), .i_rdata(i_rdata), .i_ready(i_ready),
+    mem_ctrl memc (.clk(clk), .rst(rst), .i_req(i_req), .i_addr(i_addr), .i_burst(i_burst), .i_rdata(i_rdata), .i_ready(i_ready),
         .d_req(d_req), .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_we(d_we), .d_rdata(d_rdata), .d_ready(d_ready),
-        .q_start(q_start), .q_cs(q_cs), .q_addr(q_addr), .q_we(q_we), .q_nbytes_m1(q_nbytes_m1), .q_wdata(q_wdata),
+        .q_start(q_start), .q_cs(q_cs), .q_addr(q_addr), .q_we(q_we), .q_nbytes_m1(q_nbytes_m1), .q_wdata(q_wdata), .q_burst(q_burst),
         .q_idle(q_idle), .q_done(q_done), .q_rdata(q_rdata));
     qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late), .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata), .idle(q_idle), .done(q_done), .rdata(q_rdata),
         .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in), .stream_en(stream_en),
-        .ddr(1'b0), .ddr_cap(3'd0));      // WO-54b: SDR property list, see mem.conf
+        .ddr(1'b0), .ddr_cap(3'd0), .burst(q_burst));      // WO-54b: SDR property list, see mem.conf
 
     reg armed = 1'b0;               // a reset has been applied; every assert is gated on it
     always @(posedge clk) if (rst) armed <= 1'b1;
@@ -86,6 +91,11 @@ module mem_props (
         assume (!hold_i || (i_req && i_addr == i_addr_q));                                      // M-A1
         assume (!hold_d || (d_req && d_addr == d_addr_q && d_wdata == d_wdata_q && d_be == d_be_q && d_we == d_we_q));
         assume (!i_req || (i_ok && !i_addr[0]));                                                // M-A2
+`ifdef BURST_FREE
+        assume (!i_burst || (i_req && i_addr[1:0] == 2'b00 && i_addr[31]));                     // M-A5 a burst qualifier comes with an aligned PSRAM word request (cache.v m_burst)
+`else
+        assume (!i_burst);                                                                      // cache off: no qualifier
+`endif
         assume (!d_req || (d_ok && d_addr[1:0] == 2'b00 && be_ok));
         assume (!(armed && !rst) || rd_late == rl_q);                                           // M-A3
     end
@@ -163,10 +173,17 @@ module mem_props (
         pl <= (pl_now == 8'd255) ? 8'd255 : pl_now; fl <= (fl_now == 8'd255) ? 8'd255 : fl_now;
     end
     reg [2:0] cs_q = 3'b111, rise_q = 3'b000;
+    reg i_burst_ever = 1'b0;
+    always @(posedge clk) if (i_burst) i_burst_ever <= 1'b1;
     always @(posedge clk) begin cs_q <= cs_n; rise_q <= cs_n & ~cs_q; end
     always @(*) if (armed && !rst) begin
+`ifdef BURST_FREE
+        assert (pl_now <= `LPB);                                                                // MT1b a PSRAM line burst: one CS run <= LPB clocks
+        assert (pl_now <= 8'd64 || i_burst_ever);                                               // MT1c longer than a single read only after a qualifier
+`else
         assert (pl_now <= 8'd64);                                                               // MT1
         assert (pl_now <= (strap ? `LP1 : `LP0));                                               // MT1t
+`endif
         assert (fl_now <= (strap ? `LF1 : `LF0));
         assert ((rise_q & ~cs_n) == 3'b000);                                                    // MT2
     end

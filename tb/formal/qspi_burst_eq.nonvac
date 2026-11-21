@@ -1,0 +1,6 @@
+# flash reads stop opening streams -> cs_n differs from the old engine
+sed qspi_ctrl.v s/strm  <= streamable || pstreamable;/strm  <= 1'b0;/
+# a PSRAM word always opens a burst whatever the qualifier says -> the pins differ from the old engine
+sed qspi_ctrl.v s/t_bst   <= burst;/t_bst   <= 1'b1;/
+# chip select rises after every read, stream or not -> differs from the old engine
+sed qspi_ctrl.v s/if (!streamable \&\& !pstreamable)/if (1'b1)/
