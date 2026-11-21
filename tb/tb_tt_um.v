@@ -201,8 +201,15 @@ module tb_tt_um;
         .dev_io(pmod_io), .dev_oe(pmod_oe));
 
     // ── The RP2350's UART: 16 clocks a bit, the divisor tt_pins.S sets ──────
+    // RTS# is a pinmux feature only now (WO-58): CTS is tied asserted, except in pinmux.S (cts_pin), which puts
+    // RTS# on uo_out[5]. rp_gate = 0 hides uo_out[4] from the model while pinmux.S makes it a GPIO pin (the break
+    // it drives there is not UART traffic); see soc_event.
+    reg  cts_pin = 1'b0, rp_gate = 1'b1;
     rp2350_uart_model #(.BIT_NS(16.0 * TCLK)) rp (
-        .tx(uo_out[4]), .rx(uart_rx), .cts_n(1'b0));      // RTS# is a pinmux feature only now (WO-58): CTS tied asserted
+        .tx(rp_gate ? uo_out[4] : 1'b1), .rx(uart_rx), .cts_n(cts_pin ? uo_out[5] : 1'b0));
+    // pinmux.S cue 2 closes the gate; the first rise of uo_out[4] after it is the program's GPIO store of 1 (cue 4's
+    // side), long before cue 5's frame starts
+    always @(posedge uo_out[4]) if (!rp_gate) rp_gate = 1'b1;
 
     // The demo board's other devices, on the pins as tests/soc programs use them
     // (docs/pins-and-peripherals.md): the SSD1331 on CS# [0], MOSI [1], D/C [2],
@@ -430,6 +437,10 @@ module tb_tt_um;
     localparam integer ID_syscon_pinreset = 16;
     localparam integer ID_ddr_flash = 18;    // WO-55b: tests/soc/ddr_flash.S
     localparam integer ID_ddr_sweep = 19;    // tests/soc/ddr_sweep.S, +WANT_K=<k> (-1 = "DDR off", -2 = any point 1..6), no watchdog reboot
+    localparam integer ID_sd_cs = 20;        // WO-59: tests/soc/sd_cs.S, pinmux.S, audio.S, pwm_linux.S at the pins
+    localparam integer ID_pinmux = 21;
+    localparam integer ID_audio = 22;
+    localparam integer ID_pwm_linux = 23;
     localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
     integer pid = 0;
     integer s_want_k = 0, s_exp_wdt = 0;
@@ -455,6 +466,10 @@ module tb_tt_um;
             if (p == "sd_init") prog_id = ID_sd_init;
             if (p == "ddr_flash") prog_id = ID_ddr_flash;
             if (p == "ddr_sweep") prog_id = ID_ddr_sweep;
+            if (p == "sd_cs") prog_id = ID_sd_cs;
+            if (p == "pinmux") prog_id = ID_pinmux;
+            if (p == "audio") prog_id = ID_audio;
+            if (p == "pwm_linux") prog_id = ID_pwm_linux;
         end
     endfunction
     // ── +TEST=soc +PROG=<name>: the mailbox programs of tests/soc ───────────
@@ -523,6 +538,61 @@ module tb_tt_um;
         begin want_oled[n_want_oled] = {dc, b}; n_want_oled = n_want_oled + 1; end
     endtask
 
+    // ── PWM and audio monitors (pwm_linux, pinmux, audio): as in tb_soc_periph.v, on the pins ──────────────
+    reg  [31:0] m2_eh = 0, m2_ep = 0, m7_eh = 0, m7_ep = 0;
+    reg         m2_clr = 1'b0, m7_clr = 1'b0;
+    wire [31:0] m2_hi_ok, m2_per_ok, m2_n_hi, m2_n_pulse, m7_hi_ok, m7_per_ok, m7_n_hi, m7_n_pulse;
+    pin_meter m2 (.clk(clk), .pin(uo_out[2]), .clr(m2_clr), .exp_hi(m2_eh), .exp_per(m2_ep),
+                  .hi_ok(m2_hi_ok), .per_ok(m2_per_ok), .n_hi(m2_n_hi), .n_pulse(m2_n_pulse));
+    pin_meter m7 (.clk(clk), .pin(uo_out[7]), .clr(m7_clr), .exp_hi(m7_eh), .exp_per(m7_ep),
+                  .hi_ok(m7_hi_ok), .per_ok(m7_per_ok), .n_hi(m7_n_hi), .n_pulse(m7_n_pulse));
+    always @(posedge clk) begin if (m2_clr) m2_clr <= 1'b0; if (m7_clr) m7_clr <= 1'b0; end
+    task automatic pw_eval(input integer pin, input integer ph, input [31:0] hi_ok, per_ok, n_pulse);
+        begin
+            $display("%0s phase %0d on uo_out[%0d]: %0d pulses, %0d with the expected high time, %0d with the expected period",
+                     prog, ph, pin, n_pulse, hi_ok, per_ok);
+            if (hi_ok < 1 || per_ok < 1)
+                fail($sformatf("%0s phase %0d: uo_out[%0d] had %0d pulses, %0d of the expected high time, %0d of the expected period",
+                               prog, ph, pin, n_pulse, hi_ok, per_ok));
+        end
+    endtask
+    // audio (one square voice, WO-63): every phase restarts the voice, so every distance between two consecutive
+    // rising edges of uo_out[7] is exactly the tone period, 32 * 2^O * (P + 1) clocks
+    integer au_n = 0, au_hi = 0, au_last = 0;
+    reg     au_prev = 1'b0;
+    integer au_dist [0:127];
+    always @(posedge clk) if (soc_test && pid == ID_audio) begin
+        if (uo_out[7] === 1'b1) au_hi = au_hi + 1;
+        if (uo_out[7] === 1'b1 && !au_prev) begin
+            if (au_n > 0 && au_n < 128) au_dist[au_n - 1] = cyc - au_last;
+            au_last = cyc; au_n = au_n + 1;
+        end
+        au_prev = (uo_out[7] === 1'b1);
+    end
+    task automatic au_eval(input integer ph);
+        integer i, bad, want;
+        begin
+            want = (ph == 1) ? 1024 : (ph == 2) ? 1280 : (ph == 3) ? 1312 : 0;
+            if (ph == 4) begin
+                if (au_hi != 0) fail($sformatf("audio phase %0d: EN 0 but uo_out[7] was high %0d clocks", ph, au_hi));
+            end else if (au_n < 40) fail($sformatf("audio phase %0d: only %0d rising edges", ph, au_n));
+            else begin
+                bad = 0;
+                for (i = 0; i < au_n - 1 && i < 127; i = i + 1) if (au_dist[i] != want) bad = bad + 1;
+                $display("audio phase %0d: %0d rising edges, tone period %0d clocks (want %0d), %0d wrong", ph, au_n, au_dist[0], want, bad);
+                if (bad != 0) fail($sformatf("audio phase %0d: %0d of %0d periods not %0d clocks", ph, bad, au_n - 1, want));
+            end
+            au_n = 0; au_hi = 0;
+        end
+    endtask
+    integer pidx = 0;
+    task automatic send_pat(input integer n);
+        integer k;
+        for (k = 0; k < n; k = k + 1) begin
+            rp.send_byte(8'h20 + ((pidx * 7 + 3) % 95)); pidx = pidx + 1;
+        end
+    endtask
+
     task automatic soc_setup;
         integer k;
         reg [7:0] init [0:47];
@@ -559,7 +629,7 @@ module tb_tt_um;
                               "tx_chars 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEF\015\n",
                               "console: polled\015\n", "console: fifo path, 16 at a time\015\n"};
                     s_n_ev = 2; s_ev[0] = 4; s_ev[1] = 5;
-                    s_n_val = 1; s_val_known = 1'b1; s_val[0] = 32'd4;   // VALUE s5: four tx_chars bursts
+                    s_n_val = 1; s_val_known = 1'b1; s_val[0] = 32'd55;  // VALUE s5: 55 characters, one per tx_chars (tx_loadsz 1)
                 end
                 ID_oled_spi: begin
                     s_div = 1; oled_fit = 1'b0;
@@ -578,8 +648,9 @@ module tb_tt_um;
                 end
                 ID_irq_stall: begin
                     s_div = 4;
-                    for (k = 0; k < 12; k = k + 1) s_want = {s_want, "ABABAB"};
-                    for (k = 0; k < 9; k = k + 1)  s_want = $sformatf("%sPPPPP%c", s_want, 8'h5A);
+                    // the one-byte THR (WO-63): part A sends ABA per round, part C two P and the amoswap's Z
+                    for (k = 0; k < 12; k = k + 1) s_want = {s_want, "ABA"};
+                    for (k = 0; k < 9; k = k + 1)  s_want = $sformatf("%sPP%c", s_want, 8'h5A);
                     s_n_ev = 9; for (k = 0; k < 9; k = k + 1) s_ev[k] = 4;
                     for (k = 0; k < 16; k = k + 1) begin push_oled(1'b0, 8'h55); push_oled(1'b0, 8'hAA); end
                 end
@@ -590,7 +661,7 @@ module tb_tt_um;
                     s_ev[5] = 'h21; s_ev[6] = 'h20; s_ev[7] = 'h20; s_ev[8] = 'h20; s_ev[9] = 'h20;
                     s_ev[10] = 'h30; s_ev[11] = 'h20;
                     s_n_val = 10; s_val_known = 1'b1;
-                    s_val[0] = "q"; s_val[1] = "m"; s_val[2] = 8'h89; s_val[3] = 8'hCF; s_val[4] = 8'h81;
+                    s_val[0] = "q"; s_val[1] = "m"; s_val[2] = 8'hB9; s_val[3] = 8'hFF; s_val[4] = 8'h81;
                     s_val[5] = 8'hC1; s_val[6] = 8'h41; s_val[7] = 8'h4E; s_val[8] = 8'h49; s_val[9] = 8'h49;
                     push_oled(1'b0, 8'h81); push_oled(1'b0, 8'h7E); push_oled(1'b0, 8'h5A); push_oled(1'b0, 8'hC3);
                 end
@@ -624,6 +695,28 @@ module tb_tt_um;
                     s_val[0] = 32'd2048; s_val[1] = 32'd4; s_val[2] = 32'd2;
                 end
                 ID_ddr_flash: s_div = 1;
+                ID_sd_cs: begin
+                    // the pin flop follows OUT bit 5 (cues 1, 2: uo_out[5] low, high); cues 3, 4: OUT bits 7 and 4 move
+                    // without reaching their pins. (The one-clock lag of uo_out[5] behind OUT needs gpio_out, an
+                    // internal signal: tb_soc_periph checks it.)
+                    s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
+                end
+                ID_pinmux: begin
+                    // The paste (cue 1) with RTS# on uo_out[5] as CTS, the cue-8 check of the held paste, uo_out[5] as
+                    // SD CS# again (cue 2), pin 7 back to audio (cue 5), PWM0 on pin 7 (cues 6, 7). Cues 3 and 4 never
+                    // arrive: the program has made uo_out[4] a GPIO pin then, so the UART's TX has no pin
+                    // (pinmux.S header); the program's other sends resume with cue 5.
+                    s_div = 1; cts_pin = 1'b1;
+                    s_n_ev = 6; s_ev[0] = 1; s_ev[1] = 8; s_ev[2] = 2; s_ev[3] = 5; s_ev[4] = 6; s_ev[5] = 7;
+                end
+                ID_audio: begin
+                    // one square voice on uo_out[7]: the tone period of phases 1-3, EN 0 low in phase 4 (tune.S, 9 phases of
+                    // up to 0.3 M clocks each, runs on the internal bench only)
+                    s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
+                end
+                ID_pwm_linux: begin
+                    s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
+                end
                 ID_ddr_sweep: begin
                     // the boot-time DDR sweep: its UART text is the verdict (the last line against +WANT_K), the VALUE
                     // stores are plain mailbox writes
@@ -674,6 +767,42 @@ module tb_tt_um;
                                        gpio_pins, {s_last_val[6:5], s_last_val[3:0]}));
                     if (code == 'h21) tb_in = 8'hA4;
                     if (code == 'h30) oled_fit = 1'b1;
+                end
+                ID_sd_cs: begin
+                    if (code == 1 || code == 2) begin
+                        if (uo_out[5] !== (code == 2)) fail($sformatf("sd_cs cue %0d: uo_out[5] = %b", code, uo_out[5]));
+                    end else if (uo_out[5] !== 1'b1 || uo_out[7] !== 1'b0 || uo_out[4] !== 1'b1)
+                        fail($sformatf("sd_cs cue %0d: uo_out = %b, want [5] 1, [7] 0, [4] 1", code, uo_out));
+                end
+                ID_pinmux: begin
+                    if (code == 1) begin rp.set_flow(1'b1); send_pat(64); end
+                    if (code == 8) begin
+                        // RTS# on uo_out[5]: nothing was read for 24 characters, so the 8-deep FIFO is nearly full, RTS# is
+                        // deasserted (pin high) and the model holds the rest of the paste
+                        if (uo_out[5] !== 1'b1) fail("pinmux cue 8: RTS# (uo_out[5]) still asserted with the RX FIFO nearly full");
+                        if (rp.tx_sent < 7 || rp.tx_sent > 10)
+                            fail($sformatf("pinmux cue 8: the model sent %0d characters before CTS went off, want 7..10", rp.tx_sent));
+                        if (rp.tx_pending() == 0) fail("pinmux cue 8: the model has nothing left to send (flow control did not hold it)");
+                    end
+                    if (code == 2) begin
+                        if (uo_out[5] !== 1'b0) fail("pinmux cue 2: uo_out[5] high after OUT bit 5 went low");
+                        rp_gate = 1'b0; cts_pin = 1'b0;     // the paste is over; uo_out[5] is SD CS# again
+                    end
+                    if (code == 5 && (uo_out[4] !== 1'b1 || uo_out[7] !== 1'b0))
+                        fail($sformatf("pinmux cue 5: uo_out[4], [7] = %b %b, want 1 0", uo_out[4], uo_out[7]));
+                    if (code == 6) begin m7_eh = 32'h4001; m7_ep = 32'h10000; m7_clr <= 1'b1; end
+                    if (code == 7) pw_eval(7, 6, m7_hi_ok, m7_per_ok, m7_n_pulse);
+                end
+                ID_audio: if (code >= 2) au_eval(code - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
+                ID_pwm_linux: begin
+                    if (code >= 2 && code <= 4) pw_eval(2, code - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
+                    m2_clr <= 1'b1;
+                    case (code)
+                        1: begin m2_eh = 32'h4001;  m2_ep = 32'h10000; end
+                        2: begin m2_eh = 32'h8002;  m2_ep = 32'h20000; end
+                        3: begin m2_eh = 32'h20004; m2_ep = 32'h40000; end
+                        default: ;
+                    endcase
                 end
                 ID_syscon_strap: begin strap = !rd_late; s_strap_cyc = cyc; end
                 ID_syscon_wdt: begin s_lo = 65536; s_hi = 98305 + 1 + 1000; end
@@ -856,6 +985,9 @@ module tb_tt_um;
                                        oled.log[k][8], oled.log[k][7:0], want_oled[k][8], want_oled[k][7:0]));
             end
             if (oled.errors != 0) fail($sformatf("%0d SSD1331 errors", oled.errors));
+            if (pid == ID_audio) au_eval(4);
+            if (pid == ID_pwm_linux && m2_n_hi != 0)
+                fail($sformatf("pwm_linux phase 4: uo_out[2] high %0d clocks after PWM off and the default map", m2_n_hi));
             case (pid)
                 ID_uart_echo: begin
                     $display("NOTE uart_echo: the RP2350 held characters for CTS %0d clocks; %0d characters sent against CTS",

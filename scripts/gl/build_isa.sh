@@ -8,7 +8,7 @@
 #
 # Writes under OUT: elf/<name>.elf, hex/<name>.hex (flash image at 0), and the
 # lists list.A, list.B, list.C, list.D10, list.D20 of `name|hex|plusargs` lines
-# (run_gl.sh LIST=). Part D is the 16 mailbox programs of tests/soc built with
+# (run_gl.sh LIST=). Part D is the 20 mailbox programs of tests/soc built with
 # -DMB_UART (they report over the UART as well) and the chip's divisor 34; the
 # three that drive the SSD1331 (D20) run with a 20 ns clock, the rest (D10)
 # with 10 ns: run_gl.sh TCLK=.
@@ -58,6 +58,10 @@ syscon_wdt 1 10
 syscon_wdt_split 1 10
 syscon_poweroff 1 10
 syscon_pinreset 1 10
+sd_cs 1 10
+pinmux 1 10
+audio 1 10
+pwm_linux 1 10
 EOT
   ;;
 esac
