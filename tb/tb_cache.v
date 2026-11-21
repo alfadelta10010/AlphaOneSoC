@@ -61,7 +61,7 @@ module tb_cache;
         reg [16:0] t;
         begin
             t = (a31 ? tbase1 : tbase0) + {14'd0, p};
-            mkaddr = {a31, 7'd0, t, low};
+            mkaddr = {a31, 1'b0, ~a31, 5'd0, t, low};      // 0x80.. or 0x20.. (the core's PMA windows)
         end
     endfunction
     // shadow index: {chip, tag number, addr[6:0]}; ~0 when outside the pool
@@ -231,6 +231,10 @@ module tb_cache;
         if (m_req_q && !m_ready_q && !(m_req && m_addr === m_addr_q)) begin
             $display("FAIL %0d: m_req not held (req %b addr %h -> %h)", cyc, m_req, m_addr_q, m_addr);
             errors = errors + 1;
+        end
+        // mem_ctrl's proved input assumption M-A2: every request on its i-port is in 0x20.. or 0x80.. (fills included)
+        if (m_req && !(m_addr[31:24] === 8'h20 || m_addr[31:24] === 8'h80)) begin
+            $display("FAIL %0d: m_addr %h outside the 0x20/0x80 windows (active %b)", cyc, m_addr, active); errors = errors + 1;
         end
         if (f_ready && !f_req && active) begin
             $display("FAIL %0d: f_ready without f_req while active", cyc); errors = errors + 1;

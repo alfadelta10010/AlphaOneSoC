@@ -55,7 +55,10 @@
 // fencei_flush clears every valid bit (and kills a running fill); with the
 // snoop it adds nothing a single hart needs, it is belt and braces.
 //
-// Fill addresses leave m_addr[30:24] at 0 (mem_ctrl uses addr[31] and addr[23:0]).
+// Fill addresses are the real addresses the core would have fetched: {addr[31], addr[30:24] rebuilt, tag, index,
+// word}. The key keeps addr[31] and addr[23:0]; the window byte is 0x20 (flash) or 0x80 (PSRAM), so addr[29] =
+// ~addr[31] and the rest is 0. That keeps mem_ctrl's proved input assumption M-A2 (i_addr[31:24] in {0x20, 0x80})
+// true of every request the cache makes (tb/formal/cache_props.sv asserts it).
 module cache (
     input  wire        clk,
     input  wire        rst,           // rst_soc
@@ -177,7 +180,7 @@ module cache (
     wire        use_fill = act && fill_active;
     assign active  = act;
     assign m_req   = act ? fill_active : f_req;
-    assign m_addr  = use_fill ? {fill_tag[17], 7'd0, fill_tag[16:0], fill_idx, fcnt, 2'b00} : f_addr;
+    assign m_addr  = use_fill ? {fill_tag[17], 1'b0, ~fill_tag[17], 5'd0, fill_tag[16:0], fill_idx, fcnt, 2'b00} : f_addr;
     assign f_ready = act ? hit_q : m_ready;
     assign f_rdata = !act ? m_rdata :
                      pc1  ? {rb_data[15:0], ra_data[31:16]} : ra_data;

@@ -14,7 +14,8 @@
 //      that cycle (a store completing in the same cycle is not yet in it)
 //   C  while active f_ready only comes with f_req; m_req is held with its address until m_ready
 //   D  the cycle after reset: not active
-// Environment (assumed): the core holds f_req/f_addr until f_ready and f_addr[0] = 0; mem_ctrl answers only a request
+//   E  every m_req comes with an address in 0x20xx_xxxx or 0x80xx_xxxx (mem_ctrl's proved input assumption M-A2)
+// Environment (assumed): fetch addresses are in the two PMA windows; the core holds f_req/f_addr until f_ready and f_addr[0] = 0; mem_ctrl answers only a request
 // that has been held for a cycle, never in two consecutive cycles, never for the cycle a store completes; the data
 // port holds its request until ready, and a store request has been up for a cycle when it completes; reset only in
 // the first cycle (the SoC resets every block together, nothing else is reset mid-run).
@@ -102,6 +103,7 @@ module cache_props (
     always @(*) begin
         assume (rst == !started);
         assume (!f_addr[0]);
+        assume (f_addr[31] ? f_addr[30:24] == 7'd0 : f_addr[30:24] == 7'h20);       // the core's PMA windows: 0x80.. and 0x20..
         if (live && f_req_q && !f_ready_q) assume (f_req && f_addr == f_addr_q);
         if (live && m_ready) assume (m_req_q && m_req && m_addr == m_addr_q);
         assume (!(live && m_ready && m_ready_q));
@@ -130,6 +132,7 @@ module cache_props (
             for (jp = 0; jp < 4; jp = jp + 1)
                 if (kadd(f_addr, jp[1:0]) == tb) assert (f_rdata[8*jp +: 8] == sb);
         if (armed && active && f_ready) assert (f_req);                               // C
+        if (armed && m_req) assert (m_addr[31:24] == 8'h20 || m_addr[31:24] == 8'h80); // E: mem_ctrl's M-A2, fills included
         if (live && m_req_q && !m_ready_q) assert (m_req && m_addr == m_addr_q);     // C
         if (armed && !armed_q) assert (!active);                                      // D
     end
