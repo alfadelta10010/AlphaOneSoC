@@ -152,7 +152,7 @@ module cache (
                 if (fill_active)
                     dead <= 1'b1;
             end
-            if (off || !act) begin                       // pass-through: cold, nothing pending
+            if (off) begin                               // on the way out: cold, nothing pending
                 valid <= 8'd0;
                 hit_q <= 1'b0;
                 b_ph  <= 1'b0;
