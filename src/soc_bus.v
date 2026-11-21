@@ -2,7 +2,8 @@
 //
 // This is the core's own request/ready handshake (see src/fyracore.v), not
 // APB. Memory accesses (flash, PSRAM) pass straight through to the memory
-// controller. Every IO access (CLINT, PLIC, UART, GPIO, syscon) takes two
+// controller. Every IO access (CLINT, PLIC, UART, GPIO/SPI, gamepad, syscon,
+// PINMUX, CACHE_CTL, PWM, audio: ten targets) takes two
 // phases and goes through a register (decision D14: the read data of every IO
 // target reaches the core's load path from a flop, which keeps the placer
 // from packing the IO slot against that path):
