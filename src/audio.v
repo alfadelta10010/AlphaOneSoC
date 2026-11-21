@@ -2,9 +2,9 @@
 // basic 8-bit music is fine, play Tetris"). Original design; no interrupt. audio_o is the voice's square flop.
 //   0x00 TONE0 : {13'b0, 1'b0, O[2:0], P[11:0]}   f = clk/16 / 2^O / (2(P+1)) = 1953125 / (2^O (P+1)) Hz at 62.5 MHz
 //   0x10 CTRL  : {31'b0, EN}
-// Every other offset reads 0 and ignores writes; bits above the fields read 0 (there is no volume, noise or PCM).
+// The registers alias every 0x20 (addr[4:2] only); other offsets in that span read 0 and ignore writes; bits above the fields read 0 (there is no volume, noise or PCM).
 // EN = 0 holds the counters and the pin at their reset values. A new P takes effect at the next reload.
-// Range at 62.5 MHz: O = 0 gives 477 Hz (P = 4095) to 976 kHz; O = 7 reaches 3.7 Hz. Pick the smallest O with
+// Range at 62.5 MHz: O = 0 gives 477 Hz (P = 4095) to 1.953 MHz (P = 0); O = 7 reaches 3.7 Hz. Pick the smallest O with
 // P <= 4095 for the best resolution. Worked note: A4 = 440 Hz -> O = 1, P = 2218: 1953125 / (2 * 2219) = 440.09 Hz.
 // Tetris (Korobeiniki) notes, smallest O, equal-tempered A4 = 440 (cents error is tuning only, below 0.5):
 //   note   O    P     Hz        cents      note   O    P     Hz        cents

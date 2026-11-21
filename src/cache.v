@@ -24,9 +24,10 @@
 // the PMA windows decide the rest): offset 4 bits, index 3 bits, tag 18 bits.
 // Tags and valid bits are flops (8 x 18 + 8); the data is ONE rf_top macro
 // (32 x 32 = 8 lines x 4 words, word index {index, word}), read through both
-// of its ports and never read and written on the same word in one cycle:
-// a word is looked up only after it has been written (see fill_here), so
-// the macro's write-through is never used (+RF_COLLIDE_X stays clean).
+// of its ports; on the fill edge port A may read the word being written, but
+// that data is never used: a word is looked up only after it has been written
+// (see fill_here), so the macro's write-through is never used (+RF_COLLIDE_X
+// stays clean).
 //
 // A fetch wants the 4 bytes from the halfword-aligned pc. At f_addr[1] = 0
 // that is one word; at f_addr[1] = 1 it is the upper half of word A and the

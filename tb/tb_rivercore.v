@@ -106,7 +106,7 @@ module tb_rivercore;
         force soc.qspi_ddr_cap = soc_ddr_cap[2:0];
     end
     // +CACHE_EN=1: the instruction cache is switched on (CACHE_CTL.EN) two clocks after every release of rst.
-    // The program cannot write CACHE_CTL here (IO2 is closed), so the flop is forced; a pin reset releases it
+    // The program cannot write CACHE_CTL here (CACHE_CTL is in IO1, which is closed), so the flop is forced; a pin reset releases it
     // again, as the hardware's reset clears EN.
     reg cache_en_arg;
     initial cache_en_arg = $test$plusargs("CACHE_EN");

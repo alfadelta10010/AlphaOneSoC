@@ -40,11 +40,12 @@
 //                 (read it after its own interrupt).
 //   Edge detection: in_p is in_s one clock later (the same synchroniser
 //   chain, never reset); IN_IP sets when in_s != in_p. No phantom edge after
-//   reset: setting is blocked while rst is high, in_p keeps following in_s
-//   through the reset, so the first clock after reset sees in_s == in_p
-//   whatever the pins hold (the chain is never reset, so a syscon reboot
-//   does not disturb it either). Reset must last 3 clocks from power-up to
-//   fill the chain.
+//   a syscon reboot or any reset of 3 or more clocks: setting is blocked while rst
+//   is high, in_p keeps following in_s through the reset, so the first clock
+//   after reset sees in_s == in_p whatever the pins hold. The chain is never
+//   reset, so the board's two-edge stopped-clock power-up reset (2 clocks) can
+//   leave phantom IN_IP bits: harmless with IE = 0 at reset and with "clear
+//   IN_IP, then set IN_IE".
 //   0x20  RXDATA  read only: the byte received with the last byte sent;
 //                 valid once TXE = 1.
 //   0x24  TXDATA  write: put a byte in the holding register. Read: that
@@ -63,7 +64,7 @@
 //
 // Back-pressure (ready low, only while selected, on a write): a TXDATA write
 // waits while the holding register is full, and every other write waits for
-// TXE. That keeps CS# and D/C (OUT bits 0, 2, 7) still under a byte (the
+// TXE. That keeps CS# and D/C (OUT bits 0, 2, 5) still under a byte (the
 // SSD1331 samples D/C on the byte's eighth rising SCK edge and needs CS# and
 // D/C held 60 / 40 ns after it, so software can write `TXDATA; OUT` back to
 // back without polling), and keeps a change of mode, BAUD or EN from cutting
