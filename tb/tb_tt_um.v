@@ -496,7 +496,7 @@ module tb_tt_um;
     integer    po_lim = 3000;            // clocks from the cue 'p' / 0x53 to the power-off
     integer    fr_st = 0, fr_tag = 0, fr_n = 0;
     reg [31:0] fr_acc = 32'h0;
-    integer    s_cue_cyc = 0, s_strap_cyc = 0, s_cts0 = 0, s_cts1 = 0, s_cts_wait = 0;
+    integer    s_cue_cyc = 0, s_strap_cyc = 0;
     integer    s_lo = 0, s_hi = 0, s_d_last = 0;
     reg [31:0] s_mt [0:7];
     reg [15:0] kp_sets [0:27];
@@ -743,8 +743,8 @@ module tb_tt_um;
                 fail($sformatf("cue %0d is %h, want %h", s_ev_i, code, s_ev[s_ev_i]));
             case (pid)
                 ID_uart_echo: begin
-                    if (code == 1) begin rp.set_flow(1'b1); rp.send_str("The quick brown fox jumps over the lazy dog, 0123456789!\015\n"); s_cts0 = s_cts_wait; end
-                    if (code == 2) begin s_cts1 = s_cts_wait; rp.set_flow(1'b0); rp.send_str("XYZ"); end
+                    if (code == 1) begin rp.set_flow(1'b1); rp.send_str("The quick brown fox jumps over the lazy dog, 0123456789!\015\n"); end
+                    if (code == 2) begin rp.set_flow(1'b0); rp.send_str("XYZ"); end
                     if (code == 3) rp.set_flow(1'b1);
                 end
                 ID_uart_linux: begin
@@ -864,7 +864,6 @@ module tb_tt_um;
     endtask
 
     // UART flow control: clocks the RP2350 held a character for CTS.
-    always @(posedge clk) if (soc_test && rp.tx_head != rp.tx_tail && !rp.tx_busy && 1'b0) s_cts_wait = s_cts_wait + 1;
 
     always @(negedge clk) if (soc_test && sw_on != 0) begin
         case (sw_st)
@@ -989,14 +988,10 @@ module tb_tt_um;
             if (pid == ID_pwm_linux && m2_n_hi != 0)
                 fail($sformatf("pwm_linux phase 4: uo_out[2] high %0d clocks after PWM off and the default map", m2_n_hi));
             case (pid)
-                ID_uart_echo: begin
-                    $display("NOTE uart_echo: the RP2350 held characters for CTS %0d clocks; %0d characters sent against CTS",
-                             s_cts1 - s_cts0, rp.tx_sent_cts_off);
-                    // 16550A (WO-50): RTS# drops only with fewer than two RX FIFO entries free, so a popping
-                    // program never holds the RP2350 back and nothing is sent against CTS.
-                    if (rp.tx_sent_cts_off != 0) fail("uart_echo: a character was sent against CTS");
-                end
-                ID_uart_linux: if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
+                // (uart_echo / uart_linux: no CTS check at the pins. RTS# is a pinmux feature only (WO-58) and CTS is tied
+                // asserted here, so "a character sent against CTS" could never happen; tb_soc_periph checks it with the real
+                // RTS#, and the pinmux run below does at the pins.)
+                ID_pinmux: if (rp.tx_sent_cts_off != 0) fail("pinmux: a character was sent against CTS (RTS# on uo_out[5])");
                 ID_oled_spi: begin
                     $display("NOTE oled_spi: %0d SSD1331 bytes, %0d RES# pulses, %0d timing violations flagged on the DIV 1 byte",
                              oled.nlog, oled.n_res_pulses, oled.n_expected);
