@@ -55,6 +55,10 @@
 // fencei_flush clears every valid bit (and kills a running fill); with the
 // snoop it adds nothing a single hart needs, it is belt and braces.
 //
+// PSRAM line burst (pburst = CACHE_CTL.PBURST): a fill of a line in PSRAM may keep CE# low for its four words
+// (m_burst). tCEM (8 us) needs a core clock >= 12.6 MHz for that: set PBURST only at >= 15 MHz, and only with
+// QSPI_CFG.STREAM set (the engine ignores m_burst otherwise).
+//
 // Fill addresses are the real addresses the core would have fetched: {addr[31], addr[30:24] rebuilt, tag, index,
 // word}. The key keeps addr[31] and addr[23:0]; the window byte is 0x20 (flash) or 0x80 (PSRAM), so addr[29] =
 // ~addr[31] and the rest is 0. That keeps mem_ctrl's proved input assumption M-A2 (i_addr[31:24] in {0x20, 0x80})
@@ -63,6 +67,7 @@ module cache (
     input  wire        clk,
     input  wire        rst,           // rst_soc
     input  wire        en,            // CACHE_CTL.EN
+    input  wire        pburst,        // CACHE_CTL.PBURST: PSRAM fills may burst (0 = four separate reads)
     input  wire        fencei_flush,  // core: FENCE.I retires, invalidate everything
     // Core side (fetch port)
     input  wire        f_req,
@@ -72,6 +77,7 @@ module cache (
     // mem_ctrl side (its instruction port)
     output wire        m_req,
     output wire [31:0] m_addr,
+    output wire        m_burst,       // the fill word on m_* is of a line in PSRAM and the fill is alive (a burst may continue)
     input  wire [31:0] m_rdata,
     input  wire        m_ready,
     // Data port, snooped: the memory half of the core's data port
@@ -189,6 +195,9 @@ module cache (
     assign dbg_act = act, dbg_hit_q = hit_q, dbg_b_ph = b_ph, dbg_fill = fill_active, dbg_valid_any = |valid;
 `endif
     assign m_req   = act ? fill_active : f_req;
+    // PSRAM line burst qualifier: only fill words of a live fill whose window is PSRAM (key bit 17 = addr[31]).
+    // Low with EN = 0 (fill_active is 0 while !act) and with PBURST = 0.
+    assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;
     assign m_addr  = use_fill ? {fill_tag[17], 1'b0, ~fill_tag[17], 5'd0, fill_tag[16:0], fill_idx, fcnt, 2'b00} : f_addr;
     assign f_ready = act ? hit_q : m_ready;
     assign f_rdata = !act ? m_rdata :

@@ -52,6 +52,13 @@
 //   every word is priced at the full 58. With no data traffic a flash line fill
 //   is about 57 + 3 * 18 = 111 clocks and a PSRAM fill 4 * 42 = 168.
 //
+// PSRAM line burst (i_burst -> q_burst): with the cache on, the four words of a line in PSRAM may
+// share one chip select period (qspi_ctrl keeps CE# low after words 0-2 and continues with the next
+// word if the next request is that word, at most one 16-byte line, so no page crossing). A data
+// access or anything else closes it. i_burst low (cache off, the reset state) leaves every pin as
+// without it. A burst word costs 8 SCK instead of 20 and the data port waits for at most one word
+// as before (a data request closes the burst at the next grant).
+//
 // Requests are sampled only while qspi_ctrl is idle, and it is never idle on
 // the cycle it reports done. That matters: on its ready cycle the core still
 // shows the request being completed (a fetch's old pc, say), and starting a
@@ -99,6 +106,7 @@ module mem_ctrl (
     // Instruction port (from the core)
     input  wire        i_req,
     input  wire [31:0] i_addr,
+    input  wire        i_burst,       // the request is a word of a cache line fill (src/cache.v m_burst); 0 with no cache
     output wire [31:0] i_rdata,
     output wire        i_ready,
     // Data port (from soc_bus, memory windows only)
@@ -116,6 +124,7 @@ module mem_ctrl (
     output wire        q_we,
     output wire [1:0]  q_nbytes_m1,
     output wire [31:0] q_wdata,
+    output wire        q_burst,
     input  wire        q_idle,
     input  wire        q_done,
     input  wire [31:0] q_rdata
@@ -178,6 +187,9 @@ module mem_ctrl (
     assign q_nbytes_m1 = (gnt_d && d_we) ? st_n_m1 :
                          (!gnt_d && (split || second)) ? 2'd1 : 2'd3;
     assign q_wdata     = d_wdata;
+    // PSRAM line burst: only a fetch-port request (never the data port, never the second half of
+    // a split fetch, which a cache fill word never is) may keep CE# low (qspi_ctrl "PSRAM line burst")
+    assign q_burst     = i_burst && !use_d && !second;
 
     assign i_rdata = q_rdata;
     assign d_rdata = q_rdata;

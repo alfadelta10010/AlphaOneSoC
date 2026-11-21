@@ -13,17 +13,17 @@ module bounds_tb;
     reg [31:0] i_addr = 0, d_addr = 0, d_wdata = 0;
     reg [3:0] d_be = 4'hF;
     wire [31:0] i_rdata, d_rdata, q_wdata, q_rdata;
-    wire i_ready, d_ready, q_start, q_we, q_idle, q_done, sck, ctl_oe, io_oe;
+    wire q_burst; wire i_ready, d_ready, q_start, q_we, q_idle, q_done, sck, ctl_oe, io_oe;
     wire [1:0] q_cs, q_nbytes_m1; wire [23:0] q_addr; wire [2:0] cs_n; wire [3:0] io_out;
     reg [3:0] io_in = 0;
-    mem_ctrl m (.clk(clk), .rst(rst), .i_req(i_req), .i_addr(i_addr), .i_rdata(i_rdata), .i_ready(i_ready),
+    mem_ctrl m (.clk(clk), .rst(rst), .i_req(i_req), .i_addr(i_addr), .i_burst(1'b0), .i_rdata(i_rdata), .i_ready(i_ready),
         .d_req(d_req), .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_we(d_we), .d_rdata(d_rdata), .d_ready(d_ready),
-        .q_start(q_start), .q_cs(q_cs), .q_addr(q_addr), .q_we(q_we), .q_nbytes_m1(q_nbytes_m1), .q_wdata(q_wdata),
+        .q_start(q_start), .q_cs(q_cs), .q_addr(q_addr), .q_we(q_we), .q_nbytes_m1(q_nbytes_m1), .q_wdata(q_wdata), .q_burst(q_burst),
         .q_idle(q_idle), .q_done(q_done), .q_rdata(q_rdata));
     qspi_ctrl q (.clk(clk), .rst(rst), .rd_late(rd_late), .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata), .idle(q_idle), .done(q_done), .rdata(q_rdata),
         .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out), .io_oe(io_oe), .io_in(io_in), .stream_en(stream_en),
-        .ddr(1'b0), .ddr_cap(3'd0));   // DDR latency is measured by the soc benches (WO-51), not here
+        .ddr(1'b0), .ddr_cap(3'd0), .burst(q_burst));   // DDR latency is measured by the soc benches (WO-51), not here
     always #5 clk = ~clk;
     integer seed, cyc, pl, fl, dw, iw, nd, sc, seen_idle;
     integer mLP[0:1], mLF[0:1], mS[0:1], mLD[0:1], mLI[0:1];
