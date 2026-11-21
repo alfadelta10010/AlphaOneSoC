@@ -53,7 +53,17 @@ int main(void) {
     R8(U_LCR) = 0x80; R8(U_DLL) = DIVISOR & 0xFF; R8(U_DLM) = DIVISOR >> 8; R8(U_LCR) = 0x03;
     R8(U_FCR) = 0x07;                       /* FIFOs on, clear both */
     straps = R32(SC_STRAPS);
-    R32(SC_QCFG) = (R32(SC_QCFG) & ~3u) | (CFG & 3);
+    {   /* QSPI_CFG as the image wants it; a DDR image first finds a capture point (from PSRAM code, flash is not read in DDR before) */
+        u32 q0 = R32(SC_QCFG), qc = (q0 & ~3u) | (CFG & 3), mask = 0, cap = (q0 >> 2) & 7;
+        if (CFG & 2) {
+            cap = ddr_pick_cap(qc, q0, &mask);
+            if (cap == 8) { qc &= ~2u; cap = (q0 >> 2) & 7; }
+            else qc = (qc & ~0x1Cu) | (cap << 2);
+        }
+        R32(SC_QCFG) = qc;
+        puts_("INFO banner ddr_cap="); putd(cap); puts_(" pass_mask="); putx(mask); puts_("\n");
+        if ((CFG & 2) && mask == 0) { n_fail_tests++; puts_("FAIL boot no DDR_CAP passes, running SDR\n"); }
+    }
 
     puts_("INFO banner pin="); puts_(PIN_SHA);
     puts_(" F_CLK="); putd(F_CLK); puts_(" div="); putd(DIVISOR);

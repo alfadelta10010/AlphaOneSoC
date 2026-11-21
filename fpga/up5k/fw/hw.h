@@ -63,6 +63,7 @@ void t_begin(const char *name);
 void chk(u32 got, u32 exp, const char *what);
 void t_end(void);
 
+u32  ddr_pick_cap(u32 base, u32 restore, u32 *mask);
 void t_uart(void);
 void t_flash(void);
 void t_psram(void);
