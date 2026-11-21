@@ -3,11 +3,12 @@
    is copied to PSRAM and run, then overwritten (whole function, one word, one byte) and run again;
    the new code must run. picorv32 has no fence.i, so this is the coherence path the cache documents. */
 #include "hw.h"
+#define BARRIER() __asm__ volatile("" ::: "memory")
 
 extern const u32 fn_a[], fn_a_end[], fn_b[], fn_b_end[];
 
 /* the timed loop: stays in flash; 64 iterations of a small body with a branch and a few ALU ops */
-static u32 __attribute__((noinline)) kernel(u32 n) {
+static u32 __attribute__((noipa)) kernel(u32 n) {   /* noipa: not pure-folded, not moved across the mtime reads */
     u32 acc = 0x1234u, i;
     for (i = 0; i < n; i++) {
         acc ^= i;
@@ -34,11 +35,11 @@ void t_cache(void) {
     t_begin("cache");
 
     chk(R32(CACHE_CTL), 2, "CACHE_CTL reset: EN 0, built 1");
-    t0 = mtime(); r_off = kernel(loop_n); t_off = mtime() - t0;
+    BARRIER(); t0 = mtime(); BARRIER(); r_off = kernel(loop_n); BARRIER(); t_off = mtime() - t0;
     R32(CACHE_CTL) = 1;
     chk(R32(CACHE_CTL), 3, "CACHE_CTL EN set");
     r_on = kernel(loop_n);                      /* cold */
-    t0 = mtime(); r_on = kernel(loop_n); t_on = mtime() - t0;
+    BARRIER(); t0 = mtime(); BARRIER(); r_on = kernel(loop_n); BARRIER(); t_on = mtime() - t0;
     chk(r_on, r_off, "loop result, cache on == cache off");
         puts_("INFO cache loop ticks off="); putd(t_off); puts_(" on="); putd(t_on); puts_("\n");
 
