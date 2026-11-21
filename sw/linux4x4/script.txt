@@ -1,0 +1,3 @@
+/ # 	echo typed-ok
+/ # 	cat /proc/interrupts
+/ # 	poweroff
