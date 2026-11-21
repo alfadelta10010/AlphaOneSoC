@@ -146,7 +146,7 @@
 //     therefore low for at most one 16-byte line: 20 + 3 * 8 SCK, about 97 clocks (101 with rd_late,
 //     the worst case found by formal; tb/formal/mem_props.sv LPB = 104 is BMC-checked to 250 cycles
 //     from reset, its unbounded pdr proof is open).
-// tCEM (8 us, CE# low limit) therefore needs a core clock of at least 12.6 MHz with bursts (7.5 MHz without:
+// tCEM (8 us, CE# low limit) therefore needs a core clock of at least 12.6 MHz with bursts (8.0 MHz without:
 // a single read is 64 clocks at worst): use PBURST (CACHE_CTL[2]) only at a core clock >= 15 MHz. A burst also
 // needs QSPI_CFG.STREAM (stream_en) set: with it clear the engine never opens a PSRAM stream.
 // Evidence: pausing SCK with CE# low between sequential PSRAM data reads is what TinyQV (ttsky25a) does on this

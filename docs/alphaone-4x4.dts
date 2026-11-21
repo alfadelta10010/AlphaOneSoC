@@ -75,6 +75,8 @@
 		reg = <1>;
 		spi-max-frequency = <10416667>;
 		voltage-ranges = <3200 3400>;
+		spi-cpol;	/* mode 3 like the OLED: mmc_spi falls back to mode 0 without both, and the */
+		spi-cpha;	/* controller keeps one mode, so a mode change would move SCK with CS# low */
 		status = "disabled";	/* enable when the card is fitted; the loader sets SPICTL.EN first */
 	};
 };
