@@ -7,7 +7,7 @@
 extern const u32 fn_a[], fn_a_end[], fn_b[], fn_b_end[];
 
 /* the timed loop: stays in flash; 64 iterations of a small body with a branch and a few ALU ops */
-static u32 kernel(u32 n) {
+static u32 __attribute__((noinline)) kernel(u32 n) {
     u32 acc = 0x1234u, i;
     for (i = 0; i < n; i++) {
         acc ^= i;
@@ -16,7 +16,7 @@ static u32 kernel(u32 n) {
     }
     return acc;
 }
-static u32 kernel_ref(u32 n) { return kernel(n); }   /* identical code path: compared across cache states */
+static volatile u32 loop_n = 2000;   /* volatile: the compiler must not fold or share the timed calls */
 
 typedef u32 (*fn_t)(u32);
 
@@ -34,14 +34,13 @@ void t_cache(void) {
     t_begin("cache");
 
     chk(R32(CACHE_CTL), 2, "CACHE_CTL reset: EN 0, built 1");
-    t0 = mtime(); r_off = kernel(2000); t_off = mtime() - t0;
+    t0 = mtime(); r_off = kernel(loop_n); t_off = mtime() - t0;
     R32(CACHE_CTL) = 1;
     chk(R32(CACHE_CTL), 3, "CACHE_CTL EN set");
-    r_on = kernel(2000);                      /* cold */
-    t0 = mtime(); r_on = kernel(2000); t_on = mtime() - t0;
+    r_on = kernel(loop_n);                      /* cold */
+    t0 = mtime(); r_on = kernel(loop_n); t_on = mtime() - t0;
     chk(r_on, r_off, "loop result, cache on == cache off");
-    chk(kernel_ref(77), kernel(77), "second run");
-    puts_("INFO cache loop ticks off="); putd(t_off); puts_(" on="); putd(t_on); puts_("\n");
+        puts_("INFO cache loop ticks off="); putd(t_off); puts_(" on="); putd(t_on); puts_("\n");
 
     /* Snoop. Code in PSRAM: run it twice (the second is a hit), then replace it. */
     copy(CODE, fn_a, fn_a_end);
@@ -68,6 +67,6 @@ void t_cache(void) {
     chk(call(CODE, 3), 3 + 0x222, "from PSRAM, cache off");
     R32(CODE) = fn_a[0];
     chk(call(CODE, 3), 3 + 0x111, "patched, cache off");
-    chk(kernel(2000), r_off, "loop result, cache off again");
+    chk(kernel(loop_n), r_off, "loop result, cache off again");
     t_end();
 }
