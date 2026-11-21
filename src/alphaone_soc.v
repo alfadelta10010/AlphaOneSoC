@@ -8,7 +8,7 @@
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
 //   0x0C00_0000  PLIC    4 MB, 9 sources (src/plic.v): 1 UART, 2 SPI, 3 gamepad, 4 GPIO input change
-//                        (not built, 0), 5-8 PWM cmp0-3, 9 watchdog (not built, 0)
+//                        (not built, 0), 5-8 PWM cmp0-3, 9 watchdog
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
@@ -183,6 +183,8 @@ module alphaone_soc #(
         .audio_rdata (audio_rdata)
     );
 
+    wire        wdt_irq;
+
     // ── syscon ──────────────────────────────────────────────────────────────
     syscon syscon_inst (
         .clk          (clk),
@@ -200,7 +202,8 @@ module alphaone_soc #(
         .qspi_stream_en(qspi_stream_en),
         .qspi_ddr     (qspi_ddr),
         .qspi_ddr_cap (qspi_ddr_cap),
-        .wdt_tap      (mtime[29:14])
+        .wdt_tap      (mtime[29:14]),
+        .wdt_irq      (wdt_irq)
     );
 
     // ── Memory controller + QSPI engine ─────────────────────────────────────
@@ -282,7 +285,7 @@ module alphaone_soc #(
         .addr (dmem_addr[21:2]),
         .wdata(dmem_wdata),
         .rdata(plic_rdata),
-        .src  ({1'b0,          // 9 watchdog (WO-61, not built)
+        .src  ({wdt_irq,       // 9 watchdog (WO-61)
                 pwm_irq,       // 8..5 PWM cmp3..0
                 1'b0,          // 4 GPIO input change (not built)
                 gamepad_irq,   // 3

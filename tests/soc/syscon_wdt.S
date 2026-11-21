@@ -5,7 +5,7 @@
 #           kicks 16,384 mtime counts apart (three timeouts' worth, no reset);
 #           a bad kick (0x75) and a CR write of 0 change nothing (CR stays 1);
 #           interrupt mode (CR 3): STAT sets at the first expiry with no reboot
-#           (cause stays 0x1; with -DWDT_PLIC also PLIC pending bit 9), an EOI
+#           (cause stays 0x1; PLIC pending bit 9 is set), an EOI
 #           read clears it, CR back to 1, a kick (codes 0x107-0x10E);
 #           cue 0x56, then spin without kicking. The watchdog reboots the SoC
 #           after more than one timeout and at most 1.5 timeouts + 1 clock; the
@@ -76,13 +76,11 @@ _start:
 5:  CHECK t0, 1, 0x109
     lw   t0, 4(s11)
     CHECK t0, 1, 0x10A               # RESET_CAUSE still PIN only: no reboot
-#ifdef WDT_PLIC
     li   t1, 0x0C001000
     lw   t0, 0(t1)                   # PLIC pending: source 9 is the watchdog
     srli t0, t0, 9
     andi t0, t0, 1
     CHECK t0, 1, 0x10B
-#endif
     lw   t0, W_EOI(s11)
     CHECK t0, 0, 0x10C               # EOI reads 0
     lw   t0, W_STAT(s11)
