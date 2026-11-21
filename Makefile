@@ -39,7 +39,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-seeds \
-        test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
+        test-qspi test-qspi-burst test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test
 
@@ -221,6 +221,16 @@ test-qspi: $(BUILD_DIR)
 # for round trips R, every DDR_CAP. tb/qspi_ddr_sweep.sh compares the passing set per R
 # (c = DDR_CAP + 1) with the expected one and exits 1 on a difference; with +DTR_LAUNCH=1 (a
 # device that launches the first nibble half an SCK late) no capture point may pass.
+QSPI_BURST_RUNS := "" "$(QSPI_LATE)" "+NOSTREAM" "+DDR" "+QSPI_DELAY=19" "+CLK_HALF_PS=8000" "$(QSPI_LATE) +PSRAM_WRAP"
+test-qspi-burst: $(BUILD_DIR)
+	@echo "=== Testing PSRAM line bursts ==="
+	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_burst $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
+		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi_burst.v
+	@cd $(BUILD_DIR) && for args in $(QSPI_BURST_RUNS); do \
+		$(VVP) tb_qspi_burst $$args > tb_qspi_burst.log 2>&1; grep -E '^PASS|FAIL|ERROR|TIMEOUT' tb_qspi_burst.log | head -3; \
+		grep -q '^PASS' tb_qspi_burst.log || exit 1; \
+	done
+
 test-qspi-ddr-sweep: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 -o $(BUILD_DIR)/tb_qspi_sweep $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/qspi_ctrl.v \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/req_hold_check.v $(TB_DIR)/tb_qspi.v
@@ -519,7 +529,7 @@ test-cache: $(BUILD_DIR)
 	@$(call run_tb,tb_cache,+MAXLAT=40 +RF_X +RF_COLLIDE_X,_l40)
 	@$(call run_tb,tb_cache,+NOEN +RF_COLLIDE_X,_noen)
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-qspi test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-qspi test-qspi-burst test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 
