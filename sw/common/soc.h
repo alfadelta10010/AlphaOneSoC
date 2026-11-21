@@ -51,14 +51,14 @@ struct image_hdr {
 #define UART_DIVISOR    34
 
 /* GPIO and the SPI controller behind it (src/gpio.v) */
-#define GPIO_OUT        0x00          /* bit 0 OLED CS#, 1 MOSI, 3 SCK, 7 SD CS#; resets to 0x89 */
+#define GPIO_OUT        0x00          /* bit 0 OLED CS#, 1 MOSI, 3 SCK, 5 SD CS# (4x4); resets to 0xB9 */
 #define GPIO_SPICTL     0x0C          /* bit 0 EN: the SPI engine owns MOSI and SCK */
 #define GPIO_RXDATA     0x20
 #define GPIO_TXDATA     0x24
 #define GPIO_STATUS     0x28          /* bit 0 TXE: idle and nothing held */
 #define GPIO_CONTROL    0x2C          /* resets to 3: mode 3, as an SD card wants */
 #define GPIO_BAUD       0x30          /* SCK = clk / (2 x (BAUD + 1)) */
-#define GPIO_SD_CS      0x80
+#define GPIO_SD_CS      0x20     /* 4x4 RTL: OUT bit 5 (bit 7 on main) */
 #define GPIO_OLED_CS    0x01
 
 /* syscon */

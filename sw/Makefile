@@ -31,7 +31,7 @@ BENCH_OPT ?= -O2
 CM_ITER   ?= 1
 
 RTL := $(addprefix $(ROOT)/src/,alu branchCtrl clint compressed_decoder controller csr decoder fyracore \
-        muldiv pmp regFile rf_top signExt qspi_ctrl mem_ctrl soc_bus uart gpio spi syscon alphaone_soc)
+        muldiv pmp regFile rf_top regs signExt qspi_ctrl mem_ctrl cache soc_bus plic uart gamepad pwm audio pinmux gpio spi syscon alphaone_soc)
 RTL := $(addsuffix .v,$(RTL))
 
 # The third-party sources are needed to read the benchmark lists below.
