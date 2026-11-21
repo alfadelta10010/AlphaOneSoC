@@ -1,4 +1,5 @@
-# WO-62: broken copies of src/cache.v; the BMC harness `cache` must FAIL each (a counterexample from reset).
+# WO-62: broken copies of src/cache.v; the BMC harness `cache` (EN tied 1) must FAIL each (a counterexample from reset).
+# The EN-edge copies (hand-back, cold start, no fill while falling) are in cache_en.nonvac.
 # tag ignored in the hit -> data of another line returned
 sed cache.v s@wire        hit       = tmatch \&\& (@wire        hit       = (@
 # store snoop dropped -> stale line served after a store
@@ -11,14 +12,10 @@ sed cache.v s@(kword < fcnt)@(kword <= fcnt)@
 sed cache.v s@{rb_data\[15:0\], ra_data\[31:16\]}@{ra_data[15:0], ra_data[31:16]}@
 # port B reads the word of A (the upper half of a straddling fetch comes from the wrong word)
 sed cache.v s@\.rb_addr (nxt\[4:0\])@.rb_addr (f_addr[6:2])@
-# valid is not cleared on the way out (EN 0 -> 1 does not start cold)
-sed cache.v s@if (off) begin@if (1'b0) begin@
 # fill reads the words in the wrong order
 sed cache.v s@fill_idx, fcnt, 2'b00}@fill_idx, fcnt + 2'd1, 2'b00}@
 # a dead fill still sets valid
 sed cache.v s@valid\[fill_idx\] <= !dead;@valid[fill_idx] <= 1'b1;@
-# a fill may start on the way out (EN falls): its state outlives the pass-through
-sed cache.v s@\&\& !fill_active \&\& en;@\&\& !fill_active;@
 # takes the fetch path over while a pass-through request is still in flight on mem_ctrl
 sed cache.v s@wire        on    = !act \&\& en \&\& (!f_req || m_ready);@wire        on    = !act \&\& en;@
 # pass-through address off by a word
