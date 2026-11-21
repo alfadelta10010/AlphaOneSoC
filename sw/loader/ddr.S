@@ -22,7 +22,7 @@
  * 0 for SDR, with bit c of the byte above it set for each capture point c that passed the sweep;
  * a1 = the path: 0 DDR on, 1 no passing point, 2 trap in the execute test, 3 a
  * checksum or block mismatch.
- * The loader is built with -DDDR_FORCE_TRAP, -DDDR_FORCE_MISMATCH or -DDDR_FORCE_LATE_MISMATCH
+ * The loader is built with -DDDR_FORCE_TRAP, -DDDR_FORCE_MISMATCH, -DDDR_FORCE_LATE_MISMATCH or -DDDR_FORCE_LATE_TRAP
  * (make LOADER_DEFS=...) to run the failure paths of the execute test and of the checks back in
  * flash, which no Pmod model behaviour reaches. mtvec is the PSRAM handler until label 9: a trap
  * in those checks restores SDR and BOOT_MODE 0xDF like one in the execute test.
@@ -33,6 +33,9 @@
     .equ PS_REF,    0x80FF1000
     .equ NWORDS,    64
     .equ NPASS,     3
+#ifndef DDR_FINAL_TOP
+#define DDR_FINAL_TOP 0xF         /* a test build (-DDDR_FINAL_TOP=6) shortens it: a payload that stops kicking then resets */
+#endif
     .equ QCFG,      0x1C
     .equ BMODE,     0x08
     .equ WTORR,     0x104
@@ -98,7 +101,8 @@ ps_entry:
     li      s0, 1                    # sweep DDR_CAP 1..6
     li      s1, 0                    # bit c: cap c passed
 2:  slli    t0, s0, 2
-    ori     t0, t0, 3
+    ori     t0, t0, 2                # DDR on at this trial point, STREAM as the strap left it
+    or      t0, t0, a3
     sw      t0, QCFG(s11)
     li      s2, NPASS
     li      s3, 0
@@ -163,7 +167,7 @@ ps_entry:
     ebreak                           # a test build: a trap in the execute test
 #endif
     jalr    ra, 0(s6)                # xrun from flash, in DDR
-#ifndef DDR_FORCE_MISMATCH           # (a test build: the checksum is taken as wrong)
+#ifndef DDR_FORCE_MISMATCH           /* (a test build: the checksum is taken as wrong) */
     beq     a0, s8, exec_ok
 #endif
     mv      t0, a3
@@ -194,6 +198,9 @@ after:
     j       7f                       # a trap or a mismatch in the execute test: it is armed
 6:  li      t0, 0x76
     sw      t0, WCRR(s11)            # kick
+#ifdef DDR_FORCE_LATE_TRAP
+    ebreak                           # a test build: a trap in flash code after the kick, mtvec is the PSRAM handler
+#endif
 #ifdef DDR_FORCE_LATE_MISMATCH
     j       8f                       # a test build: the check back in flash finds a difference
 #endif
@@ -218,7 +225,7 @@ after:
     sw      t0, BMODE(s11)
     li      s10, 0
     li      s9, 3
-7:  li      t0, 0xF                  # armed for good since the execute test began: TOP 15, and a kick
+7:  li      t0, DDR_FINAL_TOP        # armed for good since the execute test began: TOP 15 unless a test build says less
     sw      t0, WTORR(s11)
 9:  csrw    mtvec, s4                # the loader's own handler again, now that nothing is checked from flash
     slli    t0, s1, 8                # a0 = (the pass mask << 8) | (DDR_CAP + 1 or 0), a1 = the path

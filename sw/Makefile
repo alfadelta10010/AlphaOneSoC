@@ -258,6 +258,7 @@ run-ddr-all:
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-trap.txt LOADER_DEFS=-DDDR_FORCE_TRAP
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-mismatch.txt LOADER_DEFS=-DDDR_FORCE_MISMATCH
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-late.txt LOADER_DEFS=-DDDR_FORCE_LATE_MISMATCH
+	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-late-trap.txt LOADER_DEFS=-DDDR_FORCE_LATE_TRAP
 	$(MAKE) run-ddr ddr_EXPECT=ddr/expect-late-nostream.txt LOADER_DEFS=-DDDR_FORCE_LATE_MISMATCH RUNARGS="+NO_STREAM"
 	$(MAKE) run-ddrdt
 	$(MAKE) run-ddrrb
@@ -298,14 +299,14 @@ run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 check:
 	$(MAKE) run-hello
 	$(MAKE) run-monitor
-	$(MAKE) run-monitor DDR=1
+	$(MAKE) run-monitor DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 monitor_EXPECT=monitor/expect-ddr.txt
 	$(MAKE) run-monitor-scan
 	$(MAKE) run-fatfs DISK=fat12 SD=sdhc
 	$(MAKE) run-fatfs DISK=fat16 SD=sdsc
 	$(MAKE) run-fatfs DISK=mbr SD=v1
 	$(MAKE) run-fatfsfull
 	$(MAKE) run-freertos
-	$(MAKE) run-freertos DDR=1
+	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT=freertos/expect-ddr.txt
 	$(MAKE) run-fr-all
 	$(MAKE) run-ddr-all
 	$(MAKE) run-sdtest-all

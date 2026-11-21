@@ -187,6 +187,14 @@ module tb_sw;
     reg [63:0] instret = 64'd0;
     always @(posedge clk) if (!rst && soc.cpu.dbg_retired) instret <= instret + 1;
 
+    // +NO_STREAM: the strap says the flash never streams, and no software step (the loader's DDR
+    // sweep included) may turn it on. Checked every clock, so one trial point with STREAM set shows.
+    reg ns_err = 1'b0;
+    always @(posedge clk) if (!rst && no_stream && soc.qspi_stream_en === 1'b1 && !ns_err) begin
+        ns_err <= 1'b1;
+        $display("ERROR stream: QSPI_CFG.STREAM set under +NO_STREAM (cycle %0d, pc %08x)", cyc, soc.cpu.dbg_pc);
+    end
+
     initial begin
         if ($value$plusargs("MAX_CYCLES=%d", max_cycles)) ;
         repeat (10) @(posedge clk);
