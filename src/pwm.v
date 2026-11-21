@@ -4,9 +4,12 @@
 //                   zerocmp, sticky, 4'b0, scale[3:0]}   lane 3 write sets/clears ip directly
 //   0x08 pwmcount: reads 0 (departure); any write restarts the prescaler and the scaled count
 //   0x10 pwms    : {16'b0, s}; read-only, as in sifive-blocks (Timer.scala s_desc access R; the manual's RW is not built)
-//   0x20..0x2C pwmcmp0..3: {16'b0, cmp}, lanes 0 and 1; pwmcmp2/3 read 0, writes ignored (not built)
+//   0x20..0x2C pwmcmp0..3: {16'b0, cmp}, lanes 0 and 1; pwmcmp2/3 read 0xFFFF, writes ignored (not built)
 // Departure (WO-63, area for the cache): 2 of 4 comparators built; pwm-sifive's npwm = 4 still probes, channels 2-3
 // never fire: ip[3:2], pwm_o[3:2], irq[3:2] are constant 0 and cfg lane-3 writes to ip[3:2] are ignored.
+// pwmcmp2/3 read 0xFFFF (the reset value of cmp0/1), not 0: pwm-sifive get_state computes duty = 0xFFFF - cmp and
+// enabled = duty > 0, so 0xFFFF reads as 0 % / off and Linux keeps its clock-enable count balanced for channels 2-3
+// (a read of 0 would show them on at 100 % and unbalance clk_enable/clk_disable).
 // Counter: tick = en & (pre & (2^scale - 1)) == 2^scale - 1; s counts on tick. zerocmp & s >= cmp0 resets
 // pre and s one cycle after the match. enoneshot clears on that reset or on the s wrap (FE310-G002 20.8/20.12:
 // with zerocmp clear the reset condition is the carry out of the top pwms bit).
@@ -73,6 +76,7 @@ module pwm (
             4'd4:  rdata = {16'b0, s};
             4'd8:  rdata = {16'b0, cmp0};
             4'd9:  rdata = {16'b0, cmp1};
+            4'd10, 4'd11: rdata = 32'h0000_FFFF;   // not built: duty 0 for pwm-sifive get_state
             default: rdata = 32'b0;
         endcase
     end

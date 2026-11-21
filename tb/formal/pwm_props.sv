@@ -5,7 +5,7 @@
 //   P2 zerocmp & s >= cmp0 (or a pwmcount write) -> pre == 0 && s == 0 next cycle
 //   P3 ip == lane-3 write ? wdata[29:28] : ge | sticky & ip_q (WO-63: two comparators; ip[3:2] constant 0)
 //   P4 enoneshot: cfg lane-1 write wins; else falls only on a zerocmp reset or the s wrap; never rises alone
-//   P5 reads: cfg layout (deglitch/center/gang read 0), pwms, cmp0/1, cmp2/3 read 0; pwmcount and other offsets read 0
+//   P5 reads: cfg layout (deglitch/center/gang read 0), pwms, cmp0/1, cmp2/3 read 0xFFFF (writes ignored); pwmcount and other offsets read 0
 //   P6 reset values (ip 0, cmp FFFF) so no ip is pending after reset; pwm_o == irq == ip
 module pwm_props (
     input  wire        clk, rst,
@@ -62,7 +62,7 @@ module pwm_props (
                 4'd4:  assert (rdata == {16'b0, s});
                 4'd8:  assert (rdata == {16'b0, cmp0});
                 4'd9:  assert (rdata == {16'b0, cmp1});
-                4'd10, 4'd11: assert (rdata == 32'b0);
+                4'd10, 4'd11: assert (rdata == 32'h0000_FFFF);
                 default: assert (rdata == 32'b0);
             endcase
         end
