@@ -13,7 +13,8 @@
 #
 #   read     md5 of the netlist and the Liberty file; gold and gate read; the
 #            flop accounting (accounting.py) against the work order's table
-#   lemma    on the RTL: the 186 removed bits (184 CSR + gpio out_r[1], [3]) are constant after reset and
+#   lemma    on the RTL: the removed bits (accounting.py EXPECT cand: 184 CSR + gpio out_r[1], [3] + PLIC
+#            pend/insvc of the tied-0 sources 4, 7, 8) are constant after reset and
 #            the recoded FSMs never hold an unlisted code (lemma_props.sv,
 #            yosys sat -tempinduct); writes consts.txt, the ties of the gold
 #   fsminv   on the netlist: the four one-hot FSMs always hold exactly one set bit
@@ -46,7 +47,7 @@ for a in "$@"; do
   esac
 done
 [ -n "$NETLIST" ] || { echo "NETLIST=<path> is required" >&2; exit 2; }
-NL_MD5=71d75961e9e64b995d551afdec157aff
+NL_MD5=757ba9e991e1b2fc5ff36d75ae4f50a7
 # The version of the PDK the harden used (not what $PDK_ROOT/sky130A points to).
 LIB="$PDK_ROOT/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
 TOP=tt_um_alfadelta10010_alphaone_soc
@@ -54,6 +55,10 @@ TOP=tt_um_alfadelta10010_alphaone_soc
 SRCS=$("$ROOT/scripts/wrapper-srcs.sh" "$ROOT") || exit 2   # the Makefile's WRAPPER_SRC = the harden's VERILOG_FILES
 # FSM registers that synthesis recoded one-hot (kept as buses in gold and gate).
 FSMS="soc.cpu.exwb_memSize soc.cpu.muldiv_inst.st soc.qspi.state soc.gpio_inst.spi_inst.st"
+# The constant-bit count the lemma expects: accounting.py's EXPECT cand (one place, rewritten by a refit).
+NCAND=$(sed -n '/^EXPECT = dict(/,/)/p' "$HERE/accounting.py" | tr -d '\n ' | grep -o 'cand=[0-9]*' | cut -d= -f2)
+# The harden whose copy of src/ and resolved.json the read stage compares against (skipped if absent).
+HARDEN_DIR=${HARDEN_DIR:-/home/mempool/tt/projects/fin-3x4}
 B="$ROOT/build/eqy"
 # The tools run in the container, in the caller's directory. NATIVE=1 runs
 # them from PATH instead (inside a container already; that container needs sed,
@@ -93,6 +98,11 @@ proc -norom
 flatten
 delete t:\$scopeinfo
 opt_clean
+# memories (uart rx_mem) to flops the way the harden's synth maps them: memory_dff merges the read
+# address flop rx_rp into the port and memory_map rebuilds it as \$<mem>\$rdreg (accounting.py MEMRD)
+memory -nomap
+memory_map
+opt_clean
 setundef -undriven -zero
 setattr -unset init
 opt_clean
@@ -111,7 +121,7 @@ stage_read() {
     echo "src      $(cd "$ROOT/src" && md5sum $SRCS | md5sum | cut -d' ' -f1)  (md5 of the 21 per-file md5 lines)"
     ( cd "$B" && dk yosys -V; dk eqy --version; dk sby --version ) 2>&1
     echo "git      $(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "${GITREV:-unknown (not a git tree)}")"; } > "$R/inputs.txt"
-  local HC=/home/mempool/tt/projects/fin-3x4
+  local HC=$HARDEN_DIR
   if [ -d $HC/src ]; then      # the harden's own copy: compared without comments; a functional difference dies
     local a b
     for f in $SRCS; do
@@ -193,7 +203,8 @@ EOF
 stage_lemma() {
   mkdir -p "$B/lemma"; local L="$B/lemma"
   [ -f "$B/consts.cand" ] || die "no consts.cand: run the read stage first"
-  [ "$(wc -l < "$B/consts.cand")" = 186 ] || die "consts.cand has $(wc -l < "$B/consts.cand") entries, not 186"
+  [ -n "$NCAND" ] || die "no cand= in accounting.py EXPECT"
+  [ "$(wc -l < "$B/consts.cand")" = "$NCAND" ] || die "consts.cand has $(wc -l < "$B/consts.cand") entries, not $NCAND"
   # the design, flat, with the wires the lemma reads brought out as ports
   local regs; regs=$(sed 's/\[[0-9]*\]$//' "$B/consts.cand" | sort -u)
   {
@@ -204,6 +215,9 @@ stage_lemma() {
 hierarchy -top $TOP
 proc -norom
 flatten
+opt_clean
+memory -nomap
+memory_map
 opt_clean
 setundef -undriven -zero
 setattr -unset init
@@ -246,14 +260,14 @@ EOF
   if grep -q "Induction step proven: SUCCESS" "$L/prove.log"; then
     cp "$L/consts.txt" "$B/consts.txt"
     {
-      echo "PROVED k-induction length ${len:-?}, ${dt}s: all 186 constant bits (184 CSR + gpio out_r[1], [3]) equal their reset value once reset (L1)"
+      echo "PROVED k-induction length ${len:-?}, ${dt}s: all $NCAND constant bits (accounting.py EXPECT cand) equal their reset value once reset (L1)"
       [ "${len:-1}" -gt 1 ] && echo "NOTE: induction length ${len} > 1: the step is from any state; the base case covers only the zero power-up of the no-reset flops (if_kbuf, spi cc/bc), which EQY starts free on both sides"
       echo "PROVED the same run: exwb_memSize != 3, muldiv st not 6 or 7, qspi state > 9, spi st != 3 once reset (L2, 4 FSMs)"
       echo
       echo "bit  value  (consts.txt)"
       sed 's/^/PROVED /' "$L/consts.txt"
     } > "$L/lemma.txt"
-    say "lemma: PROVED 186 constant bits and the 4 FSM invariants (k=${len:-?}, ${dt}s)"
+    say "lemma: PROVED $NCAND constant bits and the 4 FSM invariants (k=${len:-?}, ${dt}s)"
     return 0
   fi
   local why="no verdict"
@@ -350,7 +364,7 @@ no_x_consts() {            # the unscoped setundefs of the ties are safe only if
   [ "$n" = 0 ] || die "read/gold_pre.il holds $n x constants; the unscoped setundef ties are unsafe"
 }
 
-check_ties() {             # $1 = eqy dir: gold.il ties the 181 tie0 bits to 1'0 and the 5 tie1 bits to 1'1
+check_ties() {             # $1 = eqy dir: gold.il ties the NCAND-5 tie0 bits (4x4: 187) to 1'0 and the 5 tie1 bits to 1'1
   local G="$1/gold.il" bad=0 n0=0 n1=0 name v
   [ -f "$G" ] || die "no $G to check the ties"
   while read -r name v; do
@@ -359,7 +373,8 @@ check_ties() {             # $1 = eqy dir: gold.il ties the 181 tie0 bits to 1'0
     else bad=$((bad + 1)); echo "tie check: $name not tied to 1'$v" >> "$STATUS"; fi
   done < "$B/consts.txt"
   say "prove: tie check: $n0 tie0 bits at 1'0, $n1 tie1 bits at 1'1, $bad wrong"
-  [ "$bad" = 0 ] && [ "$n0" = 181 ] && [ "$n1" = 5 ] || die "tie check failed ($n0/181 tie0, $n1/5 tie1, $bad wrong)"
+  local x0=$((NCAND - 5))
+  [ "$bad" = 0 ] && [ "$n0" = "$x0" ] && [ "$n1" = 5 ] || die "tie check failed ($n0/$x0 tie0, $n1/5 tie1, $bad wrong)"
 }
 
 eqy_verdict() {            # $1 = dir: prints the last line from the strategies' status files
