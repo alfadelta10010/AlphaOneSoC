@@ -33,7 +33,7 @@
 //        A write that changes FEN also clears the RX FIFO and THR (16550). A clear
 //        beats a push in the same clock.
 //   IIR  {FEN, FEN, 2'b00, IID}: 6 RLS (ELSI & (OE | head entry has an
-//        error)), 4 RDA (ERBFI & rx_n >= trigger), C character timeout
+//        unacknowledged error)), 4 RDA (ERBFI & rx_n >= trigger), C character timeout
 //        (ERBFI & cti), 2 THRE (ETBEI & THR empty), 1 none. THRE is a
 //        LEVEL: reading IIR does not clear it (departure from the 16550;
 //        Linux's __stop_tx clears ETBEI when it has nothing to send, and its
@@ -50,8 +50,8 @@
 //   LSR  {FIFOERR, TEMT, THRE, BI, FE, 0, OE, DR}. DR = RX FIFO not empty;
 //        OE is sticky (a frame completed with the RX FIFO full: the new
 //        character is dropped, the FIFO kept), cleared by an LSR read; BI/FE
-//        describe the head entry and leave with its pop, NOT with an LSR
-//        read (departure); THRE = THR empty; TEMT = THR empty and the shifter
+//        describe the head entry; an LSR read acknowledges them (and the RLS
+//        interrupt, err_ack) and the entry itself leaves with its pop; THRE = THR empty; TEMT = THR empty and the shifter
 //        idle; FIFOERR = FEN & any queued entry with an error.
 //   MSR  0xB0 (CTS, DSR, DCD asserted, no delta bits). In loopback
 //        {OUT2, OUT1, DTR, RTS, 4'b0}.

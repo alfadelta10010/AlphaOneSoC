@@ -389,8 +389,10 @@ RBR pops only on a load whose byte enable selects offset 0. The core drives
 * THRE is level and not cleared by an IIR read; Linux's `__stop_tx` clears
   ETBEI when it has nothing to send, and its THRE test needs the interrupt on
   both IIR reads.
-* BI and FE belong to the head entry: an LSR read does not clear them, the pop
-  does. OE is sticky until an LSR read.
+* BI and FE belong to the head entry: an LSR read acknowledges them (and the
+  receiver-line-status interrupt, as a 16550 does: BI/FE then read 0 and the
+  FIFOERR count drops that entry), but the entry itself stays until the RBR pop.
+  OE is sticky until an LSR read.
 * MSR has no delta bits, so the modem-status interrupt never fires.
 * A frame with a bad stop bit and any data bit 1 is a framing error, queued
   with the error flag (the polled subset dropped it). A frame whose every bit
@@ -423,10 +425,12 @@ characters masks interrupts for 87 µs each). **A sustained 115,200 stream
 into Linux is not carried without flow control**: n_tty costs about
 0.15-0.3 ms per character against 0.087 ms of arrival. Bare metal or FreeRTOS
 draining in the ISR (about 30 µs a character) carries it continuously. For
-sustained input, map RTS# to `uo_out[5]` (no SD card; RTS# deasserts at 2
-free entries) or lower the baud rate; otherwise set the trigger to 1 byte
+sustained input, map RTS# to `uo_out[5]` (no SD card; RTS# is asserted while 2 or
+more entries are free and deasserts when 1 is left) or lower the baud rate; otherwise set the trigger to 1 byte
 (the sysfs `rx_trig_bytes` file only offers the 16550A table's 1/4/8/14, so
-the init script writes `1`).
+the init script writes `1`: sysfs values 1-3 select FCR code 0, which is 1 byte
+here; 4-7 select code 1, 2 bytes; the file reads back 8 while the hardware
+uses 4).
 
 Device tree (`docs/devicetree-4x4.dtsi`, included by the board file
 `docs/alphaone-4x4.dts`): `compatible = "ns16550a"`, `reg-shift = <0>`,

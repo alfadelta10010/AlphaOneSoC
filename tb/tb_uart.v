@@ -7,7 +7,7 @@
 //     MCR reset 0x02, SCR) and a scoreboard predicting all 32 bits of every
 //     read, and every side effect (RBR pop, OE cleared by an LSR read);
 //   * an RX FIFO model (8 x {err, data}), FIFOERR, OE on a full FIFO, FE and
-//     BI per head entry (they leave with the pop), IIR priority (RLS > RDA >
+//     BI per head entry (an LSR read acknowledges them, the pop removes the entry), IIR priority (RLS > RDA >
 //     CTI > THRE), `irq` on every clock, the 1/2/4/7 trigger table, the
 //     character timeout (640 ticks of 16x clock after the last push, pop or
 //     clear, +-1 tick) and RTS# (rx_n <= 6, one clock after the change);
