@@ -18,7 +18,7 @@
 //   * EN low for a while -> active falls; EN high -> active rises.
 // Floors (end of run): hits, misses, store-invalidates, evictions per line, straddling
 // hits, EN toggles, flushes. +SEED=n, +CYCLES=n, +MAXLAT=n (default 12), +NOEN
-// (EN stays 1 after the first rise), +VERBOSE.
+// (EN stays 1 after the first rise), +ENFAST (EN toggles every ~100 cycles), +TFROM=n (trace).
 `timescale 1ns/1ps
 module tb_cache;
     reg clk = 0;
@@ -51,7 +51,7 @@ module tb_cache;
                .d_req(d_req), .d_we(d_we), .d_addr(d_addr), .d_ready(d_ready),
                .active(active));
 
-    integer seed, seed0, ncyc, maxlat, noen, verbose;
+    integer enfast, seed, seed0, ncyc, maxlat, noen;
     integer errors = 0;
 
     // ---- address pool and shadow memory ------------------------------------
@@ -213,7 +213,7 @@ module tb_cache;
         if (cyc > 6) begin
             if (noen) begin
                 if (cyc == 20) en <= 1'b1;
-            end else if (rnd(en ? 8000 : 400) == 0) begin
+            end else if (rnd(enfast ? (en ? 150 : 60) : (en ? 8000 : 400)) == 0) begin
                 en <= ~en;
                 n_entog = n_entog + 1;
                 if (en) en_fall_at = cyc; else en_rise_at = cyc;
@@ -302,8 +302,8 @@ module tb_cache;
         if (!$value$plusargs("CYCLES=%d", ncyc)) ncyc = 400000;
         if (!$value$plusargs("MAXLAT=%d", maxlat)) maxlat = 12;
         noen = $test$plusargs("NOEN");
+        enfast = $test$plusargs("ENFAST");
         if (!$value$plusargs("TFROM=%d", tfrom)) tfrom = -1;
-        verbose = $test$plusargs("VERBOSE");
         tbase0 = $random(seed); tbase1 = $random(seed);
         for (i = 0; i < 8; i = i + 1) n_evict[i] = 0;
         for (i = 0; i < 2048; i = i + 1) sh[i] = $random(seed);
@@ -323,7 +323,7 @@ module tb_cache;
         if (n_miss < 1000) begin $display("FAIL floor: misses %0d < 1000", n_miss); errors = errors + 1; end
         if (n_inv < 100)   begin $display("FAIL floor: store-invalidates %0d < 100", n_inv); errors = errors + 1; end
         for (i = 0; i < 8; i = i + 1)
-            if (n_evict[i] < 50) begin $display("FAIL floor: evictions of line %0d = %0d < 50", i, n_evict[i]); errors = errors + 1; end
+            if (n_evict[i] < (enfast ? 5 : 50)) begin $display("FAIL floor: evictions of line %0d = %0d < %0d", i, n_evict[i], enfast ? 5 : 50); errors = errors + 1; end
         if (n_strad < 100)   begin $display("FAIL floor: straddling hits %0d < 100", n_strad); errors = errors + 1; end
         if (n_strad_x < 20)  begin $display("FAIL floor: cross-line straddles %0d < 20", n_strad_x); errors = errors + 1; end
         if (!noen && n_entog < 10) begin $display("FAIL floor: EN toggles %0d < 10", n_entog); errors = errors + 1; end
