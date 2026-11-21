@@ -13,7 +13,7 @@ FIFO, one TX holding register) with an interrupt, a one-pad gamepad receiver, a
 timer/PWM with two comparators, one square-wave audio voice, an output pinmux,
 the watchdog interrupt, an instruction cache (K4, `CACHE_CTL`) and the
 registered IO read path; and it moves the default pin map. PSRAM line bursts
-(`CACHE_CTL.PBURST`, WO-68) are **pending**: TODO, the RTL is not committed.
+(`CACHE_CTL.PBURST`, WO-68) are built (662982d, f73a2d8) but **experimental, off at reset**.
 Block-by-block sizes come from the gate harden. The address map, boot flow
 and QSPI engine are in `docs/soc-architecture.md`; what the loader must do
 before an OS runs is in `docs/boot-contract-4x4.md`, the device tree in
@@ -66,7 +66,7 @@ level, so enabling the transmitter makes no edge), `[4]` (UART TX idle) and
 `[5]` (SD CS#) high, `[6]` low (OLED held in reset, panel supply off), `[7]`
 (audio) low. GPIO OUT resets to `0xB9`, which is the same on the pins that
 default to GPIO plus bit 7 and bit 4 high, so a pin switched to GPIO starts at
-its idle level. UART TX, RTS# (when mapped) and the PWM and audio sources
+its idle level, except pin 7, whose OUT bit resets to 1 while audio idles at 0. UART TX, RTS# (when mapped) and the PWM and audio sources
 reset to the pin's idle level as well, so the pin flops load `0x39` again on the
 first running edge and nothing moves (the TT01 case, `tb/VPLAN.md` 4.2). While
 reset is held the QSPI pins are released, as they are today. The same values
@@ -206,7 +206,7 @@ default map: its rows were `ui_in[4..7]` and its columns `uo_out[0..3]`.
 | 7 | PWM | `0x1003_0000`, `src/pwm.v` | built; 2 of 4 comparators (cmp2/3 read `0xFFFF`) | gate harden | `pwm-sifive` |
 | 8 | Audio | `0x1003_0100`, `src/audio.v` | built; one square voice | gate harden | none (bare metal) |
 | 9 | Pinmux | `0x1002_0020`, `src/pinmux.v`, carved out of the syscon window | built | 2,560 µm² synth, 32 flops | `pinctrl-single` |
-| 10 | Instruction cache | `src/cache.v`, `CACHE_CTL` at `0x1002_0024` | built (K4); PBURST pending WO-68 | one `rf_top` macro + flops | none (loader) |
+| 10 | Instruction cache | `src/cache.v`, `CACHE_CTL` at `0x1002_0024` | built (K4); PBURST built, experimental, off at reset | one `rf_top` macro + flops | none (loader) |
 | 11 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built; registered IO read path | one state flop and a 32-bit register, 632 µm² (measured) | — |
 | 12 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.151 tile, 23 flops (0.078 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
 
@@ -466,7 +466,7 @@ ignore writes.
 | `0x10` | GAMEPAD (read only), section 10; decoded in `soc_bus`, `gpio.v` never sees it |
 | `0x14` | GPSTAT, section 10; same carve |
 | `0x18` | IN_IE (read/write, `[7:0]`, resets 0): per-bit enable of the input-change interrupt (PLIC source 4). |
-| `0x1C` | IN_IP: read `[7:0]` = pending edges. Bit *i* sets on **either** edge of the synchronised `ui_in[i]`, whatever IN_IE says; a write with lane 0 clears every bit written as 1 (W1C); an edge in the same clock as the clear of its bit wins. Resets to 0 (reset and syscon reboot leave no phantom edge with a pin held high). `in_irq = |(IN_IP & IN_IE)`, a level. Neither slot ever stalls. |
+| `0x1C` | IN_IP: read `[7:0]` = pending edges. Bit *i* sets on **either** edge of the synchronised `ui_in[i]`, whatever IN_IE says; a write with lane 0 clears every bit written as 1 (W1C); an edge in the same clock as the clear of its bit wins. Resets to 0, and a syscon reboot leaves no phantom edge with a pin held high. After a power-up reset that gives the synchroniser only two clocks (the demo board stops the clock, pulses `rst_n`, then starts it) the first read can show phantom bits, because the synchroniser is never reset: harmless with IN_IE = 0 at reset, and with the "clear IN_IP, then set IN_IE" recipe below, which is therefore a rule. `in_irq = |(IN_IP & IN_IE)`, a level. Neither slot ever stalls. |
 | `0x20`-`0x30` | the SPI controller, section 4 |
 | `0x34`-`0x3C` | reserved |
 
@@ -618,8 +618,8 @@ tree are in `docs/soc-architecture.md`, section "syscon". What faces the pins:
 
 A subset of the
 RISC-V PLIC specification 1.0.0 as `drivers/irqchip/irq-sifive-plic.c` drives
-it (`sifive,plic-1.0.0`): one context (hart 0, M-mode), 9 level-triggered
-sources, 1-bit priorities and a 1-bit threshold. It lives in its own 4 MB PMA
+it (`sifive,plic-1.0.0`): one context (hart 0, M-mode), 9 sources (8 level-triggered and the watchdog pulse),
+1-bit priorities and a 1-bit threshold. It lives in its own 4 MB PMA
 window, the core's third IO window `PMA_IO2` (`0x0C00_0000`-`0x0C3F_FFFF`,
 core commit c60b579), decoded in `soc_bus` by `addr[27]`.
 
@@ -642,7 +642,15 @@ that mark only if the source's enable bit is set (a completion of a disabled
 source is ignored, as the specification says; the driver enables around it).
 The gateway forwards a source once and holds it until it is completed. The
 output `meip` is registered, like MTIP (one clock of latency; it drops two
-clocks after a claim), and drives the core's `external_irq`.
+clocks after a claim), and drives the core's `external_irq`. **MEIP stays high for one cycle after a claim, an
+enable clear, a priority-0 write or a threshold write** (the register sees the pre-write state), so with
+`mstatus.MIE = 1` an MEI can be taken whose claim then returns 0: legal (a claim may return 0; Linux's
+handler loops `while (readl(claim))`), so handlers must accept a 0 claim.
+
+**Do not issue an AMO to an IO address** (UART, GPIO, syscon, PLIC, PWM, audio, CLINT): the core allows it,
+but the read half has side effects before the write half, so an `amoswap` on the claim word claims the next
+source before it completes, and an AMO on UART `+0` pops RBR and writes FCR. Behaviour is undefined; Linux
+never AMOs MMIO.
 
 | Source | Device |
 |---|---|
@@ -652,7 +660,7 @@ clocks after a claim), and drives the core's `external_irq`.
 | 4 | GPIO input change (IN_IP & IN_IE, a level; bare-metal/FreeRTOS: gpio-mmio has no irqchip) |
 | 5-6 | PWM comparators 0-1 |
 | 7-8 | PWM comparators 2-3 (not built, tied 0) |
-| 9 | watchdog: a ONE-clock pulse at the first expiry (not the STAT level); the PLIC pend is sticky, so it is lost only while source 9 is in service (WDT_STAT stays pollable) |
+| 9 | watchdog: a ONE-clock pulse at the first expiry (not the STAT level); the PLIC pend is sticky, so a pulse is lost only while source 9 is in service (known behaviour: no latch, one flop saved; WDT_STAT stays pollable and Linux completes within microseconds) |
 
 The audio block has no interrupt. The claim ignores the threshold (as the
 specification says) and `meip` is gated by it. Device tree: `riscv,ndev = <9>`,
@@ -669,13 +677,13 @@ ignore writes (no pin, no interrupt): `pwm-sifive`'s `get_state` computes duty =
 
 | Offset | Register |
 |---|---|
-| `0x00` | PWMCFG: `scale[3:0]` (0-15), sticky, zerocmp, enoneshot, enalways, and `ip[3:0]` in bits 31:28 (a write of the top byte sets or clears `ip`); gang, center and deglitch are not built and read 0 |
+| `0x00` | PWMCFG: `scale[3:0]` (0-15), sticky, zerocmp, enoneshot, enalways, and `ip[1:0]` in bits 29:28 (ip[3:2] read 0; a write of the top byte sets or clears `ip`); gang, center and deglitch are not built and read 0 |
 | `0x08` | PWMCOUNT: reads 0 (departure); any write restarts the prescaler and the count |
 | `0x10` | PWMS: the scaled counter, read only |
 | `0x20`, `0x24` | PWMCMP0-1, 16 bits |
 | `0x28`, `0x2C` | PWMCMP2-3: read `0xFFFF`, writes ignored |
 
-The period is 2^(16 + scale) clocks. The pin is `ip`, high while the scaled
+PWM decodes `addr[5:2]` and slot 3 only `addr[8]`, so the registers alias every 0x40 (and 0x1003_0200 is PWM again). The period is 2^(16 + scale) clocks. The pin is `ip`, high while the scaled
 counter is at or above the comparator (the arithmetic of `pwm-sifive.c`,
 `cmp = 0xFFFF - duty`, requires this polarity, so 0 % is not available and
 100 % is `cmp = 0`). `zerocmp` resets the count one cycle after a match on
@@ -694,9 +702,9 @@ on `uo_out[7]`.
 | `0x00` | TONE0: `{O[2:0], P[11:0]}`; f = clk / 16 / 2^O / (2 (P + 1)) = 1,953,125 / (2^O (P + 1)) Hz at 62.5 MHz |
 | `0x10` | CTRL: bit 0 EN |
 
-Every other offset reads 0 and ignores writes. EN = 0 holds the counters and the
+Audio decodes only `addr[4:2]`, so its registers alias every 0x20 (TONE0 again at +0x20); other offsets in that span read 0 and ignore writes. EN = 0 holds the counters and the
 pin at their reset values. A new period takes effect at the next reload. Range at
-62.5 MHz: O = 0 gives 477 Hz (P = 4095) to 976 kHz. **The Tetris formula**
+62.5 MHz: O = 0 gives 477 Hz (P = 4095) to 1.953 MHz (P = 0). **The Tetris formula**
 (Korobeiniki, smallest O, equal-tempered A4 = 440; table in the `src/audio.v`
 header, `tests/soc/tune.S`): `P = round(1,953,125 / (2^O f)) - 1`, for example
 A4 = 440 Hz: O = 1, P = 2218 gives 440.09 Hz; E5: O = 0, P = 2962 gives
@@ -717,7 +725,7 @@ Any other bit count is ignored.
 | Offset | Register |
 |---|---|
 | `+0x10` GAMEPAD | read only: `{16'b0, pr0, 3'b0, pad0[11:0]}`; an absent pad reads 0 with its present bit clear; the pad-1 fields read 0 |
-| `+0x14` GPSTAT | read `{30'b0, ie, chg}`; write bit 1 sets `ie`, write 1 to bit 0 clears `chg` (a new value in the same cycle wins). Never stalls |
+| `+0x14` GPSTAT | read `{30'b0, ie, chg}`; a write to bit 1 sets or clears `ie` (any byte-0 write also writes `ie`, so write 0x3 to clear `chg` and keep the interrupt on), write 1 to bit 0 clears `chg` (a new value in the same cycle wins). Never stalls |
 
 The interrupt is `chg & ie` (PLIC source 3). It is carved out of the GPIO
 window by `soc_bus`, so `gpio.v` does not change for it.
@@ -753,15 +761,14 @@ out of the syscon window like PINMUX:
 |---|---|
 | 0 EN | read/write, reset 0 (every reset, including a reboot). 0 = the fetch path passes straight through; 0 to 1 starts cold |
 | 1 | reads 1: a cache is built |
-| 2 PBURST | **pending WO-68 (TODO: the RTL is not committed).** Reset 0; PSRAM line fills in one CE# period. Needs EN and `QSPI_CFG.STREAM`; only at a core clock of at least 15 MHz (tCEM 8 µs, about 97 clocks per line) |
+| 2 PBURST | Built, **experimental, off at reset** (reset 0): a PSRAM line fills in one CE# period. Needs EN and `QSPI_CFG.STREAM = 1` (STREAM = 0, e.g. the no-stream strap, also disables bursts); use it only at a core clock of at least 15 MHz (tCEM 8 µs, about 97 clocks per line, 101 worst; the CE# bound is bounded-checked, not proved) |
 
 A hit takes 2 clocks (3 for a straddling fetch); a miss fills four aligned words in
 line order, restarting early. Stores, AMOs and successful SCs that complete on the
 data port invalidate their line, so a fetch that starts after the store completes sees
-the new bytes. Instructions already fetched are not re-fetched: the rest of a line whose
-fill is under way when the store issues (up to three words, early restart) can execute the
-old bytes, a few instructions after the store (WO-70/71, legal under Zifencei). So issue
-FENCE.I after writing code, as Zifencei requires; it also flushes the cache. With the cache on, the
+the new bytes. The instruction fetched in the store's completing cycle may run the old bytes (measured,
+WO-71: only that one, with the cache on or off; legal under Zifencei). Always FENCE.I after
+writing code, as Zifencei requires; it also flushes the cache. With the cache on, the
 worst fetch wait on a miss is 476 clocks PSRAM-only to 581 with flash code (4 data
 transactions, 3 old and 4 own fill words, plus 3 clocks); the 449/482-clock bound
 of `mem_ctrl` is the EN = 0 statement. The software rule and the loader's

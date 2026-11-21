@@ -269,8 +269,9 @@ reset (`docs/pins-and-peripherals.md`).
 * The devices' power-up time (150 µs for the PSRAM) has passed before reset
   is released. On the demo board it long has.
 * PSRAM maximum chip-select-low time (tCEM) is 8 µs for the standard grade
-  the Pmod carries (APS6404L-3SQR-SN). The longest transaction is about 60
-  clocks, so the core clock must be above about 8 MHz.
+  the Pmod carries (APS6404L-3SQR-SN). The longest plain read is 64 clocks, so
+  without PBURST the core clock must be at least 8.0 MHz (use 8.3 or more for margin); below that every
+  PSRAM access breaks tCEM and silently corrupts RAM. PBURST needs 15 MHz (`docs/boot-contract-4x4.md`).
 * The flash is idle when reset is released: no program, erase or status
   write still running, and no erase or program suspended. While BUSY the
   flash ignores everything but status reads and suspend (-DTR §7.1.1; a
@@ -289,7 +290,7 @@ reset (`docs/pins-and-peripherals.md`).
   next-PC logic, at the cost of one flop and one cycle of latency.
 * `mtimecmp` resets to all-ones, so no timer interrupt is pending out of reset.
 * **PLIC at `0x0C00_0000`** (4x4 branch). One context (hart 0, M-mode, line 11 of
-  the cpu interrupt controller), 9 level-triggered sources: 1 UART, 2 SPI (polled,
+  the cpu interrupt controller), 9 sources (8 level-triggered and the watchdog pulse): 1 UART, 2 SPI (polled,
   not in the DT), 3 gamepad, 4 GPIO input change (IN_IE/IN_IP, all 8 inputs,
   bare-metal/FreeRTOS only: gpio-mmio has no irqchip), 5-6 PWM
   comparators 0-1, 7-8 tied 0, 9 watchdog (a one-clock pulse at the first
@@ -323,7 +324,7 @@ into.
 | +0x10 | STRAPS | R, [0] = `qspi_rd_late`, [1] = the no-stream strap (`ui_in[2]`), as latched at the last pin reset | the pins | kept |
 | +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
 | +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
-| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR (`EDh` DTR flash reads) and DDR_CAP (the capture point) as in "DDR bring-up" | STREAM = ~no-stream strap, DDR 0, DDR_CAP 0 | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
+| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR (`EDh` DTR flash reads) and DDR_CAP (the capture point) as in "DDR bring-up" | STREAM = ~no-stream strap, DDR 0, **DDR_CAP 2** (the loader must always write DDR_CAP in the same store as DDR) | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
 | +0x20..+0xFC | - | read 0, writes ignored | - | - |
 | +0x100..+0x1FF | WDT | the watchdog, below | 0 (TOP 15) | disabled |
 | +0x200..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
