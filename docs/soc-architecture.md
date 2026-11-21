@@ -13,12 +13,12 @@ apart, this document says which one won and why.
 | Flash | `0x2000_0000` | 16 MB | read, execute | W25Q128JV on QSPI CS0 |
 | PSRAM | `0x8000_0000` | 16 MB | read, write, execute, LR/SC, AMO | 2x 8 MB PSRAM on QSPI CS1 (A) / CS2 (B), `addr[23]` picks the chip |
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
-| PLIC | `0x0C00_0000` | 4 MB | read, write, AMO; its own PMA window IO2 (committed, c60b579); the PLIC itself is WO-47, in progress, and until it lands the window is closed | `src/plic.v`: `sifive,plic-1.0.0` subset, 9 sources, 1 context (`docs/pins-and-peripherals.md` 7) |
-| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550A, byte registers, FIFOs, interrupt 1 (WO-49, in progress; the 3x4 submission has the polled subset) (`docs/pins-and-peripherals.md`) |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` an optional input-change interrupt (WO-52, in progress) (`docs/pins-and-peripherals.md`) |
-| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps (section "syscon"); `+0x20` is the PINMUX word (`src/pinmux.v`), carved out in `soc_bus`, and `+0x24` is reserved for CACHE_CTL (WO-62, droppable) |
-| PWM | `0x1003_0000` | 64 KB slot | read, write, AMO | `src/pwm.v`: sifive,pwm0 layout, 4 comparators; the second IO slot, `addr[17:16] = 3` (WO-58, in progress) |
-| Audio | `0x1003_0100` | in the PWM slot, `addr[8]` | read, write, AMO | `src/audio.v`: 3 square voices + noise, 8-bit PWM DAC (WO-58, in progress) |
+| PLIC | `0x0C00_0000` | 4 MB | read, write, AMO; its own PMA window IO2 | `src/plic.v`: `sifive,plic-1.0.0` subset, 9 sources, 1 context; word reads only (`docs/pins-and-peripherals.md` 7) |
+| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550A, byte registers, RX FIFO 8, one TX holding register, interrupt 1 (the 3x4 submission has the polled subset) (`docs/pins-and-peripherals.md` 2) |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the one-pad gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` reserved (input-change interrupt not built) (`docs/pins-and-peripherals.md`) |
+| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps, QSPI_CFG, watchdog (section "syscon"); `+0x20` is the PINMUX word (`src/pinmux.v`) and `+0x24` is CACHE_CTL (`src/alphaone_soc.v`, `src/cache.v`), both carved out in `soc_bus` |
+| PWM | `0x1003_0000` | 64 KB slot | read, write, AMO | `src/pwm.v`: sifive,pwm0 layout, 2 built comparators (cmp2/3 read `0xFFFF`); the second IO slot, `addr[17:16] = 3` |
+| Audio | `0x1003_0100` | in the PWM slot, `addr[8]` | read, write, AMO | `src/audio.v`: one square-wave voice (TONE0 at `+0x00`, CTRL at `+0x10`) |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
 7) from the core's PMA check, before anything reaches the bus. The windows are
@@ -88,14 +88,14 @@ held request (see `src/fyracore.v`), which is all a single-master bus needs.
   `addr[17:16]`), otherwise the CLINT;
 * a read-data and ready mux.
 
-**Three carves** sit on top of that decode (WO-58, in progress): the PLIC is
+**Three carves** sit on top of that decode: the PLIC is
 selected by `addr[27]` (its own PMA window); in the GPIO slot, offsets
 `0x10`-`0x17` of every 64-byte alias go to the gamepad and `gpio.v` never sees
 them; in the syscon slot, `0x1002_0020` goes to the pinmux and `syscon.v`
-still reads 0 there, so its proofs stand. PWM and audio are IO slot 3
+still reads 0 there, so its proofs stand (CACHE_CTL at `0x1002_0024` is the same kind of carve). PWM and audio are IO slot 3
 (`addr[8]` picks between them). The new targets never hold `ready` low.
 
-**Registered IO read path (WO-51, in progress; decision D14).** The 3x4
+**Registered IO read path (decision D14).** The 3x4
 submission has no registers in `soc_bus`: peripherals answer with
 combinational read data in the cycle they are selected. The 4x4 bus has one
 state flop `ph` and a 32-bit `io_q`. Selects are high only in phase 1; the
@@ -129,7 +129,7 @@ Joins the core's two ports onto the one QSPI engine.
   load and a store each), not one. The bound is what keeps a fetch from being
   starved: the formal harness `core_df` checks at most 4 data handshakes per
   held fetch (BOUNDED, 32 steps from reset), and the worst fetch latency of
-  449/482 clocks (`rd_late` 0/1, streaming on; 442/456 off) is stated for that bound. Serving data first
+  449/482 clocks (`rd_late` 0/1, streaming on; 442/456 off) is stated for that bound, **with the cache off**. With the cache on (CACHE_CTL.EN = 1) the requester is the cache, one aligned word per request; a fill word can be starved by data traffic (no deadlock: the core is not waiting for it) and a data request can wait behind one fill word. The wait the core sees on a miss is bounded by 4 data, 3 old fill and 4 own fill transactions plus 3 clocks: 476 clocks with PSRAM-only code up to 581 with flash code (`src/mem_ctrl.v` header). Serving data first
   also avoids reading the next instruction before a load and then losing it
   while the load stalls the pipeline; fetch-first would do that on every load.
 * **Chip select** from the address: flash if `addr[31]` is 0, otherwise PSRAM
@@ -288,15 +288,17 @@ reset (`docs/pins-and-peripherals.md`).
   `mtime >= mtimecmp` compare out of the path into the core's interrupt and
   next-PC logic, at the cost of one flop and one cycle of latency.
 * `mtimecmp` resets to all-ones, so no timer interrupt is pending out of reset.
-* **PLIC at `0x0C00_0000`** (4x4 branch; WO-47 in progress, integration
-  WO-51). One context (hart 0, M-mode), 9 level-triggered sources: 1 UART,
-  2 SPI, 3 gamepad, 4 GPIO input change, 5-8 PWM comparators, 9 watchdog
-  (optional, WO-61). Its output `meip` is registered, like MTIP, and drives the
-  core's `external_irq`, so `mip.MEIP` is no longer constant 0. The 3x4
-  submission has no PLIC and every device is polled; the earlier reasoning
-  (a polled console at 87 µs a character gains nothing from an interrupt per
-  character) still holds for a UART without FIFOs, and the 16550A's FIFOs and
-  trigger levels are what make the UART interrupt worth taking
+* **PLIC at `0x0C00_0000`** (4x4 branch). One context (hart 0, M-mode, line 11 of
+  the cpu interrupt controller), 9 level-triggered sources: 1 UART, 2 SPI (polled,
+  not in the DT), 3 gamepad, 4 GPIO input change (not built, tied 0), 5-6 PWM
+  comparators 0-1, 7-8 tied 0, 9 watchdog (a one-clock pulse at the first
+  expiry). The claim ignores the threshold (spec), a complete clears the
+  in-service mark only for an enabled source, and reads must be words (a byte
+  read claims). Its output `meip` is registered, like MTIP, and drives the
+  core's `external_irq`, so `mip.MEIP` is no longer constant 0. Priority
+  MEI > MSI > MTI; WFI wakes on pending and enabled regardless of `mstatus.MIE`.
+  The 3x4 submission has no PLIC and every device is polled; the 16550A's trigger
+  levels are what make the UART interrupt worth taking
   (`docs/pins-and-peripherals.md` 2 and 7).
 * Registered MTIP is legal: Priv §3.2.1 says MTIP reflects the comparison
   "eventually, but not necessarily immediately". Linux's CLINT driver sets
@@ -320,7 +322,7 @@ into.
 | +0x10 | STRAPS | R, [0] = `qspi_rd_late`, [1] = the no-stream strap (`ui_in[2]`), as latched at the last pin reset | the pins | kept |
 | +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
 | +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
-| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR, DDR_CAP: stored, no effect until the DTR read path lands | STREAM = ~no-stream strap, DDR 0, DDR_CAP 0 | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
+| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR (`EDh` DTR flash reads) and DDR_CAP (the capture point) as in "DDR bring-up" | STREAM = ~no-stream strap, DDR 0, DDR_CAP 0 | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
 | +0x20..+0xFC | - | read 0, writes ignored | - | - |
 | +0x100..+0x1FF | WDT | the watchdog, below | 0 (TOP 15) | disabled |
 | +0x200..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
@@ -393,7 +395,7 @@ A store of `0x5555` (or the fail value `0x3333`) sets `off`, which holds
 * The QSPI pins are released. The Pmod's 10 kΩ pull-ups hold every chip
   select high, so the flash and both PSRAMs deselect and drop to standby.
 * `uo_out` = `0x39` (the 3x4 design: `0xB9`): UART idle, SD CS# high, the OLED in reset with its
-  panel supply off, audio low (WO-58, in progress).
+  panel supply off, audio low.
 * The clock keeps running. Nothing gates a clock yet, so only the clock tree
   and the flops' clock pins toggle; `mtime` stops, because the CLINT is in
   reset.
@@ -548,11 +550,12 @@ It gets its own device-tree node, beside the `syscon` node, not inside its
 
 | Offset | Name | Access | After any `rst_soc` reset |
 |---|---|---|---|
-| +0x100 | WDT CR | Lane 0. [0] EN: a write with bit 0 = 1 sets it; nothing clears it but a reset. [1] RESP_MODE reads 0 and ignores writes | 0 |
+| +0x100 | WDT CR | Lane 0. [0] EN: a write with bit 0 = 1 sets it; nothing clears it but a reset. [1] RMOD (RESP_MODE), written by every CR write: 0 = an expiry reboots, 1 = interrupt mode (first expiry raises PLIC source 9, the second reboots) | 0 |
 | +0x104 | WDT TORR | [3:0] TOP, R/W, lane 0; reads `{TOP, TOP}` in [7:0]. A write also kicks | `0xFF` (TOP 15) |
 | +0x108 | WDT CCVR | Reads 0 | - |
 | +0x10C | WDT CRR | Lane 0: writing `0x76` kicks, any other value is ignored. Reads 0 | - |
-| +0x110, +0x114 | STAT, EOI | Read 0 | - |
+| +0x110 | STAT | [0] the interrupt-mode flag; cleared by a kick, a TORR write, an EOI read or a reset | 0 |
+| +0x114 | EOI | Reads 0; a read clears the flag | - |
 | +0x1F4 | COMP_PARAMS_1 | Reads `0x0000_0040` (USE_FIX_TOP: timeout TOP = 2^(16+TOP) clocks) | - |
 | other +0x100..+0x1FF | - | Read 0, writes ignored | - |
 
@@ -612,8 +615,15 @@ so neither matters to it.
   cycle is swallowed, so the bound is 3Pt + 1.
 * TORR resets to TOP 15 (reads `0xFF`): a program that sets EN without writing
   TORR gets 34 s, not 1 ms.
-* RESP_MODE reads 0 and ignores writes: there is no interrupt line, and with
-  no `interrupts` property the driver offers no pretimeout.
+* RMOD set (interrupt mode): the first expiry sets STAT and restarts the period, and
+  raises PLIC source 9 as a **one-clock pulse** (not the STAT level: `dw_wdt`
+  requests the IRQ rising-edge, its ISR reads STAT only and never EOI, and the
+  PLIC is level-only, so a level would re-pend after every complete); an expiry
+  with STAT still set reboots. The PLIC pend is sticky, so the pulse is lost only
+  while source 9 is claimed and not completed (WDT_STAT stays pollable). Linux
+  sets RMOD itself for a pretimeout (`dw_wdt_update_mode`) and the DT's
+  `interrupts = <9>` lets the driver offer one; without `interrupts` it stays
+  reset-only. Do not mask it in the DT.
 
 **CCVR reads 0**, so `/sys/class/watchdog/watchdog0/timeleft` shows 0 s. A real
 readback needs a variable shifter, about +0.12 tile.
@@ -723,7 +733,7 @@ watchdog@10020100 {
   NOMMU config) and `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`, so the kernel
   pings a watchdog the flash loader armed until userspace opens
   `/dev/watchdog`. Userspace: busybox `watchdog`.
-* What the driver does here: probe clears RESP_MODE (already 0) and takes the
+* What the driver does here: probe clears RMOD (already 0) and takes the
   timeouts from the fixed TOPs; start writes TORR, kicks, sets EN; ping writes
   CRR = `0x76`; stop cannot stop it and the core keeps pinging; timeleft is 0.
   Its restart handler (priority 128, below `syscon-reboot`'s 192) writes
