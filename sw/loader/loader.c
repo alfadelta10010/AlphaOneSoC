@@ -121,6 +121,9 @@ void loader_main(void)
     __asm__ volatile("fence.i");
 #ifdef CACHE_CTL_VAL
     *(volatile uint32_t *)0x10020024u = CACHE_CTL_VAL;    /* 4x4 RTL: bit 0 instruction cache on, bit 2 PSRAM burst */
+    uart_puts("CACHE_CTL=");                              /* read back: the evidence that the write took */
+    uart_puthex(*(volatile uint32_t *)0x10020024u, 8);
+    uart_puts("\n");
 #endif
     ((void (*)(unsigned, unsigned))entry)(0, 0);
     for (;;)
