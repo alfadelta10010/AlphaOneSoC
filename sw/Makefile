@@ -308,6 +308,8 @@ check:
 	$(MAKE) run-freertos
 	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT=freertos/expect-ddr.txt
 	$(MAKE) run-fr-all
+	$(MAKE) run-fr-assert DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 fr-assert_EXPECT=freertos/expect-neg-assert-ddr.txt
+	$(MAKE) run-fr-malloc DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 fr-malloc_EXPECT=freertos/expect-neg-malloc-ddr.txt
 	$(MAKE) run-ddr-all
 	$(MAKE) run-sdtest-all
 	tools/loader_neg.sh

@@ -1,0 +1,8 @@
+# The assert case under a DDR image (-DNEG_ASSERT, DDR=1, final TOP 6): the crash happens in task context with the tick
+# running, so soc_crash must mask interrupts for the watchdog to expire; the reboot comes up in SDR and the
+# payload then fails the same way with the flash in SDR.
++ ASSERT
+=RESULT FAIL code=165
++ reset cause 0x04
++ flash stays SDR: a watchdog reset with DDR on
+- tick: vTaskDelay

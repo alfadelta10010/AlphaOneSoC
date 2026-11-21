@@ -126,8 +126,13 @@ static inline void soc_crash(unsigned n) __attribute__((noreturn));
 static inline void soc_crash(unsigned n)
 {
     if (*reg32(SYSCON_BASE + SYSCON_QSPI_CFG) & 2)
+    {
+        /* Interrupts off first: a crash from task context (configASSERT, the malloc hook) would otherwise keep
+         * taking the tick, and a tick hook that kicks the watchdog would keep the board alive forever. */
+        __asm__ volatile("csrc mstatus, %0" :: "r"(8u));
         for (;;)
             ;
+    }
     soc_fail(n);
 }
 
