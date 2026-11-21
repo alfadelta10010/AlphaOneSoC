@@ -62,7 +62,9 @@
 // FEN says (departure: a 16450 would overrun at the second character). RBR
 // reads 0x00 when it is empty. The trigger is 1/2/4/7 with FEN, 1 without
 // (departures from the 16550A's 1/4/8/14 to fit an 8-entry FIFO; code 2, which
-// Linux uses, leaves 4 character times, ~350 us at 115200 baud, before an overrun).
+// Linux uses, is 4 bytes and leaves 5 character times, ~435 us at 114,890 baud,
+// of slack before an overrun: the 8-deep FIFO takes 4 more after the trigger
+// plus the one being shifted in).
 // Character timeout: a counter of 16x ticks restarts on every push, pop,
 // clear and while the FIFO is empty; at 640 ticks (4 characters) it holds
 // and cti is set until the next restart.
@@ -71,9 +73,10 @@
 // from the 16550A's 16-byte TX FIFO; IIR[7:6] still reads 11 so autoconfig sees
 // FIFOs). THRE = THR empty, TEMT = THR and shifter empty. A THR write with THR
 // full does not complete: `ready` stays low (only while the write is selected)
-// until the shifter takes the character, and the write lands on the cycle it
-// does, so the bus paces the driver at line rate (the CPU waits up to one frame,
-// ~87 us at 115200 baud). A word store that writes THR and the other lanes
+// until the shifter takes the character, and the write lands one clock after the
+// take (ready follows thr_v, which falls on the take edge; push and pop never
+// coincide, so no character is lost), so the bus paces the driver at line rate
+// (the CPU waits up to one frame, ~87 us at 115200 baud). A word store that writes THR and the other lanes
 // while full writes them once, when THR is taken. The Linux device tree gives
 // tx-threshold so the driver writes one byte per THRE interrupt anyway.
 //
