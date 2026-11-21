@@ -108,7 +108,7 @@ module tb_soc_periph;
     gamepad_model gp (.latch(gp_latch), .clock(gp_clock), .data(gp_data));
     reg        gp_on = 1'b0;                  // gamepad.S / +GAMEPAD=1: the Pmod drives ui_in[6:4]
     wire [3:0] hi_in = kp_fitted ? kp_row : gp_on ? {tb_in[7], gp_data, gp_clock, gp_latch} : tb_in[7:4];
-    assign gpio_in = {hi_in, uart_rx, tb_in[2], sd_used ? do_d : tb_in[1], 1'b0};
+    assign gpio_in = {hi_in, uart_rx, tb_in[2], sd_used ? do_d : tb_in[1], tb_in[0]};
 
     // ── Checks on every clock ───────────────────────────────────────────────
     reg done = 1'b0, passed = 1'b0, failed = 1'b0;
@@ -380,6 +380,16 @@ module tb_soc_periph;
                     2: begin gp.present1 = 1'b1; gp.pad1 = 12'h456; end   // pad 1 is not kept: nothing changes
                     3: gp.present0 = 1'b0;
                     4: begin gp.present1 = 1'b0; gp.present0 = 1'b1; gp.pad0 = 12'h0AA; end
+                    default: ;
+                endcase
+            end else if (test == "gpio_irq") begin
+                // one edge of one pin per cue (gpio_irq.S): 1 pin 7 rises, 2 pin 2 rises, 3 pin 0 rises, 4 pin 4 rises, 5 pin 2 falls
+                case (e)
+                    1: tb_in[7] = 1'b1;
+                    2: tb_in[2] = 1'b1;
+                    3: tb_in[0] = 1'b1;
+                    4: tb_in[4] = 1'b1;
+                    5: tb_in[2] = 1'b0;
                     default: ;
                 endcase
             end else if (test == "pwm_linux") begin
