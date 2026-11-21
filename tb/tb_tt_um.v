@@ -754,7 +754,7 @@ module tb_tt_um;
                     s_n_ev = 6; s_ev[0] = 1; s_ev[1] = 8; s_ev[2] = 2; s_ev[3] = 5; s_ev[4] = 6; s_ev[5] = 7;
                 end
                 ID_reboot_dirty: begin
-                    // cue 1 (boot 1): a gamepad frame and 3 characters; one reboot; cue 2 (boot 2): the default pin map.
+                    // cue 1 (boot 1): a gamepad frame, 3 characters and pin 7 toggled; one reboot; cue 2 (boot 2): the default pin map.
                     // The character in flight at the reboot is all ones, so its cut frame reads as 0xFF.
                     s_div = 1; s_n_ev = 2; s_ev[0] = 1; s_ev[1] = 2; s_exp_re = 1; s_want = "\377";
                 end
@@ -843,7 +843,7 @@ module tb_tt_um;
                     if (code == 7) pw_eval(7, 6, m7_hi_ok, m7_per_ok, m7_n_pulse);
                 end
                 ID_reboot_dirty: begin
-                    if (code == 1) begin send_pat(3); pad_frame(12'hA5A); end
+                    if (code == 1) begin tb_in[7] = ~tb_in[7]; send_pat(3); pad_frame(12'hA5A); end   // pin 7 first: a GPIO input change (WO-69)
 `ifndef GL_TEST
                     if (code == 2 && !cache_en_arg && dut.soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
 `else
