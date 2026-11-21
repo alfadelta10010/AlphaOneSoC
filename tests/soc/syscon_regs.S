@@ -42,7 +42,7 @@
 .endm
 # one register offset with each of its alias bits (5-7, 9-15) set
 .macro ALIASES off
-    .if ((\off | 0x0020) != 0x20)         # 0x1002_0020 is the pinmux, carved out of syscon (WO-58)
+    .if (((\off | 0x0020) != 0x20) && ((\off | 0x0020) != 0x24))   # 0x1002_0020 is the pinmux (WO-58), 0x1002_0024 CACHE_CTL (WO-62): carved out of syscon
     SWZF (\off | 0x0020)
     .endif
     SWZF (\off | 0x0040)
