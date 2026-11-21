@@ -307,6 +307,7 @@ test-pinmux: $(BUILD_DIR)
 # and follow the program's divisor (+MB_DIV), and every floor and check stays.
 # MB_DIV per program as in scripts/gl/build_isa.sh; the programs that run at the
 # reset divisor need none (4 here).
+# SIM_PLUSARGS=+CACHE_EN adds plusargs to every test-soc-periph / test-syscon-soc run (the instruction cache on).
 define MB_FLAGS
 case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|syscon_reboot) d=;; *) d=1;; esac; \
 	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
@@ -330,7 +331,7 @@ test-soc-periph: $(BUILD_DIR)
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf || { bad=1; continue; }; \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 $$t.elf $$t.hex; \
-		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex $$pl > $$t.log 2>&1; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SOC_PERIPH_DIR)/$$t.hex $$pl $(SIM_PLUSARGS) > $$t.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT)|^[a-z_]+: ' $$t.log | head -6; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.log || ! grep -q '^PASS' $$t.log; then bad=1; fi; \
 	done; exit $$bad
@@ -423,7 +424,7 @@ test-syscon-soc: $(BUILD_DIR)
 			$(CURDIR)/$(TESTS_DIR)/soc/$$t.S -o $$t.elf && \
 		$(TOOLCHAIN)objcopy -O verilog -j .text.init -j .text -j .rodata \
 			--change-addresses=-0x20000000 $$t.elf $$t.hex || { bad=1; continue; }; \
-		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SYSCON_SOC_DIR)/$$t.hex $$pl "$$@" > $$t.$$n.log 2>&1; \
+		$(VVP) -n sim +TEST=$$t +FLASH_FILE=$(CURDIR)/$(SYSCON_SOC_DIR)/$$t.hex $$pl $(SIM_PLUSARGS) "$$@" > $$t.$$n.log 2>&1; \
 		grep -E '^(PASS|FAIL|ERROR|TIMEOUT|NOTE)' $$t.$$n.log | head -40; \
 		if grep -qE '^(FAIL|ERROR|TIMEOUT)' $$t.$$n.log || ! grep -q '^PASS' $$t.$$n.log; then bad=1; fi; \
 	done; exit $$bad

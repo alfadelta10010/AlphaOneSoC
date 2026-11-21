@@ -293,6 +293,12 @@ module tb_soc_periph;
     // RP2350 compares is the payload without the frames; the divisor follows
     // +MB_DIV (default the reset divisor); uart_linux's baud change follows its
     // cue frame, which the program sends before it writes the divisor.
+    // +CACHE_EN: the instruction cache is switched on (CACHE_CTL.EN) two clocks after every release of rst_soc, as a
+    // program's first stores would; a reboot or pin reset clears EN again, as in the hardware.
+    reg cache_en_arg;
+    initial cache_en_arg = $test$plusargs("CACHE_EN");
+    always @(posedge soc.rst_soc) if (cache_en_arg) release soc.cache_en;
+    always @(negedge soc.rst_soc) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!soc.rst_soc) force soc.cache_en = 1'b1; end
     reg        mb_uart = 1'b0;
     integer    mb_div = UART_DIV, mb_seen = 0, mb_st = 0, mb_n = 0, mb_tag = 0;
     string     mb_pay = "";

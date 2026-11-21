@@ -65,6 +65,13 @@ module tb_syscon_soc;
     wire [7:0] gpio_in = {tb_in[7:4], uart_rx, strap_ns, tb_in[1], strap};
 
     // No override of syscon's CHIP_ID: syscon_regs reads the one the chip ships.
+    // +CACHE_EN: the instruction cache is switched on (CACHE_CTL.EN) two clocks after every release of rst_soc, as a
+    // program's first stores would; a reboot or pin reset clears EN again, as in the hardware.
+    reg cache_en_arg;
+    initial cache_en_arg = $test$plusargs("CACHE_EN");
+    always @(posedge soc.rst_soc) if (cache_en_arg) release soc.cache_en;
+    always @(negedge soc.rst_soc) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!soc.rst_soc) force soc.cache_en = 1'b1; end
+
     alphaone_soc #(.UART_DIV_RESET(UART_DIV)) soc (
         .clk(clk), .rst(rst), .qspi_rd_late(strap), .qspi_no_stream(strap_ns),
         .qspi_sck(qspi_sck), .qspi_cs_n(qspi_cs_n), .qspi_ctl_oe(qspi_ctl_oe),
