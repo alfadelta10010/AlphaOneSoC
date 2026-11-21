@@ -59,7 +59,7 @@ UNIT = {
 # Optional unit benches added later; used when the Makefile has the target.
 UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
 SOC_FILES = {"plic.v", "mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
-             "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v"}
+             "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v", "pwm.v", "audio.v"}
 
 # formal: run.sh's inner limits are 1800 s (yosys) and PDR_TIMEOUT + 600 = 1800 s (sby, pdr
 # harnesses of the mutation lists); the outer limit is inner max + 600 so a slow proof ends
