@@ -11,6 +11,7 @@
 #
 # CORNERS (short: nom_tt, max_ss, min_ff, ... = {min,nom,max} x {ff,tt,ss}) overrides every variant's list.
 # Per run one line: <variant> <corner> monitor [..] bench [..] sdf-warn <n> d_oe3 <ns> wall <s>; last line WO34 PASS|FAIL.
+# CACHE_EN=1 adds +CACHE_EN (the instruction cache forced on after each reset release, tb_tt_um.v).
 # Resumable (WORK/runs/<v>_<c>/done); the per-run pnl, vvp and sdf are deleted after the run (disk is tight).
 # Timing models: the PDK's with every `wire X_delayed;` tied `= X` (Icarus does not drive $setuphold's
 # delayed nets), compared with ~/regr/rfm/gls-sdf/gls_model_timing; rf_top_timing.v has the macro's 4.0 ns.
@@ -100,9 +101,10 @@ run_one() { # variant corner
   $IVERILOG -g2012 -gspecify -I "$R/src" -o sim.vvp -s tb_tt_um $top -DGL_TEST -DUSE_POWER_PINS -DSIM \
     -DTCLK_NS=$T -DIN_DLY_NS=$IN_DLY -DRST_CHK_NS=$RST_CHK -DSDF_FILE=\"$d/cells.sdf\" \
     "$WORK/models/primitives.v" "$WORK/models/sky130_fd_sc_hd.v" "$G/rf_top_timing.v" pnl.v \
-    "$R/tb/qspi_pmod_model.v" "$R/tb/rp2350_uart_model.v" "$R/tb/ssd1331_model.v" "$R/tb/keypad_model.v" "$R/tb/tb_tt_um.v" $mon_v > compile.log 2>&1 \
+    "$R/tb/qspi_pmod_model.v" "$R/tb/rp2350_uart_model.v" "$R/tb/ssd1331_model.v" "$R/tb/keypad_model.v" "$R/tb/pin_meter.v" "$R/tb/tb_tt_um.v" $mon_v > compile.log 2>&1 \
     || { echo "$v $c COMPILE-FAILED" >> "$SUM"; rm -f pnl.v cells.sdf sim.vvp; touch done; return; }
   rm -f pnl.v
+  [ "${CACHE_EN:-0}" = 1 ] && vargs="$vargs +CACHE_EN"
   timeout -s KILL $tmo $VVP -n sim.vvp $vargs > sim.log 2>&1
   rm -f sim.vvp cells.sdf
   local mon bench warn d1

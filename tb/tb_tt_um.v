@@ -156,6 +156,22 @@ module tb_tt_um;
     always @(posedge clk) if (cyc > 4 && dut.soc.qspi_stream_en !== ~no_stream)
         $display("FAIL QSPI_CFG.STREAM = %b with ui_in[2] = %b through reset (cycle %0d)", dut.soc.qspi_stream_en, no_stream, cyc);
 `endif
+    // +CACHE_EN: the instruction cache is switched on (CACHE_CTL.EN) two clocks after every release of the SoC's reset,
+    // as a program's first stores would (the same force as tb_soc_periph / tb_syscon_soc); a reboot or pin reset
+    // clears EN again, as in the hardware. RTL: soc.cache_en and soc.rst_soc. A gate-level netlist keeps the net
+    // \soc.cache_en (the flop's Q) but not rst_soc, which is rebuilt from the syscon's rq and off flops and the
+    // pin reset (rst_soc = rst | rq | off; its synchroniser is at most two clocks, inside the wait).
+    reg cache_en_arg;
+    initial cache_en_arg = $test$plusargs("CACHE_EN");
+`ifndef GL_TEST
+    wire soc_rst_obs = dut.soc.rst_soc;
+    always @(posedge soc_rst_obs) if (cache_en_arg) release dut.soc.cache_en;
+    always @(negedge soc_rst_obs) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!soc_rst_obs) force dut.soc.cache_en = 1'b1; end
+`else
+    wire soc_rst_obs = !rst_n | dut.\soc.syscon_inst.rq | dut.\soc.syscon_inst.off ;
+    always @(posedge soc_rst_obs) if (cache_en_arg) release dut.\soc.cache_en ;
+    always @(negedge soc_rst_obs) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!soc_rst_obs) force dut.\soc.cache_en = 1'b1; end
+`endif
     reg  [7:0] tb_in = 8'h00;
     wire       uart_rx;
     reg        kp_fit = 1'b0, oled_fit = 1'b0;   // +TEST=soc: the PmodKYPD / PmodOLEDrgb are fitted
@@ -829,9 +845,9 @@ module tb_tt_um;
                 ID_reboot_dirty: begin
                     if (code == 1) begin send_pat(3); pad_frame(12'hA5A); end
 `ifndef GL_TEST
-                    if (code == 2 && dut.soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
+                    if (code == 2 && !cache_en_arg && dut.soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
 `else
-                    if (code == 2 && dut.\soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
+                    if (code == 2 && !cache_en_arg && dut.\soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
 `endif
                     if (code == 2 && uo_out !== 8'h39) fail($sformatf("reboot_dirty cue 2: uo_out = %b, want the default map 00111001", uo_out));
                 end

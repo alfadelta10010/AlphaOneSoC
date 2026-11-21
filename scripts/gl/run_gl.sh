@@ -9,6 +9,7 @@
 # One compile, then the list with JOBS vvp processes (auto: 2 while the file
 # Q3DONE is missing, else 5). A line with +SIG_REF=<file> whose file is missing or empty stops the
 # whole run before the compile (exit 1, message on stderr and in STATUS). Resumable: a test with a <name>.verdict is skipped.
+# CACHE_EN=1 adds +CACHE_EN to every run (EN forced two clocks after each reset release, RTL and netlist).
 # Per test OUT/<name>.log and OUT/<name>.verdict:
 #   `PASS|FAIL|TIMEOUT <cycles> cycles <wall> s [known: <label>]`
 # MAX_CYCLES = BASE's cycles * 2 + 50000, else DEFMAX (5,000,000). The last
@@ -40,7 +41,7 @@ while IFS='|' read -r name hex args; do
 done < "$LIST"
 [ "$nref" -eq 0 ] || { echo "run_gl.sh: $nref list line(s) without a SIG_REF file: nothing simulated" | tee -a "$OUT/STATUS" >&2; exit 1; }
 if [ "${RTL:-0}" = 1 ]; then
-  SRC="$R/src/alu.v $R/src/branchCtrl.v $R/src/clint.v $R/src/compressed_decoder.v $R/src/controller.v $R/src/csr.v $R/src/decoder.v $R/src/fyracore.v $R/src/muldiv.v $R/src/pmp.v $R/src/regFile.v $R/src/regs.v $R/src/rf_top.v $R/src/signExt.v $R/src/qspi_ctrl.v $R/src/mem_ctrl.v $R/src/cache.v $R/src/soc_bus.v $R/src/plic.v $R/src/uart.v $R/src/gamepad.v $R/src/pwm.v $R/src/audio.v $R/src/pinmux.v $R/src/gpio.v $R/src/spi.v $R/src/syscon.v $R/src/alphaone_soc.v $R/src/tt_um_alfadelta10010_alphaone_soc.v"
+  SRC=$(for f in $("$R/scripts/wrapper-srcs.sh" "$R"); do echo -n "$R/src/$f "; done)
   DEFS=""
 else
   : "${NETLIST:?NETLIST= or RTL=1}"
@@ -59,6 +60,7 @@ fi
 limit() { if [ "$JOBS" = auto ]; then [ -e "$Q3DONE" ] && echo 5 || echo 2; else echo "$JOBS"; fi; }
 run_one() { # name hex args
   local name=$1 hex=$2 args=${3//@RUN@/$OUT} mc=$DEFMAX s=$SECONDS c v lab=""
+  [ "${CACHE_EN:-0}" = 1 ] && args="$args +CACHE_EN"     # CACHE_EN=1: the instruction cache on after every reset release (tb_tt_um.v)
   if [ -n "${BASE:-}" ] && [ -s "$BASE/$name.verdict" ]; then
     c=$(awk '{print $2}' "$BASE/$name.verdict"); [[ $c =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] && mc=$(( c * 2 + 50000 ))
   fi
