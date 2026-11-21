@@ -144,7 +144,7 @@ module tb_spi;
         integer    t, k, r, bin, cls;
         ecnt = ecnt + 1;
         txe = !m_active && !m_bba;
-        exp_stall = sel && we && be[0] && ((addr == `SL_TXDATA) ? m_bba : (addr == `SL_STATUS) ? 1'b0 : !txe);
+        exp_stall = sel && we && be[0] && ((addr == `SL_TXDATA) ? m_bba : (addr == `SL_STATUS || addr == 4'd6 || addr == 4'd7) ? 1'b0 : !txe);
         acc = sel && we && be[0] && !exp_stall;
         if (armed) begin
             checks = checks + 4;
@@ -164,6 +164,7 @@ module tb_spi;
                     `SL_STATUS:  exp_rd = {30'b0, !m_bba, txe};
                     `SL_CONTROL: exp_rd = {30'b0, m_cpol, m_cpha};
                     `SL_BAUD:    exp_rd = {24'b0, m_baud};
+                    4'd6, 4'd7:  begin exp_rd = 32'h0; skip = 1'b1; end   // IN_IE / IN_IP (WO-69): tb_gpio checks the values
                     default:     exp_rd = 32'h0;
                 endcase
                 checks = checks + 1;
@@ -440,7 +441,7 @@ module tb_spi;
                     10: ckv("STATUS reset", v, 32'h3);
                     11: ckv("CONTROL reset", v, 32'h3);
                     12: ckv("BAUD reset", v, 32'hFF);
-                    1:  ;
+                    1, 6, 7: ;                  // IN; IN_IE / IN_IP (WO-69: tb_gpio checks them)
                     default: ckv("reset value of a reserved slot / register", v, 32'h0);
                 endcase
             end
@@ -464,7 +465,7 @@ module tb_spi;
                     wr(4'd3, up | pat[i]);        rd(4'd3, v);        ckv("SPICTL readback", v, {31'b0, pat[i][0]});
                     wr(`SL_STATUS, up | pat[i]);  rd(`SL_STATUS, v);  ckv("STATUS write leaves the status bits", v, 32'h3);
                     for (m = 0; m < 16; m = m + 1)
-                        if (m != 0 && m != 1 && m != 3 && m != 8 && m != 9 && m != 10 && m != 11 && m != 12) begin
+                        if (m != 0 && m != 1 && m != 3 && m != 6 && m != 7 && m != 8 && m != 9 && m != 10 && m != 11 && m != 12) begin
                             wr(m[3:0], up | pat[i]); rd(m[3:0], v); ckv("reserved slot", v, 32'h0);
                         end
                 end

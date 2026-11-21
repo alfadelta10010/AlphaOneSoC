@@ -50,7 +50,7 @@ module spi_bb_props (
     wire       txe_s = !busy_s && !bba_s;
     wire       txr_s = !bba_s;
     wire       req   = sel && we && be[0];
-    wire       ready_s = !(req && (addr == 4'd9 ? bba_s : addr == 4'd10 ? 1'b0 : !txe_s));
+    wire       ready_s = !(req && (addr == 4'd9 ? bba_s : addr == 4'd10 || addr == 4'd6 || addr == 4'd7 ? 1'b0 : !txe_s));   // IN_IE / IN_IP never wait (WO-69)
     wire       acc   = req && ready;
     wire       sample = busy_s && ((baud_s == 8'd0) ? !phase_s : (phase_s && hp_s + 8'd1 == baud_s));
     wire       drive = en_s && busy_s;
@@ -130,7 +130,7 @@ module spi_bb_props (
             if (addr == 4'd11) assert (rdata == {30'b0, cpol_s, cpha_s});
             if (addr == 4'd12) assert (rdata == {24'b0, baud_s});
             if (addr == 4'd0)  assert (rdata == {24'b0, out});
-            if (addr == 4'd2 || (addr >= 4'd4 && addr <= 4'd7) || addr >= 4'd13) assert (rdata == 32'h0);
+            if (addr == 4'd2 || addr == 4'd4 || addr == 4'd5 || addr >= 4'd13) assert (rdata == 32'h0);
         end
     end
 endmodule
