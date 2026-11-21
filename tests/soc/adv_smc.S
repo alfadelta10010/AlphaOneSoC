@@ -397,6 +397,7 @@ c3_back:
     bne  s2, t0, test_fail
     ADV_PASS
 
+    .balign 4                    /* mtvec BASE is 4-byte aligned: the low bits are its MODE field (WARL) */
 trap:
     csrr s1, mcause
     csrr s2, mepc

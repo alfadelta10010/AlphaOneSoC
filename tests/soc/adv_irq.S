@@ -322,6 +322,7 @@ _start:
     ADV_PASS
 
 /* ── Trap handler: tp, gp, s0-s3, s5-s8 are its own; t0 via mscratch ── */
+    .balign 4                    /* mtvec BASE is 4-byte aligned: the low bits are its MODE field (WARL) */
 trap:
     csrrw t0, mscratch, t0
     csrr tp, mcause

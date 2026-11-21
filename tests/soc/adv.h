@@ -61,6 +61,12 @@
 .macro ADV_ENTRY handler
     la   t0, \handler
     csrw mtvec, t0
+    csrr t1, mtvec                /* the handler must be 4-byte aligned: mtvec's low bits are MODE (WARL) */
+    beq  t0, t1, 76f
+    mv   a7, t1
+    li   a6, 0x7D
+    j    test_fail
+76:
     li   s11, SYSCON
     li   s10, 0
     MB_INIT
