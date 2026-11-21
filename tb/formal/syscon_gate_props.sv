@@ -7,8 +7,13 @@
 //       edge: seen at the port as WDT clear in a held cycle and set in the
 //       next, with the same word (RESET_CAUSE) addressed.
 //   P2  after any held edge the watchdog is disabled and out of interrupt mode: CR reads 0 (EN = 0, RMOD = 0).
-//   P4  after any held edge wdt_irq (the interrupt-mode flag) is 0.
-//   P5  a STAT read (+0x110) returns exactly wdt_irq.
+//   P4  after any held edge wdt_irq (the one-clock first-expiry pulse) is 0.
+//   P5  a STAT read (+0x110) returns exactly the flag `stat`, rebuilt at the ports: the flag is
+//       set by the wdt_irq pulse (stat and the pulse rise on the same edge, so the pulse cycle
+//       already reads 1) and cleared by a kick (CRR 0x76 on lane 0), a TORR write, an EOI read
+//       or a held reset: sh <= (sh | wdt_irq) & ~clear.
+//   P6  wdt_irq is a pulse: never high in two consecutive clocks (the first expiry needs stat
+//       clear, and stat stays set after it).
 //   P3  after any held edge QSPI_CFG (+0x1C) has DDR = 0 and DDR_CAP = DDR_CAP_RESET (the harness parameter, 2 since 6dee0f1;
 //       syscon keeps its own default, so a changed reset value is a FAIL here until this follows):
 //       every reset, reboot and watchdog expiry returns to SDR.
@@ -37,11 +42,23 @@ module syscon_gate_props #(parameter [2:0] DDR_CAP_RESET = 3'd2) (
         hq2    <= armed && !rst && rst_soc;
     end
 
+    // the STAT flag rebuilt from the pulse and the clearing events seen at the ports
+    wire clr_ev = (sel && we && be[0] && addr == 14'h41)                          // TORR write
+               || (sel && we && be[0] && addr == 14'h43 && wdata[7:0] == 8'h76)   // CRR kick
+               || (sel && !we && addr == 14'h45);                                 // EOI read
+    reg  sh = 1'b0, irq_q = 1'b0;
+    wire sh_now = sh | wdt_irq;
+    always @(posedge clk) begin
+        sh    <= !armed || rst_soc ? 1'b0 : (sh_now && !clr_ev);
+        irq_q <= wdt_irq;
+    end
+
     always @(*) begin
         assert (!(armed && held_q && !rst && addr == 14'd1 && rdata[2]));   // P1
         assert (!(armed && hq2 && addr == 14'h40 && rdata[1:0] != 2'b00));    // P2
         assert (!(armed && hq2 && wdt_irq));                                // P4
-        assert (!(armed && sel && !we && addr == 14'h44 && rdata != {31'b0, wdt_irq}));   // P5
+        assert (!(armed && sel && !we && addr == 14'h44 && rdata != {31'b0, sh_now}));   // P5
+        assert (!(armed && irq_q && wdt_irq));                              // P6
         assert (!(armed && hq2 && addr == 14'd7 && (rdata[1] || rdata[4:2] != DDR_CAP_RESET)));   // P3
     end
 
@@ -51,6 +68,7 @@ module syscon_gate_props #(parameter [2:0] DDR_CAP_RESET = 3'd2) (
         cover (armed && held_q && !rst && addr == 14'd1); cover (armed && hq2 && addr == 14'h40);
         cover (armed && hq2 && addr == 14'd7);
         cover (armed && wdt_irq); cover (armed && sel && !we && addr == 14'h44 && rdata[0]);
+        cover (armed && sh && !wdt_irq && sel && !we && addr == 14'h44 && rdata[0]);
     end
 `endif
 endmodule

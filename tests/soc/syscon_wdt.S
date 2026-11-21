@@ -5,8 +5,11 @@
 #           kicks 16,384 mtime counts apart (three timeouts' worth, no reset);
 #           a bad kick (0x75) and a CR write of 0 change nothing (CR stays 1);
 #           interrupt mode (CR 3): STAT sets at the first expiry with no reboot
-#           (cause stays 0x1; PLIC pending bit 9 is set), an EOI
-#           read clears it, CR back to 1, a kick (codes 0x107-0x10E);
+#           (cause stays 0x1; PLIC pending bit 9 is set by the ONE-clock
+#           pulse); the PLIC claims source 9 and completes it with STAT
+#           still 1 and pending bit 9 must stay 0 (the Linux dw_wdt ISR
+#           never clears STAT; a level source would re-pend, S1/V1); an EOI
+#           read clears STAT, CR back to 1, a kick (codes 0x107-0x113);
 #           cue 0x56, then spin without kicking. The watchdog reboots the SoC
 #           after more than one timeout and at most 1.5 timeouts + 1 clock; the
 #           bench predicts the cycle from mtime and prints the interval.
@@ -81,6 +84,36 @@ _start:
     srli t0, t0, 9
     andi t0, t0, 1
     CHECK t0, 1, 0x10B
+    # V1: claim and complete source 9 while STAT is still 1. The PLIC source is a
+    # one-clock pulse, so pending bit 9 must NOT come back (dw_wdt's ISR never clears STAT)
+    li   t2, 0x0C000000              # PLIC base
+    li   t0, 1
+    sw   t0, 0x24(t2)                # priority 9 = 1
+    li   t3, 0x0C002000
+    li   t0, 0x200
+    sw   t0, 0(t3)                   # enable source 9
+    li   t3, 0x0C200000              # threshold word; claim/complete at +4
+    sw   zero, 0(t3)                 # threshold 0
+    lw   t0, 4(t3)                   # claim
+    CHECK t0, 9, 0x10F
+    li   t2, 0x0C001000              # PLIC pending word
+    lw   t0, 0(t2)
+    srli t0, t0, 9
+    andi t0, t0, 1
+    CHECK t0, 0, 0x110               # the claim cleared pending
+    li   t0, 9
+    sw   t0, 4(t3)                   # complete
+    li   t1, 64
+7:  addi t1, t1, -1                  # let a level source re-pend if it were one
+    bnez t1, 7b
+    lw   t0, 0(t2)
+    srli t0, t0, 9
+    andi t0, t0, 1
+    CHECK t0, 0, 0x111               # NOT re-pended: the source was a pulse
+    lw   t0, 4(t3)
+    CHECK t0, 0, 0x112               # nothing left to claim
+    lw   t0, W_STAT(s11)
+    CHECK t0, 1, 0x113               # while STAT is still 1 (the test would be vacuous without it)
     lw   t0, W_EOI(s11)
     CHECK t0, 0, 0x10C               # EOI reads 0
     lw   t0, W_STAT(s11)

@@ -42,7 +42,9 @@
 //   +0x108  WDT_CCVR    reads 0.
 //   +0x10C  WDT_CRR     W: 0x76 in lane 0 kicks; any other value is ignored.
 //                       Reads 0.
-//   +0x110  WDT_STAT    R. [0] = the interrupt-mode flag (wdt_irq); 0 in RMOD 0.
+//   +0x110  WDT_STAT    R. [0] = the interrupt-mode flag `stat`. It is not wdt_irq (that is a
+//                       one-clock pulse, see Watchdog). `stat` survives a CR write that
+//                       clears RMOD; only a kick, TORR write, EOI read or reset clears it.
 //   +0x114  WDT_EOI     reads 0; a read clears the flag (the DW clear-on-read).
 //   +0x1F4  COMP_PARAMS_1  reads 0x40 (USE_FIX_TOP: timeout TOP = 2^(16+TOP)
 //                       clocks). The rest of the window reads 0.
@@ -94,9 +96,26 @@
 // `stat` clear, sets it and restarts the period instead of rebooting; an
 // expiry while it is still set reboots as in RMOD 0 (RESET_CAUSE.WDT). A kick
 // or a TORR write (both kick) and a read of WDT_EOI clear it; a same-cycle
-// expiry wins (the interrupt is not lost). wdt_irq = stat, a level for PLIC
-// source 9. Linux's dw_wdt ISR reads WDT_STAT only (it never reads EOI) and
-// the flag then drops at the next ping. rmod and stat are on rst_soc.
+// expiry wins (the interrupt is not lost). That includes a kick or TORR write
+// in the very clock of the first expiry: set wins, so the interrupt still
+// rises although the ping was on time (the same rule as RMOD 0, where a fire
+// beats a same-clock kick; Linux pings at half the period, so it cannot
+// happen there).
+//
+// wdt_irq is NOT the level `stat`: it is a one-clock pulse, irq_p <= first,
+// the clock after the first expiry. Linux's dw_wdt requests the IRQ
+// IRQF_TRIGGER_RISING, its ISR reads WDT_STAT only (never EOI) and `stat`
+// drops only at the next ping, while the PLIC (plic.v) is level-only and
+// re-pends a source after every complete if it is still high: a level would
+// livelock the hart in the ISR until the second expiry. The PLIC's pend bit
+// is sticky, so the pulse sets it reliably, also while another source is
+// claimed, and the claim clears it once. A pulse that arrives while source 9
+// itself is claimed and not yet completed (insvc set), or in the very clock of
+// its claim, is LOST (plic.v sets pend only when !insvc); `stat` still reads
+// 1, so software can poll WDT_STAT. At most one first expiry happens per
+// ping period, so that is one pretimeout per period at worst. `stat` is the
+// level behind WDT_STAT and the second-stage reboot. rmod, stat and irq_p are
+// on rst_soc.
 
 `default_nettype none
 
@@ -120,14 +139,14 @@ module syscon #(
     output wire        qspi_ddr,       // QSPI_CFG.DDR
     output wire [2:0]  qspi_ddr_cap,   // QSPI_CFG.DDR_CAP
     input  wire [15:0] wdt_tap,        // mtime[29:14]
-    output wire        wdt_irq         // watchdog interrupt-mode flag (PLIC source 9)
+    output wire        wdt_irq         // one-clock pulse at the first expiry (PLIC source 9)
 );
 
     reg       rq, rq2, off, strap_q, strap_ns_q;
     reg       cfg_stream, cfg_ddr;
     reg [2:0] cfg_cap;
     reg [2:0] cause;
-    reg       en, tprev, rmod, stat;
+    reg       en, tprev, rmod, stat, irq_p;
     reg [3:0] top;
     reg [1:0] cnt;
     reg [7:0] boot_mode;
@@ -161,6 +180,7 @@ module syscon #(
             en    <= 1'b0;
             rmod  <= 1'b0;
             stat  <= 1'b0;
+            irq_p <= 1'b0;
             top   <= 4'hF;
             cnt   <= 2'd0;
             tprev <= 1'b0;
@@ -168,6 +188,7 @@ module syscon #(
             tprev <= w_torr | tap;
             if (w_cr & wdata[0]) en <= 1'b1;
             if (w_cr) rmod <= wdata[1];
+            irq_p <= first;
             if (first) stat <= 1'b1;
             else if (kick | w_torr | eoi) stat <= 1'b0;
             if (w_torr) top <= wdata[3:0];
@@ -209,7 +230,7 @@ module syscon #(
     end
 
     assign rst_soc = rst | rq | off;
-    assign wdt_irq = stat;
+    assign wdt_irq = irq_p;
     assign rd_late = rst ? strap_rd_late : strap_q;
     assign qspi_stream_en = cfg_stream;
     assign qspi_ddr       = cfg_ddr;

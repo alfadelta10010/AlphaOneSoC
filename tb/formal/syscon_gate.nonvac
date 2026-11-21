@@ -2,5 +2,7 @@ cat WD16   # SA-009 gate removed
 cat WD05   # recorded kill
 sed syscon.v s/DDR_CAP_RESET = 3'd2/DDR_CAP_RESET = 3'd5/   # the reset value drifts from the harness parameter -> P3
 sed syscon.v s/rmod  <= 1'b0;/rmod  <= rmod;/   # rmod not reset by rst_soc -> P2
-sed syscon.v s/stat  <= 1'b0;/stat  <= stat;/   # the flag not reset by rst_soc -> P4
+sed syscon.v s/stat  <= 1'b0;/stat  <= stat;/   # the flag not reset by rst_soc -> P5
+sed syscon.v s/irq_p <= 1'b0;/irq_p <= irq_p;/   # the pulse flop not reset by rst_soc -> P4
+sed syscon.v s/assign wdt_irq = irq_p;/assign wdt_irq = stat;/   # PLIC source is the level, not the pulse -> P6
 sed syscon.v s/widx == 6'd4  ? {31'b0, stat}/widx == 6'd4  ? {31'b0, en}/   # STAT reads the wrong bit -> P5
