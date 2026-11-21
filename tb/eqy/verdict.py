@@ -19,7 +19,7 @@
 """
 import glob, json, os, re, sys
 
-EXPECT_PARTITIONS = 179   # rewritten by scripts/eqy-refit.sh after a harden
+EXPECT_PARTITIONS = 251   # rewritten by scripts/eqy-refit.sh after a harden (4x4 hd 757ba9e9: 251 with the cache macro pin nets)
 
 
 def statuses(eqydir, only=None):
@@ -106,7 +106,8 @@ def verdict(eqydir, out, only=None, classes=None):
                  "and free each cycle, rst/rst_soc included. The one premise left: the chip reaches the FSM "
                  "reset codes at its first reset edge (the wrapper holds rst for at least two edges), the "
                  "premise of L1/L2/I_gate. The rf_top w_ena pin has its own net (soc.cpu.rf.w_ena_pin), "
-                 "compared as a partition. Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
+                 "compared as a partition; so do the I-cache macro's w_ena and rb_addr pins "
+                 "(soc.icache.pin_w_ena, pin_rb_addr; their logic word_in, nxt is nomatched). Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
                  "Every sat proof closed at induction length 1 (step from any state); longer sat proofs are not "
                  "accepted because the base case is vacuous under undefined init.")
     if count_bad:
