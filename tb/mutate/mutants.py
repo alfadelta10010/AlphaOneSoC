@@ -554,7 +554,7 @@ m('PX07', 'pinmux.v', 'default: mux[j] = pwm[codes[3*j +: 3] - 3\'d4];', 'defaul
 m('PX08', 'pinmux.v', "codes <= 24'd0;", "codes <= 24'd1;", 'pin 0 code resets to 1')
 
 # ── plic.v (WO-48 PL01-PL13)
-m("PL01", "plic.v", "for (i = NSRC; i >= 1; i = i - 1) if (cand[i]) cid = i;", "for (i = 1; i <= NSRC; i = i + 1) if (cand[i]) cid = i;", "claim takes the highest eligible id")
+m("PL01", "plic.v", "for (j = NSRC; j >= 1; j = j - 1) if (cand[j]) cid = j;", "for (j = 1; j <= NSRC; j = j + 1) if (cand[j]) cid = j;", "claim takes the highest eligible id")
 m("PL02", "plic.v", "wire [NSRC:1] elig = cand & {NSRC{!thr}};", "wire [NSRC:1] elig = cand;", "meip ignores the threshold")
 m("PL03", "plic.v", "wire [NSRC:1] cand = pend & en & prio;", "wire [NSRC:1] cand = pend & en;", "claim ignores priority (priority 0 does not mask)")
 m("PL04", "plic.v", "if (compl && wdata == i && en[i]) insvc", "if (compl && wdata == i) insvc", "complete acts on a disabled id")

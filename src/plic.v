@@ -27,10 +27,10 @@ module plic #(parameter NSRC = 9) (
 
     // lowest claimable id, else 0
     reg [4:0] cid;
-    integer i;
+    integer i, j, k;                         // one loop variable per always block (yosys: no shared driver)
     always @(*) begin
         cid = 5'd0;
-        for (i = NSRC; i >= 1; i = i - 1) if (cand[i]) cid = i;
+        for (j = NSRC; j >= 1; j = j - 1) if (cand[j]) cid = j;
     end
 
     wire rd    = sel & ~we;
@@ -63,8 +63,9 @@ module plic #(parameter NSRC = 9) (
 
     always @(*) begin
         rdata = 32'd0;
+        k = 0;                               // assigned on every path: no latch on k
         if (a_pri) begin
-            for (i = 1; i <= NSRC; i = i + 1) if (addr[6:2] == i) rdata = {31'd0, prio[i]};
+            for (k = 1; k <= NSRC; k = k + 1) if (addr[6:2] == k) rdata = {31'd0, prio[k]};
         end
         else if (a_pnd) rdata = {{(31-NSRC){1'b0}}, pend, 1'b0};
         else if (a_en)  rdata = {{(31-NSRC){1'b0}}, en, 1'b0};
