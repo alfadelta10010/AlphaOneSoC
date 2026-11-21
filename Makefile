@@ -41,7 +41,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-seeds \
         test-qspi test-qspi-burst test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
-        rivercore-build rivercore-test
+        rivercore-build rivercore-test lint
 
 all: test-all
 
@@ -453,6 +453,11 @@ WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+NO_STREAM"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper
+# Lint gate over the whole SoC top: verilator -Wall, iverilog -Wall, yosys check -assert + latch count
+# (scripts/lint.sh; needs verilator, iverilog, yosys on PATH). Logs in $(BUILD_DIR)/lint.
+lint:
+	@bash scripts/lint.sh $(BUILD_DIR)/lint
+
 test-wrapper: $(BUILD_DIR)
 	@echo "=== Testing the TinyTapeout top level ==="
 	@mkdir -p $(WRAPPER_DIR)
