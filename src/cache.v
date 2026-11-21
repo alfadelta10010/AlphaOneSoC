@@ -47,10 +47,10 @@
 //                   word or line unavailable waits; a miss on another line
 //                   waits for the running fill to end (one fill at a time).
 //
-// Coherence. A store that completes on the data port (d_req && d_we && d_ready)
+// Coherence. A store that completes on the data port (d_we && d_ready)
 // clears the valid bit of its line if the tags match; if that line is being
-// filled the fill is marked dead (it finishes, its words are not used, valid
-// is not set). The lookup in that cycle is skipped (the shared tag mux and
+// filled the fill is marked dead (it stops after the word in flight, its words are
+// not used, valid is not set). The lookup in that cycle is skipped (the shared tag mux and
 // comparator serve the store) and a straddling fetch starts again at A.
 // fencei_flush clears every valid bit (and kills a running fill); with the
 // snoop it adds nothing a single hart needs, it is belt and braces.
@@ -96,7 +96,10 @@ module cache (
     // ---- lookup -------------------------------------------------------
     wire        pc1  = f_addr[1];
     wire [21:0] nxt  = f_addr[23:2] + 22'd1;            // the word after A (24-bit offset wraps)
-    wire        snoop = d_req && d_we && d_ready; // a store completes: the tag logic serves it (idle while !act)
+    // A store completes on the data port: the tag logic serves it for this cycle. d_ready only comes with the
+    // request it completes (the core holds d_req until then; cache_props assumes it), so d_req is not needed.
+    // The snoop also runs while !act, where it only clears valid bits that are already 0.
+    wire        snoop = d_we && d_ready;
 
     wire [2:0]  kidx  = snoop ? d_addr[6:4] : b_ph ? nxt[4:2] : f_addr[6:4];
     wire [1:0]  kword = b_ph ? nxt[1:0] : f_addr[3:2];
@@ -140,7 +143,7 @@ module cache (
             end
             if (word_in) begin
                 fcnt <= fcnt + 2'd1;
-                if (fcnt == 2'd3) begin
+                if (fcnt == 2'd3 || dead) begin          // a dead fill stops at the next word boundary
                     fill_active <= 1'b0;
                     valid[fill_idx] <= !dead;
                 end
