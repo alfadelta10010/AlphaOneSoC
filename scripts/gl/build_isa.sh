@@ -60,6 +60,7 @@ syscon_poweroff 1 10
 syscon_pinreset 1 10
 sd_cs 1 10
 pinmux 1 10
+reboot_dirty 1 10
 audio 1 10
 pwm_linux 1 10
 EOT

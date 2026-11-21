@@ -452,6 +452,7 @@ module tb_tt_um;
     localparam integer ID_ddr_sweep = 19;    // tests/soc/ddr_sweep.S, +WANT_K=<k> (-1 = "DDR off", -2 = any point 1..6), no watchdog reboot
     localparam integer ID_sd_cs = 20;        // WO-59: tests/soc/sd_cs.S, pinmux.S, audio.S, pwm_linux.S at the pins
     localparam integer ID_pinmux = 21;
+    localparam integer ID_reboot_dirty = 24; // tests/soc/reboot_dirty.S (SF4): a reboot with the 4x4 blocks dirty
     localparam integer ID_audio = 22;
     localparam integer ID_pwm_linux = 23;
     localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
@@ -481,6 +482,7 @@ module tb_tt_um;
             if (p == "ddr_sweep") prog_id = ID_ddr_sweep;
             if (p == "sd_cs") prog_id = ID_sd_cs;
             if (p == "pinmux") prog_id = ID_pinmux;
+            if (p == "reboot_dirty") prog_id = ID_reboot_dirty;
             if (p == "audio") prog_id = ID_audio;
             if (p == "pwm_linux") prog_id = ID_pwm_linux;
         end
@@ -596,6 +598,19 @@ module tb_tt_um;
                 if (bad != 0) fail($sformatf("audio phase %0d: %0d of %0d periods not %0d clocks", ph, bad, au_n - 1, want));
             end
             au_n = 0; au_hi = 0;
+        end
+    endtask
+    // a 12-bit gamepad report on ui_in[6:4] (DATA 6, CLOCK 5, LATCH 4), MSB first, then the LATCH pulse
+    task automatic pad_frame(input [11:0] bits);
+        integer k;
+        begin
+            for (k = 11; k >= 0; k = k - 1) begin
+                tb_in[6] = bits[k]; repeat (4) @(posedge clk);
+                tb_in[5] = 1'b1;    repeat (4) @(posedge clk);
+                tb_in[5] = 1'b0;    repeat (4) @(posedge clk);
+            end
+            tb_in[4] = 1'b1; repeat (6) @(posedge clk);
+            tb_in[4] = 1'b0; tb_in[6] = 1'b0; repeat (4) @(posedge clk);
         end
     endtask
     integer pidx = 0;
@@ -722,6 +737,11 @@ module tb_tt_um;
                     s_div = 1; cts_pin = 1'b1;
                     s_n_ev = 6; s_ev[0] = 1; s_ev[1] = 8; s_ev[2] = 2; s_ev[3] = 5; s_ev[4] = 6; s_ev[5] = 7;
                 end
+                ID_reboot_dirty: begin
+                    // cue 1 (boot 1): a gamepad frame and 3 characters; one reboot; cue 2 (boot 2): the default pin map.
+                    // The character in flight at the reboot is all ones, so its cut frame reads as 0xFF.
+                    s_div = 1; s_n_ev = 2; s_ev[0] = 1; s_ev[1] = 2; s_exp_re = 1; s_want = "\377";
+                end
                 ID_audio: begin
                     // one square voice on uo_out[7]: the tone period of phases 1-3, EN 0 low in phase 4 (tune.S, 9 phases of
                     // up to 0.3 M clocks each, runs on the internal bench only)
@@ -805,6 +825,15 @@ module tb_tt_um;
                         fail($sformatf("pinmux cue 5: uo_out[4], [7] = %b %b, want 1 0", uo_out[4], uo_out[7]));
                     if (code == 6) begin m7_eh = 32'h4001; m7_ep = 32'h10000; m7_clr <= 1'b1; end
                     if (code == 7) pw_eval(7, 6, m7_hi_ok, m7_per_ok, m7_n_pulse);
+                end
+                ID_reboot_dirty: begin
+                    if (code == 1) begin send_pat(3); pad_frame(12'hA5A); end
+`ifndef GL_TEST
+                    if (code == 2 && dut.soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
+`else
+                    if (code == 2 && dut.\soc.cache_en !== 1'b0) fail("reboot_dirty cue 2: CACHE_CTL.EN is not 0 after the reboot");
+`endif
+                    if (code == 2 && uo_out !== 8'h39) fail($sformatf("reboot_dirty cue 2: uo_out = %b, want the default map 00111001", uo_out));
                 end
                 ID_audio: if (code >= 2) au_eval(code - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
                 ID_pwm_linux: begin
