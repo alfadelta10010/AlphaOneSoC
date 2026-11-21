@@ -96,6 +96,7 @@ module alphaone_soc #(
     wire [3:0]  dmem_be;
     wire        dmem_req, dmem_we, dmem_ready;
     wire        timer_irq, sw_irq, meip;
+    wire        core_fencei;
     wire [63:0] mtime;
 
     fyracore #(
@@ -125,7 +126,7 @@ module alphaone_soc #(
         .external_irq(meip),
         .sw_irq      (sw_irq),
         .mtime_in    (mtime),
-        .fencei_flush(),               // nothing caches instructions
+        .fencei_flush(core_fencei),
         .dbg_pc      (),
         .dbg_retired (),
         .dbg_instr   (),
@@ -148,6 +149,11 @@ module alphaone_soc #(
     wire [7:0]  gpio_in_sync;
     wire [31:0] plic_rdata;
     wire        gamepad_sel, pinmux_sel, pwm_sel, audio_sel, gamepad_irq, audio_o;
+    wire        cache_sel, cache_active;
+    wire [31:0] cache_rdata;
+    wire        c_req, c_ready;          // mem_ctrl's fetch port (behind the cache)
+    wire [31:0] c_addr, c_rdata;
+    reg         cache_en;                // CACHE_CTL.EN, reset 0 by rst_soc
     wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata, audio_rdata;
     wire [3:0]  pwm_o, pwm_irq;
 
@@ -180,7 +186,9 @@ module alphaone_soc #(
         .pwm_sel     (pwm_sel),
         .pwm_rdata   (pwm_rdata),
         .audio_sel   (audio_sel),
-        .audio_rdata (audio_rdata)
+        .audio_rdata (audio_rdata),
+        .cache_sel   (cache_sel),
+        .cache_rdata (cache_rdata)
     );
 
     wire        wdt_irq;
@@ -212,13 +220,40 @@ module alphaone_soc #(
     wire [23:0] q_addr;
     wire [31:0] q_wdata, q_rdata;
 
+    // CACHE_CTL (0x1002_0024): [0] EN (rw, reset 0), [1] reads 1 (a cache is built). Writing EN 0 -> 1 starts cold.
+    always @(posedge clk) begin
+        if (rst_soc)                                   cache_en <= 1'b0;
+        else if (cache_sel && dmem_we && dmem_be[0])   cache_en <= dmem_wdata[0];
+    end
+    assign cache_rdata = {30'd0, 1'b1, cache_en};
+
+    cache icache (
+        .clk          (clk),
+        .rst          (rst_soc),
+        .en           (cache_en),
+        .fencei_flush (core_fencei),
+        .f_req        (imem_req),
+        .f_addr       (imem_addr),
+        .f_rdata      (imem_rdata),
+        .f_ready      (imem_ready),
+        .m_req        (c_req),
+        .m_addr       (c_addr),
+        .m_rdata      (c_rdata),
+        .m_ready      (c_ready),
+        .d_req        (mem_d_req),
+        .d_we         (dmem_we),
+        .d_addr       (dmem_addr),
+        .d_ready      (mem_d_ready),
+        .active       (cache_active)
+    );
+
     mem_ctrl memc (
         .clk        (clk),
         .rst        (rst_soc),
-        .i_req      (imem_req),
-        .i_addr     (imem_addr),
-        .i_rdata    (imem_rdata),
-        .i_ready    (imem_ready),
+        .i_req      (c_req),
+        .i_addr     (c_addr),
+        .i_rdata    (c_rdata),
+        .i_ready    (c_ready),
         .d_req      (mem_d_req),
         .d_addr     (dmem_addr),
         .d_wdata    (dmem_wdata),

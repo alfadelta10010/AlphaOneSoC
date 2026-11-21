@@ -81,7 +81,9 @@ module soc_bus (
     output wire        pwm_sel,
     input  wire [31:0] pwm_rdata,
     output wire        audio_sel,
-    input  wire [31:0] audio_rdata
+    input  wire [31:0] audio_rdata,
+    output wire        cache_sel,
+    input  wire [31:0] cache_rdata
 );
 
     wire is_mem = d_addr[31] | d_addr[29];
@@ -104,16 +106,18 @@ module soc_bus (
     wire syscon_slot = phase1 && is_io && (io_idx == 2'd2);
     wire gp_hit      = (d_addr[5:3] == 3'b010);         // gamepad carve of the GPIO slot
     wire pmx_hit     = (d_addr[15:2] == 14'h0008);      // pinmux carve of the syscon slot
+    wire cch_hit     = (d_addr[15:2] == 14'h0009);      // CACHE_CTL carve of the syscon slot (0x1002_0024)
     assign gpio_sel    = gpio_slot && !gp_hit;
     assign gamepad_sel = gpio_slot && gp_hit;
-    assign syscon_sel  = syscon_slot && !pmx_hit;
+    assign syscon_sel  = syscon_slot && !pmx_hit && !cch_hit;
     assign pinmux_sel  = syscon_slot && pmx_hit;
+    assign cache_sel   = syscon_slot && cch_hit;
     assign pwm_sel     = phase1 && is_io && (io_idx == 2'd3) && !d_addr[8];
     assign audio_sel   = phase1 && is_io && (io_idx == 2'd3) &&  d_addr[8];
 
     wire [31:0] io_rdata = d_addr[28] ? ((io_idx == 2'd0) ? uart_rdata   :
                                          (io_idx == 2'd1) ? (gp_hit  ? gamepad_rdata : gpio_rdata)   :
-                                         (io_idx == 2'd2) ? (pmx_hit ? pinmux_rdata  : syscon_rdata) :
+                                         (io_idx == 2'd2) ? (pmx_hit ? pinmux_rdata  : cch_hit ? cache_rdata : syscon_rdata) :
                                          d_addr[8]        ? audio_rdata : pwm_rdata) :
                            d_addr[27] ? plic_rdata : clint_rdata;
 
