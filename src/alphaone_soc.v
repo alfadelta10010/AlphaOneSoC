@@ -8,7 +8,7 @@
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
 //   0x0C00_0000  PLIC    4 MB, 9 sources (src/plic.v): 1 UART, 2 SPI, 3 gamepad, 4 GPIO input change
-//                        (not built, 0), 5-8 PWM cmp0-3, 9 watchdog
+//                        (level, gpio.v IN_IE/IN_IP), 5-6 PWM cmp0-1 (7-8 tied 0: cmp2-3 not built), 9 watchdog
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
@@ -148,7 +148,7 @@ module alphaone_soc #(
     wire [2:0]  qspi_ddr_cap;
     wire [31:0] syscon_rdata;
 
-    wire        plic_sel, uart_irq, gpio_spi_irq;
+    wire        plic_sel, uart_irq, gpio_spi_irq, gpio_in_irq;
     wire [7:0]  gpio_in_sync;
     wire [31:0] plic_rdata;
     wire        gamepad_sel, pinmux_sel, pwm_sel, audio_sel, gamepad_irq, audio_o;
@@ -339,7 +339,7 @@ module alphaone_soc #(
         .rdata(plic_rdata),
         .src  ({wdt_irq,       // 9 watchdog (WO-61)
                 pwm_irq,       // 8..5 PWM cmp3..0
-                1'b0,          // 4 GPIO input change (not built)
+                gpio_in_irq,   // 4 GPIO input change (gpio.v IN_IE / IN_IP)
                 gamepad_irq,   // 3
                 gpio_spi_irq,  // 2
                 uart_irq}),    // 1
@@ -379,7 +379,8 @@ module alphaone_soc #(
         .in   (gpio_in),
         .out  (gpio_out),
         .in_sync(gpio_in_sync),     // for the gamepad receiver
-        .spi_irq(gpio_spi_irq)
+        .spi_irq(gpio_spi_irq),
+        .in_irq (gpio_in_irq)
     );
 
     // ── Gamepad receiver (GPIO slot +0x10 / +0x14) ─────────────────────────
