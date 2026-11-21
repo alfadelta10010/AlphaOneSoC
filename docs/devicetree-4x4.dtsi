@@ -54,7 +54,10 @@
 		 * full THR (a console write with tx_loadsz = 1 also takes the byte-by-byte path, not
 		 * the FIFO one). Were it to push more, THR stalls the CPU up to one frame (~87 us at
 		 * 115200). The driver still writes FCR = ENABLE_FIFO | R_TRIG_10 (code 2), which this
-		 * UART maps to 4 bytes, leaving 4 character times (~350 us) before an RX overrun. */
+		 * UART maps to 4 bytes here (decision on review S2), leaving 5 characters (~435 us) of
+		 * slack before an RX overrun. For sustained input at 114,890 baud use the RTS# pinmux
+		 * feature (flow control), or set rx_trig_bytes to 1 (sysfs; it reads back the 16550A
+		 * table's values, not ours). */
 		uart0: serial@10000000 {
 			compatible = "ns16550a";
 			reg = <0x10000000 0x100>;
@@ -103,7 +106,8 @@
 			baud-width = <8>;
 			cs-gpios = <&gpo 0 1>, <&gpo 5 1>;
 
-			/* oled@0 and mmc@1 (compatible "mmc-spi-slot", spi-max-frequency <10416666>)
+			/* oled@0 and mmc@1 (compatible "mmc-spi-slot", spi-max-frequency <10416667>:
+			 * tiny_spi rounds the divider up, so 10416666 would give BAUD 3, 10416667 gives BAUD 2)
 			 * belong in the board file. */
 		};
 
@@ -154,11 +158,19 @@
 			compatible = "snps,dw-wdt";
 			reg = <0x10020100 0x100>;
 			clocks = <&clk_core>;
+			/* PLIC source 9 is a ONE-clock pulse at the first expiry (not the STAT level): dw_wdt
+			 * requests the IRQ edge-triggered, never clears STAT in the ISR, and our PLIC is
+			 * level-only, so a level would re-pend after every complete. Valid only with that
+			 * pulse (syscon.v). A pulse arriving while source 9 is claimed and not yet completed
+			 * is lost (one pretimeout per period). */
+			interrupt-parent = <&plic>;
+			interrupts = <9>;
 		};
 
-		/* PWM at 0x1003_0000 (WO-58, in progress): four comparators, period 2^(16 + scale) clocks.
-		 * The binding requires four interrupts (PLIC sources 5-8) and clocks; the driver does not
-		 * request them. */
+		/* PWM at 0x1003_0000: 2 of 4 comparators built (WO-63); period 2^(16 + scale) clocks.
+		 * Channels 2-3 are inert: pwmcmp2/3 read 0xFFFF (duty 0 for pwm-sifive get_state),
+		 * writes ignored, no pin, no irq. The binding requires four interrupts (PLIC sources 5-8)
+		 * and clocks; the driver does not request them. */
 		pwm0: pwm@10030000 {
 			compatible = "sifive,pwm0";
 			reg = <0x10030000 0x30>;
