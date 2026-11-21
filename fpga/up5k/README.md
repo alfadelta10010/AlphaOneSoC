@@ -64,6 +64,22 @@ the hardware default image; cfg 2 and 3 need the -IM part). T2 additionally loop
    Straps: `ui_in[0]`/`ui_in[2]` should be low (the firmware writes QSPI_CFG itself and prints the straps
    in the `INFO` banner, so a different strap setting does not fail the run).
 
+## What the twin proves / does not prove
+
+**Proves** (on FPGA fabric, with the real QSPI Pmod, at 18 MHz): the peripherals, byte-identical to the pin
+(`1f2a473`): UART, QSPI controller including stream and DDR, syscon, cache, `mem_ctrl`, `soc_bus`, `pinmux`, and CLINT/PLIC
+as the firmware uses them.
+
+**Does not prove anything about fyracore.** picorv32 (rv32i, no C) stands in for it. Not covered by this twin:
+straddling RVC fetches (there is no C at all now), fetch reuse, AMO/LR/SC, FENCE.I, misaligned traps, IRQ/WFI timing.
+
+**Also not covered: fyracore's bus pattern.** picorv32 fetches aligned words only and never overlaps a fetch with a
+data access, so the cache and `mem_ctrl` corners that fyracore's request stream reaches are not exercised.
+
+Numbers: 4673 / 5280 LC = 88 %, post-route fmax 22.42 MHz, run at 18 MHz.
+
+All of the items above are covered by the Arty exact build (WO-A1, later), which runs fyracore itself.
+
 ## NOT 1-to-1 with the tapeout
 
 * **The CPU.** picorv32 (rv32i, no C/M/A/Zicsr, no CSRs, no traps handled, no interrupts, no PMP, no
