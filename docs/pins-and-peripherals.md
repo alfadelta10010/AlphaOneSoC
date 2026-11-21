@@ -753,8 +753,11 @@ out of the syscon window like PINMUX:
 
 A hit takes 2 clocks (3 for a straddling fetch); a miss fills four aligned words in
 line order, restarting early. Stores, AMOs and successful SCs that complete on the
-data port invalidate their line, so no flush is needed for coherence (issue FENCE.I
-after loading code anyway; it flushes the cache). With the cache on, the
+data port invalidate their line, so a fetch that starts after the store completes sees
+the new bytes. Instructions already fetched are not re-fetched: the rest of a line whose
+fill is under way when the store issues (up to three words, early restart) can execute the
+old bytes, a few instructions after the store (WO-70/71, legal under Zifencei). So issue
+FENCE.I after writing code, as Zifencei requires; it also flushes the cache. With the cache on, the
 worst fetch wait on a miss is 476 clocks PSRAM-only to 581 with flash code (4 data
 transactions, 3 old and 4 own fill words, plus 3 clocks); the 449/482-clock bound
 of `mem_ctrl` is the EN = 0 statement. The software rule and the loader's

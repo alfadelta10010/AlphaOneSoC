@@ -31,7 +31,9 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
    bit 2 PBURST. Reset 0 on every reset, including a reboot.
    * EN may be written at any time, from flash or from PSRAM. Enabling starts cold; clearing returns
      to the pass-through. The cache is a read cache for instruction fetches: it snoops the core's own
-     stores, AMOs and successful SCs, so no flush is needed for coherence.
+     stores, AMOs and successful SCs, so a fetch that starts after such a store sees the new bytes;
+     words already fetched (the rest of a line being filled, up to three words) can still execute
+     the old bytes, as Zifencei allows without FENCE.I.
    * **Still issue FENCE.I after loading code** (Zifencei requires it, and FENCE.I also flushes the
      cache). Do it after step 6 and before the jump.
    * **PBURST (bit 2): pending WO-68, TODO.** The RTL is not committed. When it lands: set PBURST only
