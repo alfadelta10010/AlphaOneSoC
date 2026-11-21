@@ -4,8 +4,8 @@
 #   2  RTS# on uo_out[5] (code 2, giving up the SD CS#), the RP2350 model's flow control on (the bench
 #      does this for pinmux, CTS = uo_out[5]), interrupts off: cue 1 = the bench pastes 64 characters
 #      (pattern 0x20 + (7n + 3) mod 95). First the program reads nothing for 24 character times: the
-#      16-deep FIFO fills, RTS# goes high and the model holds the rest (cue 8: the bench checks pin 5
-#      high and 14..17 characters sent). Then the program drains, slowly (3 character times between
+#      8-deep FIFO fills, RTS# goes high at 7 entries and the model holds the rest (cue 8: the bench
+#      checks pin 5 high and 7..10 characters sent). Then the program drains, slowly (3 character times between
 #      pops): the model resumes, 64 in order, none lost, OE 0, no character sent against CTS.
 #   3  back to the default: pin 5 = GPIO OUT bit 5 (SD CS#) again; cue 2 with OUT bit 5 low then high.
 #   4  GPIO on pin 4 (UART TX gives way: OUT bit 4 drives the pin, reset high) and pin 7 (OUT bit 7, reset 1):

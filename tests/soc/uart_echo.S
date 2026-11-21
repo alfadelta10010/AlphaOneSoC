@@ -5,7 +5,7 @@
 # nothing is lost and OE never rises, however slowly the program runs.
 #
 # Then a burst with flow control off (cue 2): the model sends "XYZ" back to
-# back while the program keeps its hands off the UART. The 16550A's 16-entry
+# back while the program keeps its hands off the UART. The UART's 8-entry
 # RX FIFO keeps all three (no overrun): LSR = DR | THRE | TEMT, RBR = X, Y, Z.
 #include "periph.h"
     .section .text.init
@@ -38,7 +38,7 @@ _start:
     EVENT_P 2                      # "XYZ", flow control off
     DELAY 3000                   # three frames at divisor 4 are 1920 clocks
     lbu  t1, LSR(s0)
-    CHECK t1, 0x61, 0x20         # the 16-deep RX FIFO keeps all three: DR | THRE | TEMT, no overrun
+    CHECK t1, 0x61, 0x20         # the 8-deep RX FIFO keeps all three: DR | THRE | TEMT, no overrun
     lbu  t1, RBR(s0)
     CHECK t1, 'X', 0x21
     lbu  t1, RBR(s0)

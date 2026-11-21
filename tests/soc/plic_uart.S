@@ -1,6 +1,6 @@
 # The Linux interrupt sequences end to end: PLIC (0x0C00_0000) + 16550 on source 1, in the order the
 # kernel does them (irq-sifive-plic.c, 8250 driver): mtvec; probe the PLIC (priorities, enables
-# cleared, threshold 0); enable source 1; mie.MEIE; mstatus.MIE; UART FCR 0x81 (trigger 8),
+# cleared, threshold 0); enable source 1; mie.MEIE; mstatus.MIE; UART FCR 0x81 (trigger 4),
 # IER = ERBFI | ELSI.
 #
 # The testbench's RP2350 model sends, with flow control off and at full rate, a pattern whose byte n

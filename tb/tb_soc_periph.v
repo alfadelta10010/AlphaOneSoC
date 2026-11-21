@@ -401,11 +401,11 @@ module tb_soc_periph;
             end else if (test == "pinmux") begin
                 if (e == 1) send_pat(64);
                 if (e == 8) begin
-                    // RTS# on uo[5]: nothing was read for 24 characters, so the 16-deep FIFO is nearly full,
+                    // RTS# on uo[5]: nothing was read for 24 characters, so the 8-deep FIFO is nearly full,
                     // RTS# is deasserted (pin high) and the model holds the rest of the paste
                     if (uo[5] !== 1'b1) fail("pinmux cue 8: RTS# (uo[5]) still asserted with the RX FIFO nearly full");
-                    if (rp.tx_sent < 14 || rp.tx_sent > 17)
-                        fail($sformatf("pinmux cue 8: the model sent %0d characters before CTS went off, want 14..17", rp.tx_sent));
+                    if (rp.tx_sent < 7 || rp.tx_sent > 10)
+                        fail($sformatf("pinmux cue 8: the model sent %0d characters before CTS went off, want 7..10", rp.tx_sent));
                     if (rp.tx_pending() == 0) fail("pinmux cue 8: the model has nothing left to send (flow control did not hold it)");
                 end
                 if (e == 2 && uo[5] !== 1'b0) fail("pinmux cue 2: uo[5] high after OUT bit 5 went low");
@@ -494,9 +494,9 @@ module tb_soc_periph;
                      "tx_chars 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEF\015\n",
                      "console: polled\015\n", "console: fifo path, 16 at a time\015\n"};
             if (test == "irq_stall") begin
-                // the 4-deep TX FIFO: part A sends ABABAB per round, part C five P and the amoswap's Z
-                for (k = 0; k < 12; k = k + 1) s = {s, "ABABAB"};
-                for (k = 0; k < 9; k = k + 1)  s = $sformatf("%sPPPPP%c", s, 8'h5A);
+                // the one-byte THR: part A sends ABA per round (the third store is held), part C two P and the amoswap's Z
+                for (k = 0; k < 12; k = k + 1) s = {s, "ABA"};
+                for (k = 0; k < 9; k = k + 1)  s = $sformatf("%sPP%c", s, 8'h5A);
             end
             if (test == "periph_access") s = "ABq";
             if (test == "plic_uart")
@@ -654,10 +654,10 @@ module tb_soc_periph;
             if (test == "uart_hello") begin
                 $display("uart_hello: part 1 (no polling) %0d stores waited %0d clocks; part 2 (LSR polled) %0d waited",
                          ph[5] - ph[4], ph[2] - ph[1], ph[6] - ph[5]);
-                // the 4-deep TX FIFO plus the shifter take the first few stores without waiting; the
+                // the shifter and the one-byte THR take the first two stores without waiting; the
                 // exact count (measured, stable: the stores are paced by the flash fetches) pins the depth,
-                // so a deeper or shallower FIFO shows
-                if (ph[5] - ph[4] != 8) fail($sformatf("uart_hello: %0d of 15 unpolled THR stores waited, want exactly 8", ph[5] - ph[4]));
+                // so a deeper or shallower THR shows
+                if (ph[5] - ph[4] != 13) fail($sformatf("uart_hello: %0d of 15 unpolled THR stores waited, want exactly 13", ph[5] - ph[4]));
                 if (ph[3] != ph[2]) fail("uart_hello: a THR store waited although LSR.THRE was polled");
             end
             if (test == "uart_echo") begin
@@ -669,9 +669,10 @@ module tb_soc_periph;
             end
             if (test == "uart_linux") begin
                 $display("uart_linux: %0d THR stores waited (%0d clocks)", uart_waits, uart_wait);
-                // the 4-deep TX FIFO and the shifter take the first few characters of each burst; the
-                // exact count (measured) pins the depth
-                if (uart_waits != 28) fail($sformatf("uart_linux: %0d THR stores waited, want exactly 28", uart_waits));
+                // tx_chars writes one byte per THRE interrupt and never waits; the waits are the console
+                // FIFO-path stress (16 stores in a row against the one-byte THR). The exact count (measured)
+                // pins the depth
+                if (uart_waits != 25) fail($sformatf("uart_linux: %0d THR stores waited, want exactly 25", uart_waits));
                 if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
             end
             if (test == "audio") au_eval(8);

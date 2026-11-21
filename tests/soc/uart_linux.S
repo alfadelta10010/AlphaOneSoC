@@ -15,9 +15,9 @@
 #     cue 4 tells the terminal), LCR, FCR twice, MCR.
 #  4. Transmit through start_tx and the polled handler: IER |= THRI; each
 #     poll reads IIR, then LSR and MSR, and when THRE is set and THRI is
-#     enabled serial8250_tx_chars() writes up to tx_loadsz = 16 characters
-#     to THR back to back -- the UART's back-pressure paces them -- and
-#     __stop_tx() clears THRI when the buffer is empty. A poll made while a
+#     enabled serial8250_tx_chars() writes up to tx_loadsz = 1 character
+#     (the device tree's tx-threshold: the UART has a one-byte THR, docs/
+#     devicetree-4x4.dtsi) and __stop_tx() clears THRI when the buffer is empty. A poll made while a
 #     character is still on the line sees IIR = no interrupt.
 #  5. Receive through the same handler: the terminal types a line (cue 5,
 #     CTS flow control on); IIR = RX data; serial8250_rx_chars() reads RX
@@ -25,7 +25,9 @@
 #  6. serial8250_console_write(): save IER, clear it, write each character
 #     after polling THRE (uart_console_write, with '\r' before '\n'), wait
 #     for BOTH_EMPTY, restore IER. Then the FIFO variant
-#     (serial8250_console_fifo_write): wait for THRE once, write up to 16.
+#     (serial8250_console_fifo_write): wait for THRE once, write up to 16. Linux
+#     does not take that path with tx_loadsz = 1; it stays as a stress of the THR
+#     stall (the second store of each pair waits for the shifter).
 #include "periph.h"
 
 #define NEW_DIV 3
@@ -125,7 +127,7 @@ _start:
     la   s2, s_tx
     ori  s1, s1, 0x02            # serial8250_set_THRI
     sb   s1, IER(s0)
-    li   s4, 0                   # polls that found IIR = no interrupt
+    li   s4, 0                   # polls that found IIR = no interrupt (informational)
     li   s5, 0                   # tx_chars bursts
 poll_tx:
     lbu  t0, IIR(s0)             # serial8250_default_handle_irq
@@ -145,10 +147,10 @@ poll_tx:
     andi t2, s1, 0x02
     beqz t2, 6f
     addi s5, s5, 1               # serial8250_tx_chars
-    li   t3, 16                  # up->tx_loadsz
+    li   t3, 1                   # up->tx_loadsz (tx-threshold)
 2:  lbu  t0, 0(s2)
     beqz t0, 3f
-    sb   t0, THR(s0)             # back to back: the UART paces them
+    sb   t0, THR(s0)             # one per THRE interrupt
     addi s2, s2, 1
     addi t3, t3, -1
     bnez t3, 2b
@@ -164,12 +166,9 @@ poll_tx:
     bnez t0, 4b
     j    poll_tx
 7:  VALUE s5
-    CHECK s5, 4, 0x133           # 55 characters: 16 + 16 + 16 + 7
-    beqz s4, 8f
-    j    9f
-8:  mv   a7, s4
-    li   a6, 0x134               # never polled while TX was busy
-    j    test_fail
+    CHECK s5, 55, 0x133          # 55 characters, one per tx_chars
+                                 # (s4, the polls that found IIR = no interrupt, is not checked: with one
+                                 # byte per THRE the CPU is slower than the line, a poll finds THR empty)
 9:  WAIT_LSR s0, LSR_TEMT
     lbu  t0, IIR(s0)
     CHECK t0, 0xC1, 0x135        # THRI off, nothing received
