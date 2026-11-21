@@ -1,0 +1,17 @@
+V13, NOMMU Linux 6.8-rc1 on the 4x4 RTL a732aaa, Verilator, shipped docs/alphaone-4x4.dts (73c6623) with the bench-only
+earlycon removal (bench-noearlycon.dts). UART interrupt-driven through the PLIC. Sandbox 2026-11-21/22.
+
+                       (a) cache on + PBURST        (b) cache off
+loader CACHE_CTL_VAL   5                            0
+SW-RESULT              PASS                         PASS
+clocks (whole run)     1,727,831,354                2,502,170,084   (different typed scripts: script.txt vs script-b.txt)
+instret                39,639,195                   48,840,139
+kernel clock, "Run /init"  11.826 s                 14.112 s        same kernel point, so the clean comparison: 1.19x
+kernel clock, power down   20.402 s                 32.241 s        not comparable (b types more commands)
+
+Probes (boot b, `ls /sys/bus/platform/drivers/*/`): of_serial 10000000.serial (16550A, irq 4 = PLIC source 1),
+basic-mmio-gpio 10010000.gpio and 10010004.gpio, spi_oc_tiny 10010020.spi, pinctrl-single 10020020.pinmux,
+dw_wdt 10020100.watchdog (PLIC source 9), pwm-sifive 10030000.pwm, syscon-poweroff, syscon-reboot. mmc_spi: absent (mmc@1 disabled).
+/proc/tty/driver/serial: tx:601 rx:42, no oe/fe/brk counters shown (the kernel prints only nonzero ones).
+dmesg grep err|fail|warn: only "spi_oc_tiny: error -ENXIO: IRQ index 0 not found" (the DT omits the SPI IRQ on purpose).
+/proc/interrupts: clint-timer, ttyS0 (PLIC 1), watchdog (PLIC 9) registered; timer and UART counts rise.
