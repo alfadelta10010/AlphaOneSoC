@@ -105,8 +105,10 @@ drives `0xB9` and RTS# on pin 5.)
 
 ## Board setups
 
-The TT Audio Pmod and the OLED adapter stack on the OUT header (the Audio
-Pmod passes `out[0-6]` through); the gamepad Pmod goes on the IN header.
+The TT Audio Pmod sits on the OUT header (it passes `out[0-6]` through) and
+the OLED connects by jumper wires: either stacked through the PmodTPH2
+adapter below, or wired directly to the same `uo_out` pins. The gamepad Pmod
+goes on the IN header.
 
 ### OLED (PmodOLEDrgb): the primary display
 

@@ -559,7 +559,7 @@ EX computes the read-modify-write value, so the CSR unit only ever writes, and t
 9. No debug module and no trigger CSRs (Sdtrig); `tselect` traps.
 10. No Zihpm: `hpmcounter3-31` trap; `mhpmcounter3-31`/`mhpmevent3-31` read 0.
 11. mtime ticks every clock (no prescaler); MTIP is registered, one cycle behind the compare.
-12. One external interrupt input and no PLIC.
+12. One external interrupt input (mip.MEIP). The core has no interrupt controller of its own; on the 4x4 SoC the PLIC (`sifive,plic-1.0.0` subset, 9 sources, one context, at 0x0C00_0000) drives it.
 13. The memory controller keeps no fetch buffer: a stall with a fetch outstanding refetches, and every access costs a full QSPI transaction (about 42 clocks from PSRAM, 60 from flash).
 14. x1-x31 are not reset; boot code must zero them (`plugins/helpers/boot_flash.S` does).
 15. The register-file macro's timing is a placeholder liberty (setup 2.0, hold 0.2, clock-to-output 4.0 ns, minimum period 10 ns, one nominal corner), not a characterisation.
