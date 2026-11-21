@@ -297,8 +297,12 @@ module tb_soc_periph;
     // program's first stores would; a reboot or pin reset clears EN again, as in the hardware.
     reg cache_en_arg;
     initial cache_en_arg = $test$plusargs("CACHE_EN");
+    reg cache_pb_arg;                 // +CACHE_PBURST: CACHE_CTL.PBURST forced on with EN (PSRAM line bursts)
+    initial cache_pb_arg = $test$plusargs("CACHE_PBURST");
     always @(posedge soc.rst_soc) if (cache_en_arg) release soc.cache_en;
+    always @(posedge soc.rst_soc) if (cache_pb_arg) release soc.cache_pburst;
     always @(negedge soc.rst_soc) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!soc.rst_soc) force soc.cache_en = 1'b1; end
+    always @(negedge soc.rst_soc) if (cache_pb_arg) begin repeat (2) @(posedge clk); if (!soc.rst_soc) force soc.cache_pburst = 1'b1; end
     reg        mb_uart = 1'b0;
     integer    mb_div = UART_DIV, mb_seen = 0, mb_st = 0, mb_n = 0, mb_tag = 0;
     string     mb_pay = "";
@@ -653,6 +657,8 @@ module tb_soc_periph;
                 sd_detail = $sformatf("reboot in SPI state %0d, race %0d, cycle %0d", rb_st, sd.n_race, rb_cyc);
             end
             // Per-test coverage: the scenario each test is for really happened.
+            if (test == "cache_ctl")
+                $display("cache_ctl: 64 nops cold from PSRAM, EN = 1: %0d cycles with PBURST 0, %0d with PBURST 1", value2, value);
             if (test == "uart_hello") begin
                 $display("uart_hello: part 1 (no polling) %0d stores waited %0d clocks; part 2 (LSR polled) %0d waited",
                          ph[5] - ph[4], ph[2] - ph[1], ph[6] - ph[5]);
@@ -674,7 +680,10 @@ module tb_soc_periph;
                 // tx_chars writes one byte per THRE interrupt and never waits; the waits are the console
                 // FIFO-path stress (16 stores in a row against the one-byte THR). The exact count (measured)
                 // pins the depth
-                if (uart_waits != 25) fail($sformatf("uart_linux: %0d THR stores waited, want exactly 25", uart_waits));
+                // (with the instruction cache on the stores come faster: measured 30, stable for PBURST 0 and 1;
+                // the count depends on the CPU speed, so each mode has its own exact number)
+                if (uart_waits != (cache_en_arg ? 30 : 25))
+                    fail($sformatf("uart_linux: %0d THR stores waited, want exactly %0d", uart_waits, cache_en_arg ? 30 : 25));
                 if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
             end
             if (test == "audio") au_eval(4);

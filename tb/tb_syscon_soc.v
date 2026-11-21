@@ -69,8 +69,12 @@ module tb_syscon_soc;
     // program's first stores would; a reboot or pin reset clears EN again, as in the hardware.
     reg cache_en_arg;
     initial cache_en_arg = $test$plusargs("CACHE_EN");
+    reg cache_pb_arg;                 // +CACHE_PBURST: CACHE_CTL.PBURST forced on with EN (PSRAM line bursts)
+    initial cache_pb_arg = $test$plusargs("CACHE_PBURST");
     always @(posedge soc.rst_soc) if (cache_en_arg) release soc.cache_en;
+    always @(posedge soc.rst_soc) if (cache_pb_arg) release soc.cache_pburst;
     always @(negedge soc.rst_soc) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!soc.rst_soc) force soc.cache_en = 1'b1; end
+    always @(negedge soc.rst_soc) if (cache_pb_arg) begin repeat (2) @(posedge clk); if (!soc.rst_soc) force soc.cache_pburst = 1'b1; end
 
     alphaone_soc #(.UART_DIV_RESET(UART_DIV)) soc (
         .clk(clk), .rst(rst), .qspi_rd_late(strap), .qspi_no_stream(strap_ns),
@@ -644,10 +648,14 @@ module tb_syscon_soc;
                 fail($sformatf("%s: the core received %0d of the %0d syscon loads checked", test, n_core_loads, n_loads));
             // coverage floors: the scenario each test is for really happened
             if (test == "syscon_wdt_split") begin
-                if (cls_rb[1] < 1) fail("syscon_wdt_split: no watchdog reboot landed between the halves of a split fetch");
+                // With +CACHE_EN every fetch is an aligned word fill, so no split fetch exists to land between the halves of:
+                // that floor is kept strict with the cache off and skipped with it on (the data floor stays)
+                if (cls_rb[1] < 1 && !cache_en_arg) fail("syscon_wdt_split: no watchdog reboot landed between the halves of a split fetch");
                 if (cls_rb[2] < 1) fail("syscon_wdt_split: no watchdog reboot landed on a data transaction");
             end
-            if (test == "syscon_poweroff" && cls_off[0] + cls_off[2] < 1)
+            // (+CACHE_EN: the instruction cache's fills are timed by its hits, so the in-flight fetch/data landing
+            // is not steered by this test's program; strict with the cache off)
+            if (test == "syscon_poweroff" && cls_off[0] + cls_off[2] < 1 && !cache_en_arg)
                 fail("syscon_poweroff: no power-off landed on a fetch or data transaction in flight");
             if (test == "syscon_reboot" && cls_rb[0] < 1)
                 fail("syscon_reboot: no reboot landed on a flash fetch in flight");

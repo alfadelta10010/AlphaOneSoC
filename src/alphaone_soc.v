@@ -16,6 +16,9 @@
 //                        at 0x1002_0020 (src/pinmux.v) is carved out of it
 //   0x1003_0000  PWM     4 x 16-bit, SiFive pwm0 layout (src/pwm.v)
 //   0x1003_0100  audio   3 square voices + noise, 8-bit PWM DAC (src/audio.v)
+//   0x1002_0024  CACHE_CTL  [0] EN, [1] reads 1, [2] PBURST (PSRAM line fills in one CE# period; needs
+//                        QSPI_CFG.STREAM and a core clock >= 15 MHz, tCEM 8 us); carved out of syscon in
+//                        soc_bus, the flops are in this file (src/cache.v)
 //   The GPIO window's +0x10 / +0x14 (every 64-byte alias) is the gamepad receiver
 //   (GAMEPAD, GPSTAT, src/gamepad.v); the carves are decoded in soc_bus.
 //
@@ -154,6 +157,8 @@ module alphaone_soc #(
     wire        c_req, c_ready;          // mem_ctrl's fetch port (behind the cache)
     wire [31:0] c_addr, c_rdata;
     reg         cache_en;                // CACHE_CTL.EN, reset 0 by rst_soc
+    reg         cache_pburst;            // CACHE_CTL.PBURST, reset 0 by rst_soc
+    wire        c_burst, q_burst;        // PSRAM line burst qualifier: cache -> mem_ctrl -> qspi_ctrl
     wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata, audio_rdata;
     wire [3:0]  pwm_o, pwm_irq;
 
@@ -220,12 +225,19 @@ module alphaone_soc #(
     wire [23:0] q_addr;
     wire [31:0] q_wdata, q_rdata;
 
-    // CACHE_CTL (0x1002_0024): [0] EN (rw, reset 0), [1] reads 1 (a cache is built). Writing EN 0 -> 1 starts cold.
+    // CACHE_CTL (0x1002_0024): [0] EN (rw, reset 0), [1] reads 1 (a cache is built),
+    // [2] PBURST (rw, reset 0): PSRAM line fills may use one chip select period per line (needs EN).
+    // Writing EN 0 -> 1 starts cold.
     always @(posedge clk) begin
-        if (rst_soc)                                   cache_en <= 1'b0;
-        else if (cache_sel && dmem_we && dmem_be[0])   cache_en <= dmem_wdata[0];
+        if (rst_soc) begin
+            cache_en     <= 1'b0;
+            cache_pburst <= 1'b0;
+        end else if (cache_sel && dmem_we && dmem_be[0]) begin
+            cache_en     <= dmem_wdata[0];
+            cache_pburst <= dmem_wdata[2];
+        end
     end
-    assign cache_rdata = {30'd0, 1'b1, cache_en};
+    assign cache_rdata = {29'd0, cache_pburst, 1'b1, cache_en};
 
     cache icache (
         .clk          (clk),
@@ -238,6 +250,8 @@ module alphaone_soc #(
         .f_ready      (imem_ready),
         .m_req        (c_req),
         .m_addr       (c_addr),
+        .m_burst      (c_burst),
+        .pburst       (cache_pburst),
         .m_rdata      (c_rdata),
         .m_ready      (c_ready),
         .d_req        (mem_d_req),
@@ -252,6 +266,7 @@ module alphaone_soc #(
         .rst        (rst_soc),
         .i_req      (c_req),
         .i_addr     (c_addr),
+        .i_burst    (c_burst),
         .i_rdata    (c_rdata),
         .i_ready    (c_ready),
         .d_req      (mem_d_req),
@@ -267,6 +282,7 @@ module alphaone_soc #(
         .q_we       (q_we),
         .q_nbytes_m1(q_nbytes_m1),
         .q_wdata    (q_wdata),
+        .q_burst    (q_burst),
         .q_idle     (q_idle),
         .q_done     (q_done),
         .q_rdata    (q_rdata)
@@ -279,6 +295,7 @@ module alphaone_soc #(
         .stream_en(qspi_stream_en),
         .ddr      (qspi_ddr),
         .ddr_cap  (qspi_ddr_cap),
+        .burst    (q_burst),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
