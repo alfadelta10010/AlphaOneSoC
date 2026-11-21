@@ -17,7 +17,8 @@ static u32 __attribute__((noipa)) kernel(u32 n) {   /* noipa: not pure-folded, n
     }
     return acc;
 }
-static volatile u32 loop_n = 2000;   /* volatile: the compiler must not fold or share the timed calls */
+static const u32 loop_n_init = 2000;   /* a const: no .data to initialise */
+#define loop_n (*(volatile const u32 *)&loop_n_init)   /* volatile read: the compiler must not fold the timed calls */
 
 typedef u32 (*fn_t)(u32);
 

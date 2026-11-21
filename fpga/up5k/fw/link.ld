@@ -12,7 +12,9 @@ SECTIONS {
     .ramcode : { _ramcode = .; *(.ramcode*) . = ALIGN(4); _eramcode = .; } > RAMC AT> FLASH
     _ramcode_lma = LOADADDR(.ramcode);
     .bss (NOLOAD) : { _bss = .; *(.bss*) *(.sbss*) *(COMMON) _ebss = .; } > PSRAM
+    .sdata : { *(.sdata*) }
+    .data : { *(.data*) }
     /DISCARD/ : { *(.comment) *(.riscv.attributes) *(.eh_frame*) }
 }
-ASSERT(SIZEOF(.data) == 0, "no initialised .data: keep globals zero-initialised")
+ASSERT(SIZEOF(.data) == 0 && SIZEOF(.sdata) == 0, "no initialised .data: keep globals zero-initialised")
 _stack_top = 0x80010000;
