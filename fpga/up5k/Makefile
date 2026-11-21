@@ -2,7 +2,7 @@
 # in ../pin (scripts/sync.sh does both). make clean only removes build/.
 export PATH := /home/mempool/tools/oss-cad-suite/bin:$(PATH)
 PINDIR  ?= ../pin
-F_MHZ   ?= 20
+F_MHZ   ?= 18
 SEED    ?= 1
 INTCLK  ?= 0
 BUILD   := build
@@ -21,7 +21,7 @@ ports:
 
 $(BUILD)/fpga_top.json: $(SOC_SRC) $(OWN_SRC) pin.sums
 	scripts/manifest.sh
-	yosys -q -l $(BUILD)/synth.log -p "read_verilog $(DEFS) $(SOC_SRC) $(OWN_SRC); hierarchy -top fpga_top; \
+	yosys -q -l $(BUILD)/synth.log -p "read_verilog $(DEFS) $(SOC_SRC) $(OWN_SRC); \
 	  synth_ice40 -top fpga_top -json $@; tee -o $(BUILD)/synth.stat stat" > /dev/null
 
 $(BUILD)/up5k.asc: $(BUILD)/fpga_top.json $(PCF)

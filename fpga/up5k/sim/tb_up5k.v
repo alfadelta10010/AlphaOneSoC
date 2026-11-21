@@ -54,6 +54,16 @@ module tb_up5k;
         #(TCLK / 4.0) rst_n = 1'b1;
     end
 
+    // +HB=<n>: progress line every n cycles (cycle, last fetch address, last data address)
+    integer hb = 0;
+    reg [31:0] last_if = 0, last_d = 0;
+    initial if (!$value$plusargs("HB=%d", hb)) hb = 0;
+    always @(posedge clk) begin
+        if (dut.u_dut.soc.cpu.p_valid && dut.u_dut.soc.cpu.p_instr)  last_if <= dut.u_dut.soc.cpu.p_addr;
+        if (dut.u_dut.soc.cpu.p_valid && !dut.u_dut.soc.cpu.p_instr) last_d  <= dut.u_dut.soc.cpu.p_addr;
+        if (hb != 0 && cyc % hb == 0 && cyc != 0) $display("HB cyc=%0d pc=%h data=%h", cyc, last_if, last_d);
+    end
+
     // transcript
     integer fd, shown = 0, maxcyc;
     reg [8*128-1:0] gpath;
