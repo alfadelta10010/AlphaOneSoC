@@ -14,7 +14,7 @@
 #   read     md5 of the netlist and the Liberty file; gold and gate read; the
 #            flop accounting (accounting.py) against the work order's table
 #   lemma    on the RTL: the removed bits (accounting.py EXPECT cand: 184 CSR + gpio out_r[1], [3] + PLIC
-#            pend/insvc of the tied-0 sources 4, 7, 8) are constant after reset and
+#            pend/insvc of the tied-0 sources 7, 8) are constant after reset and
 #            the recoded FSMs never hold an unlisted code (lemma_props.sv,
 #            yosys sat -tempinduct); writes consts.txt, the ties of the gold
 #   fsminv   on the netlist: the four one-hot FSMs always hold exactly one set bit
@@ -364,7 +364,7 @@ no_x_consts() {            # the unscoped setundefs of the ties are safe only if
   [ "$n" = 0 ] || die "read/gold_pre.il holds $n x constants; the unscoped setundef ties are unsafe"
 }
 
-check_ties() {             # $1 = eqy dir: gold.il ties the NCAND-5 tie0 bits (4x4: 187) to 1'0 and the 5 tie1 bits to 1'1
+check_ties() {             # $1 = eqy dir: gold.il ties the NCAND-5 tie0 bits (HEAD: 185 = 190 - 5) to 1'0 and the 5 tie1 bits to 1'1
   local G="$1/gold.il" bad=0 n0=0 n1=0 name v
   [ -f "$G" ] || die "no $G to check the ties"
   while read -r name v; do

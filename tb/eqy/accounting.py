@@ -22,12 +22,17 @@ Exit status 1 if a count differs from the table of the work order.
 """
 import collections, json, re, sys
 
-# 4x4 (hd netlist 757ba9e9, RTL 1f2a473): 1925 direct = 1861 named flops + the 64 bits of
+# WO-73 re-baseline for HEAD (WO-69 drives PLIC source 4 from the GPIO input-change irq, so
+# pend[4] and insvc[4] are live flops, no longer constants): cand = 184 CSR + gpio out_r[1], [3]
+# + PLIC pend/insvc of the tied-0 sources 7, 8 = 190; a netlist from the HEAD RTL has the two
+# flops, so direct = 1927, gate = 1963, removed = 190 (the gate refit must show these; gold
+# unchanged at 2142 unless the RTL gained flops). tie0 = NCAND - 5 = 185, tie1 = 5.
+# Before that, 4x4 (hd netlist 757ba9e9, RTL 1f2a473): 1925 direct = 1861 named flops + the 64 bits of
 # uart rx_mem (gold memory_map words rx_mem[k][b] = the netlist's rx_mem[k][b]); cand = 184 CSR
 # + gpio out_r[1], [3] + PLIC pend/insvc of the tied-0 sources 4, 7, 8; unused = 0 (the pinmux
 # reads gpio out_r[7:4] now); memaddr = rx_mem's read-address register, 3 bits on each side.
-EXPECT = dict(direct=1925, rename=11, recode_gold=11, recode_gate=22, removed=192,
-              gold=2142, gate=1961, cand=192, unused=0, memaddr_gold=3, memaddr_gate=3)
+EXPECT = dict(direct=1927, rename=11, recode_gold=11, recode_gate=22, removed=190,
+              gold=2142, gate=1963, cand=190, unused=0, memaddr_gold=3, memaddr_gate=3, live_gone=0)
 RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, 6),
           "soc.qspi.state": (4, 10), "soc.gpio_inst.spi_inst.st": (2, 3)}
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
@@ -38,6 +43,11 @@ EXPLICIT_RENAME = {"soc.cpu.imem_addr[0]": "soc.cpu.if_pc_next[0]"}
 # gold flop bits with no fan-out that synthesis removed (3x4: gpio out_r[4], [5]; in 4x4 the pinmux
 # reads them, so they are direct matches and the set is empty)
 UNUSED = set()
+# gold flop bits that the RTL drives live (never constants). A netlist hardened before the RTL
+# made them live has no flop for them; they are then NOT constant candidates (the lemma would
+# fail on them) and are counted as live_gone, which EXPECT sets to 0: with a current netlist
+# the set is empty. WO-69: PLIC source 4 = GPIO input-change irq.
+LIVE = {"soc.plic_inst.pend[4]", "soc.plic_inst.insvc[4]"}
 # memory -> (address flop, address width): the read port's address register that memory_dff
 # merges into the port and memory_map rebuilds as a plain flop, a copy of the address flop
 # (rx_rp: same D, so the same value from any equal start). gold: Q net $\<mem>$rdreg[0]$q;
@@ -106,12 +116,13 @@ def main():
         hit = [n for n in ns if re.sub(r"\[\d+\]$", "", n) in RECODE]
         if hit:
             recode_gate.append(hit[0])
-    cand = sorted(x for x in cls["removed"] if x not in UNUSED)
+    live_gone = sorted(x for x in cls["removed"] if x in LIVE)
+    cand = sorted(x for x in cls["removed"] if x not in UNUSED and x not in LIVE)
     unused = sorted(x for x in cls["removed"] if x in UNUSED)
     got = dict(direct=len(cls["direct"]), rename=len(cls["rename"]),
                recode_gold=len(recode_gold), recode_gate=len(recode_gate),
                removed=len(cls["removed"]), gold=len(gf), gate=len(tf), cand=len(cand),
-               unused=len(unused), memaddr_gold=len(memaddr_gold))
+               unused=len(unused), live_gone=len(live_gone), memaddr_gold=len(memaddr_gold))
     # gate flops with a Q net that no gold bit explains; the anonymous ones are the memory read
     # address registers (their count must equal gold's), every other one is a stray
     gold_names = {n for _, _, _, ns in gf for n in ns} | set(EXPLICIT_RENAME.values())
@@ -130,7 +141,8 @@ def main():
              f"  recoded FSM bits, gold    {got['recode_gold']:5d}  (expect {EXPECT['recode_gold']})",
              f"  recoded FSM bits, gate    {got['recode_gate']:5d}  (expect {EXPECT['recode_gate']})",
              f"  removed by synthesis      {got['removed']:5d}  (expect {EXPECT['removed']})",
-             f"    constant bits (CSR + gpio out_r[1], [3] + PLIC pend/insvc 4, 7, 8) {len(cand):5d}  (expect {EXPECT['cand']})",
+             f"    constant bits (CSR + gpio out_r[1], [3] + PLIC pend/insvc 7, 8) {len(cand):5d}  (expect {EXPECT['cand']})",
+             f"    live in the RTL, no flop in this netlist {len(live_gone):5d}  (expect {EXPECT['live_gone']}): {live_gone}",
              f"    unused gpio bits        {len(unused):5d}  (expect {EXPECT['unused']})",
              f"  memory read-address register, gold {got['memaddr_gold']:5d}  (expect {EXPECT['memaddr_gold']}): {sorted(memaddr_gold)}",
              f"  memory read-address register, gate {got['memaddr_gate']:5d}  (expect {EXPECT['memaddr_gate']}): {sorted(memaddr_gate)}",

@@ -10,7 +10,7 @@
 # which stops after the EQY setup. It
 #   1. prints the netlist md5;
 #   2. runs the read, lemma and fsminv stages (flop accounting by tb/eqy/accounting.py,
-#      the constant bits (4x4: 192), the one-hot invariant of the four recoded FSMs);
+#      the constant bits (HEAD: 190), the one-hot invariant of the four recoded FSMs);
 #   3. runs the setup of the prove stage and prints the partition count;
 #   4. writes WORK/refit.patch: NL_MD5 in run.sh, the EXPECT tables of accounting.py and
 #      matchreport.py, and the partition count of verdict.py.
@@ -18,8 +18,8 @@
 # accounting shows a flop that nothing explains, an unmatched flop, a changed constant set or a
 # changed recoded FSM (new FSMs need an enc/dec table in fsmcut.v and tie lists by a person).
 # The partition count is read from EXPECT_PARTITIONS in tb/eqy/verdict.py (a count mismatch is an
-# EQY FAIL there, so a refit is how a changed count is accepted). The constant counts (4x4: 192
-# tied bits = 184 CSR + gpio out_r[1], [3] + PLIC pend/insvc of sources 4, 7, 8; 0 unused; FSM
+# EQY FAIL there, so a refit is how a changed count is accepted). The constant counts (HEAD: 190
+# tied bits = 184 CSR + gpio out_r[1], [3] + PLIC pend/insvc of sources 7, 8 (source 4 is live since WO-69); 0 unused; FSM
 # bits 11/22; 11 renames; 3 + 3 memory read-address bits) are the "what the last re-baseline
 # established" values: they are read from tb/eqy/accounting.py EXPECT and tb/eqy/matchreport.py, so
 # a refit is automatic only while those do not change; any other count goes MANUAL (a person looks:
@@ -76,13 +76,14 @@ got = dict(gold=num(r"gold flop bits\s+(\d+)", acc), gate=num(r"gate flops\s+(\d
            rename=num(r"same flop, other name\s+(\d+)", acc), recode_gold=num(r"recoded FSM bits, gold\s+(\d+)", acc),
            recode_gate=num(r"recoded FSM bits, gate\s+(\d+)", acc), removed=num(r"removed by synthesis\s+(\d+)", acc),
            cand=num(r"constant bits \(CSR.*?\)\s+(\d+)", acc), unused=num(r"unused gpio bits\s+(\d+)", acc),
-           stray=num(r"no gold bit explains: (\d+)", acc), unmatched=num(r"^\s*UNMATCHED\s+(\d+)", mt),
+           live_gone=num(r"no flop in this netlist\s+(\d+)", acc), stray=num(r"no gold bit explains: (\d+)", acc), unmatched=num(r"^\s*UNMATCHED\s+(\d+)", mt),
            memaddr_gold=num(r"read-address register, gold\s+(\d+)", acc), memaddr_gate=num(r"read-address register, gate\s+(\d+)", acc))
 print("--- derived:", got)
 why = []
 if None in got.values(): why.append("a count could not be read (%s)" % [k for k, v in got.items() if v is None])
 else:
     if got["stray"]: why.append("%d gate flops that no gold bit explains (new flops)" % got["stray"])
+    if got["live_gone"]: why.append("%d flops the RTL drives live (accounting.py LIVE) have no flop in the netlist: it predates the RTL (WO-69)" % got["live_gone"])
     if got["unmatched"]: why.append("%d flop bits EQY did not match" % got["unmatched"])
     if got["cand"] != X_TIED or got["unused"] != X_UNUSED: why.append("the constant set changed (cand %s, unused %s)" % (got["cand"], got["unused"]))
     if (got["recode_gold"], got["recode_gate"]) != (X_RG, X_RT): why.append("the recoded FSM bits changed (gold %s, gate %s): a new or changed FSM" % (got["recode_gold"], got["recode_gate"]))
