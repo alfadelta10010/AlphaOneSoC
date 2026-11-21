@@ -461,9 +461,17 @@ ignore writes.
 | `0x0C` | SPICTL. Bit 0 EN (resets 0): 1 = the SPI engine owns `uo_out[1]` and `uo_out[3]`. Bit 8 BUSY (read only) = not TXE. |
 | `0x10` | GAMEPAD (read only), section 10; decoded in `soc_bus`, `gpio.v` never sees it |
 | `0x14` | GPSTAT, section 10; same carve |
-| `0x18`, `0x1C` | IN_IE (read/write, `[7:0]`, resets 0) and IN_IP (read; write 1 to clear, lane 0): reserved: read 0, writes ignored (the input-change interrupt, PLIC source 4, is not built; user decision U4). |
+| `0x18` | IN_IE (read/write, `[7:0]`, resets 0): per-bit enable of the input-change interrupt (PLIC source 4). |
+| `0x1C` | IN_IP: read `[7:0]` = pending edges. Bit *i* sets on **either** edge of the synchronised `ui_in[i]`, whatever IN_IE says; a write with lane 0 clears every bit written as 1 (W1C); an edge in the same clock as the clear of its bit wins. Resets to 0 (reset and syscon reboot leave no phantom edge with a pin held high). `in_irq = |(IN_IP & IN_IE)`, a level. Neither slot ever stalls. |
 | `0x20`-`0x30` | the SPI controller, section 4 |
 | `0x34`-`0x3C` | reserved |
+
+Input-change interrupt (PLIC source 4, bare-metal and FreeRTOS): clear IN_IP, then set IN_IE; an edge seen
+while disabled stays pending and fires when its enable is set. With the gamepad Pmod fitted, `ui_in[4..6]`
+toggle every frame: leave IE[6:4] at 0 and use GPSTAT's interrupt (source 3). IE[1] is the SD card's MISO
+and toggles with every byte while the SD is in use: leave it 0 then. IE[3] is the UART RX pin: a start bit
+is a falling edge, so it wakes a `wfi` on the first character's start bit (the byte arrives later: read it
+after the UART's own interrupt). Linux's gpio-mmio driver has no interrupt support, so Linux does not use it.
 
 Setting EN (0 to 1) moves SCK from OUT bit 3 to CPOL on that edge, so it can
 create an SCK edge: set EN only with every CS# high. Clearing EN leaves the
@@ -637,7 +645,7 @@ clocks after a claim), and drives the core's `external_irq`.
 | 1 | UART |
 | 2 | SPI (tiny_spi interrupt; the DT does not use it) |
 | 3 | gamepad change |
-| 4 | GPIO input change (not built, tied 0) |
+| 4 | GPIO input change (IN_IP & IN_IE, a level; bare-metal/FreeRTOS: gpio-mmio has no irqchip) |
 | 5-6 | PWM comparators 0-1 |
 | 7-8 | PWM comparators 2-3 (not built, tied 0) |
 | 9 | watchdog: a ONE-clock pulse at the first expiry (not the STAT level); the PLIC pend is sticky, so it is lost only while source 9 is in service (WDT_STAT stays pollable) |

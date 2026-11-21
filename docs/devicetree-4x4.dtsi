@@ -39,7 +39,8 @@
 		 * out-of-tree "alfadelta10010,alphaone-plic" (expected; "riscv,plic0" alone fails the schema too).
 		 * PLIC at 0x0C00_0000, 4 MB, hart 0 M-mode only (context 0 = cpu0_intc line 11).
 		 * Sources: 1 UART, 2 SPI (not described: polled), 3 gamepad (no Linux driver),
-		 * 4 GPIO input change (not built, tied 0), 5-6 PWM comparators 0-1, 7-8 tied 0
+		 * 4 GPIO input change (gpio.v IN_IE/IN_IP at +0x18/+0x1C; gpio-mmio has no irqchip, so the gpio nodes
+		 * carry no `interrupts` property: bare-metal / FreeRTOS only), 5-6 PWM comparators 0-1, 7-8 tied 0
 		 * (comparators 2-3 are not built), 9 watchdog (one-clock pulse). */
 		plic: interrupt-controller@c000000 {
 			compatible = "alfadelta10010,alphaone-plic", "sifive,plic-1.0.0";

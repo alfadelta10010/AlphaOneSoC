@@ -15,7 +15,7 @@ apart, this document says which one won and why.
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
 | PLIC | `0x0C00_0000` | 4 MB | read, write, AMO; its own PMA window IO2 | `src/plic.v`: `sifive,plic-1.0.0` subset, 9 sources, 1 context; word reads only (`docs/pins-and-peripherals.md` 7) |
 | UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550A, byte registers, RX FIFO 8, one TX holding register, interrupt 1 (the 3x4 submission has the polled subset) (`docs/pins-and-peripherals.md` 2) |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the one-pad gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` reserved (input-change interrupt not built) (`docs/pins-and-peripherals.md`) |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the one-pad gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` IN_IE/IN_IP, the input-change interrupt (PLIC source 4) (`docs/pins-and-peripherals.md`) |
 | syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps, QSPI_CFG, watchdog (section "syscon"); `+0x20` is the PINMUX word (`src/pinmux.v`) and `+0x24` is CACHE_CTL (`src/alphaone_soc.v`, `src/cache.v`), both carved out in `soc_bus` |
 | PWM | `0x1003_0000` | 64 KB slot | read, write, AMO | `src/pwm.v`: sifive,pwm0 layout, 2 built comparators (cmp2/3 read `0xFFFF`); the second IO slot, `addr[17:16] = 3` |
 | Audio | `0x1003_0100` | in the PWM slot, `addr[8]` | read, write, AMO | `src/audio.v`: one square-wave voice (TONE0 at `+0x00`, CTRL at `+0x10`) |
@@ -290,7 +290,8 @@ reset (`docs/pins-and-peripherals.md`).
 * `mtimecmp` resets to all-ones, so no timer interrupt is pending out of reset.
 * **PLIC at `0x0C00_0000`** (4x4 branch). One context (hart 0, M-mode, line 11 of
   the cpu interrupt controller), 9 level-triggered sources: 1 UART, 2 SPI (polled,
-  not in the DT), 3 gamepad, 4 GPIO input change (not built, tied 0), 5-6 PWM
+  not in the DT), 3 gamepad, 4 GPIO input change (IN_IE/IN_IP, all 8 inputs,
+  bare-metal/FreeRTOS only: gpio-mmio has no irqchip), 5-6 PWM
   comparators 0-1, 7-8 tied 0, 9 watchdog (a one-clock pulse at the first
   expiry). The claim ignores the threshold (spec), a complete clears the
   in-service mark only for an enabled source, and reads must be words (a byte
