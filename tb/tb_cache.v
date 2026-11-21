@@ -15,7 +15,7 @@
 //     f_ready is only taken with f_req);
 //   * mem_ctrl's contract on m_*: a request is held, address unchanged, until ready;
 //   * while !active every fetch signal equals its pass-through source;
-//   * EN low for a while -> active falls; EN high -> active rises.
+//   * EN low for a while -> active falls; EN high -> active rises; the takeover is cold (valid = 0).
 // Floors (end of run): hits, misses, store-invalidates, evictions per line, straddling
 // hits, EN toggles, flushes. +SEED=n, +CYCLES=n, +MAXLAT=n (default 12), +NOEN
 // (EN stays 1 after the first rise), +ENFAST (EN toggles every ~100 cycles), +TFROM=n (trace).
@@ -253,6 +253,10 @@ module tb_cache;
                     errors = errors + 1;
                 end
             end
+        end
+        // EN 0 -> 1 starts cold (the stores are snooped in the pass-through too, so stale lines would not show in the data)
+        if (dut.on && dut.valid !== 8'd0) begin
+            $display("FAIL %0d: takeover with valid = %b", cyc, dut.valid); errors = errors + 1;
         end
         // liveness of EN
         if (!en && en_fall_at >= 0 && cyc - en_fall_at > 1500 && active) begin
