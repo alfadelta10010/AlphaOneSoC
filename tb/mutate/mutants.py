@@ -338,12 +338,26 @@ m("QS05", "qspi_ctrl.v", "3'd2:    cmd = 8'h99;", "3'd2:    cmd = 8'h98;", "star
 m("QS06", "qspi_ctrl.v", "ctl_oe <= 1'b1;\n            dq <= {dq[2:0], launch};", "ctl_oe <= 1'b1;\n            late <= rd_late;\n            dq <= {dq[2:0], launch};", "rd_late strap followed after reset")
 m("QS07", "qspi_ctrl.v", "wire [2:0] wnib      = {~cnt[2:1], cnt[0]};", "wire [2:0] wnib      = {~cnt[2:1], ~cnt[0]};", "write nibbles low half first")
 m("QS08", "qspi_ctrl.v", "S_CMD: if (init && step == 3'd4 && !again) begin", "S_CMD: if (1'b0) begin", "start-up step 4 sends 8 clocks, not 16")
-m('QS09', 'qspi_ctrl.v', 'end else if (!init && strm && (!stream_en || mode_chg)) begin', 'end else if (!init && strm && (mode_chg)) begin', 'an idle open stream is not closed when stream_en falls (REVIEW-6a QX1)')
+m('QS09', 'qspi_ctrl.v', 'end else if (!init && strm && (!stream_en || mode_chg || pstrm)) begin', 'end else if (!init && strm && (mode_chg || pstrm)) begin', 'an idle open stream is not closed when stream_en falls (REVIEW-6a QX1)')
 m('QS10', 'qspi_ctrl.v', "wire hit_top  = (a_hw == p - 23'd1);", "wire hit_top  = 1'b0;", 'the 2-byte top-up never recognised: a read at p-2 closes and reopens (QX2)')
 m('QS11', 'qspi_ctrl.v', 'wire       mode_chg  = (t_ddr != ddr) || (t_ddr && t_cap != ddr_cap);', 'wire       mode_chg  = (t_ddr != ddr);', 'a DDR_CAP change with ddr = 1 does not close an open stream (QX3)')
 m('QS12', 'qspi_ctrl.v', 'wire       mode_chg  = (t_ddr != ddr) || (t_ddr && t_cap != ddr_cap);', "wire       mode_chg  = 1'b0;", 'no QSPI_CFG change ever closes an open stream (QX4)')
 m('QS13', 'qspi_ctrl.v', 't_ddr <= ddr && !t_we && !t_psram;\n                    t_cap <= ddr_cap;', 't_ddr <= t_ddr && !t_we && !t_psram;\n                    t_cap <= t_cap;', 'the new mode is never latched at the request (QX6; only same-clock change differs from idle-close)')
-m('QS14', 'qspi_ctrl.v', 'if (streamable && !mode_chg && (hit_cont || hit_top)) begin', 'if (streamable && (hit_cont || hit_top)) begin', 'a continuation ignores a mode change on its own clock (QX7)')
+m('QS14', 'qspi_ctrl.v', 'if (pstrm ? pcont_ok : (streamable && !mode_chg && (hit_cont || hit_top))) begin', 'if (pstrm ? pcont_ok : (streamable && (hit_cont || hit_top))) begin', 'a continuation ignores a mode change on its own clock (QX7)')
+
+# ── PSRAM line bursts (WO-68) ────────────────────────────────
+m('QB01', 'qspi_ctrl.v', 't_bst   <= burst;\n                    if (pstrm', "t_bst   <= 1'b0;\n                    if (pstrm", 'qualifier ignored: a PSRAM burst never continues (cost only; data stays right)')
+m('QB02', 'qspi_ctrl.v', "addr[1:0] == 2'd0 && addr[3:2] != 2'd3;", "addr[1:0] == 2'd0;", "a PSRAM burst is not closed after the line's fourth word (crosses the line and the 1 KB page)")
+m('QB03', 'qspi_ctrl.v', 'if (pstrm ? !(start_psram && !we && burst && stream_en && cs_n == ~sel_now)', 'if (pstrm ? !(start_psram && !we && stream_en && cs_n == ~sel_now)', 'a burst survives a request without the qualifier')
+m('QB04', 'qspi_ctrl.v', 'if (pstrm ? !(start_psram && !we && burst && stream_en && cs_n == ~sel_now)', 'if (pstrm ? !(start_psram && burst && stream_en && cs_n == ~sel_now)', 'a burst survives a write (data access) request')
+m('QB05', 'qspi_ctrl.v', 'if (pstrm ? !(start_psram && !we && burst && stream_en && cs_n == ~sel_now)', 'if (pstrm ? !(start_psram && !we && burst && stream_en)', 'a burst continues on the other chip at the same offset')
+m('QB06', 'qspi_ctrl.v', 'wire pstreamable = t_psram && !t_we && t_bst && stream_en', 'wire pstreamable = t_psram && !t_we && stream_en', 'a PSRAM stream opens without the qualifier')
+m('QB07', 'qspi_ctrl.v', "wire pcont_ok    = t_bst && stream_en && nbytes_m1 == 2'd3 && hit_cont", "wire pcont_ok    = t_bst && stream_en && nbytes_m1 == 2'd3", 'a burst continues at any address on the same chip')
+m('QB08', 'qspi_ctrl.v', '(!stream_en || mode_chg || pstrm)) begin', '(!stream_en || mode_chg)) begin', 'an idle PSRAM burst waits for a request that never comes (CE# low without bound)')
+m('QB09', 'mem_ctrl.v', 'assign q_burst     = i_burst && !use_d && !second;', 'assign q_burst     = i_burst && !second;', 'a data request is granted with the qualifier of the pending fetch')
+m('QB10', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;', 'assign m_burst = act && fill_active && !dead && pburst;', 'a flash line fill asks for a burst (pin-neutral: t_psram gates pstreamable)')
+m('QB11', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;', "assign m_burst = 1'b1;", 'the qualifier is always high (a PSRAM fetch with the cache off bursts)')
+m('QB12', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;', 'assign m_burst = act && fill_active && !dead && fill_tag[17];', 'PBURST ignored: EN alone bursts')
 
 # ── uart.v / gpio.v / tt_um ──────────────────────────────────────────────
 m("GP01", "gpio.v", "wire req   = sel && we && be[0];", "wire req   = sel && we;", "writes without lane 0 stall and act too")

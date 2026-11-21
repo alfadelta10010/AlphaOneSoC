@@ -49,7 +49,7 @@ UNIT = {
     "regFile.v": ["test-regfile"],
     "csr.v": ["test-csr"],
     "pmp.v": [], "clint.v": [], "fyracore.v": [],
-    "mem_ctrl.v": ["test-qspi"], "qspi_ctrl.v": ["test-qspi"],
+    "mem_ctrl.v": ["test-qspi", "test-qspi-burst"], "qspi_ctrl.v": ["test-qspi", "test-qspi-burst"],
     "soc_bus.v": [], "alphaone_soc.v": [],
     "uart.v": ["test-uart"], "gpio.v": ["test-gpio", "test-spi"], "spi.v": ["test-spi"],
     "syscon.v": ["test-syscon"],
@@ -73,7 +73,7 @@ TIMEOUT = {"unit": 1800, "dir": 3600, "dir-soc": 14400, "soc": 3600, "formal": 1
 # harness FAILS on a mutant that merely makes a trace unreachable (not a bug
 # found), and mem_li / md07_miter are opt-in (no engine closes them in the time
 # box). Every pdr harness's PDR_TIMEOUT (1200 s) + 600 is below TIMEOUT["formal"].
-MEM = ["mem_flash", "mem_tcem", "mem_arb", "mem_ld"]
+MEM = ["mem_flash", "mem_tcem", "mem_tcem_burst", "mem_arb", "mem_ld"]
 FORMAL = {"csr.v": ["csr"],
           "fyracore.v": ["core_hold", "core_req", "core_req_cov", "core_fetch", "core_df"],
           "regFile.v": ["core_hold"],
@@ -81,7 +81,7 @@ FORMAL = {"csr.v": ["csr"],
           "plic.v": ["plic", "bus"], "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "audio.v": ["audio"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
           "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12", "bus"],
-          "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap"],
+          "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap", "qspi_burst_eq"],
           "cache.v": ["cache", "cache_pt", "cache_en"],
           "soc_bus.v": ["bus"], "uart.v": ["uart", "bus"],
           "muldiv.v": ["md07"],
