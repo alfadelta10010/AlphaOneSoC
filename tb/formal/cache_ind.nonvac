@@ -1,0 +1,15 @@
+# WO-66: broken copies of src/cache.v; the induction harness cache_ind (EN free) must FAIL each.
+# takes the fetch path over while a pass-through request is still in flight on mem_ctrl
+sed cache.v s@wire        on    = !act \&\& en \&\& (!f_req || m_ready);@wire        on    = !act \&\& en;@
+# hands the fetch path back while a fill is running (m_req and its address vanish before m_ready)
+sed cache.v s@wire        off   = act \&\& !en \&\& !fill_active \&\& !hit_q;@wire        off   = act \&\& !en \&\& !hit_q;@
+# the fill address has the wrong window byte (bit 29 not rebuilt): M-A2 broken
+sed cache.v s@1'b0, ~fill_tag\[17\], 5'd0@1'b0, fill_tag[17], 5'd0@
+# the word counter runs without a ready: the held address moves
+sed cache.v s@            if (word_in) begin@            if (fill_active) begin@
+# f_ready from a fill word: ready without a request
+sed cache.v s@assign f_ready = act ? hit_q : m_ready;@assign f_ready = act ? (hit_q || word_in) : m_ready;@
+# the cache is active out of reset
+sed cache.v s@            act         <= 1'b0;@            act         <= 1'b1;@
+# valid bits survive the hand-back (not cold): the !act -> valid = 0 invariant breaks
+sed cache.v /on the way out/{n;s@valid <= 8'd0;@valid <= valid;@}

@@ -80,6 +80,9 @@ module cache (
     input  wire [31:0] d_addr,
     input  wire        d_ready,
     output wire        active         // the cache owns the fetch path (EN took effect)
+`ifdef CACHE_DBG                      // formal only (tb/formal/cache_ind_props.sv): the state its invariants talk about
+    , output wire        dbg_act, dbg_hit_q, dbg_b_ph, dbg_fill, dbg_valid_any
+`endif
 );
     reg         act;          // the cache owns the fetch path
     reg         hit_q;        // a hit was found last cycle: f_ready now
@@ -182,6 +185,9 @@ module cache (
     // ---- outputs ------------------------------------------------------
     wire        use_fill = act && fill_active;
     assign active  = act;
+`ifdef CACHE_DBG
+    assign dbg_act = act, dbg_hit_q = hit_q, dbg_b_ph = b_ph, dbg_fill = fill_active, dbg_valid_any = |valid;
+`endif
     assign m_req   = act ? fill_active : f_req;
     assign m_addr  = use_fill ? {fill_tag[17], 1'b0, ~fill_tag[17], 5'd0, fill_tag[16:0], fill_idx, fcnt, 2'b00} : f_addr;
     assign f_ready = act ? hit_q : m_ready;
