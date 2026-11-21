@@ -38,8 +38,9 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
      cache). Do it after step 6 and before the jump.
    * **PBURST (bit 2)** (WO-68, 662982d/f73a2d8): set PBURST only with `QSPI_CFG.STREAM = 1`
      (PBURST does nothing without it) and only if the core clock is at least **15 MHz**. A PSRAM
-     line burst holds CE# low for at most 101 clocks (proved bound 104 with margin; about 97 with
-     rd_late = 0; 1.6 µs at 62.5 MHz); the APS6404L allows 8 µs (tCEM, standard grade), which fixes
+     line burst holds CE# low for at most 101 clocks (worst case with rd_late = 1; measured 97 with
+     rd_late = 0; bounded-checked to 250 cycles from reset against 104, the unbounded proof is open;
+     1.6 µs at 62.5 MHz); the APS6404L allows 8 µs (tCEM, standard grade), which fixes
      the floor at 12.6 MHz, rounded up to 15 MHz. Below that leave PBURST at 0 (the reset value; the pins are then unchanged).
 8. **Watchdog.** If the DDR sweep passed it left the watchdog armed with TOP 1 (about 2 to 3 ms) and
    it cannot be disabled. Before the jump write `WDT_TORR` with a long TOP (the write kicks): TOP 15
