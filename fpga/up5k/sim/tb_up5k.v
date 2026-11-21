@@ -30,7 +30,12 @@ module tb_up5k;
 
     // the Pmod: chip selects pulled up (10k on the Pmod), SCK floats; SD0..SD3 are uio[1], [2], [4], [5]
     // (iverilog resolves a weak pull-up against a strong 0 on an SB_IO pin to X, so the pull-up is a function)
-    wire [2:0] cs_pin = {uio[7] === 1'bz ? 1'b1 : uio[7], uio[6] === 1'bz ? 1'b1 : uio[6], uio[0] === 1'bz ? 1'b1 : uio[0]};
+    // The Pmod model only watches the pins once the SoC is out of reset (`armed`): with random power-up flops
+    // (scripts/run_vl_rand.sh) the pins glitch before the first reset edge, which the ASIC does too and which the
+    // model's SCK-before-CS check would flag. Pins are hi-Z/high to the model until then.
+    reg armed = 1'b0;
+    wire [2:0] cs_pin_raw = {uio[7] === 1'bz ? 1'b1 : uio[7], uio[6] === 1'bz ? 1'b1 : uio[6], uio[0] === 1'bz ? 1'b1 : uio[0]};
+    wire [2:0] cs_pin = armed ? cs_pin_raw : 3'b111;
     wire [7:0] oe = dut.uio_oe;
     wire [3:0] sd_pin = {uio[5], uio[4], uio[2], uio[1]};
     wire [3:0] sd_oe  = {oe[5], oe[4], oe[2], oe[1]};
@@ -43,7 +48,7 @@ module tb_up5k;
     assign uio[4] = pmod_oe ? pmod_io[2] : 1'bz;
     assign uio[5] = pmod_oe ? pmod_io[3] : 1'bz;
     qspi_pmod_model pmod (
-        .host_sck(uio[3]), .host_cs_n(cs_pin), .host_ctl_oe(oe[3]),
+        .host_sck(uio[3]), .host_cs_n(cs_pin), .host_ctl_oe(armed & oe[3]),
         .host_io(host_io), .host_oe(&sd_oe), .dev_io(pmod_io), .dev_oe(pmod_oe));
 
     rp2350_uart_model #(.BIT_NS(16.0 * DIV * TCLK)) rp (.tx(uo_out[4]), .rx(uart_rx), .cts_n(1'b0));
@@ -52,6 +57,8 @@ module tb_up5k;
     initial begin
         repeat (8) @(posedge clk);
         #(TCLK / 4.0) rst_n = 1'b1;
+        repeat (2) @(posedge clk);
+        armed = 1'b1;
     end
 
     // +HB=<n>: progress line every n cycles (cycle, last fetch address, last data address)
