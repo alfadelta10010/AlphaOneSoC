@@ -36,11 +36,11 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
      the old bytes, as Zifencei allows without FENCE.I.
    * **Still issue FENCE.I after loading code** (Zifencei requires it, and FENCE.I also flushes the
      cache). Do it after step 6 and before the jump.
-   * **PBURST (bit 2): pending WO-68, TODO.** The RTL is not committed. When it lands: set PBURST only
-     with `QSPI_CFG.STREAM = 1` (PBURST does nothing without it) and only if the core clock is at
-     least **15 MHz**. A PSRAM line burst holds CE# low for about 97 clocks (1.55 µs at 62.5 MHz);
-     the APS6404L allows 8 µs (tCEM, standard grade), which fixes the floor at 12.1 MHz, rounded up
-     to 15 MHz. Below that leave PBURST at 0 (the reset value; the pins are then unchanged).
+   * **PBURST (bit 2)** (WO-68, 662982d/f73a2d8): set PBURST only with `QSPI_CFG.STREAM = 1`
+     (PBURST does nothing without it) and only if the core clock is at least **15 MHz**. A PSRAM
+     line burst holds CE# low for at most 101 clocks (proved bound 104 with margin; about 97 with
+     rd_late = 0; 1.6 µs at 62.5 MHz); the APS6404L allows 8 µs (tCEM, standard grade), which fixes
+     the floor at 12.6 MHz, rounded up to 15 MHz. Below that leave PBURST at 0 (the reset value; the pins are then unchanged).
 8. **Watchdog.** If the DDR sweep passed it left the watchdog armed with TOP 1 (about 2 to 3 ms) and
    it cannot be disabled. Before the jump write `WDT_TORR` with a long TOP (the write kicks): TOP 15
    is 34 s at 62.5 MHz, and Linux's `dw_wdt` then takes over (build with
@@ -90,7 +90,7 @@ can.
 | `earlycon` | no baud, clock from the node | with an explicit baud also give the clock in Hz (`earlycon=uart8250,mmio,0x10000000,115200,<f>`) | `bootargs` |
 | SPI BAUD: SCK = *f* / (2 (BAUD + 1)) | SD at BAUD 2 = 10.4 MHz | The driver derives BAUD = ceil(*f* / (2 x `spi-max-frequency`)) - 1. BAUD 1 is lost to the pin flop, so keep `spi-max-frequency` **below *f* / 4**: 10,416,667 at 62.5 MHz gives BAUD 2, but at 25 MHz it would give BAUD 1, so use at most 6,250,000 there. SD init needs SCK <= 400 kHz (BAUD <= 255 up to 204 MHz, always met). The OLED needs 75 ns phases: BAUD >= ceil(*f* x 75 ns) - 1 (5 at 62.5 MHz; 1 at 25 MHz, but BAUD 1 is only unsafe for MISO, never use 0 to receive) | `spi0` node, loader |
 | Watchdog: timeout = 2^(16+TOP) clocks | TOP 15 = 34.4 s; DDR test TOP 1 = 2.1 to 3.1 ms | scales as 1/*f*: at 15 MHz TOP 15 = 143 s, TOP 1 = 8.7 to 13 ms. The driver reads the rate from `clk_core`, so a correct DT needs nothing else | `docs/soc-architecture.md` (Watchdog), loader |
-| PBURST minimum clock | 15 MHz (tCEM 8 µs, 97 clocks per line) | **below 15 MHz PBURST stays 0** (pending WO-68) | CACHE_CTL |
+| PBURST minimum clock | 15 MHz (tCEM 8 µs, at most 101 clocks per line: floor 12.6 MHz) | **below 15 MHz PBURST stays 0** | CACHE_CTL |
 | Audio tone: *f* / 16 / 2^O / (2 (P + 1)) | 1,953,125 / (2^O (P + 1)) Hz | recompute the note table (`src/audio.v` header) | bare-metal software |
 | UART RX slack without RTS# | 87 µs per character at 114,890 baud | set by the baud, not the clock: unchanged once the divisor is retuned | `docs/pins-and-peripherals.md` |
 

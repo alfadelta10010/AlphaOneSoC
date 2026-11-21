@@ -14,8 +14,8 @@
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
 //                        straps, watchdog at +0x100 (src/syscon.v); the pinmux
 //                        at 0x1002_0020 (src/pinmux.v) is carved out of it
-//   0x1003_0000  PWM     4 x 16-bit, SiFive pwm0 layout (src/pwm.v)
-//   0x1003_0100  audio   3 square voices + noise, 8-bit PWM DAC (src/audio.v)
+//   0x1003_0000  PWM     SiFive pwm0 layout, comparators 0-1 built (2-3 read 0xFFFF) (src/pwm.v)
+//   0x1003_0100  audio   one square tone, TONE0 + CTRL.EN (src/audio.v)
 //   0x1002_0024  CACHE_CTL  [0] EN, [1] reads 1, [2] PBURST (PSRAM line fills in one CE# period; needs
 //                        QSPI_CFG.STREAM and a core clock >= 15 MHz, tCEM 8 us); carved out of syscon in
 //                        soc_bus, the flops are in this file (src/cache.v)
