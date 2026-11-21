@@ -6,7 +6,7 @@ F_CLK ?= 20000000
 CFG   ?= 1
 PIN_SHA ?= $(shell cat ../PIN)
 OUT   ?= ../build/fw$(CFG)
-CFLAGS := -march=rv32ic -mabi=ilp32 -Os -ffreestanding -fno-builtin -fno-pic -mno-relax -Wall -Wextra \
+CFLAGS := -march=rv32i -mabi=ilp32 -Os -ffreestanding -fno-builtin -fno-pic -mno-relax -Wall -Wextra \
           -Wno-unused-parameter -DF_CLK=$(F_CLK) -DCFG=$(CFG) -DPIN_SHA='"$(PIN_SHA)"'
 SRC := crt0.S fn.S main.c t_uart.c t_flash.c t_psram.c t_cache.c
 

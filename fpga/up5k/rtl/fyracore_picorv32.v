@@ -62,7 +62,7 @@ module fyracore #(
         .BARREL_SHIFTER      (0),
         .TWO_CYCLE_COMPARE   (0),
         .TWO_CYCLE_ALU       (0),
-        .COMPRESSED_ISA      (1),
+        .COMPRESSED_ISA      (0),
         .CATCH_MISALIGN      (1),
         .CATCH_ILLINSN       (1),
         .ENABLE_PCPI         (0),
