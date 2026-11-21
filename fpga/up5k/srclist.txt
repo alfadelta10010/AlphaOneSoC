@@ -1,0 +1,17 @@
+# SoC RTL taken byte-exact from the pin (git archive $PIN src). One path per line, relative to the pin dir.
+src/tt_um_alfadelta10010_alphaone_soc.v
+src/alphaone_soc.v
+src/audio.v
+src/cache.v
+src/clint.v
+src/gamepad.v
+src/gpio.v
+src/mem_ctrl.v
+src/pinmux.v
+src/plic.v
+src/pwm.v
+src/qspi_ctrl.v
+src/soc_bus.v
+src/spi.v
+src/syscon.v
+src/uart.v
