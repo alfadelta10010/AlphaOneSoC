@@ -322,7 +322,7 @@ test-soc-periph: $(BUILD_DIR)
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_PERIPH_DIR) && bad=0; for t in $(SOC_PERIPH_TESTS); do \
 		fl=; pl=; if [ -n "$(MB_UART)" ]; then $(MB_FLAGS); fi; \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles $$fl \
@@ -359,7 +359,7 @@ test-soc-spi: $(BUILD_DIR)
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/tb_soc_periph.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_soc_periph.v
 	@cd $(SOC_SPI_DIR) && bad=0; for r in $(SOC_SPI_RUNS); do \
 		IFS=';'; set -- $$r; unset IFS; [ -z "$(ONLY)" ] || case " $(ONLY) " in *" $$1 "*) ;; *) continue;; esac; label=$$1; prog=$$2; cf=$$3; pa=$$4; \
 		fl=$$cf; pl=; if [ -n "$(MB_UART)" ]; then fl="$$fl -DMB_UART -DMB_DIV=1"; pl="+MB_UART +MB_DIV=1"; fi; \
@@ -447,7 +447,7 @@ test-wrapper: $(BUILD_DIR)
 	@mkdir -p $(WRAPPER_DIR)
 	@$(IVERILOG) -g2012 -o $(WRAPPER_DIR)/sim -s tb_tt_um $(WRAPPER_SRC) \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/tb_tt_um.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_tt_um.v
 	@cd $(WRAPPER_DIR) && \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
@@ -471,7 +471,7 @@ test-wrapper: $(BUILD_DIR)
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_reboot.$$n.log || ! grep -q '^PASS' tt_reboot.$$n.log; then exit 1; fi; \
 		done
 
-# The 16 mailbox programs of tests/soc through the pins (tb_tt_um.v
+# The 20 mailbox programs of tests/soc through the pins (tb_tt_um.v
 # +TEST=soc +PROG=<name>), on the RTL: scripts/gl/build_isa.sh PARTS=D builds
 # them with -DMB_UART and each one's divisor, run_gl.sh runs the two lists. The
 # same lists run on the hardened netlist on the sandbox; this is the baseline,
