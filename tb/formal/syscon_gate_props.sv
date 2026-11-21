@@ -14,6 +14,10 @@
 //       or a held reset: sh <= (sh | wdt_irq) & ~clear.
 //   P6  wdt_irq is a pulse: never high in two consecutive clocks (the first expiry needs stat
 //       clear, and stat stays set after it).
+//   P7  (the invariant that makes P5 and P6 inductive) once armed, syscon's own `stat` flop equals the
+//       shadow: stat == sh | wdt_irq (irq_p). Without it the induction starts from a state in which
+//       the two disagree (and a pulse can follow a pulse). It is checked on the real flop, so a copy
+//       of the rules cannot drift from the RTL unseen.
 //   P3  after any held edge QSPI_CFG (+0x1C) has DDR = 0 and DDR_CAP = DDR_CAP_RESET (the harness parameter, 2 since 6dee0f1;
 //       syscon keeps its own default, so a changed reset value is a FAIL here until this follows):
 //       every reset, reboot and watchdog expiry returns to SDR.
@@ -28,7 +32,8 @@ module syscon_gate_props #(parameter [2:0] DDR_CAP_RESET = 3'd2) (
 );
     wire [31:0] rdata;
     wire        rst_soc, rd_late, wdt_irq;
-    syscon dut (.clk(clk), .rst(rst), .rst_soc(rst_soc), .sel(sel), .we(we), .be(be),
+    wire        stat_x;      // syscon's `stat` flop, exposed by run.sh (PRE) for the invariant P7
+    syscon dut (.stat(stat_x), .clk(clk), .rst(rst), .rst_soc(rst_soc), .sel(sel), .we(we), .be(be),
                 .addr(addr), .wdata(wdata), .rdata(rdata),
                 .strap_rd_late(strap_rd_late), .rd_late(rd_late), .wdt_tap(wdt_tap),
                 .strap_no_stream(strap_no_stream), .wdt_irq(wdt_irq));
@@ -59,6 +64,7 @@ module syscon_gate_props #(parameter [2:0] DDR_CAP_RESET = 3'd2) (
         assert (!(armed && hq2 && wdt_irq));                                // P4
         assert (!(armed && sel && !we && addr == 14'h44 && rdata != {31'b0, sh_now}));   // P5
         assert (!(armed && irq_q && wdt_irq));                              // P6
+        assert (!armed || stat_x == sh_now);                                // P7
         assert (!(armed && hq2 && addr == 14'd7 && (rdata[1] || rdata[4:2] != DDR_CAP_RESET)));   // P3
     end
 

@@ -72,7 +72,7 @@ SPI_EXPOSE="w:st w:sr w:bb w:bba w:cc w:bc w:cpol w:cpha w:baud"
 GPIO_PRE="hierarchy -top gpio; proc; flatten; cd gpio;"
 for x in wr_tx wr_ctl wr_baud wr_en wr_out wr_st miso st bba bb sr baud cpol cpha cc bc; do GPIO_PRE="$GPIO_PRE rename spi_inst.$x x_$x;"; done
 GPIO_PRE="$GPIO_PRE expose w:x_wr_tx w:x_wr_ctl w:x_wr_baud w:x_wr_en w:x_wr_out w:x_wr_st w:x_miso w:x_st w:x_bba w:x_bb w:x_sr w:x_baud w:x_cpol w:x_cpha w:x_cc w:x_bc w:spi_en w:in_m w:in_s w:out_r; cd .."
-declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
+declare -A PRE=( [syscon_gate]="hierarchy -top syscon; proc; expose w:stat" [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
                  [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_bb1]="" [spi_cover]="$GPIO_PRE" )
 # spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
 declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
