@@ -1,6 +1,7 @@
 # A trap in a DDR image under the loader's handler: it spins, the watchdog resets the SoC, and the next boot is SDR.
 >=2 AlphaOne loader
 + flash in DDR, DDR_CAP
++ TRAP mcause=0x00000002
 + reset cause 0x04
 + flash stays SDR: a watchdog reset with DDR on
 + ddrdt: second boot, SDR kept

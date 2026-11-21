@@ -25,6 +25,9 @@ for line in rules:
         continue
     if line.startswith(">="):
         n, _, text = line[2:].partition(" ")
+        if not n.isdigit() or not text:
+            bad.append(f"malformed rule: {line}")
+            continue
         if log.count(text) < int(n):
             bad.append(f"found {log.count(text)} of {n}: {text}")
         continue
