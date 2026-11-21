@@ -38,7 +38,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 # Phony targets
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
-        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
+        test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-seeds \
         test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test
@@ -318,7 +318,7 @@ test-soc-periph: $(BUILD_DIR)
 	@echo "=== Testing the peripherals through the SoC ==="
 	@mkdir -p $(SOC_PERIPH_DIR)
 	@$(IVERILOG) -g2012 -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
-		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
@@ -355,7 +355,7 @@ test-soc-spi: $(BUILD_DIR)
 	@echo "=== Testing the SD card and the shared SPI bus through the SoC (62.5 MHz) ==="
 	@mkdir -p $(SOC_SPI_DIR)
 	@$(IVERILOG) -g2012 -DTCLK_NS=16.0 -o $(SOC_SPI_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
-		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
@@ -410,7 +410,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@echo "=== Testing syscon through the SoC ==="
 	@mkdir -p $(SYSCON_SOC_DIR)
 	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(SYSCON_SOC_DIR)/sim -s tb_syscon_soc $(SRC_FILES) \
-		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
+		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
 		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
@@ -437,7 +437,7 @@ test-syscon-soc: $(BUILD_DIR)
 #   NO_STREAM          ui_in[2] = 1 through reset: QSPI_CFG.STREAM stays 0
 # then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
 # strap at 0 and at 1 (RD_LATE, 25 ns).
-WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v \
+WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v \
                 $(SRC_DIR)/uart.v $(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+NO_STREAM"
@@ -508,7 +508,17 @@ test-gl:
 	@cat $(GL_DIR)/smoke/tt_pins.0.verdict; grep -E '^(PASS|FAIL|TIMEOUT|ERROR)' $(GL_DIR)/smoke/tt_pins.0.log | head -5
 	@grep -q '^PASS' $(GL_DIR)/smoke/tt_pins.0.verdict
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-qspi test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
+# The instruction cache (src/cache.v): random fetch/store streams against a shadow memory, +SEED=, also with the
+# register-file macro's X modes (the cache must never use a word the macro read while it was written).
+test-cache: $(BUILD_DIR)
+	@echo "=== Testing the instruction cache ==="
+	@$(IVERILOG) -g2001 -o $(BUILD_DIR)/tb_cache $(SRC_DIR)/cache.v $(SRC_DIR)/rf_top.v $(TB_DIR)/tb_cache.v
+	@$(call run_tb,tb_cache,+MAXLAT=12)
+	@$(call run_tb,tb_cache,+MAXLAT=1 +RF_COLLIDE_X,_l1)
+	@$(call run_tb,tb_cache,+MAXLAT=40 +RF_X +RF_COLLIDE_X,_l40)
+	@$(call run_tb,tb_cache,+NOEN +RF_COLLIDE_X,_noen)
+
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-qspi test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 

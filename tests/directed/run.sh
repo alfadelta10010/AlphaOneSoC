@@ -100,7 +100,7 @@ CORE_SRC=("$SRC"/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder
 build() {
   if [ $SOC = 1 ]; then
     iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
-      "${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,soc_bus,plic,uart,gamepad,pwm,audio,pinmux,gpio,spi,syscon,alphaone_soc}.v \
+      "${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,cache,soc_bus,plic,uart,gamepad,pwm,audio,pinmux,gpio,spi,syscon,alphaone_soc}.v \
       "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v || return 1
   else
     iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
