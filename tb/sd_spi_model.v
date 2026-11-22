@@ -111,6 +111,11 @@ module sd_spi_model #(
         stuck = $test$plusargs("SD_STUCK_DO");
     end
 
+    initial begin : cap_check                // the bench sets use_disk at time 0
+        #1;
+        if (use_disk && cap_set && cap_blks > DISK_BLKS && !sparse) err("+SD_BLKS beyond the disk needs +SD_SPARSE");
+    end
+
     task automatic err(input [8*48-1:0] m);
         begin
             if (expect_violations) n_expected = n_expected + 1;
@@ -379,7 +384,8 @@ module sd_spi_model #(
                             integer s, f;
                             f = -1;
                             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
-                            if (f < 0) begin f = wb_n; if (wb_n < 15) wb_n = wb_n + 1; wb_blk[f] = wblk; end
+                            if (f < 0 && wb_n == 16) begin err("written-block table full (16)"); f = 15; end   // the last slot is reused
+                            else if (f < 0) begin f = wb_n; wb_n = wb_n + 1; wb_blk[f] = wblk; end
                             if (wr_resp != 8'h05) ;                 // refused: nothing is stored
                             else if (on_disk(wblk)) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
                             else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];

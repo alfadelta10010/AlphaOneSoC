@@ -11,6 +11,7 @@
 + sdtest: write 2147483647 rc=0
 + sdtest: readback 2147483647 rc=0 match=1
 + sdtest: read last rc=0 b0=ff
++ sdtest: block 5 unchanged=1
 + sdtest: read beyond rc=1
 + sdtest: done
 + 0 errors, 1 expected

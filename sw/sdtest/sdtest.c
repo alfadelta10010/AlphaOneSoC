@@ -7,7 +7,7 @@
 
 extern int printf(const char *, ...);
 
-static uint8_t buf[512], chk[512];
+static uint8_t buf[512], chk[512], ref5[512];
 
 static void pattern(uint32_t lba)
 {
@@ -41,6 +41,7 @@ int main(void)
     printf("sdtest: read 0 rc=%d b0=%02x b510=%02x b511=%02x\n", rc, chk[0], chk[510], chk[511]);
     printf("sdtest: read 4095 rc=%d\n", sd_read(4095, chk));
     printf("sdtest: read 123 rc=%d\n", sd_read(123, chk));
+    sd_read(5, ref5);                            /* to see later that a high block did not land here */
     write_readback(5000);
     write_readback(8191);                        /* the last block */
     printf("sdtest: capacity %u blocks\n", (unsigned)sd_blocks);
@@ -52,6 +53,12 @@ int main(void)
         write_readback(0x400005);
         write_readback(0x800005);
         write_readback(sd_blocks - 1);
+        sd_read(5, chk);
+        int same = 1;
+        for (int i = 0; i < 512; i++)
+            if (chk[i] != ref5[i])
+                same = 0;
+        printf("sdtest: block 5 unchanged=%d\n", same);   /* no address bit was dropped */
         rc = sd_read(sd_blocks - 1, chk);
         printf("sdtest: read last rc=%d b0=%02x\n", rc, chk[0]);
         if (sd_blocks != 0xFFFFFFFFu)
