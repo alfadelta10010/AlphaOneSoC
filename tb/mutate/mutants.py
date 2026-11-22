@@ -471,26 +471,52 @@ m("FR05", "fyracore.v", KV_LOAD,
   "a hit does not consume if_kv: the same halfword is issued again, pc running on")
 m("FR06", "fyracore.v", "if_kbuf <= imem_rdata[31:16];", "if_kbuf <= imem_rdata[15:0];",
   "the lower halfword is kept: C2 is replaced by C1")
-m("FR07", "fyracore.v", "assign imem_req  = if_exec && !ex_nofetch && !if_hit;", "assign imem_req  = if_exec && !ex_nofetch;",
+m("FR07", "fyracore.v", "assign imem_req  = if_exec && !ex_nofetch && !if_hit && !if_wv;", "assign imem_req  = if_exec && !ex_nofetch && !if_wv;",
   "a fetch is requested with the instruction in hand (functionally equivalent, the hit wins; the bench's no-fetch check kills it)")
 m("FR08", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= 1'b0;",
   "if_kv cleared behind a not-taken branch too (perf only; the bench's if_kv shadow kills it)")
 m("FR09", "fyracore.v", "wire [31:0] if_fetched    = if_word & {32{if_exec}};",
   "wire [31:0] if_fetched    = {imem_rdata[31:16] & {16{if_exec}}, if_hit ? if_kbuf : (imem_rdata[15:0] & {16{if_exec}})};",
   "mux behind the window mask (a kept halfword outside the window is no longer forced to 0; fr_window_end kills it with garbage on the idle port)")
-m("FR10", "fyracore.v", "        if (imem_req && imem_ready)\n            if_kbuf <= imem_rdata[31:16];",
-  "        if (imem_ready)\n            if_kbuf <= imem_rdata[31:16];",
+m("FR10", "fyracore.v", "        if (imem_req && imem_ready) begin\n            if_kbuf <= imem_rdata[31:16];",
+  "        if (imem_ready) begin\n            if_kbuf <= imem_rdata[31:16];",
   "if_kbuf captured on ready alone: overwritten with the port's idle data while in use (needs NOTREADY_DATA)")
 m("FR11", "fyracore.v", "ifex_raw16     <= if_fetched[15:0];", "ifex_raw16     <= imem_rdata[15:0];",
   "the trace / mtval 16 bits come from the port, not from the kept halfword, on a hit")
-m("FR12", "fyracore.v", "            if_kv             <= 1'b0;\n        end else begin",
-  "            if_kv             <= (if_kv === 1'bx) ? 1'b0 : if_kv;\n        end else begin",
+m("FR12", "fyracore.v", "            if_kv             <= 1'b0;\n            if_wv             <= 1'b0;\n        end else begin",
+  "            if_kv             <= (if_kv === 1'bx) ? 1'b0 : if_kv;\n            if_wv             <= 1'b0;\n        end else begin",
   "if_kv survives a reset (a mid-run reset issues a halfword of the old stream)")
 m("FR13", "fyracore.v", "            if (stall) begin\n                // Hold IF/EX on stall.",
   "            if (stall) begin\n                if_kv <= if_kv && !flush;\n                // Hold IF/EX on stall.",
   "if_kv cleared by a flush on a stalled cycle too (perf only: pc holds, the hit is lost; the if_kv shadow kills it)")
 m("FR14", "fyracore.v", "if_kv          <= if_kv && !flush;", "if_kv          <= if_kv && !(flush && !ex_is_fencei && !ex_pmp_csr_wr);",
   "FENCE.I and a PMP write do not clear if_kv (equivalent: if_kv is set only behind a compressed instruction, and the compressed decoder turns every illegal encoding into a NOP, so no compressed form decodes as FENCE.I or a CSR write, with misa.C set or clear)")
+
+# ── fetch hold (WO-76): if_wv / if_wlo in fyracore.v ────────────────────────
+# A fetch that completes on a stalled edge with no data access in WB is kept
+# whole and not requested again. FH07 and FH08 change no retired value (FH07
+# is R8's mutant; FH08 is performance only: killed by fh_perf).
+WV_SET = "if_wv <= stall && (if_wv ||\n                     (imem_req && imem_ready && !dmem_req && !wb_busy));"
+m("FH01", "fyracore.v", "assign imem_req  = if_exec && !ex_nofetch && !if_hit && !if_wv;", "assign imem_req  = if_exec && !ex_nofetch && !if_hit;",
+  "a fetch is requested with the whole word in hand (the tb's if_wv check and core_fetch F6 kill it)")
+m("FH02", "fyracore.v", "if_wv <= stall && (if_wv ||", "if_wv <= (stall || flush) && (if_wv ||",
+  "a held word survives a redirect: the next instruction at the new pc is the old word")
+m("FH03", "fyracore.v", "if_wv <= stall && (if_wv ||", "if_wv <= (if_wv ||",
+  "set on a load edge too (and never cleared on a !stall edge once set): a word is held for a pc that moves on")
+m("FH04", "fyracore.v", "if_wlo  <= imem_rdata[15:0];", "if_wlo  <= imem_rdata[31:16];",
+  "the held low half is the upper halfword of the fetch")
+m("FH05", "fyracore.v", "(imem_req && imem_ready && !dmem_req && !wb_busy));", "(imem_req && imem_ready && !wb_busy));",
+  "a fetch completing while a data request is in WB is held: a store can complete after the word was read (SMC without FENCE.I runs stale), DF_N would be 5")
+m("FH06", "fyracore.v", "wire [31:0] if_word       = {if_wv ? if_kbuf : imem_rdata[31:16],", "wire [31:0] if_word       = {if_hit ? if_kbuf : imem_rdata[31:16],",
+  "the held word's upper half comes from the port (idle data), not from if_kbuf")
+m("FH07", "fyracore.v", "(ctrl_doBranch || ctrl_doJump || ctrl_isEcall || ctrl_isEbreak ||", "(ctrl_isEcall || ctrl_isEbreak ||",
+  "a fetch is issued while a branch or jump is in EX (goal 1 of WO-76: R8; the fetch is discarded, a performance loss)")
+m("FH08", "fyracore.v", "                          && !stall_nofetch;", "                          && !stall_other;",
+  "an M op waits for the fetch before it starts (performance only: fh_perf)")
+m("FH09", "fyracore.v", WV_SET, "if_wv <= 1'b0;",
+  "if_wv never set: the hold does nothing (performance only: fh_perf, the fetch-hold counter floor)")
+m("FH10", "fyracore.v", "wire [15:0] if_bdat       = if_wv ? if_wlo : if_kbuf;", "wire [15:0] if_bdat       = if_kbuf;",
+  "the held word's low half is ignored (the kept halfword is used instead)")
 
 # ── spi.v / gpio.v (WO-29 SPI01-SPI32)
 m('SPI01', 'spi.v', 'wire [7:0] rx_in = {sr[6:0], miso};', 'reg miso_a;\n    always @(posedge clk) if (st == B && cc == baud) miso_a <= miso;\n    wire [7:0] rx_in = {sr[6:0], miso_a};', 'MISO taken at the A->B edge (the pin one clock after it), the classic point; equivalent at BAUD 0')
