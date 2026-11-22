@@ -10,6 +10,7 @@
 rvtest_entry_point:
   li   s0, 8                  # iterations
   li   a2, 0
+  li   a4, 0
   li   a0, 3
   li   a1, 5
   la   t0, Y
