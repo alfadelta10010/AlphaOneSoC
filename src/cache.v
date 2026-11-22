@@ -26,10 +26,21 @@
 // (each 32 x 32 = 8 lines x 4 words): data_mem holds lines 0-7 (index[3] = addr[7] = 0), data_hi lines 8-15
 // (index[3] = 1); the word address inside a macro is addr[6:2]. Both read ports of both macros are driven
 // with the same addresses and a 2:1 per port picks the data (port A by index[3] of A, port B by index[3] of
-// B = A + 1, so a straddle across line 7 -> 8 or 15 -> 0 reads each word from its own macro). On the fill edge port A may read the word being written, but
-// that data is never used: a word is looked up only after it has been written
-// (see fill_here), so the macro's write-through is never used (+RF_COLLIDE_X
-// stays clean).
+// B = A + 1, so a straddle across line 7 -> 8 or 15 -> 0 reads each word from its own macro).
+//
+// Read/write collisions. A macro read that meets a write of the same word on the same edge has no timing
+// (rf_top: the write-through data is never used, +RF_COLLIDE_X turns it into X); the stored word is still written. A fill word
+// is written on an edge where up to four reads are in flight, so there are three collision cases and the output of
+// every one of them is dropped:
+//   1. Port A of the selected macro: the fill writes word fcnt while a lookup of word fcnt of the fill line misses
+//      (a word is looked up as a hit only after it was written, kword < fcnt, see fill_here).
+//   2. Port B of the selected macro: the fill of line L writes word fcnt while an aligned fetch of word fcnt-1 of L
+//      hits through fill_here; port B (address A + 1 = the word being written) reads X, and f_rdata ignores it
+//      because pc1 = 0 selects ra_data. The kword < fcnt rule plays no part here.
+//   3. Either port of the macro that is NOT selected: both macros get the same read addresses, so a fill of
+//      line i + 8 (or i) collides with a hit on line i (or i + 8) at the same word; the f_addr[7] / nxt[5] select drops it.
+// tb/formal/cache_props.sv asserts that on every hit cycle neither the port A data (always) nor the port B data
+// (when pc1) that f_rdata uses came from a same-word write, and covers cases 2 and 3.
 //
 // A fetch wants the 4 bytes from the halfword-aligned pc. At f_addr[1] = 0
 // that is one word; at f_addr[1] = 1 it is the upper half of word A and the
@@ -200,6 +211,8 @@ module cache (
         .rb_data (rb_hi),
         .clk     (clk)
     );
+    // Collision cases 1-3 are listed in the header: the port or macro that meets a same-word write is never the
+    // one f_rdata uses.
     // The macros read synchronously: the data in a cycle is for the address of the previous edge. The
     // core holds f_addr from request to ready, so the select taken from the current f_addr is the one
     // the data was read with.
