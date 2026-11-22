@@ -11,7 +11,8 @@
 // Arbitration: data first. With the instruction cache off (CACHE_CTL.EN = 0, the reset
 // state) the i-port is the core's fetch port and the pipeline only issues a new data
 // request on the cycle after a fetch completes or after a fetch-word-reuse hit (an
-// instruction taken from the kept halfword with no fetch). At most every other
+// instruction taken from the kept halfword with no fetch) or after IF/EX takes a held word (a fetch
+// that completed while the pipeline was stalled). At most every other
 // IF/EX load is a hit, so few data accesses run between consecutive fetches (up to
 // four: two back-to-back AMOs, a read and a write each, behind fetches that already
 // completed; bounded by tb/formal core_df) and a fetch waits a bounded time (449/482
@@ -20,7 +21,8 @@
 // EN = 0 statements. Serving the data request first means the fetch that follows a
 // load is not read before the load and then thrown away while the load stalls the
 // pipeline (fetch-first would do that on every load, forever, on a pipeline that
-// refetches while stalled). The grant is latched rather than inferred from which
+// refetches while stalled; the core now keeps a fetch that completes while stalled, so this
+// matters only for a fetch completing with a data access in WB). The grant is latched rather than inferred from which
 // request is high, so a request that appears mid-transaction cannot redirect its
 // reply.
 //

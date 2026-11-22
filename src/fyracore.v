@@ -16,6 +16,8 @@
 //   - CSR write in WB: the next instruction is still in EX (3-cycle EX, ex_wait)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
 //   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
+//   - A fetch that completes while the pipeline is stalled is kept (if_wv,
+//     if_wlo + if_kbuf) and not requested again
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
@@ -75,9 +77,10 @@ module fyracore #(
     // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*), EX holds
     // no instruction that decides the next pc (ex_nofetch) and the
     // instruction at pc is not already in hand (see if_kv below); outside
-    // them no fetch is requested at all (see imem_req below). When the
-    // pipeline is stalled with a fetch already completed, the same address is
-    // requested again.
+    // them no fetch is requested at all (see imem_req below). When a fetch
+    // completes while the pipeline is stalled, the word is kept and imem_req
+    // drops until IF/EX takes it (if_wv), except when a data access is in WB in
+    // the completion cycle: then the same address is requested again.
     //
     // A fetch returns the 4 bytes from pc. When the instruction at pc is
     // compressed, the upper two bytes are the halfword behind it; the core
@@ -192,11 +195,25 @@ module fyracore #(
     // !stall edge, so a held if_kv is never stale.
     reg  [15:0] if_kbuf;         // upper halfword of the last fetch (no reset)
     reg         if_kv;           // if_kbuf is the compressed instruction at pc
+    // Fetch hold. A fetch that completes on a stalled edge (IF/EX and pc hold)
+    // with no data access in WB is kept whole: {if_kbuf, if_wlo} are the 4
+    // bytes at pc and if_wv says so. imem_req stays low until the next !stall
+    // edge, which loads IF/EX from the held word or redirects (it clears
+    // if_wv either way). No data request can start while if_wv is 1 (EX/WB
+    // takes bubbles while the EX instruction is stalled), so no store
+    // completes after the word was read and the data-per-fetch bound holds.
+    reg  [15:0] if_wlo;          // lower halfword of the last fetch (no reset)
+    reg         if_wv;           // {if_kbuf, if_wlo} is the word at pc, held
     wire        if_hit        = if_kv;
     // The mux is in front of the window mask: a kept halfword at pc outside
     // the window (the last halfword of a window) is forced to 0 like a fetched
     // one and faults in EX. The upper half of the word is not used on a hit.
-    wire [31:0] if_word       = {imem_rdata[31:16], if_hit ? if_kbuf : imem_rdata[15:0]};
+    // Both selects are flops; the held-word mux is flop to flop. A load from
+    // the held word takes the upper half from if_kbuf as well.
+    wire        if_bsel       = if_hit || if_wv;
+    wire [15:0] if_bdat       = if_wv ? if_wlo : if_kbuf;
+    wire [31:0] if_word       = {if_wv ? if_kbuf : imem_rdata[31:16],
+                                 if_bsel ? if_bdat : imem_rdata[15:0]};
     wire [31:0] if_fetched    = if_word & {32{if_exec}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     // A compressed instruction is expanded here, on its way into IF/EX, so
@@ -241,17 +258,20 @@ module fyracore #(
     // fetch would have to complete (~42 clocks) before the redirect could be
     // taken. See ex_nofetch. A not-taken branch then costs one bubble.
     assign if_exec   = in_exec(pc);
-    // Nothing is requested while the instruction at pc is in hand (if_hit).
-    assign imem_req  = if_exec && !ex_nofetch && !if_hit;
+    // Nothing is requested while the instruction at pc is in hand (if_hit) or
+    // its whole word is held (if_wv).
+    assign imem_req  = if_exec && !ex_nofetch && !if_hit && !if_wv;
 
     // Captured on every completed fetch, not on the IF/EX load: no fetch can
-    // complete while if_kv is 1 (imem_req is low), so the bits are frozen
-    // exactly while they are needed, and the 16 enables stay off the stall
-    // net. imem_ready alone is not enough: a memory may raise it with no
+    // complete while if_kv or if_wv is 1 (imem_req is low), so the bits are
+    // frozen exactly while they are needed, and the 32 enables stay off the
+    // stall net. imem_ready alone is not enough: a memory may raise it with no
     // request, and the kept bits would be overwritten while in use.
     always @(posedge clk)
-        if (imem_req && imem_ready)
+        if (imem_req && imem_ready) begin
             if_kbuf <= imem_rdata[31:16];
+            if_wlo  <= imem_rdata[15:0];
+        end
 
     // ================================================================
     //  IF/EX Pipeline Register
@@ -1333,9 +1353,17 @@ module fyracore #(
             reservation_addr  <= 30'b0;
             // Fetch word reuse
             if_kv             <= 1'b0;
+            if_wv             <= 1'b0;
         end else begin
             // ---- PC ----
             pc <= next_pc;
+
+            // ---- Fetch hold ----
+            // Set when a fetch completes on a stalled edge with nothing left
+            // to transfer in WB; held while stalled; every !stall edge
+            // consumes or discards it.
+            if_wv <= stall && (if_wv ||
+                     (imem_req && imem_ready && !dmem_req && !wb_busy));
 
             // ---- Privilege mode update ----
             // Trap (WB stage): always enter M-mode
