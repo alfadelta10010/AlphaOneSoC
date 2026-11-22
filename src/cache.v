@@ -1,4 +1,4 @@
-// Instruction cache: 128 B, direct-mapped, 16 B lines, fetch path only (WO-62, variant K4).
+// Instruction cache: 256 B, direct-mapped, 16 B lines, fetch path only (WO-62 K4, 256 B WO-77).
 //
 // Sits between the core's fetch port and mem_ctrl's fetch port. The data path
 // is not touched; the cache only watches it: a store that completes on the
@@ -21,10 +21,12 @@
 // `active` shows which of the two the fetch path is in.
 //
 // Geometry. Key = {addr[31], addr[23:0]} (flash / PSRAM and the chip offset;
-// the PMA windows decide the rest): offset 4 bits, index 3 bits, tag 18 bits.
-// Tags and valid bits are flops (8 x 18 + 8); the data is ONE rf_top macro
-// (32 x 32 = 8 lines x 4 words, word index {index, word}), read through both
-// of its ports; on the fill edge port A may read the word being written, but
+// the PMA windows decide the rest): offset 4 bits, index 4 bits (addr[7:4]), tag 17 bits
+// ({addr[31], addr[23:8]}). Tags and valid bits are flops (16 x 17 + 16); the data is TWO rf_top macros
+// (each 32 x 32 = 8 lines x 4 words): data_mem holds lines 0-7 (index[3] = addr[7] = 0), data_hi lines 8-15
+// (index[3] = 1); the word address inside a macro is addr[6:2]. Both read ports of both macros are driven
+// with the same addresses and a 2:1 per port picks the data (port A by index[3] of A, port B by index[3] of
+// B = A + 1, so a straddle across line 7 -> 8 or 15 -> 0 reads each word from its own macro). On the fill edge port A may read the word being written, but
 // that data is never used: a word is looked up only after it has been written
 // (see fill_here), so the macro's write-through is never used (+RF_COLLIDE_X
 // stays clean).
@@ -94,13 +96,13 @@ module cache (
     reg         act;          // the cache owns the fetch path
     reg         hit_q;        // a hit was found last cycle: f_ready now
     reg         b_ph;         // a straddling fetch: A hit, B is looked up now
-    reg  [7:0]  valid;
-    reg  [143:0] tags;        // 8 x 18, line i at [18*i +: 18]
+    reg  [15:0] valid;
+    reg  [271:0] tags;        // 16 x 17, line i at [17*i +: 17]
 
     reg         fill_active;
     reg         dead;         // a store hit the line being filled
-    reg  [2:0]  fill_idx;
-    reg  [17:0] fill_tag;
+    reg  [3:0]  fill_idx;
+    reg  [16:0] fill_tag;
     reg  [1:0]  fcnt;         // words of the running fill that have arrived (and been written)
 
     // ---- lookup -------------------------------------------------------
@@ -111,12 +113,12 @@ module cache (
     // The snoop also runs while !act, where it only clears valid bits that are already 0.
     wire        snoop = d_we && d_ready;
 
-    wire [2:0]  kidx  = snoop ? d_addr[6:4] : b_ph ? nxt[4:2] : f_addr[6:4];
+    wire [3:0]  kidx  = snoop ? d_addr[7:4] : b_ph ? nxt[5:2] : f_addr[7:4];
     wire [1:0]  kword = b_ph ? nxt[1:0] : f_addr[3:2];
-    wire [17:0] ktag  = snoop ? {d_addr[31], d_addr[23:7]} :
-                        b_ph  ? {f_addr[31], nxt[21:5]} : {f_addr[31], f_addr[23:7]};
+    wire [16:0] ktag  = snoop ? {d_addr[31], d_addr[23:8]} :
+                        b_ph  ? {f_addr[31], nxt[21:6]} : {f_addr[31], f_addr[23:8]};
 
-    wire        tmatch    = (tags[18*kidx +: 18] == ktag);
+    wire        tmatch    = (tags[17*kidx +: 17] == ktag);
     // The word of the line being filled is usable once it has been written.
     wire        fill_here = fill_active && !dead && (kidx == fill_idx) && (kword < fcnt);
     wire        hit       = tmatch && (valid[kidx] || fill_here);
@@ -133,7 +135,7 @@ module cache (
             act         <= 1'b0;
             hit_q       <= 1'b0;
             b_ph        <= 1'b0;
-            valid       <= 8'd0;
+            valid       <= 16'd0;
             fill_active <= 1'b0;
         end else begin
             if (on)  act <= 1'b1;
@@ -149,7 +151,7 @@ module cache (
                 fcnt        <= 2'd0;
                 dead        <= 1'b0;
                 valid[kidx] <= 1'b0;
-                tags[18*kidx +: 18] <= ktag;
+                tags[17*kidx +: 17] <= ktag;
             end
             if (word_in) begin
                 fcnt <= fcnt + 2'd1;
@@ -164,12 +166,12 @@ module cache (
                     dead <= 1'b1;
             end
             if (fencei_flush) begin
-                valid <= 8'd0;
+                valid <= 16'd0;
                 if (fill_active)
                     dead <= 1'b1;
             end
             if (off) begin                               // on the way out: cold, nothing pending
-                valid <= 8'd0;
+                valid <= 16'd0;
                 hit_q <= 1'b0;
                 b_ph  <= 1'b0;
             end
@@ -177,17 +179,32 @@ module cache (
     end
 
     // ---- data macro ---------------------------------------------------
-    wire [31:0] ra_data, rb_data;
-    rf_top data_mem (
+    wire [31:0] ra_lo, rb_lo, ra_hi, rb_hi;
+    rf_top data_mem (                       // lines 0-7  (index[3] = 0)
         .w_data  (m_rdata),
-        .w_addr  ({fill_idx, fcnt}),
-        .w_ena   (word_in),
+        .w_addr  ({fill_idx[2:0], fcnt}),
+        .w_ena   (word_in && !fill_idx[3]),
         .ra_addr (f_addr[6:2]),
         .rb_addr (nxt[4:0]),
-        .ra_data (ra_data),
-        .rb_data (rb_data),
+        .ra_data (ra_lo),
+        .rb_data (rb_lo),
         .clk     (clk)
     );
+    rf_top data_hi (                        // lines 8-15 (index[3] = 1)
+        .w_data  (m_rdata),
+        .w_addr  ({fill_idx[2:0], fcnt}),
+        .w_ena   (word_in && fill_idx[3]),
+        .ra_addr (f_addr[6:2]),
+        .rb_addr (nxt[4:0]),
+        .ra_data (ra_hi),
+        .rb_data (rb_hi),
+        .clk     (clk)
+    );
+    // The macros read synchronously: the data in a cycle is for the address of the previous edge. The
+    // core holds f_addr from request to ready, so the select taken from the current f_addr is the one
+    // the data was read with.
+    wire [31:0] ra_data = f_addr[7] ? ra_hi : ra_lo;   // word A's line: index[3] of A
+    wire [31:0] rb_data = nxt[5]    ? rb_hi : rb_lo;   // word B = A + 1: index[3] of B
 
     // ---- outputs ------------------------------------------------------
     wire        use_fill = act && fill_active;
@@ -196,10 +213,10 @@ module cache (
     assign dbg_act = act, dbg_hit_q = hit_q, dbg_b_ph = b_ph, dbg_fill = fill_active, dbg_valid_any = |valid;
 `endif
     assign m_req   = act ? fill_active : f_req;
-    // PSRAM line burst qualifier: only fill words of a live fill whose window is PSRAM (key bit 17 = addr[31]).
+    // PSRAM line burst qualifier: only fill words of a live fill whose window is PSRAM (key bit 16 = addr[31]).
     // Low with EN = 0 (fill_active is 0 while !act) and with PBURST = 0.
-    assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;
-    assign m_addr  = use_fill ? {fill_tag[17], 1'b0, ~fill_tag[17], 5'd0, fill_tag[16:0], fill_idx, fcnt, 2'b00} : f_addr;
+    assign m_burst = act && fill_active && !dead && fill_tag[16] && pburst;
+    assign m_addr  = use_fill ? {fill_tag[16], 1'b0, ~fill_tag[16], 5'd0, fill_tag[15:0], fill_idx, fcnt, 2'b00} : f_addr;
     assign f_ready = act ? hit_q : m_ready;
     assign f_rdata = !act ? m_rdata :
                      pc1  ? {rb_data[15:0], ra_data[31:16]} : ra_data;

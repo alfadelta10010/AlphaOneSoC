@@ -18,7 +18,7 @@
 //   0x1003_0100  audio   one square tone, TONE0 + CTRL.EN (src/audio.v)
 //   0x1002_0024  CACHE_CTL  [0] EN, [1] reads 1, [2] PBURST (PSRAM line fills in one CE# period; needs
 //                        QSPI_CFG.STREAM and a core clock >= 15 MHz, tCEM 8 us); carved out of syscon in
-//                        soc_bus, the flops are in this file (src/cache.v)
+//                        soc_bus, the flops are in this file; the cache is 256 B with two data macros (src/cache.v)
 //   The GPIO window's +0x10 / +0x14 (every 64-byte alias) is the gamepad receiver
 //   (GAMEPAD, GPSTAT, src/gamepad.v); the carves are decoded in soc_bus.
 //
