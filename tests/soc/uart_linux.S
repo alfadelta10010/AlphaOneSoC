@@ -20,8 +20,12 @@
 #     devicetree-4x4.dtsi) and __stop_tx() clears THRI when the buffer is empty. A poll made while a
 #     character is still on the line sees IIR = no interrupt.
 #  5. Receive through the same handler: the terminal types a line (cue 5,
-#     CTS flow control on); IIR = RX data; serial8250_rx_chars() reads RX
-#     while LSR.DR. One character arrives per poll: RTS# holds the next.
+#     CTS flow control on); IIR = RX data available (0xC4) or character
+#     timeout (0xCC), which serial8250_handle_irq treats alike (LSR, then
+#     serial8250_rx_chars() reads RX while LSR.DR). The line is 11 characters
+#     against a trigger of 4, so whatever is left below the trigger after the
+#     last RX-data drain waits for the timeout; how many that is depends on
+#     how many characters arrive during each drain, i.e. on the CPU's speed.
 #  6. serial8250_console_write(): save IER, clear it, write each character
 #     after polling THRE (uart_console_write, with '\r' before '\n'), wait
 #     for BOTH_EMPTY, restore IER. Then the FIFO variant
@@ -181,9 +185,18 @@ poll_rx:
     lbu  t0, IIR(s0)
     andi t1, t0, 0x01
     bnez t1, 3f
-    CHECK t0, 0xC4, 0x140        # RX data available
-    lbu  t1, LSR(s0)
-    li   t3, 256                 # max_count
+    mv   a3, t0                  # the IID, for the count check after the drain
+    li   t1, 0xC4
+    beq  t0, t1, 8f              # RX data available (FIFO level >= trigger) ...
+    CHECK t0, 0xCC, 0x140        # ... or character timeout (UART_IIR_RX_TIMEOUT); nothing else is enabled
+8:  lbu  t1, LSR(s0)
+    li   a4, 0                   # characters this handler call reads
+    andi t2, t1, LSR_DR
+    bnez t2, 9f
+    mv   a7, t1
+    li   a6, 0x144               # an RX interrupt with the FIFO empty
+    j    test_fail
+9:  li   t3, 256                 # max_count
 1:  andi t2, t1, LSR_OE
     beqz t2, 2f
     mv   a7, t1
@@ -195,12 +208,21 @@ poll_rx:
     sb   t0, 0(s6)
     addi s6, s6, 1
     addi s7, s7, 1
+    addi a4, a4, 1
 4:  addi t3, t3, -1
     beqz t3, 5f
     lbu  t1, LSR(s0)             # while (lsr & (DR | BI))
     andi t2, t1, LSR_DR
     bnez t2, 1b
 5:  lbu  t0, MSR(s0)
+    li   t1, 4                   # RX data: at least the trigger (FCR code 2 = 4 here) was queued,
+    li   t2, 0xC4                # and only this loop pops
+    beq  a3, t2, 9f
+    li   t1, 1                   # timeout: at least one (DR, checked above)
+9:  bge  a4, t1, 3f
+    mv   a7, a4
+    li   a6, 0x145               # fewer characters than the interrupt promised
+    j    test_fail
 3:  la   t0, s_rx_end
     la   t1, s_rx
     sub  t0, t0, t1
