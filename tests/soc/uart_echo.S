@@ -36,7 +36,11 @@ _start:
     CHECK t1, 0x60, 0x13
 
     EVENT_P 2                      # "XYZ", flow control off
+#ifdef MB_DIV
+    DELAY (750 * MB_DIV)         # three frames at the program's divisor (160 x MB_DIV clocks each)
+#else
     DELAY 3000                   # three frames at divisor 4 are 1920 clocks
+#endif
     lbu  t1, LSR(s0)
     CHECK t1, 0x61, 0x20         # the 8-deep RX FIFO keeps all three: DR | THRE | TEMT, no overrun
     lbu  t1, RBR(s0)
