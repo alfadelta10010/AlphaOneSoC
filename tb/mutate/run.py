@@ -11,8 +11,8 @@ kill, and left out of the survivors too). A mutant whose copy does not compile i
 left out of every rate. A bench that has to be stopped by the timeout here
 counts as a kill (a hang is a failure), and is labelled TIMEOUT.
 
-  tb/mutate/run.py --check              every find string occurs once and
-                                        every mutant compiles
+  tb/mutate/run.py --check              every find string occurs once,
+                                        every mutant compiles and no ID is used twice
   tb/mutate/run.py [-j 2] [--only CS01,CS02] [--file csr.v]
                    [--benches unit,dir,soc,dir-soc,formal] [--keep]
   tb/mutate/run.py --report             kill matrix from the results file
@@ -333,6 +333,12 @@ def main():
            and (not a.file or e[1] == a.file)]
     if a.check:
         bad = 0
+        seen = {}
+        for e in M:   # mutant IDs key the work dirs, the results and the nonvac lists: a duplicate silently drops one
+            if e[0] in seen:
+                bad += 1
+                print("DUPLICATE %s: %s and %s" % (e[0], seen[e[0]], e[1]))
+            seen.setdefault(e[0], e[1])
         for e in sel:
             d = os.path.join(ROOT, MUT, "check", e[0])
             shutil.rmtree(d, ignore_errors=True)
