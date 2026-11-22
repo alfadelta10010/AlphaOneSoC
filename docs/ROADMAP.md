@@ -880,7 +880,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
   monitor's scripted session give the same clocks on both (hello 2,077,331 on both at the PR #18 tip 85c8459, 2026-11-22), and 56.9 million
-  (1.59 million instructions); FatFs (108.2 million clocks, 123 blocks read, 69 written) and
+  (1.59 million instructions); FatFs (108.3 million clocks with the CSD read in sd_init, 108.2 before it, 123 blocks read, 69 written) and
   FreeRTOS (49,077,894 clocks, the same costs) are the Verilator figures. The monitor, FatFs and
   FreeRTOS runs were identical on Icarus when compared 2026-11-11, before the later fixes changed
   the counts; on the current tree Icarus was re-run 2026-11-21 for hello, the DDR cases and the
