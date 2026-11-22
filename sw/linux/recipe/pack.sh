@@ -1,9 +1,12 @@
 #!/bin/bash
 # Pack stub + DTB + Image into one payload, for the SoC bench (flash.hex) and for Spike (ELF).
 # Blob layout, loaded at 0x8000_0000: Image @0 (the kernel's
-# initramfs is inside the Image). Needs: deliver/{Image,alpha.dtb,spike.dtb} and the toolchain in PATH.
+# initramfs is inside the Image). Needs: $W/deliver/{Image,alpha.dtb,spike.dtb} (build.sh), the loader
+# ($W/build/sw/loader/loader.bin: make -C $W/sw hello) and the toolchain in PATH.
+#   pack.sh [workdir]     (default $LINUX_WORK or ~/linux-work, the same as build.sh and run-bench.sh)
 set -euo pipefail
-R=$(cd "$(dirname "$0")" && pwd); D=${DELIVER:-$R/../deliver}; SW=${SW:-$R/../sw}
+R=$(cd "$(dirname "$0")" && pwd)
+W=${1:-${LINUX_WORK:-$HOME/linux-work}}; D=${DELIVER:-$W/deliver}; SW=${SW:-$W/sw}
 BASE=0x80000000
 # The NOMMU kernel is linked at 0x80000000 and cannot be moved: the Image goes at offset 0 and the
 # stub and DTB sit behind _end (past the kernel's bss, which the kernel zeroes), page aligned.
@@ -32,5 +35,5 @@ LD
 $CC-ld -m elf32lriscv -r -b binary $D/blob-spike.bin -o $D/blob-spike.o
 $CC-ld -m elf32lriscv -T $D/spike.ld -o $D/linux-spike.elf $D/blob-spike.o --defsym _start=$((BASE+STUB_OFF))
 # SoC flash image
-python3 $SW/tools/mkflash.py --loader $R/../build/sw/loader/loader.bin --image $D/blob-soc.bin \
+python3 $SW/tools/mkflash.py --loader $W/build/sw/loader/loader.bin --image $D/blob-soc.bin \
    --load $BASE --entry $((BASE+STUB_OFF)) --out $D/flash-linux.hex --bin $D/flash-linux.bin

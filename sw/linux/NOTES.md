@@ -1,7 +1,7 @@
 # Linux (NOMMU, M-mode, RV32IMAC) on AlphaOneSoC - rung 8 notes
 
-Build: `recipe/build.sh ~/linux-work` (cnlohr/buildroot 851edd24, Linux 6.8-rc1, uClibc-ng, busybox 1.36.1 static FLAT,
-elf2flt), then `recipe/pack.sh` (stub + DTB + Image -> blob-*.bin, linux-spike.elf, flash-linux.hex/.bin via sw/tools/mkflash.py).
+Build: `recipe/build.sh [workdir]` (default `$LINUX_WORK` or `~/linux-work`; the work dir holds a copy of `sw/`, `src/` and `tb/`, `br/` and `deliver/`) (cnlohr/buildroot 851edd24, Linux 6.8-rc1, uClibc-ng, busybox 1.36.1 static FLAT,
+elf2flt), then `recipe/pack.sh [workdir]` (same default; stub + DTB + Image -> blob-*.bin, linux-spike.elf, flash-linux.hex/.bin via sw/tools/mkflash.py).
 A host `unzip` is needed: build.sh installs `recipe/unzip` (a python shim) on PATH when the host has none.
 Outputs: Image (1.95 MB, initramfs inside, 284 KB cpio), rootfs.cpio, alpha.dtb (SoC), spike.dtb, System.map, vmlinux,
 kernel.config, busybox.built.config. The build tree br/ is 7.5 GB.
