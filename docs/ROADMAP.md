@@ -937,7 +937,7 @@ benchmarks). Besides the runs above: the loader against 13 damaged images (`tool
 blank flash, a size or load address that does not fit, an unaligned one, an entry outside the image, a wrong
 sum, unknown flag bits); the monitor's edge cases (bad input, misaligned and faulting accesses, backspace, an
 overlong line, the illegal-instruction, load-fault and return stops) and every one of the 4096 CSR numbers
-(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16 and an MBR with SDHC, standard-capacity
+(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16, FAT32 (a 70000-sector volume, 94.1 million clocks on 2026-11-22) and an MBR with SDHC, standard-capacity
 and v1 cards, its error codes, empty, 120-character-named, truncated and cluster-boundary files, and a card
 filled until it is full; the SD driver against a card told to fail 13 ways (`make run-sdtest-all`: data error
 token, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,

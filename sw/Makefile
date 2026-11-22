@@ -133,16 +133,17 @@ $(FFB)/ff.c: $(TP)/fatfs/source/ff.c fatfs/ffconf.sed
 	sed -f fatfs/ffconf.sed $(TP)/fatfs/source/ffconf.h > $(FFB)/ffconf.h
 fatfs_SRC    := fatfs/fatfs_test.c fatfs/diskio_sd.c common/sd.c $(FFB)/ff.c $(FFB)/ffunicode.c $(FFB)/ffsystem.c
 fatfs_CFLAGS := -I$(FFB) -Wno-format -Wno-error
-# DISK=fat12|fat16|mbr picks the card's image and SD=sdhc|sdsc|v1 its kind (byte addressing and
+# DISK=fat12|fat16|mbr|fat32 picks the card's image and SD=sdhc|sdsc|v1 its kind (byte addressing and
 # CMD16 for sdsc, no CMD8 either for v1): make run-fatfs DISK=mbr SD=v1. fat12 on an SDHC card is
 # the default; the image is rebuilt when DISK changes.
 DISK ?= fat12
 SD   ?= sdhc
-fatfs_TYPE   := $(if $(filter fat12,$(DISK)),FAT12,FAT16)
+fatfs_TYPE   := $(if $(filter fat12,$(DISK)),FAT12,$(if $(filter fat32,$(DISK)),FAT32,FAT16))
 fatfs_SDARG  := $(if $(filter sdsc,$(SD)),+SD_SDSC,$(if $(filter v1,$(SD)),+SD_V1,))
 fatfs_RUNDEP := $(BUILD)/fatfs/disk-$(DISK).hex
-fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG)
-fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
+fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG) \
+                 $(if $(filter fat32,$(DISK)),+SD_SPARSE +SD_BLKS=70000)
+fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex $(if $(filter fat32,$(DISK)),--fat32) && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
 $(BUILD)/fatfs/disk-%.hex: tools/mkdisk.sh tools/img2hex.py
 	@mkdir -p $(dir $@)
 	./tools/mkdisk.sh $(BUILD)/fatfs/disk-$*.img $@ $*
@@ -305,6 +306,7 @@ check:
 	$(MAKE) run-fatfs DISK=fat12 SD=sdhc
 	$(MAKE) run-fatfs DISK=fat16 SD=sdsc
 	$(MAKE) run-fatfs DISK=mbr SD=v1
+	$(MAKE) run-fatfs DISK=fat32 SD=sdhc
 	$(MAKE) run-fatfsfull
 	$(MAKE) run-freertos
 	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT="freertos/expect.txt freertos/expect-ddr.txt"
