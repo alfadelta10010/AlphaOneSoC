@@ -189,6 +189,33 @@ module tb_adv;
             end
         end
 
+    // Track B coverage (WO-76/77 adversarial review 2026-11-22): did the races the adv_c256 / adv_hold
+    // programs aim at happen? Counted from the outside of the cache and the core, printed as "COV".
+    //   dead_lo/dead_hi  a store hit the line being filled in data_mem / data_hi (the fill went dead)
+    //   fi_dead          FENCE.I retired with a live fill in flight
+    //   en_fill          CACHE_CTL.EN fell while a fill was in flight
+    //   xs7e/xsfe        a fetch at a cross-macro straddle (f_addr[7:0] 0x7E / 0xFE) served by the cache
+    //   hi_hit           fetches served by the cache from data_hi (f_addr[7] = 1)
+    //   hold             cycles a held fetch word leaves (if_wv && !stall: IF/EX takes it or a flush drops it)
+    integer cv_dead_lo = 0, cv_dead_hi = 0, cv_fi_dead = 0, cv_en_fill = 0, cv_xs7e = 0, cv_xsfe = 0,
+            cv_hi_hit = 0, cv_hold = 0;
+    reg     cv_en_q = 1'b0;
+    always @(posedge clk) if (!rst) begin
+        cv_en_q <= soc.cache_en;
+        if (soc.icache.snoop && soc.icache.tmatch && soc.icache.fill_active && !soc.icache.dead &&
+            soc.icache.fill_idx == soc.icache.kidx) begin
+            if (soc.icache.fill_idx[3]) cv_dead_hi = cv_dead_hi + 1; else cv_dead_lo = cv_dead_lo + 1;
+        end
+        if (soc.icache.fencei_flush && soc.icache.fill_active && !soc.icache.dead) cv_fi_dead = cv_fi_dead + 1;
+        if (cv_en_q && !soc.cache_en && soc.icache.fill_active) cv_en_fill = cv_en_fill + 1;
+        if (soc.icache.active && soc.icache.f_req && soc.icache.f_ready) begin
+            if (soc.icache.f_addr[7:0] == 8'h7E) cv_xs7e = cv_xs7e + 1;
+            if (soc.icache.f_addr[7:0] == 8'hFE) cv_xsfe = cv_xsfe + 1;
+            if (soc.icache.f_addr[7]) cv_hi_hit = cv_hi_hit + 1;
+        end
+        if (soc.cpu.if_wv && !soc.cpu.stall) cv_hold = cv_hold + 1;
+    end
+
     integer max_cycles;
     initial begin
         if (!$value$plusargs("TEST=%s", test)) test = "";
@@ -203,6 +230,8 @@ module tb_adv;
         if (rp.errors != 0) fail($sformatf("%0d RP2350 UART errors", rp.errors));
         $display("NOTE %s: %0d PSRAM reads, %0d bursts (largest %0d bytes), tCEM max %0.1f ns, %0d resets (%0d cut a PSRAM read, %0d a burst), %0d gpio toggles, meip rises %0d (%0d on a PSRAM read)",
                  test, n_ps_rd, n_burst, max_rd, pmod.tcem_max, n_reset, n_cut_ps, n_cut_burst, n_tog, n_meip, n_meip_fill);
+        $display("COV %s dead_lo %0d dead_hi %0d fi_dead %0d en_fill %0d xs7e %0d xsfe %0d hi_hit %0d hold %0d",
+                 test, cv_dead_lo, cv_dead_hi, cv_fi_dead, cv_en_fill, cv_xs7e, cv_xsfe, cv_hi_hit, cv_hold);
         if (errors == 0) $display("PASS tb_adv %s (%0d cycles)", test, cyc);
         else             $display("FAIL tb_adv %s: %0d errors", test, errors);
         $finish;
