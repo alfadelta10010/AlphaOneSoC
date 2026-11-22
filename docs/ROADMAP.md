@@ -939,8 +939,8 @@ sum, unknown flag bits); the monitor's edge cases (bad input, misaligned and fau
 overlong line, the illegal-instruction, load-fault and return stops) and every one of the 4096 CSR numbers
 (136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16, FAT32 (a 70000-sector volume, 94.1 million clocks on 2026-11-22) and an MBR with SDHC, standard-capacity
 and v1 cards, its error codes, empty, 120-character-named, truncated and cluster-boundary files, and a card
-filled until it is full; the SD driver against a card told to fail 13 ways (`make run-sdtest-all`: data error
-token, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
+filled until it is full; the SD driver against a card told to fail 14 ways (`make run-sdtest-all`: data error
+token, wrong CRC16, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
 refused CMD16 ...); FreeRTOS's five fault paths (`make run-fr-all`: stack overflow, allocation failure,
 assertion, illegal instruction, unhandled interrupt). Icarus (`make bench-icarus`, `SIMRUN=`, `SIM=`) gave the same results on the commits before the 2026-11-20 review fixes for the hello, monitor, CSR-scan, FatFs, FreeRTOS, FreeRTOS fault-path, DDR and damaged-image runs; its SD-variant runs (in progress 2026-11-21) and everything after the review fixes, except hello, the DDR cases and the 51-run matrix (re-run on Icarus 2026-11-21, same results), ran on Verilator only. The review fixes were checked by mutation: without the CMD13 that clears the status after a refused write, `wrerr1` fails; with a trap that powers off instead of spinning under DDR, `ddrdt` fails; with the late-mismatch path forcing STREAM on, the no-stream run fails.
 
@@ -966,8 +966,11 @@ million clocks: the run below is 70 iterations.
 * exFAT: FatFs is built with `FF_FS_EXFAT` off, so a card over 32 GB (formatted exFAT as shipped) needs
   a FAT32 re-format or the option switched on (not built or run). The driver and the card model cover
   SDHC/SDXC to 2 TB (CSD, block numbers past 2 GB and 4 GB), multiple-block transfers (CMD18 + CMD12,
-  CMD25 + stop token), the CRC16 of read data, and the card that never finishes (`sdtest never`);
-  the CRC16 of written data is not sent (SPI mode does not check it).
+  CMD25 + stop token, `make run-sdmulti-all`: 8 variants incl. a refused block inside CMD25, a data
+  error token inside CMD18 and cards of 1 TB and 4 GB standard capacity), the CRC16 of read data (a
+  2 TB card, block 0xFFFFFFFF, is argued, not run: the biggest run is 1 TB). The CRC16 of written
+  data is not sent (SPI mode does not check it). Not run: a write or a CMD12 that the card never
+  finishes (the 1,000,000-byte busy limit; `sdtest never` is ACMD41 never leaving idle).
 * FreeRTOS runs in M-mode only; the upstream port has no U-mode tasks under PMP.
 * Silicon: the DDR sweep's windows come from the Pmod model; the sweep exists to measure the real ones
   (docs/qspi-ddr.md 7).

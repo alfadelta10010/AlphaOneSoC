@@ -73,6 +73,10 @@ int main(void)
             printf("sdmulti: x4 at %u write rc=%d read rc=%d same=%d\n", (unsigned)at[k], w, r, same(a, b, 4 * 512));
         }
     }
+    if (!sd_sdhc) {                      /* a 4 GB standard-capacity card: block 0x800000 is where lba * 512 wraps */
+        printf("sdmulti: to the last block (0x7FFFF8 x8) rc=%d\n", sd_read_blocks(0x7FFFF8u, b, 8));
+        printf("sdmulti: past 4 GB (0x7FFFFC x8) read rc=%d write rc=%d\n", sd_read_blocks(0x7FFFFCu, b, 8), sd_write_blocks(0x7FFFFCu, a, 8));
+    }
     printf("sdmulti: single after rc=%d\n", sd_read(1, one));
     printf("sdmulti: done\n");
     return 0;

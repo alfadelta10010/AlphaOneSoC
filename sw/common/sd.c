@@ -211,11 +211,12 @@ int sd_read(uint32_t lba, void *buf)
  * bits), any one below the size the CSD gave, and no block number past 2^32 - 1. */
 static int range_ok(uint32_t lba, uint32_t n)
 {
-    if (n == 0 || lba + n < lba)
+    uint32_t last = lba + (n - 1);       /* the last block; block 0xFFFFFFFF is a legal one */
+    if (n == 0 || last < lba)
         return 0;
-    if (!sd_sdhc && lba + n > 0x800000)
+    if (!sd_sdhc && last >= 0x800000)
         return 0;
-    if (sd_blocks != 0 && sd_blocks != 0xFFFFFFFFu && lba + n > sd_blocks)
+    if (sd_blocks != 0 && sd_blocks != 0xFFFFFFFFu && last >= sd_blocks)
         return 0;
     return 1;
 }

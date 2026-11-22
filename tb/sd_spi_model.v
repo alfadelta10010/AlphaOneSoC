@@ -180,6 +180,7 @@ module sd_spi_model #(
     reg       txb [0:4095];                 // 1 = a busy byte
     integer   qh = 0, qt = 0, busy_cnt = 0;
     reg       stream = 1'b0;                // CMD18 running
+    integer   oor_pos = -1;                 // queue position of the out-of-range token of a stream
     reg [31:0] stream_blk = 0;
     integer   st_last = 0;  // st_last: the index of the last CRC byte pushed
     integer   crc_end_pos [0:7];            // queue positions that end a read block
@@ -192,12 +193,16 @@ module sd_spi_model #(
         begin
             g = 1 + rn(16);
             for (i = 0; i < g; i = i + 1) push(8'hFF, 1'b0);
+            if (rderr_blk >= 0 && blk == rderr_blk) begin       // +SD_RDERR: a data error token, no data; a stream stops
+                push(8'h04, 1'b0); stream = 1'b0;
+            end else begin
             push(8'hFE, 1'b0);
             c = 16'h0000;
             for (i = 0; i < 512; i = i + 1) begin push(blk_byte(blk, i), 1'b0); c = crc16_up(c, blk_byte(blk, i)); end
-            if (rdcrc_blk >= 0 && blk == rdcrc_blk) c = c ^ 16'h0001;      // +SD_RDCRC: a wrong CRC16 on this block
+            if (rdcrc_blk >= 0 && blk == rdcrc_blk) c = c ^ 16'h0101;      // +SD_RDCRC: a wrong CRC16 on this block (a bit wrong in each byte)
             push(c[15:8], 1'b0); push(c[7:0], 1'b0);
             crc_end_pos[n_ce % 8] = qt - 1; n_ce = n_ce + 1;
+            end
         end
     endtask
     task csd_push;                          // the 16 CSD bytes (v2) and their CRC16
@@ -215,9 +220,15 @@ module sd_spi_model #(
     reg [7:0] tx_cur = 8'hFF;
     integer   tb_idx = 7;
     integer   rd_done = 0;                  // read blocks fully clocked out
+    integer   oi;
     task pop;
         begin
-            if (qh == qt && stream) begin push_block(stream_blk); stream_blk = stream_blk + 1; end
+            if (qh == qt && stream) begin
+                if ((use_disk || cap_set) && stream_blk >= cap_now) begin   // past the card: the out-of-range error token, an error only once clocked out
+                    for (oi = 0; oi < 20; oi = oi + 1) push(8'hFF, 1'b0);     // more than the 7 bytes of a CMD12 frame: a host that stops at the last block never sees it
+                    oor_pos = qt; push(8'h08, 1'b0); stream = 1'b0;
+                end else begin push_block(stream_blk); stream_blk = stream_blk + 1; end
+            end
             if (qh == qt) tx_cur = 8'hFF;
             else begin
                 tx_cur = txq[qh % 4096];
@@ -228,6 +239,7 @@ module sd_spi_model #(
                         n_rd_blk = n_rd_blk + 1; crc_end_pos[s] = -1;
                     end
                 end
+                if (oor_pos == qh) begin err("CMD18 stream ran past the end of the card"); oor_pos = -1; end
                 qh = qh + 1;
             end
             tb_idx = 7;
@@ -342,8 +354,8 @@ module sd_spi_model #(
                 end
                 6'd12: begin
                     // abandon the stream; a stuff byte, R1b, busy
-                    qh = qt; stream = 1'b0;
-                    push(8'hFF, 1'b0); push(8'h00, 1'b0);
+                    qh = qt; stream = 1'b0; oor_pos = -1;
+                    push(8'h3C, 1'b0); push(8'h00, 1'b0);     // the stuff byte is not 0xFF, nor an R1: the host must discard it
                     na = 1 + rn(8);
                     for (i = 0; i < na; i = i + 1) push(8'h00, 1'b1);
                 end
@@ -381,14 +393,17 @@ module sd_spi_model #(
                     end
                 end
                 W_TOKEN: begin
-                    if (b == (wmulti ? 8'hFC : 8'hFE)) begin rxs = W_DATA; wcnt = 0; end
+                    if (b == (wmulti ? 8'hFC : 8'hFE)) begin
+                        rxs = W_DATA; wcnt = 0;
+                        if ((use_disk || cap_set) && wblk >= cap_now) err("write beyond the card (OUT_OF_RANGE)");
+                    end
                     else if (wmulti && b == 8'hFD) begin     // stop tran: a stuff byte, then busy
                         push(8'hFF, 1'b0);
                         wbusy = 1 + rn(16);
                         for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
                         wmulti = 1'b0; rxs = RX_IDLE;
                     end
-                    else if (b != 8'hFF) err("write: not 0xFE or 0xFF while waiting for the token");
+                    else if (b != 8'hFF) err(wmulti ? "write: not 0xFC, 0xFD or 0xFF while waiting for the token" : "write: not 0xFE or 0xFF while waiting for the token");
                 end
                 W_DATA: begin wbuf[wcnt] = b; wcnt = wcnt + 1; if (wcnt == 512) begin rxs = W_CRC; wcnt = 0; end end
                 W_CRC: begin
@@ -402,6 +417,7 @@ module sd_spi_model #(
                         begin : store
                             integer s, f;
                             if (wr_resp != 8'h05) ;                 // refused: nothing is stored
+                            else if ((use_disk || cap_set) && wblk >= cap_now) ;   // beyond the card: nothing is stored
                             else if (on_disk(wblk)) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
                             else begin                              // the written-block table: only blocks that are not on the disk
                                 f = -1;

@@ -299,7 +299,8 @@ sdmulti_EXPECT := sdmulti/expect-sdhc.txt
 sdmulti_RUNDEP := $(BUILD)/fatfs/disk-fat12.hex
 sdmulti_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-fat12.hex
 $(eval $(call PAYLOAD,sdmulti))
-SDMULTIS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rdcrc:+SD_RDCRC=203 \
+SDMULTIS := sdhc: sdsc:+SD_SDSC,+SD_SPARSE,+SD_BLKS=8388608 v1:+SD_V1,+SD_SPARSE,+SD_BLKS=8388608 rdcrc:+SD_RDCRC=203 \
+            rderr:+SD_RDERR=203 wrerr:+SD_WRRESP=0d,+SD_WRONCE \
             big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648
 .PHONY: sdmulti run-sdmulti run-sdmulti-all
 run-sdmulti-all: sdmulti $(BUILD)/bench/sim $(sdmulti_RUNDEP)
