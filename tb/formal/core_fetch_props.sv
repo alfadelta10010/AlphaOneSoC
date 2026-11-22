@@ -20,6 +20,16 @@
 //       pc; this is what makes F1 inductive)
 //   F3  lemma: if_kv implies the kept halfword is compressed (its low bits
 //       are not 11), so a hit never holds the lower half of a 32-bit one
+//   Fetch hold (WO-76), a fetch that completed while the pipeline was stalled:
+//   F4  lemma: if_wv implies {if_kbuf, if_wlo} == {h(pc + 2), h(pc)} (H-L3;
+//       makes F1 inductive for a load from the held word)
+//   F5  lemma: !(if_wv && if_kv)
+//   F6  lemma: !(if_wv && imem_req) (no fetch is requested with the word in hand)
+//   F7  lemma: if_wv implies pc is in an executable window
+//   F8  lemma: if_wv implies !dmem_req (H-L2: no data access, so no store
+//       completes under a held word)
+//   R8  imem_req is low while a branch or jump is in EX (goal 1 of WO-76,
+//       the fetch is not issued behind a branch or jump)
 module core_fetch_props (
     input  wire        clk, rst_in,
     input  wire [31:0] boot_addr,
@@ -35,8 +45,8 @@ module core_fetch_props (
     wire [3:0]  dmem_be;
     wire        imem_req, dmem_req, dmem_we, fencei_flush, dbg_retired, dbg_compressed, dbg_trap;
     wire [31:0] f_pc, f_fetched;
-    wire [15:0] f_kbuf;
-    wire        f_kv, f_exec, f_load;
+    wire [15:0] f_kbuf, f_wlo;
+    wire        f_kv, f_exec, f_load, f_wv, f_cti;
 
     function [15:0] h(input [31:0] a);
         h = tab[16*a[4:1] +: 16];
@@ -51,7 +61,7 @@ module core_fetch_props (
         .fencei_flush(fencei_flush), .dbg_pc(dbg_pc), .dbg_retired(dbg_retired),
         .dbg_instr(dbg_instr), .dbg_compressed(dbg_compressed), .dbg_trap(dbg_trap),
         .f_pc(f_pc), .f_kv(f_kv), .f_kbuf(f_kbuf), .f_exec(f_exec), .f_fetched(f_fetched),
-        .f_load(f_load));
+        .f_load(f_load), .f_wlo(f_wlo), .f_wv(f_wv), .f_cti(f_cti));
 
     reg armed = 1'b0;               // a reset has been applied
     always @(posedge clk) if (rst) armed <= 1'b1;
@@ -67,6 +77,12 @@ module core_fetch_props (
         if (chk) begin
             assert (!f_kv || f_kbuf == h(f_pc));                                  // F2
             assert (!f_kv || f_kbuf[1:0] != 2'b11);                               // F3
+            assert (!f_wv || (f_kbuf == h(f_pc + 32'd2) && f_wlo == h(f_pc)));    // F4
+            assert (!(f_wv && f_kv));                                             // F5
+            assert (!(f_wv && imem_req));                                         // F6
+            assert (!f_wv || f_exec);                                             // F7
+            assert (!(f_wv && dmem_req));                                         // F8
+            assert (!(f_cti && imem_req));                                        // R8
             if (f_load && f_exec) begin
                 assert (f_fetched[15:0] == h(f_pc));                              // F1
                 assert (f_fetched[1:0] != 2'b11 || f_fetched[31:16] == h(f_pc + 32'd2));
@@ -78,6 +94,8 @@ module core_fetch_props (
     // antecedents of the implication asserts above: an unreached one makes its assert vacuous
     always @(*) begin
         cover (chk && f_kv); cover (chk && f_load && f_exec);
+        cover (chk && f_wv); cover (chk && f_load && f_exec && f_wv);
+        cover (chk && f_cti);
         cover (chk && f_load && f_exec && f_fetched[1:0] == 2'b11);
     end
 `endif
