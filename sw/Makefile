@@ -281,7 +281,8 @@ $(eval $(call PAYLOAD,sdtest))
 SDTESTS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rderr:+SD_RDERR=123 wrerr:+SD_WRRESP=0d wrcrc:+SD_WRRESP=0b \
            wrerr1:+SD_WRRESP=0d,+SD_WRONCE \
            staterr:+SD_STATUS=01 absent:+SD_ABSENT stuck:+SD_STUCK_DO never:+SD_BUSY=5000 \
-           slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16
+           slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16 \
+           big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648 sdscbig:+SD_SDSC,+SD_SPARSE,+SD_BLKS=4194304
 .PHONY: run-sdtest-all
 run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 	@for v in $(SDTESTS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \

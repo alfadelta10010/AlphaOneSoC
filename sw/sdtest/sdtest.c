@@ -43,8 +43,27 @@ int main(void)
     printf("sdtest: read 123 rc=%d\n", sd_read(123, chk));
     write_readback(5000);
     write_readback(8191);                        /* the last block */
-    printf("sdtest: read 8192 rc=%d\n", sd_read(8192, chk));     /* beyond the disk: refused */
-    printf("sdtest: write 8192 rc=%d\n", sd_write(8192, buf));
+    printf("sdtest: capacity %u blocks\n", (unsigned)sd_blocks);
+    if (sd_blocks > 8192) {
+        /* a card bigger than the disk image: block numbers past 2 GB (0x400000) and 4 GB (0x800000), the last
+         * block, and the first one beyond it */
+        rc = sd_read(4194304, chk);           /* the formula image, not block 0 of the disk (b0 would be eb) */
+        printf("sdtest: read 4194304 rc=%d b0=%02x b1=%02x\n", rc, chk[0], chk[1]);
+        write_readback(0x400005);
+        write_readback(0x800005);
+        write_readback(sd_blocks - 1);
+        rc = sd_read(sd_blocks - 1, chk);
+        printf("sdtest: read last rc=%d b0=%02x\n", rc, chk[0]);
+        if (sd_blocks != 0xFFFFFFFFu)
+            printf("sdtest: read beyond rc=%d\n", sd_read(sd_blocks, chk));
+    } else if (!sd_sdhc) {
+        printf("sdtest: sdsc read 8388608 rc=%d\n", sd_read(0x800000, chk));   /* the byte address would wrap */
+        printf("sdtest: sdsc write 8388608 rc=%d\n", sd_write(0x800000, buf));
+    }
+    if (sd_blocks <= 8192) {                    /* the disk is the card: 8192 is beyond it, refused */
+        printf("sdtest: read 8192 rc=%d\n", sd_read(8192, chk));
+        printf("sdtest: write 8192 rc=%d\n", sd_write(8192, buf));
+    }
     printf("sdtest: done\n");
     return 0;
 }
