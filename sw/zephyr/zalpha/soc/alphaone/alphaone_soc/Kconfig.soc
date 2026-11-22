@@ -1,0 +1,5 @@
+config SOC_ALPHAONE_SOC
+	bool
+
+config SOC
+	default "alphaone_soc" if SOC_ALPHAONE_SOC

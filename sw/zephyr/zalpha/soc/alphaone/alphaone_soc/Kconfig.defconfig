@@ -1,0 +1,24 @@
+if SOC_ALPHAONE_SOC
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	default 62500000
+
+config RISCV_SOC_INTERRUPT_INIT
+	default n
+
+config NUM_IRQS
+	default 16
+
+config PMP_SLOTS
+	default 4
+
+# with 4 slots the ROM and IRQ-stack-guard entries must be NAPOT (one slot each): as TOR pairs they use all 4 and the
+# MPRV catch-all has no slot, so an image with HW_STACK_PROTECTION (every ztest) hangs before the banner
+config PMP_POWER_OF_TWO_ALIGNMENT
+	default y if RISCV_PMP
+
+# the cross-compile toolchain variant does not declare TLS support; this gcc has it (userspace needs it)
+config TOOLCHAIN_SUPPORTS_THREAD_LOCAL_STORAGE
+	default y
+
+endif # SOC_ALPHAONE_SOC

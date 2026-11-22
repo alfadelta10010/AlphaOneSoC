@@ -1,0 +1,5 @@
+#! /bin/sh
+echo "== alpha: rcS =="
+uname -a
+cat /proc/cpuinfo
+echo ok

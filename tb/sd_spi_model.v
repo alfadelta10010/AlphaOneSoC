@@ -34,6 +34,11 @@
 //     error, 0d write error; 05 default) and the block is then not stored; +SD_STATUS=<hex> the second byte
 //     of CMD13's R2; +SD_CMD8BAD an R7 that does not echo the check pattern; +SD_NO16 a CMD16 the card refuses.
 //     +SD_BUSY=<n> (above) keeps ACMD41 returning idle for n tries.
+//   * capacity: +SD_BLKS=<n> sets the card's size in blocks (default: DISK_BLKS with a disk, else unbounded);
+//     CMD9 (SDHC/SDXC only) answers a CSD version 2 with C_SIZE = n / 1024 - 1, so 67108864 blocks is a 32 GB card;
+//     a read or write at or beyond n is refused (R1 0x40, an error unless +SD_EXPECT). +SD_SPARSE: the blocks
+//     from DISK_BLKS up to n are the formula image (above) with up to 16 written blocks remembered, so block
+//     numbers up to 2^32 - 1 can be read and written without a disk that big.
 //   * a real disk: with DISK_BLKS > 1 and `use_disk` set by the bench (tb_sw does it for
 //     +SD_IMAGE=<byte-hex>), reads and writes go to the `disk` array, so a FAT image
 //     can be mounted, written to and read back (+SD_DUMP in tb_sw writes it out).
@@ -76,6 +81,8 @@ module sd_spi_model #(
     integer rderr_blk = -1;                 // +SD_RDERR
     reg [7:0] wr_resp = 8'h05, sd_status = 8'h00;   // +SD_WRRESP, +SD_STATUS
     reg     cmd8bad = 1'b0, no16 = 1'b0;    // +SD_CMD8BAD, +SD_NO16
+    reg [31:0] cap_blks = 32'hFFFFFFFF, cap_tmp = 32'h0;   // +SD_BLKS
+    reg     cap_set = 1'b0, sparse = 1'b0;           // +SD_BLKS given, +SD_SPARSE
     reg     wr_once = 1'b0;                 // +SD_WRONCE: +SD_WRRESP applies to the first write only
     reg [7:0] st_pend = 8'h00;              // status bits a refused write left, cleared by CMD13
     reg [31:0] rs = 32'h1;
@@ -90,6 +97,8 @@ module sd_spi_model #(
         if ($value$plusargs("SD_BUSY=%d", sd_busy_n)) ;
         v1   = $test$plusargs("SD_V1");
         if ($value$plusargs("SD_RDERR=%d", rderr_blk)) ;
+        if ($value$plusargs("SD_BLKS=%d", cap_tmp)) begin cap_blks = cap_tmp; cap_set = 1'b1; end
+        sparse = $test$plusargs("SD_SPARSE");
         if ($value$plusargs("SD_WRRESP=%h", wr_resp)) ;
         if ($value$plusargs("SD_STATUS=%h", sd_status)) ;
         cmd8bad = $test$plusargs("SD_CMD8BAD");
@@ -100,6 +109,11 @@ module sd_spi_model #(
         else rs = 32'h2545F491;
         if (rs == 0) rs = 1;
         stuck = $test$plusargs("SD_STUCK_DO");
+    end
+
+    initial begin : cap_check                // the bench sets use_disk at time 0
+        #1;
+        if (use_disk && cap_set && cap_blks > DISK_BLKS && !sparse) err("+SD_BLKS beyond the disk needs +SD_SPARSE");
     end
 
     task automatic err(input [8*48-1:0] m);
@@ -142,15 +156,19 @@ module sd_spi_model #(
     reg [7:0]  disk [0:DISK_BLKS * 512 - 1];
 
     // Written blocks (up to 4): block number and data
-    integer    wb_blk [0:3];
-    reg [7:0]  wb_dat [0:2047];
+    reg [31:0] wb_blk [0:15];
+    reg [7:0]  wb_dat [0:8191];
     integer    wb_n = 0;
-    function [7:0] blk_byte(input integer blk, input integer i);
+    wire [31:0] cap_now = cap_set ? cap_blks : (use_disk ? DISK_BLKS : 32'hFFFFFFFF);
+    function on_disk(input [31:0] blk);      // this block is in the `disk` array
+        on_disk = use_disk && (!sparse || blk < DISK_BLKS);
+    endfunction
+    function [7:0] blk_byte(input [31:0] blk, input integer i);
         integer s, f;
         begin
             f = -1;
             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == blk) f = s;
-            blk_byte = use_disk ? disk[blk * 512 + i] : (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
+            blk_byte = on_disk(blk) ? disk[blk * 512 + i] : (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
         end
     endfunction
 
@@ -159,13 +177,14 @@ module sd_spi_model #(
     reg       txb [0:4095];                 // 1 = a busy byte
     integer   qh = 0, qt = 0, busy_cnt = 0;
     reg       stream = 1'b0;                // CMD18 running
-    integer   stream_blk = 0, st_last = 0;  // st_last: the index of the last CRC byte pushed
+    reg [31:0] stream_blk = 0;
+    integer   st_last = 0;  // st_last: the index of the last CRC byte pushed
     integer   crc_end_pos [0:7];            // queue positions that end a read block
     integer   n_ce = 0;
     task push(input [7:0] b, input busy);
         begin txq[qt % 4096] = b; txb[qt % 4096] = busy; qt = qt + 1; if (busy) busy_cnt = busy_cnt + 1; end
     endtask
-    task push_block(input integer blk);
+    task push_block(input [31:0] blk);
         integer i, g; reg [15:0] c;
         begin
             g = 1 + rn(16);
@@ -175,6 +194,18 @@ module sd_spi_model #(
             for (i = 0; i < 512; i = i + 1) begin push(blk_byte(blk, i), 1'b0); c = crc16_up(c, blk_byte(blk, i)); end
             push(c[15:8], 1'b0); push(c[7:0], 1'b0);
             crc_end_pos[n_ce % 8] = qt - 1; n_ce = n_ce + 1;
+        end
+    endtask
+    task csd_push;                          // the 16 CSD bytes (v2) and their CRC16
+        integer i; reg [15:0] c; reg [21:0] cs; reg [7:0] b [0:15];
+        begin
+            cs = (cap_now >> 10) - 1;
+            b[0] = 8'h40; b[1] = 8'h0E; b[2] = 8'h00; b[3] = 8'h32; b[4] = 8'h5B; b[5] = 8'h59; b[6] = 8'h00;
+            b[7] = {2'b00, cs[21:16]}; b[8] = cs[15:8]; b[9] = cs[7:0];
+            b[10] = 8'h7F; b[11] = 8'h80; b[12] = 8'h0A; b[13] = 8'h40; b[14] = 8'h00; b[15] = 8'h01;
+            c = 16'h0000;
+            for (i = 0; i < 16; i = i + 1) begin push(b[i], 1'b0); c = crc16_up(c, b[i]); end
+            push(c[15:8], 1'b0); push(c[7:0], 1'b0);
         end
     endtask
     reg [7:0] tx_cur = 8'hFF;
@@ -219,7 +250,8 @@ module sd_spi_model #(
     localparam [2:0] RX_IDLE = 0, RX_ARG = 1, W_TOKEN = 2, W_DATA = 3, W_CRC = 4;
     reg [2:0]  rxs = RX_IDLE;
     reg [7:0]  fr [0:5];
-    integer    nfr = 0, wcnt = 0, wblk = 0, wbusy = 0;
+    integer    nfr = 0, wcnt = 0, wbusy = 0;
+    reg [31:0] wblk = 0;
     reg        idle_st = 1'b0, app = 1'b0, pwr = 1'b0;
     integer    acmd41_n = 0, pu_cnt = 0;
     reg [7:0]  wbuf [0:511];
@@ -266,6 +298,16 @@ module sd_spi_model #(
                     push(r1, 1'b0);
                     push(ready ? (sdsc ? 8'h80 : 8'hC0) : 8'h80, 1'b0); push(8'hFF, 1'b0); push(8'h80, 1'b0); push(8'h00, 1'b0);
                 end
+                6'd9: begin             // SEND_CSD, a CSD version 2 (SDHC/SDXC only)
+                    if (!ready || sdsc) push(r1 | 8'h04, 1'b0);
+                    else begin
+                        push(8'h00, 1'b0);
+                        na = 1 + rn(8);
+                        for (i = 0; i < na; i = i + 1) push(8'hFF, 1'b0);
+                        push(8'hFE, 1'b0);
+                        csd_push;
+                    end
+                end
                 6'd13: begin
                     push(r1, 1'b0); push(sd_status | st_pend, 1'b0);
                     st_pend = 8'h00;                        // the error bits clear on read
@@ -278,7 +320,7 @@ module sd_spi_model #(
                 6'd17: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
                     else if (sdsc && arg[8:0] != 9'd0) begin err("CMD17 byte address not a multiple of 512"); push(8'h40, 1'b0); end
-                    else if (use_disk && (sdsc ? arg >> 9 : arg) >= DISK_BLKS) begin err("CMD17 beyond the disk"); push(8'h40, 1'b0); end
+                    else if ((use_disk || cap_set) && (sdsc ? arg >> 9 : arg) >= cap_now) begin err("CMD17 beyond the disk"); push(8'h40, 1'b0); end
                     else if (rderr_blk >= 0 && (sdsc ? arg >> 9 : arg) == rderr_blk) begin
                         push(8'h00, 1'b0);
                         na = 1 + rn(8);
@@ -301,7 +343,7 @@ module sd_spi_model #(
                 6'd24: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
                     else if (sdsc && arg[8:0] != 9'd0) begin err("CMD24 byte address not a multiple of 512"); push(8'h40, 1'b0); end
-                    else if (use_disk && (sdsc ? arg >> 9 : arg) >= DISK_BLKS) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
+                    else if ((use_disk || cap_set) && (sdsc ? arg >> 9 : arg) >= cap_now) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
                     else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = sdsc ? arg >> 9 : arg; end
                 end
                 default: push(r1 | 8'h04, 1'b0);
@@ -335,17 +377,22 @@ module sd_spi_model #(
                     if (wcnt == 2) begin
                         // the data response, busy, then store
                         push(wr_resp, 1'b0);
-                        if (wr_resp != 8'h05) st_pend = st_pend | 8'h20;   // a refused write: the status keeps "error" 
+                        if (wr_resp != 8'h05) st_pend = st_pend | 8'h04;   // a refused write: the status keeps "error" (R2 byte 2, bit 2; SD spec 7.3.2.3)
                         wbusy = 1 + rn(16);
                         for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
                         begin : store
                             integer s, f;
-                            f = -1;
-                            for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
-                            if (f < 0) begin f = wb_n; if (wb_n < 3) wb_n = wb_n + 1; wb_blk[f] = wblk; end
                             if (wr_resp != 8'h05) ;                 // refused: nothing is stored
-                            else if (use_disk) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
-                            else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
+                            else if (on_disk(wblk)) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
+                            else begin                              // the written-block table: only blocks that are not on the disk
+                                f = -1;
+                                for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
+                                if (f < 0 && wb_n == 16) err("written-block table full (16)");   // nothing is stored
+                                else begin
+                                    if (f < 0) begin f = wb_n; wb_n = wb_n + 1; wb_blk[f] = wblk; end
+                                    for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
+                                end
+                            end
                         end
                         n_wr_blk = n_wr_blk + 1;
                         if (wr_once) wr_resp = 8'h05;

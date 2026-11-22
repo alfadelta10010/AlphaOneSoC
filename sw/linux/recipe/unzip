@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+# minimal unzip shim (host has none): unzip [-q|-o] file [-d dir]
+import sys, zipfile
+a=sys.argv[1:]; d="."; f=None
+i=0
+while i<len(a):
+    if a[i]=="-d": d=a[i+1]; i+=2; continue
+    if a[i].startswith("-"): i+=1; continue
+    f=a[i]; i+=1
+zipfile.ZipFile(f).extractall(d)

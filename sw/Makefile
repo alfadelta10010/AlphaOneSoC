@@ -281,7 +281,8 @@ $(eval $(call PAYLOAD,sdtest))
 SDTESTS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rderr:+SD_RDERR=123 wrerr:+SD_WRRESP=0d wrcrc:+SD_WRRESP=0b \
            wrerr1:+SD_WRRESP=0d,+SD_WRONCE \
            staterr:+SD_STATUS=01 absent:+SD_ABSENT stuck:+SD_STUCK_DO never:+SD_BUSY=5000 \
-           slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16
+           slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16 \
+           big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648 sdscbig:+SD_SDSC,+SD_SPARSE,+SD_BLKS=4194304
 .PHONY: run-sdtest-all
 run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 	@for v in $(SDTESTS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \
@@ -299,17 +300,17 @@ run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 check:
 	$(MAKE) run-hello
 	$(MAKE) run-monitor
-	$(MAKE) run-monitor DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 monitor_EXPECT=monitor/expect-ddr.txt
+	$(MAKE) run-monitor DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 monitor_EXPECT="monitor/expect.txt monitor/expect-ddr.txt"
 	$(MAKE) run-monitor-scan
 	$(MAKE) run-fatfs DISK=fat12 SD=sdhc
 	$(MAKE) run-fatfs DISK=fat16 SD=sdsc
 	$(MAKE) run-fatfs DISK=mbr SD=v1
 	$(MAKE) run-fatfsfull
 	$(MAKE) run-freertos
-	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT=freertos/expect-ddr.txt
+	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT="freertos/expect.txt freertos/expect-ddr.txt"
 	$(MAKE) run-fr-all
-	$(MAKE) run-fr-assert DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 fr-assert_EXPECT=freertos/expect-neg-assert-ddr.txt
-	$(MAKE) run-fr-malloc DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 fr-malloc_EXPECT=freertos/expect-neg-malloc-ddr.txt
+	$(MAKE) run-fr-assert DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 RUNARGS=+MAX_CYCLES=40000000 fr-assert_EXPECT="freertos/expect-neg-assert.txt freertos/expect-neg-assert-ddr.txt"
+	$(MAKE) run-fr-malloc DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 RUNARGS=+MAX_CYCLES=40000000 fr-malloc_EXPECT="freertos/expect-neg-malloc.txt freertos/expect-neg-malloc-ddr.txt"
 	$(MAKE) run-ddr-all
 	$(MAKE) run-sdtest-all
 	tools/loader_neg.sh

@@ -1,0 +1,22 @@
+--- a/kernel/Kconfig.hz	2026-11-20 22:24:44.692115777 +0530
++++ b/kernel/Kconfig.hz	2026-11-20 22:24:44.716115716 +0530
+@@ -17,6 +17,11 @@
+ 	 per second.
+ 
+ 
++	config HZ_30
++		bool "30 HZ"
++	help
++	  30 Hz, for a core that fetches one instruction in about 43 clocks.
++
+ 	config HZ_100
+ 		bool "100 HZ"
+ 	help
+@@ -50,6 +55,7 @@
+ 
+ config HZ
+ 	int
++	default 30 if HZ_30
+ 	default 100 if HZ_100
+ 	default 250 if HZ_250
+ 	default 300 if HZ_300

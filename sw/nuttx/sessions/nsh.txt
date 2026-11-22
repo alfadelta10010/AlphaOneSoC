@@ -1,0 +1,9 @@
+nsh> 	help
+nsh> 	ls /
+nsh> 	echo hello
+nsh> 	ps
+nsh> 	free
+nsh> 	uname -a
+nsh> 	sleep 1
+nsh> 	hello
+nsh> 	poweroff

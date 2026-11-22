@@ -531,7 +531,7 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
     software bench (`tb/tb_sw.v`, 9.4) runs the loader and hello world in
     1,967,772 clocks in both simulators, instruction for instruction (on `32cac47`,
     with streaming flash reads, 1,894,652 in both: re-checked 2026-11-11; hello now
-    also prints its mcycle line, 2,076,382 in both) Getting
+    also prints its mcycle line: 2,077,331 in both at the PR #18 tip 85c8459, re-run on 2026-11-22; 2,076,382 on the tree before it) Getting
     there found one testbench race, not an RTL difference: releasing reset
     with `rst <= 0` in a process that waits on the clock edge made Verilator
     release the QSPI pins a clock earlier than Icarus. A bench must release
@@ -589,7 +589,7 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
 
 ## 4. Linux bring-up
 
-The top rung of the software ladder (section 9), after FreeRTOS. Plan in
+**Status (2026-11-21): NOMMU M-mode Linux boots to a shell on the SoC bench** and powers off through syscon (9.5, `sw/linux`). The plan below is what was done, except the SD root filesystem and the peripheral drivers. The top rung of the software ladder (section 9), after FreeRTOS. Plan in
 `localFiles/PROGRESS-2026-10-12.md` section 7. In short:
 
 1. **Spike golden boot.** KianV's nommu buildroot recipe
@@ -792,9 +792,9 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 | 3 | **Monitor** (`sw/monitor`, a C monitor; mecrisp-quintus Forth is left for later) | A prompt over UART that reports any register or memory location: the 31 registers and pc of a stopped program, every CSR, any address, the peripheral registers. The first thing to run on returned silicon | **Done** (9.4). No RTL change: a timer tick looks for Ctrl-C, since the UART has no interrupt line |
 | 4 | **FatFs on the SD card** (bare metal) | The SPI controller and the SD protocol (CMD0, CMD8, ACMD41, CMD17, CMD24) driven by real software, before Linux's `mmc_spi` depends on them | **Done** (`sw/fatfs`, 9.4). FatFs R0.16 on a 4 MB FAT image through the SoC bench's SD card |
 | 5 | **FreeRTOS** (upstream RISC-V port, M-mode) | The CLINT tick, context switches, trap entry and exit, interrupt latency under load | **Done** (`sw/freertos`, 9.4). Upstream port, 100 Hz tick; U-mode tasks under PMP are not part of it |
-| 6 | **Zephyr** | Atomics, U-mode with PMP (userspace), its ns16550 and CLINT drivers, and its kernel test suite (twister) | Medium. KianV's Zephyr port (`localFiles/kianRiscV`) is a starting point. Check that 4 PMP entries are enough for userspace. The test suite needs Verilator |
-| 7 | **NuttX** | POSIX, the `nsh` shell, FAT on SD over SPI, ELF programs loaded without an MMU: the closest rung to Linux | Medium. Its 16550 serial driver expects an interrupt line; check for a polled console |
-| 8 | **Linux, NOMMU, M-mode** | Section 4 | Large |
+| 6 | **Zephyr** | Atomics, U-mode with PMP (userspace), its ns16550 and CLINT drivers, and its kernel test suite (twister) | **Started** (`sw/zephyr`, 9.5): boots, hello and the synchronization sample pass, userspace limited by 4 PMP slots; kernel tests unfinished |
+| 7 | **NuttX** | POSIX, the `nsh` shell, FAT on SD over SPI, ELF programs loaded without an MMU: the closest rung to Linux | **Started** (`sw/nuttx`, 9.5): `nsh` boots, a scripted session and poweroff pass; ELF and SD not done |
+| 8 | **Linux, NOMMU, M-mode** | Section 4 | **Boots to a shell on the bench** (`sw/linux`, 9.5), commands and poweroff through syscon; no SD, no GPIO or SPI drivers yet |
 
 Optional, anywhere after rung 1:
 
@@ -879,8 +879,8 @@ of `sw/Makefile`. Output goes to `build/sw`.
   watcher on syscon FINISH. It prints `SW-RESULT: PASS|FAIL|TIMEOUT` with
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
-  monitor's scripted session give the same clocks on both, 2,076,382 and 56.9 million
-  (1.59 million instructions); FatFs (108.2 million clocks, 123 blocks read, 69 written) and
+  monitor's scripted session give the same clocks on both (hello 2,077,331 on both at the PR #18 tip 85c8459, 2026-11-22), and 56.9 million
+  (1.59 million instructions); FatFs (108.3 million clocks with the CSD read in sd_init, 108.2 before it, 123 blocks read, 69 written) and
   FreeRTOS (49,077,894 clocks, the same costs) are the Verilator figures. The monitor, FatFs and
   FreeRTOS runs were identical on Icarus when compared 2026-11-11, before the later fixes changed
   the counts; on the current tree Icarus was re-run 2026-11-21 for hello, the DDR cases and the
@@ -920,6 +920,18 @@ of `sw/Makefile`. Output goes to `build/sw`.
   source is in this repository. `BENCH_OPT` (default `-O2`) and `CM_ITER` set
   the flags and CoreMark's iterations.
 
+### 9.5 Zephyr, NuttX and Linux on the bench (2026-11-21)
+
+Recipes in `sw/zephyr`, `sw/nuttx` and `sw/linux` (patches, configs, scripts: none of the OSes' own source), overview in `sw/README-os.md`. All built on the sandbox and run on the software bench through the flash loader; every UART is polled (no interrupt line, no PLIC). No RTL or loader defect turned up in any of them. None has been run on Icarus.
+
+| OS | Result | What is missing |
+|---|---|---|
+| Zephyr 4.5.0, board `alphaone` | `hello_world` 3.38 M clocks; `samples/synchronization` 41.3 M clocks (threads and semaphores on the CLINT tick at 100 Hz); `hello_world_user` (userspace, 4 PMP slots, NAPOT entries as the board now defaults) 12.1 M clocks (8.84 M before the NAPOT default: its padding grew the image from 0xac80 to 0x100e0 bytes, so the loader copies more) | `tests/kernel/mem_protect/userspace` fails at once: "no free partition slots" (Zephyr's default memory domain needs more PMP entries than 4 slots give: 0 partitions with TOR entries, at most 1 with NAPOT, which the SoC's Kconfig now selects; `samples/userspace/shared_mem` needs 3); `samples/userspace/shared_mem` printed nothing in 10 minutes: with CONFIG_HW_STACK_PROTECTION on and 4 PMP slots, Zephyr's PMP init spends 2 slots on the ROM entry and 2 on the IRQ stack guard, leaving none for the MPRV catch-all (pmpcfg0 0x88008d00); it then sets MPRV=1, MPP=U, the first data access outside those regions faults (correct PMP behaviour: memcpy load at 0x80010738, mcause 5) and the fault handler dereferences a NULL `_current` and walks the stack below RAM, all before the console is up (software, not RTL); the kernel tests (`common`, `mutex`, ...) were not finished (7 and 5 PASS lines, no FAIL, then stopped: the loaded sandbox gave them about 0.1 M clocks/s) |
+| NuttX 12.11.0, rv-virt 32-bit flat/NOMMU | `nsh` prompt; `help`, `ls /`, `echo`, `ps`, `free`, `uname -a`, `sleep 1`, `hello`, `poweroff`: 11 of 11 output checks, `SW-RESULT: PASS`, 124 M clocks, 2.7 M instructions (also from a clean `run-nuttx.sh`) | pthread test, ELF programs from ROMFS, FAT on SD (needs a `tiny_spi` mmcsd driver); the bench's UART input needs one character per echo (`mkscript_slow.py`): the SoC UART's receiver is one byte deep (uart.v has RTS# flow control, the bench sender ignores it) and the overlay polls it only from the idle loop |
+| Linux 6.8-rc1, NOMMU, M-mode, buildroot with C on, HZ 30 | Spike: shell, `uname`, `/proc/cpuinfo` (rv32imac), poweroff. Bench: kernel at `Run /init` after 11.63 s (727 M clocks), `/proc/cpuinfo` shows `rv32imac_zicntr_zicsr_zifencei_zihpm`, typed `uname -a` and `echo shell-ok` answer, `poweroff` ends in `reboot: Power down` and `SW-RESULT: PASS`: **2,052,552,077 clocks, 35,175,734 instructions, 71 minutes of Verilator**, and the bench's `+UART_DIV=34` check passed (the 8250 driver programmed divisor 34) | SD card, GPIO and SPI drivers, a larger rootfs; input is one character per 8250 poll (about 30 a second at HZ 30), so the session is typed with `mkscript_slow.py`; the kernel is not relocatable (it loads at 0x8000_0000, stub at +0x201000, DTB at +0x202000) |
+
+On the Linux run the loader's copy of the 2 MB image takes about 12 minutes of the 71. The boot's 35 M instructions in 2.05 G clocks is 58 clocks an instruction, against 38 to 43 on the benchmarks, because the loader's flash reads and the kernel's page-sized copies are not streamed. The Pmod model's "samples checked" counter is a 32-bit integer and printed a negative number on this run; it is only a counter.
+
 **What is tested, and how** (`make -C sw check`, about 25 minutes of Verilator; `check-bench` adds the
 benchmarks). Besides the runs above: the loader against 13 damaged images (`tools/loader_neg.sh`: bad magic,
 blank flash, a size or load address that does not fit, an unaligned one, an entry outside the image, a wrong
@@ -948,7 +960,7 @@ million clocks: the run below is 70 iterations.
 | CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
 | Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
 | FatFs, mount to delete | 108 million clocks in all; 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
-| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,186 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
+| FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,191 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
 * FAT32 (a 33 MB image is too big for the bench's disk array), a card larger than 2 GB, multi-block

@@ -1,0 +1,5 @@
+::sysinit:/bin/mount -t proc proc /proc
+::sysinit:/bin/mount -t sysfs sysfs /sys
+::sysinit:/etc/init.d/rcS
+console::respawn:-/bin/sh
+::shutdown:/bin/umount -a -r

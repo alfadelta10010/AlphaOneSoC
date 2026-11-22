@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Minimal kconfig-tweak for NuttX's configure.sh when only kconfiglib is installed."""
+import sys, re
+a = sys.argv[1:]
+f = ".config"
+if a and a[0] == "--file": f = a[1]; a = a[2:]
+op, name, *val = a
+lines = open(f).read().splitlines()
+pat = re.compile(r"^(# )?CONFIG_%s(=| is not set)" % re.escape(name))
+if op in ("-e", "--enable"): new = f"CONFIG_{name}=y"
+elif op in ("-d", "--disable"): new = f"# CONFIG_{name} is not set"
+elif op in ("-u", "--undefine"): new = None
+elif op == "--set-str": new = f'CONFIG_{name}="{val[0]}"'
+elif op == "--set-val": new = f"CONFIG_{name}={val[0]}"
+elif op in ("-m",): new = f"CONFIG_{name}=m"
+else: sys.exit(f"unsupported {op}")
+out, done = [], False
+for l in lines:
+    if pat.match(l):
+        if new and not done: out.append(new)
+        done = True
+    else: out.append(l)
+if new and not done: out.append(new)
+open(f, "w").write("\n".join(out) + "\n")

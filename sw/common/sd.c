@@ -3,11 +3,13 @@
  * every CS# high (both the card's and the OLED's), at least 74 clocks go out with CS# high
  * before CMD0, and the card is first clocked at BAUD 0xFF (122 kHz at 62.5 MHz; the spec allows 400 kHz
  * during identification). Blocks are 512 bytes; an SDHC card is addressed by block
- * number, a standard-capacity one by byte. CRC is off in SPI mode except for CMD0
+ * number (32 bits: SDHC and SDXC cards up to 2 TB), a standard-capacity one by byte (at most 2 GB: a block
+ * number from 0x800000 up would wrap the 32-bit byte address, so sd_read and sd_write refuse it). CRC is off in SPI mode except for CMD0
  * and CMD8. */
 #include "soc.h"
 
 int sd_sdhc;
+uint32_t sd_blocks;                     /* the card's size in blocks from its CSD (version 2 only); 0 = not known */
 
 #define SPI(o) (*reg32(GPIO_BASE + (o)))
 
@@ -45,6 +47,32 @@ static uint8_t acmd(uint8_t c, uint32_t arg)
     xfer(0xFF);
     cs_low();
     return cmd(c, arg, 0x01);
+}
+
+/* CMD9: the CSD (16 bytes and a CRC16, unchecked). A version 2 CSD (SDHC and SDXC) gives C_SIZE, bits 69:48:
+ * the card holds (C_SIZE + 1) * 1024 blocks. A failure leaves sd_blocks 0: the card's own limit still applies. */
+static void sd_read_csd(void)
+{
+    uint8_t csd[16];
+    cs_low();
+    if (cmd(9, 0, 0x01) == 0x00) {
+        int t = 0;
+        uint8_t b;
+        while ((b = xfer(0xFF)) != 0xFE && t++ < 100000)
+            ;
+        if (b == 0xFE) {
+            for (int i = 0; i < 16; i++)
+                csd[i] = xfer(0xFF);
+            xfer(0xFF);
+            xfer(0xFF);
+            if ((csd[0] >> 6) == 1) {
+                uint32_t c_size = ((uint32_t)(csd[7] & 0x3F) << 16) | ((uint32_t)csd[8] << 8) | csd[9];
+                sd_blocks = c_size >= 0x3FFFFF ? 0xFFFFFFFFu : (c_size + 1) << 10;   /* 2 TB = 2^32 blocks, saturated */
+            }
+        }
+    }
+    cs_high();
+    xfer(0xFF);
 }
 
 int sd_init(void)
@@ -121,6 +149,9 @@ int sd_init(void)
         if (r != 0x00)
             return 5;
     }
+    sd_blocks = 0;
+    if (sd_sdhc)
+        sd_read_csd();
     SPI(GPIO_BAUD) = 1;                  /* 15.6 MHz: the card allows 25 */
     return 0;
 }
@@ -128,6 +159,8 @@ int sd_init(void)
 int sd_read(uint32_t lba, void *buf)
 {
     uint8_t *p = buf, r;
+    if (!sd_sdhc && lba >= 0x800000)     /* lba * 512 would wrap */
+        return 1;
     cs_low();
     r = cmd(17, sd_sdhc ? lba : lba * 512, 0x01);
     if (r != 0x00) {
@@ -161,6 +194,8 @@ int sd_write(uint32_t lba, const void *buf)
 {
     const uint8_t *p = buf;
     uint8_t r;
+    if (!sd_sdhc && lba >= 0x800000)     /* lba * 512 would wrap */
+        return 1;
     cs_low();
     r = cmd(24, sd_sdhc ? lba : lba * 512, 0x01);
     if (r != 0x00) {

@@ -1,0 +1,7 @@
+Zephyr v4.5.0 on AlphaOneSoC bench, 2026-11-20 (the logs named below were on the sandbox and are not in the repository; run-zephyr.sh regenerates them) (box load ~18, sims at nice 19 got ~25% of a core)
+1 hello_world: PASS, 3,378,848 clocks (incl. loader copy), syscon exit
+2 sync (sample, SLEEPTIME 50, main sleeps 600 ms): PASS, 41,290,470 clocks, 4 ping-pong lines, 100 Hz tick
+3 kernel tests: common and mutex_api ran 30+ min wall without finishing; per-test PASS lines so far in logs/*.partial.log (0 FAIL); semaphore, fifo_api, sleep built but not run
+4 userspace: hello_world_user PASS with CONFIG_RISCV_PMP=y, PMP_SLOTS=4 (8,841,407 clocks without NAPOT; 12,113,277 with the board default PMP_POWER_OF_TWO_ALIGNMENT=y, 2026-11-22);
+  tests/kernel/mem_protect/userspace FAIL: "no free partition slots available, Failed to add default memory partition (-28)";
+  samples/userspace/shared_mem: no output in 10 min wall (software: HW_STACK_PROTECTION leaves no PMP slot for the MPRV catch-all with 4 slots, see ROADMAP 9.5)

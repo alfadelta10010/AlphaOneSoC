@@ -1,0 +1,6 @@
+board:
+  name: alphaone
+  full_name: AlphaOneSoC (FyraCore RV32IMAC)
+  vendor: others
+  socs:
+    - name: alphaone_soc

@@ -102,6 +102,7 @@ int  sd_init(void);                                   /* 0 = ready; sets sd_sdhc
 int  sd_read(uint32_t lba, void *buf);                /* one 512-byte block, 0 = ok */
 int  sd_write(uint32_t lba, const void *buf);
 extern int sd_sdhc;
+extern uint32_t sd_blocks;                             /* size in blocks from the CSD (SDHC/SDXC), 0 = unknown */
 
 /* uart.c */
 void uart_init(unsigned divisor);
