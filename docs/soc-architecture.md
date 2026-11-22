@@ -887,8 +887,15 @@ Options not yet taken, roughly in order of payoff per gate:
    writes in d19ceed) and the M op starting during the fetch wait (ff130fb,
    `muldiv_start` on `stall_nofetch`) are in the RTL: a taken branch costs one
    fetch, not two, and an M op no longer waits for a fetch it then discards.
-   What remains is a fetch that completes while the pipeline is stalled being
-   discarded and fetched again (WO-76, Track B, measured before adoption).
+   The last piece, a fetch that completes while the pipeline is stalled being
+   discarded and fetched again, is WO-76: the fetch hold register (`if_wlo`,
+   `if_wv`). A fetch that completes on a stalled edge with no data access in WB
+   is kept whole and `imem_req` stays low until IF/EX takes it (or a redirect
+   drops it); with the cache on that takes an aligned hit from 4 clocks to 3
+   per instruction, with the cache off and the flash stream open it saves the
+   57-clock re-read after an M op, and in WFI the bus goes idle. A fetch that
+   completes with a data access in WB is still requested again (the
+   data-per-fetch bound of 4 and the store ordering depend on it).
 
 3. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
    core or the pads limit the clock. With a round trip over 20 ns it needs

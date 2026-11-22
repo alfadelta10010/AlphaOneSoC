@@ -88,6 +88,7 @@ E = eventual, A = architectural (no clock count).
 | REQ-MEM-003 | every load/store/LR/SC/AMO retire is exactly its transaction: word address, lanes from size and offset, direction, the stored bytes in their lanes; no transaction without one; a failing SC makes none (CPU ref 5.1, 9.3) | C | every run | tb_rivercore bus check (new) |
 | REQ-RST-001 | a reset in the middle of a program, on every phase of LR, DIV, a store, an AMO, ECALL, the M-mode WFI wait and the timer interrupt, restarts a clean boot at boot_addr | B | core_reset (160 resets, tb_rivercore +RESETS) | self-check: x11 counts the boots |
 | REQ-RF-101 | the macro is read with the EX instruction's registers from its second EX cycle | C | every run | tb_rivercore rf check |
+| REQ-FH-001 | a fetch that completes while the pipeline is stalled and no data access is in WB is kept whole (if_wv) and not requested again; a held word is the memory's word at pc, never outlives a !stall edge, never coexists with a data request or a kept halfword (WO-76, H-L1..H-L3); no fetch is issued behind a branch or jump (R8) | C | fh_mul_hold, fh_store_held, fh_irq_hold, fh_perf (soc, cache on); every run | tb_rivercore C-hold / C-held / R8 and the `fetch-hold` counter; formal core_fetch F4-F8, R8; mutants FH01-FH10 |
 
 ### 1.4 SoC
 
