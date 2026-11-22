@@ -216,7 +216,7 @@ module tb_sw;
                     $display("SW-RESULT: PASS cycles=%0d instret=%0d", cyc, instret);
                 else
                     $display("SW-RESULT: FAIL code=%0d cycles=%0d instret=%0d",
-                             soc.dmem_wdata[15:0] == 16'h5555 ? 0 : soc.dmem_wdata[31:16], cyc, instret);
+                             soc.dmem_wdata[15:0] == 16'h5555 ? (ns_err ? 126 : 0) : soc.dmem_wdata[31:16], cyc, instret);
                 $finish;
             end else if (cyc >= max_cycles) begin
                 done = 1'b1;
