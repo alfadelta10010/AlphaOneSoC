@@ -531,6 +531,8 @@ m("PXS2", "fyracore.v", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;", "&
   "an M op starts in its first EX cycle, on the previous instruction's register data")
 m("PXS3", "fyracore.v", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;", "&& ex_rf_ok && !use_hazard;",
   "an M op starts during the fetch PMP check (a denied fetch would still run)")
+m("PXS4", "fyracore.v", "assign muldiv_stall = muldiv_want && (!muldiv_have || dmem_req);", "assign muldiv_stall = muldiv_want && !muldiv_have;",
+  "an M result ready before a data access in WB completes leaves EX on that access's completion edge: the next instruction comes from a fetch read before the store wrote (fh_store_held +DMEM_WAIT=20)")
 m("FH09", "fyracore.v", WV_SET, "if_wv <= 1'b0;",
   "if_wv never set: the hold does nothing (performance only: fh_perf, the fetch-hold counter floor)")
 m("FH10", "fyracore.v", "wire [15:0] if_bdat       = if_wv ? if_wlo : if_kbuf;", "wire [15:0] if_bdat       = if_kbuf;",

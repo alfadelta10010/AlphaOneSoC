@@ -901,8 +901,9 @@ module fyracore #(
     // operation, and that phantom's done later set muldiv_ready for the
     // *next* M instruction, which then captured the previous result.
     wire muldiv_have = muldiv_ready || muldiv_done;
-    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other;
+    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result
+    // (never while a data access is in WB, see muldiv_stall).
+    wire muldiv_capture = muldiv_want && muldiv_have && !dmem_req && !stall_other;
     // No `!flush` on capture or start, and no flush term in the muldiv_ready
     // reset: flush and muldiv_want are never both 1 (a flush source in EX
     // means the EX instruction is not an M op, and a trapping M op is
@@ -923,7 +924,16 @@ module fyracore #(
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
                           && ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;
-    assign muldiv_stall = muldiv_want && !muldiv_have;
+    // The result waits out a data access in WB, its completion cycle too
+    // (wb_mem_stall already covers the cycles before it). Starting under the
+    // access lets the operation finish first, and the M instruction then left
+    // EX on the edge the access completed: IF/EX took the next instruction
+    // from a fetch that completed on that same edge, i.e. read before a store
+    // to it wrote (a store, a MUL, then the stored-to instruction ran the old
+    // word, where the core with the M start after the access, and Spike, run
+    // the new one; tests/directed/fh_store_held). One clock, only when the
+    // result is in before the access completes.
+    assign muldiv_stall = muldiv_want && (!muldiv_have || dmem_req);
 
     always @(posedge clk) begin
         // capture before done: a result taken on its own done cycle must not
