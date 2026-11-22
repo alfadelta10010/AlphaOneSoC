@@ -1,4 +1,4 @@
-/* The run ends through the syscon FINISH register when main returns or the kernel hits a fatal error:
+/* The run ends through the syscon FINISH register when main returns or the kernel halts after a fatal error:
  * 0x5555 = pass, (code << 16) | 0x3333 = fail. The bench stops on it. Note: ztest's main returns 0 even
  * when a test fails, so a ztest run is judged by run-zephyr.sh (it also rejects any FAIL line). */
 #include <stdint.h>
@@ -18,12 +18,13 @@ int __wrap_main(void)
 	}
 }
 
-/* A fatal error (a fault, an oops, a failed assert) ends the run as a failure instead of spinning in
- * arch_system_halt until the cycle cap: code 0x7F, the reason in the low byte of the log line above. */
-void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
+/* A fatal error ends the run as a failure instead of spinning until the cycle cap: the default
+ * k_sys_fatal_error_handler and k_fatal_halt both end in arch_system_halt (a weak function in
+ * kernel/fatal.c). Not k_sys_fatal_error_handler itself: many tests define their own, and tests that
+ * recover from a fault never reach this. Code 0x7F. */
+FUNC_NORETURN void arch_system_halt(unsigned int reason)
 {
-	ARG_UNUSED(esf);
-	printk("FATAL: k_sys_fatal_error_handler reason %u\n", reason);
+	ARG_UNUSED(reason);
 	*SYSCON_FINISH = (0x7Fu << 16) | 0x3333u;
 	for (;;) {
 	}
