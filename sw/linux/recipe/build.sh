@@ -7,6 +7,8 @@ W=${1:-$R/..}
 BR_COMMIT=851edd24                          # cnlohr/buildroot master used
 [ -d "$W/br" ] || { git clone https://github.com/cnlohr/buildroot.git "$W/br"; git -C "$W/br" checkout $BR_COMMIT; }
 B=$W/br
+# a host without unzip (the sandbox): put the python shim next to it on PATH
+command -v unzip >/dev/null || { mkdir -p $W/bin; cp $R/unzip $W/bin/unzip; export PATH=$W/bin:$PATH; }
 mkdir -p $B/board/alpha
 cp -a $R/overlay $B/board/alpha/
 cp $R/linux.config $R/busybox.config $B/board/alpha/
