@@ -4,6 +4,8 @@
 # tests/soc/adv_hold_ref.py. One "VERDICT <prog> PASS|FAIL <why>" line per program.
 # usage: tests/soc/adv_trackb.sh <tree> <outdir> [prog[:gcc-flags] ...]   (default: adv_c256 adv_hold)
 # Needs riscv64-unknown-elf-gcc, iverilog/vvp on PATH. Run heavy jobs through the sandbox slot gate.
+# ADV_PLUS = extra tb_adv plusargs for every run (e.g. "+MAX_CYCLES=4000000" for mutants: the clean runs
+# finish in < 1.1 M cycles, a broken copy that hangs then FAILs in minutes instead of at the 40 M default).
 set -u
 T=$(cd "$1" && pwd); O=$2; shift 2
 mkdir -p "$O"; O=$(cd "$O" && pwd)
@@ -23,7 +25,7 @@ for pf in "${progs[@]}"; do
     riscv64-unknown-elf-gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles -DCMODE=$m $fl \
       -T $T/tests/soc/link.ld -I$T/tests/soc $T/tests/soc/$p.S -o $O/$n.elf || { bad="$bad build-m$m"; continue; }
     riscv64-unknown-elf-objcopy -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 $O/$n.elf $O/$n.hex
-    vvp -n $O/sim +TEST=$n +FLASH_FILE=$O/$n.hex > $O/$n.log 2>&1
+    vvp -n $O/sim +TEST=$n +FLASH_FILE=$O/$n.hex ${ADV_PLUS:-} > $O/$n.log 2>&1
     grep -E '^(PASS|FAIL|ERROR|SIG|COV)|fatal|FATAL|rror' $O/$n.log | head -8 | sed "s/^/  [$n] /"
     grep -q "^PASS tb_adv" $O/$n.log || bad="$bad run-m$m"
     sigs+=("$(awk '/^SIG /{print $4}' $O/$n.log | tail -1)")
