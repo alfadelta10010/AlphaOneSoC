@@ -1006,10 +1006,23 @@ module tb_rivercore;
     //             other load. Without it a buffer that never hits is
     //             functionally invisible.
     //
-    //  The counters are in the summary ("fetch-reuse:"), so a run can show
-    //  that it exercised hits at all.
+    //  Fetch hold (WO-76): a fetch that completes on a stalled edge with no
+    //  data access in WB is kept whole (if_wv, {if_kbuf, if_wlo}).
+    //  C-hold     never imem_req, if_kv or dmem_req while if_wv is 1 (the
+    //             last one is lemma H-L2: no store completes under a held
+    //             word); if_wv equals an independent shadow of the rule.
+    //  C-held     a load from the held word has the memory's 4 bytes at pc
+    //             (PSRAM only, skipped once a store wrote one of them since
+    //             the capture).
+    //  R8         imem_req is low while a branch or jump is in EX.
+    //
+    //  The counters are in the summary ("fetch-reuse:", "fetch-hold:"), so a
+    //  run can show that it exercised hits and held words at all.
     // ================================================================
-    integer fr_hits = 0, fr_fetches = 0, fr_loads = 0;
+    integer fr_hits = 0, fr_fetches = 0, fr_loads = 0, fh_loads = 0;
+    reg        fr_exp_wv = 1'b0, fr_hdirty = 1'b0;
+    reg [31:0] fr_fpc = 32'h0;
+    reg [31:0] fr_mem_w;
     reg        fr_exp_kv = 1'b0, fr_dirty = 1'b0, fr_seen_rst = 1'b0;
     reg [31:0] fr_kaddr = 32'h0;
     reg [15:0] fr_mem_h;
@@ -1033,17 +1046,32 @@ module tb_rivercore;
     always @(posedge clk) begin
         if (rst) begin
             fr_exp_kv   <= 1'b0;
+            fr_exp_wv   <= 1'b0;
             fr_seen_rst <= 1'b1;
         end else if (fr_seen_rst) begin
             if (`CPU.if_kv !== fr_exp_kv)
                 fr_fail("if_kv differs from the rule");
             if (`CPU.imem_req && `CPU.if_kv)
                 fr_fail("fetch requested with the instruction in hand");
+            if (`CPU.if_wv !== fr_exp_wv)
+                fr_fail("if_wv differs from the rule");
+            if (`CPU.if_wv && `CPU.imem_req)
+                fr_fail("fetch requested with the word in hand");
+            if (`CPU.if_wv && `CPU.if_kv)
+                fr_fail("if_wv and if_kv both set");
+            if (`CPU.if_wv && `CPU.dmem_req)
+                fr_fail("data request while a word is held");
+            if (`CPU.ifex_valid && (`CPU.ctrl_doBranch || `CPU.ctrl_doJump) && `CPU.imem_req)
+                fr_fail("fetch issued behind a branch or jump");
+            fr_exp_wv <= `CPU.stall && (fr_exp_wv ||
+                         (`CPU.imem_req && `CPU.imem_ready && !`CPU.dmem_req && !`CPU.wb_busy));
             // the shadow and the fill/store bookkeeping
             if (`CPU.imem_req && `CPU.imem_ready) begin
                 fr_fetches = fr_fetches + 1;
                 fr_kaddr   = `CPU.pc + 32'd2;
                 fr_dirty   = 1'b0;
+                fr_hdirty  = 1'b0;
+                fr_fpc     = `CPU.pc;
             end
             if (dmem_req && dmem_ready && dmem_we) begin     // a store in a fetch's cycle counts too
                 for (fr_k = 0; fr_k < 4; fr_k = fr_k + 1)
@@ -1051,12 +1079,28 @@ module tb_rivercore;
                         ({dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr ||
                          {dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr + 32'd1))
                         fr_dirty = 1'b1;
+                for (fr_k = 0; fr_k < 4; fr_k = fr_k + 1)
+                    if (dmem_be[fr_k] &&
+                        ({dmem_addr[31:2], 2'b00} + fr_k >= fr_fpc &&
+                         {dmem_addr[31:2], 2'b00} + fr_k <= fr_fpc + 32'd3))
+                        fr_hdirty = 1'b1;
             end
             if (!`CPU.stall) begin
                 if (`CPU.flush || `CPU.ex_nofetch) begin
                     fr_exp_kv <= fr_exp_kv && !`CPU.flush;
                 end else begin
                     fr_loads = fr_loads + 1;
+                    if (`CPU.if_wv) begin
+                        fh_loads = fh_loads + 1;
+                        if (`CPU.pc !== fr_fpc)
+                            fr_fail("held word loaded at another pc");
+                        if (`CPU.pc[31] && `CPU.if_exec && !fr_hdirty) begin
+                            fr_mem_w = {fr_byte(`CPU.pc + 32'd3), fr_byte(`CPU.pc + 32'd2),
+                                        fr_byte(`CPU.pc + 32'd1), fr_byte(`CPU.pc)};
+                            if ({`CPU.if_kbuf, `CPU.if_wlo} !== fr_mem_w)
+                                fr_fail("held word is not the memory's");
+                        end
+                    end
                     if (`CPU.if_hit) begin
                         fr_hits = fr_hits + 1;
                         if (`CPU.pc !== fr_kaddr)
@@ -1068,7 +1112,7 @@ module tb_rivercore;
                         end
                     end
                     fr_exp_kv <= !fr_exp_kv && `CPU.if_exec && `CPU.if_compressed &&
-                                 (`CPU.imem_rdata[17:16] != 2'b11);
+                                 (`CPU.if_fetched[17:16] != 2'b11);
                 end
             end
         end
@@ -1113,6 +1157,7 @@ module tb_rivercore;
             $display("  FC02/FC49/FC49b checks: %0d cycles, flush %0d, muldiv_want %0d, M-unit-active %0d, CSR-write-in-WB with EX valid %0d, %0d FAIL",
                      inv_cycles, inv_flush, inv_muldiv, inv_mdact, inv_csrwb, inv_fail);
             $display("  fetch-reuse: hits %0d fetches %0d loads %0d", fr_hits, fr_fetches, fr_loads);
+            $display("  fetch-hold: %0d", fh_loads);
             $display("  Dump: %0s", dump_file_str);
         end
     endtask
