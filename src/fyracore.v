@@ -835,10 +835,9 @@ module fyracore #(
     wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr ||
                  irq_inject;
 
-    // stall_other: all stall sources except muldiv (used to gate muldiv_start)
+    // stall_other: all stall sources except muldiv
     // wfi_active stalls the pipeline until an interrupt becomes pending.
-    // stall_nofetch is the same without the pending fetch: an M instruction
-    // starts on it (see muldiv_start).
+    // stall_nofetch is the same without the pending fetch.
     //
     // No stall term for "a CSR write is in WB": the 3-cycle EX does that job.
     // A CSR write commits in WB, and the instruction behind it is still in EX
@@ -913,11 +912,17 @@ module fyracore #(
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
+    // Nor does a stall for anything else (WB busy, a data access in WB, the
+    // EX instruction's own c1/c2): the operation starts in the first cycle
+    // its operands are final (ex_rf_ok, no use_hazard: the cycle that sets
+    // ex_ph), which is the one before the old !stall_nofetch condition held.
+    // The operands are then the registers it will use; nothing is committed
+    // before the capture, which waits for stall_other as before.
     // Waiting for the fetch as well started it on the cycle the fetch
     // completed, and muldiv_stall then dropped that fetch and fetched the
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_nofetch;
+                          && ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;
     assign muldiv_stall = muldiv_want && !muldiv_have;
 
     always @(posedge clk) begin

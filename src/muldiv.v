@@ -10,11 +10,11 @@
 // multiplicand is sign-extended into the 33-bit accumulator when it is
 // signed, and the last step subtracts instead of adds when the multiplier is
 // signed (its bit 31 has weight -2^31), so no operand or result negation is
-// needed. 1 + 32 + 1 cycles from start to done.
+// needed. 33 cycles from start to done: the last step writes the result.
 //
 // Divide (DIV/DIVU/REM/REMU): restoring division on magnitudes. The operand
 // negations (S_NEGA, S_NEGB) and the result negation (S_FIX) go through the
-// same adder. 1 + 2 + 32 + 1 cycles. Division by zero and signed overflow
+// same adder. 1 + 2 + 32 + 1 cycles = 36. Division by zero and signed overflow
 // fall out of the datapath with the results RV32M requires:
 //   x / 0      -> quotient all ones (-1), remainder x
 //   INT_MIN/-1 -> quotient INT_MIN, remainder 0
@@ -130,10 +130,16 @@ module muldiv (
                 end else begin
                     // shift the 66-bit {acc, lo} right with the new sum on top
                     acc <= sum[33:1];
-                    lo  <= {sum[0], lo[31:1]};
+                    lo  <= (cnt == 5'd31 && hi) ? sum[32:1] : {sum[0], lo[31:1]};
                 end
                 cnt <= cnt + 5'd1;
-                if (cnt == 5'd31) st <= S_FIX;
+                if (cnt == 5'd31) begin
+                    // a multiply is complete after its last step (the high
+                    // word is taken from the new sum directly); only a
+                    // divide still has to select / negate its result
+                    if (isdiv) st <= S_FIX;
+                    else begin busy <= 1'b0; done <= 1'b1; st <= S_IDLE; end
+                end
             end
             S_FIX: begin
                 lo   <= sum[31:0];

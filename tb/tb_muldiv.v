@@ -11,7 +11,7 @@
 //     until the next start, whatever the inputs do meanwhile -- the
 //     operands and op input are scrambled from the cycle after start;
 //   * the latency in docs/FyraCore_CPU_Reference.md 9.2 (REQ-MD-004): done
-//     LAT_MUL / LAT_DIV cycles after start (functions below);
+//     33 cycles after start for a multiply, 36 for a divide (function below);
 //   * reset in the middle of an operation leaves the unit idle and the next
 //     operation correct (REQ-MD-005).
 // A new operation is started 0-3 cycles after done (0: on the done cycle
@@ -73,7 +73,7 @@ module tb_muldiv;
         end
     endfunction
     function integer latency(input integer kind, input [31:0] y);
-        latency = (kind < 4) ? 34 : 36;
+        latency = (kind < 4) ? 33 : 36;
     endfunction
 
     // ── handshake monitor (every clock) ──────────────────────────────────
