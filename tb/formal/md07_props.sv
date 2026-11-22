@@ -29,15 +29,14 @@ module md07_props (
     input  wire        clk, rst,
     input  wire        start,
     input  wire [2:0]  op,
-    input  wire        shift, sra,
     input  wire [31:0] a, b
 );
     wire [31:0] result, lo, m;
     wire        busy, done, isdiv;
     wire [2:0]  st;
     wire [32:0] acc, trial;
-    wire [33:0] sum;
-    muldiv dut (.clk(clk), .rst(rst), .start(start), .op(op), .shift(shift), .sra(sra),
+    wire [34:0] sum;
+    muldiv dut (.clk(clk), .rst(rst), .start(start), .op(op),
                 .a(a), .b(b), .result(result), .busy(busy), .done(done),
                 .st(st), .acc(acc), .lo(lo), .m(m), .isdiv(isdiv), .sum(sum), .trial(trial));
 

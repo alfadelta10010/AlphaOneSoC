@@ -15,7 +15,7 @@
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
 //   - CSR write in WB: the next instruction is still in EX (3-cycle EX, ex_wait)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
-//   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
+//   - M ops: multi-cycle in muldiv, started during the fetch wait
 //   - A fetch that completes while the pipeline is stalled is kept (if_wv,
 //     if_wlo + if_kbuf) and not requested again
 //   - AMO: 2-cycle WB (stall pipeline)
@@ -560,11 +560,9 @@ module fyracore #(
     wire        muldiv_start;   // driven by assign in Hazard Detection
     wire        muldiv_stall;   // driven by assign in Hazard Detection
 
-    // The shifts (aluOp 00001 SLL, 00101 SRL, 01101 SRA) run through muldiv's
-    // shift register as well, one bit per cycle: the ALU has no shifter.
-    // Everything below that says "M instruction" covers them too.
-    wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
-    wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
+    // The shifts are single-cycle in the ALU; only the M instructions are
+    // iterative.
+    wire ex_is_iter  = ctrl_isMulDiv;
 
 `ifdef RISCV_FORMAL_ALTOPS
     wire [31:0] muldiv_result_raw;
@@ -574,10 +572,8 @@ module fyracore #(
         .rst   (rst),
         .start (muldiv_start),
         .op    (ctrl_aluOp[2:0]),    // op encoded in lower 3 bits of aluOp
-        .shift (ex_is_shift),
-        .sra   (ctrl_aluOp[3]),
-        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
-        .b     (alu_d2),             // rs2, or the immediate shift amount
+        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext)
+        .b     (alu_d2),             // rs2
 `ifdef RISCV_FORMAL_ALTOPS
         .result(muldiv_result_raw),
 `else
@@ -839,10 +835,9 @@ module fyracore #(
     wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr ||
                  irq_inject;
 
-    // stall_other: all stall sources except muldiv (used to gate muldiv_start)
+    // stall_other: all stall sources except muldiv
     // wfi_active stalls the pipeline until an interrupt becomes pending.
-    // stall_nofetch is the same without the pending fetch: an M instruction
-    // starts on it (see muldiv_start).
+    // stall_nofetch is the same without the pending fetch.
     //
     // No stall term for "a CSR write is in WB": the 3-cycle EX does that job.
     // A CSR write commits in WB, and the instruction behind it is still in EX
@@ -879,7 +874,7 @@ module fyracore #(
     // trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
-    // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
+    // ex_trap_iter is all of ex_trap here. An M instruction is OP
     // or OP-IMM: it makes no memory access and no jump, so the three address
     // causes cannot be raised for it, and it is no SYSTEM instruction, CSR
     // access, LR or FENCE, which leaves a fetch fault, a bad funct7 and the
@@ -906,8 +901,9 @@ module fyracore #(
     // operation, and that phantom's done later set muldiv_ready for the
     // *next* M instruction, which then captured the previous result.
     wire muldiv_have = muldiv_ready || muldiv_done;
-    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other;
+    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result
+    // (never while a data access is in WB, see muldiv_stall).
+    wire muldiv_capture = muldiv_want && muldiv_have && !dmem_req && !stall_other;
     // No `!flush` on capture or start, and no flush term in the muldiv_ready
     // reset: flush and muldiv_want are never both 1 (a flush source in EX
     // means the EX instruction is not an M op, and a trapping M op is
@@ -917,12 +913,27 @@ module fyracore #(
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
+    // Nor does a stall for anything else (WB busy, a data access in WB, the
+    // EX instruction's own c1/c2): the operation starts in the first cycle
+    // its operands are final (ex_rf_ok, no use_hazard: the cycle that sets
+    // ex_ph), which is the one before the old !stall_nofetch condition held.
+    // The operands are then the registers it will use; nothing is committed
+    // before the capture, which waits for stall_other as before.
     // Waiting for the fetch as well started it on the cycle the fetch
     // completed, and muldiv_stall then dropped that fetch and fetched the
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_nofetch;
-    assign muldiv_stall = muldiv_want && !muldiv_have;
+                          && ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;
+    // The result waits out a data access in WB, its completion cycle too
+    // (wb_mem_stall already covers the cycles before it). Starting under the
+    // access lets the operation finish first, and the M instruction then left
+    // EX on the edge the access completed: IF/EX took the next instruction
+    // from a fetch that completed on that same edge, i.e. read before a store
+    // to it wrote (a store, a MUL, then the stored-to instruction ran the old
+    // word, where the core with the M start after the access, and Spike, run
+    // the new one; tests/directed/fh_store_held). One clock, only when the
+    // result is in before the access completes.
+    assign muldiv_stall = muldiv_want && (!muldiv_have || dmem_req);
 
     always @(posedge clk) begin
         // capture before done: a result taken on its own done cycle must not

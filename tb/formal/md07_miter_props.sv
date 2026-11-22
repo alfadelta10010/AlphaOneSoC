@@ -20,14 +20,13 @@ module md07_miter_props (
     input  wire        clk, rst,
     input  wire        start,
     input  wire [2:0]  op,
-    input  wire        shift, sra,
     input  wire [31:0] a, b
 );
     wire [31:0] r0, r1;
     wire        b0, b1, d0, d1;
-    muldiv       u0 (.clk(clk), .rst(rst), .start(start), .op(op), .shift(shift), .sra(sra),
+    muldiv       u0 (.clk(clk), .rst(rst), .start(start), .op(op),
                      .a(a), .b(b), .result(r0), .busy(b0), .done(d0));
-    muldiv_md07  u1 (.clk(clk), .rst(rst), .start(start), .op(op), .shift(shift), .sra(sra),
+    muldiv_md07  u1 (.clk(clk), .rst(rst), .start(start), .op(op),
                      .a(a), .b(b), .result(r1), .busy(b1), .done(d1));
 
     reg armed = 1'b0, seen = 1'b0;
