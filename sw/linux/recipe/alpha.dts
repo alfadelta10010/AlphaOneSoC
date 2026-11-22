@@ -1,6 +1,7 @@
 /dts-v1/;
-/* AlphaOneSoC, NOMMU M-mode Linux. SPIKE=1 variant (spike.dts) differs only in
-   timebase-frequency and the syscon address (see build.sh). */
+/* AlphaOneSoC, NOMMU M-mode Linux. build.sh turns this template into alpha.dts (the SoC) and spike.dts.
+   The Spike variant has another timebase-frequency, a PLIC node and uart interrupts, the syscon on the HTIF
+   tohost word (an extra reserved-memory node), and no mmu-type (see build.sh and NOTES.md). */
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;

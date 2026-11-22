@@ -10,7 +10,7 @@ kernel.config, busybox.built.config. The build tree br/ is 7.5 GB.
 - RISCV_ISA_C=y (KianV's config has it off, the first build had it off: rebuilt), RISCV_M_MODE=y (implied by !MMU), ARCH_RV32I,
   MMU off, BINFMT_FLAT, CLINT_TIMER, 8250 + OF platform, POWER_RESET_SYSCON(+_POWEROFF).
 - HZ=30 via a new Kconfig choice HZ_30 (recipe/patches/0003-Add-HZ_30-timer-frequency.patch). Buildroot: RVM+RVA+RVC, -Os, no LTO, no host QEMU.
-- At boot: "14080K/16384K available".
+- At boot: "14084K/16320K available" (bench log; the memory node is 0x00ff0000 bytes).
 - Command line (in the DTB): `rw console=ttyS0,115200 earlycon=uart8250,mmio,0x10000000 loglevel=7`. No baud on earlycon (it would reprogram
   the divisor from a 1.8 MHz default clock); console 115200 with clock-frequency 62.5 MHz rounds to divisor 34, the reset value.
 - initramfs: busybox init; inittab mounts /proc and /sys, runs /etc/init.d/rcS (uname -a, cat /proc/cpuinfo, echo ok), then `-/bin/sh` (hush).
