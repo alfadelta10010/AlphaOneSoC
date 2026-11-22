@@ -14,6 +14,10 @@
 //      that cycle (a store completing in the same cycle is not yet in it)
 //   C  while active f_ready only comes with f_req; m_req is held with its address until m_ready
 //   D  the cycle after reset: not active
+//   F  (M1) on every hit cycle (active, f_ready) the macro data f_rdata uses (port A of the macro f_addr[7] selects; port B of
+//      the macro nxt[5] selects, only when f_addr[1]) did not meet a write of its own word on the previous edge, i.e. the
+//      write-through / +RF_COLLIDE_X data is never used. Collisions on the port that is not used (aligned fetch: port B) and
+//      on the macro that is not selected do happen (covers 11-13) and are dropped.
 //   E  every m_req comes with an address in 0x20xx_xxxx or 0x80xx_xxxx (mem_ctrl's proved input assumption M-A2)
 // Environment (assumed): fetch addresses are in the two PMA windows; the core holds f_req/f_addr until f_ready and f_addr[0] = 0; mem_ctrl answers only a request
 // that has been held for a cycle, never in two consecutive cycles, never for the cycle a store completes; the data
@@ -69,7 +73,7 @@ module cache_props (
                .d_req(d_req), .d_we(d_we), .d_addr(d_addr), .d_ready(d_ready), .active(active));
 
     // ---- history and the shadow byte ----------------------------------------------------
-    reg started = 1'b0, armed = 1'b0, armed_q = 1'b0;
+    reg started = 1'b0, armed = 1'b0, armed_q = 1'b0, active_q = 1'b0;
     reg f_req_q = 0, f_ready_q = 0, m_req_q = 0, m_ready_q = 0, d_req_q = 0, d_ready_q = 0, d_we_q = 0;
     reg [31:0] f_addr_q = 0, m_addr_q = 0, d_addr_q = 0;
     reg [3:0]  d_be_q = 0;
@@ -86,6 +90,7 @@ module cache_props (
         started <= 1'b1;
         if (rst) armed <= 1'b1;
         armed_q <= armed;
+        active_q <= active;
         f_req_q <= f_req; f_ready_q <= f_ready; f_addr_q <= f_addr;
         m_req_q <= m_req; m_ready_q <= m_ready; m_addr_q <= m_addr;
         d_req_q <= d_req; d_ready_q <= d_ready; d_addr_q <= d_addr; d_we_q <= d_we; d_be_q <= d_be;
@@ -121,6 +126,18 @@ module cache_props (
             if (m_ready && kadd(m_addr, je[1:0]) == tb) assume (m_rdata[8*je +: 8] == sbv);
     end
 
+    // ---- macro read/write collisions (F, covers 11-13) ----
+    // A fill word was written on the previous edge iff the cache was active and m_ready came (m_req = fill_active while active);
+    // it went to macro m_addr_q[7] (index[3]) at word m_addr_q[6:2] ({index[2:0], word}). The reads of that edge were at
+    // f_addr_q[6:2] (port A, both macros) and nxt_q[4:0] (port B, both macros); f_addr is held from request to hit.
+    wire        wr_q    = live && active_q && m_ready_q;
+    wire        hit_cy  = live && active && f_req && f_ready && f_req_q && !f_ready_q;
+    wire [21:0] nxt_q   = f_addr_q[23:2] + 22'd1;
+    wire        colA    = wr_q && f_addr_q[6:2] == m_addr_q[6:2];       // port A of macro m_addr_q[7] met the write
+    wire        colB    = wr_q && nxt_q[4:0]    == m_addr_q[6:2];       // port B of macro m_addr_q[7] met the write
+    wire        usedA_c = colA && f_addr_q[7] == m_addr_q[7];            // ... and the mux takes that macro's port A
+    wire        usedB_c = colB && nxt_q[5]    == m_addr_q[7] && f_addr_q[1];
+
     // ---- properties -----------------------------------------------------------------------------
     always @(*) begin
         if (armed && !active)                                                         // A
@@ -132,6 +149,7 @@ module cache_props (
             for (jp = 0; jp < 4; jp = jp + 1)
                 if (kadd(f_addr, jp[1:0]) == tb) assert (f_rdata[8*jp +: 8] == sb);
         if (armed && active && f_ready) assert (f_req);                               // C
+        if (hit_cy) assert (!usedA_c && !usedB_c);                                    // F (M1): no read-through data reaches f_rdata
         if (armed && m_req) assert (m_addr[31:24] == 8'h20 || m_addr[31:24] == 8'h80); // E: mem_ctrl's M-A2, fills included
         if (live && m_req_q && !m_ready_q) assert (m_req && m_addr == m_addr_q);     // C
         if (armed && !armed_q) assert (!active);                                      // D
@@ -165,6 +183,9 @@ module cache_props (
         cover (armed && active && f_req && f_ready && f_addr[7:0] == 8'h7E);                          // 8 straddle data_mem -> data_hi
         cover (armed && active && f_req && f_ready && f_addr[7:0] == 8'hFE);                          // 9 straddle data_hi -> data_mem (index 15 -> 0)
         cover (armed && st_done && have_l && done_l && s_idx == l_idx && s_tag == l_tag && l_idx[3]); // 10 a data_hi line store-invalidated
+        cover (hit_cy && colB && !f_addr_q[1] && nxt_q[5] == m_addr_q[7]);                            // 11 collision on the selected macro's port B, dropped by pc1 = 0
+        cover (hit_cy && colA && f_addr_q[7] != m_addr_q[7]);                                         // 12 collision on port A of the unselected macro
+        cover (hit_cy && colB && f_addr_q[1] && nxt_q[5] != m_addr_q[7]);                             // 13 collision on port B of the unselected macro (straddle)
     end
 `endif
 endmodule

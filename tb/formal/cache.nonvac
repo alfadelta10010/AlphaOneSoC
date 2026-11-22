@@ -29,3 +29,5 @@ sed cache.v s@wire \[31:0\] ra_data = f_addr\[7\]@wire [31:0] ra_data = f_addr[6
 sed cache.v s@wire \[31:0\] rb_data = nxt\[5\]   @wire [31:0] rb_data = f_addr[7]@
 # N4: the lookup index drops index[3] (lines 8-15 alias 0-7)
 sed cache.v s@: f_addr\[7:4\];@: {1'b0, f_addr[6:4]};@
+# M1: the port B lookup (b_ph) of a straddling fetch hits the word being written on this edge: the macro's write-through data (free in the harness) reaches f_rdata (assertion F)
+sed cache.v s@(kword < fcnt)@(kword < fcnt || (b_ph \&\& kword == fcnt))@
