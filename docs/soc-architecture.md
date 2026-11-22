@@ -882,17 +882,13 @@ Options not yet taken, roughly in order of payoff per gate:
    bus, for about 0.5–0.7 kGE. It also ends the refetching during WFI and
    M-op stalls. It must close the stream at every 1 KB PSRAM page and within
    tCEM, and it is the heaviest to verify.
-2. **Stop the two wasted fetches (prototyped, for a follow-up branch).**
-   A taken branch pays for the fall-through fetch already in flight, and an
-   M op starts only after a fetch completes and then discards it, so both
-   cost one extra QSPI read (about 42 clocks). Holding `imem_req` low while
-   a branch or jump is in EX, and letting `muldiv_start` ignore only a
-   pending fetch, fix both at 0.00 tiles with no change to the
-   request/ready contract: a taken branch drops from 84 to 43 clocks, an M
-   op from 84 to 42, a not-taken branch rises from 42 to 43, and the
-   compiled-C benchmark goes from 56.1 to 48.3 clocks per instruction
-   (−14%). Prototypes in `localFiles/area-audit/pr5/`; kept off this branch
-   by decision (2026-09-29).
+2. **Stop the two wasted fetches: done.** The branch/jump fetch hold (9dc7443,
+   2026-10-01, `ex_nofetch`; extended to ECALL, EBREAK, MRET, FENCE.I and PMP
+   writes in d19ceed) and the M op starting during the fetch wait (ff130fb,
+   `muldiv_start` on `stall_nofetch`) are in the RTL: a taken branch costs one
+   fetch, not two, and an M op no longer waits for a fetch it then discards.
+   What remains is a fetch that completes while the pipeline is stalled being
+   discarded and fetched again (WO-76, Track B, measured before adoption).
 
 3. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
    core or the pads limit the clock. With a round trip over 20 ns it needs
