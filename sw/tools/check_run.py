@@ -16,7 +16,11 @@ import sys
 log = open(sys.argv[1], errors="replace").read().replace("\r", "")
 bad = []
 rules = [l.rstrip("\n") for f in sys.argv[2:] for l in open(f)]
-want = next((l[len("=RESULT "):] for l in rules if l.startswith("=RESULT ")), "PASS")
+results = [l[len("=RESULT "):] for l in rules if l.startswith("=RESULT ")]
+if len(results) > 1:
+    print("CHECK FAIL: malformed: more than one =RESULT rule:", results)
+    sys.exit(1)
+want = results[0] if results else "PASS"
 import re
 if not re.search(r"^SW-RESULT: " + re.escape(want) + r"( |$)", log, re.M):
     bad.append(f"run did not end in SW-RESULT: {want}")
