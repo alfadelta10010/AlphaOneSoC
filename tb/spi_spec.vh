@@ -34,8 +34,12 @@
 `ifndef SPI_SPEC_VH
 `define SPI_SPEC_VH
 
-// Clock: 62.5 MHz, the chip clock on sky26d.
+// Clock: the chip clock on sky26d (Makefile CHIP_TCLK_NS, -DCHIP_TCLK_NS); 62.5 MHz without it.
+`ifdef CHIP_TCLK_NS
+`define SPI_T_NS      `CHIP_TCLK_NS
+`else
 `define SPI_T_NS      16.0
+`endif
 
 // GPIO window slots, addr[5:2] of the 64-byte-aliased window at 0x1001_0000.
 `define SL_OUT        4'd0

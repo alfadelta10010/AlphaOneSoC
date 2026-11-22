@@ -80,6 +80,8 @@
 #   FYRA_SRC=<dir>  build the simulator from this copy of src/
 #   OUT_DIR=<dir>   artifacts there instead of ./out (./out/soc for soc)
 #   FAILFAST=1      stop the suite at its first failing run
+# SOC_TCLK_NS=<ns> builds the soc sim with that clock period (default 10 ns; the chip's is
+# the Makefile's CHIP_TCLK_NS).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -99,7 +101,7 @@ ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 CORE_SRC=("$SRC"/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,rf_top,signExt}.v)
 build() {
   if [ $SOC = 1 ]; then
-    iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
+    iverilog -g2012 -DSOC_TB ${SOC_TCLK_NS:+-DTB_TCLK_NS=$SOC_TCLK_NS} -o "$OUT/sim" -s tb_rivercore \
       "${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,cache,soc_bus,plic,uart,gamepad,pwm,audio,pinmux,gpio,spi,syscon,alphaone_soc}.v \
       "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v || return 1
   else

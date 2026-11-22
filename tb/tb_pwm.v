@@ -1,4 +1,7 @@
 `timescale 1ns / 1ps
+`ifndef CHIP_HZ
+`define CHIP_HZ 62500000
+`endif
 // pwm (src/pwm.v) against a cycle model written from the WO-54 specification (SiFive pwm0 layout, two built
 // of four 16-bit comparators, WO-63: pwmcmp2/3 read 0xFFFF, writes ignored, ip/pwm_o/irq[3:2] constant 0), not from the RTL. pwm_o, irq and every read word are compared
 // every clock. Independent oracle (from Linux pwm-sifive.c, not the RTL): scale/cmp from the driver's arithmetic,
@@ -115,7 +118,7 @@ module tb_pwm;
         begin wr(4'd0, {4'd0, 12'b0, 2'b0, one, alw, 2'b0, zc, stk, 4'b0, sc[3:0]} & 32'h0FFFFFFF); end
     endtask
 
-    // ---- oracle from Linux drivers/pwm/pwm-sifive.c (not from the RTL), rate = 62.5 MHz:
+    // ---- oracle from Linux drivers/pwm/pwm-sifive.c (not from the RTL), rate = the chip clock (`CHIP_HZ, Makefile CHIP_HZ):
     //   scale = clamp(ilog2(period * rate / 1e9) - 16, 0, 15)   (apply: pwm_sifive_apply)
     //   frac  = min(duty * 65536 / period, 65535), cmp = 65535 - frac, CFG = EN_ALWAYS | scale
     // Pin polarity: pwm_o = ip, high while pwms >= cmp, so one period is 2^(16+scale) clocks and the pin
@@ -123,7 +126,7 @@ module tb_pwm;
     function integer drv_scale(input [63:0] period_ns);
         reg [63:0] t; integer l;
         begin
-            t = (period_ns * 62500000) / 1000000000;
+            t = (period_ns * `CHIP_HZ) / 1000000000;
             l = 0; while (t > 1) begin t = t >> 1; l = l + 1; end
             l = l - 16; if (l < 0) l = 0; if (l > 15) l = 15;
             drv_scale = l;
