@@ -4,4 +4,4 @@ Zephyr v4.5.0 on AlphaOneSoC bench, 2026-11-20 (box load ~18, sims at nice 19 go
 3 kernel tests: common and mutex_api ran 30+ min wall without finishing; per-test PASS lines so far in logs/*.partial.log (0 FAIL); semaphore, fifo_api, sleep built but not run
 4 userspace: hello_world_user PASS with CONFIG_RISCV_PMP=y, PMP_SLOTS=4 (8,841,407 clocks);
   tests/kernel/mem_protect/userspace FAIL: "no free partition slots available, Failed to add default memory partition (-28)";
-  samples/userspace/shared_mem: no output in 10 min wall (unresolved)
+  samples/userspace/shared_mem: no output in 10 min wall (software: HW_STACK_PROTECTION leaves no PMP slot for the MPRV catch-all with 4 slots, see ROADMAP 9.5)
