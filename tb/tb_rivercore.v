@@ -112,6 +112,11 @@ module tb_rivercore;
     initial cache_en_arg = $test$plusargs("CACHE_EN");
     always @(posedge rst) if (cache_en_arg) release soc.cache_en;
     always @(negedge rst) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!rst) force soc.cache_en = 1'b1; end
+    // +CACHE_PBURST: CACHE_CTL.PBURST forced on the same way (PSRAM line fills in one CE# period; with +CACHE_EN)
+    reg cache_pb_arg;
+    initial cache_pb_arg = $test$plusargs("CACHE_PBURST");
+    always @(posedge rst) if (cache_pb_arg) release soc.cache_pburst;
+    always @(negedge rst) if (cache_pb_arg) begin repeat (2) @(posedge clk); if (!rst) force soc.cache_pburst = 1'b1; end
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
     wire [3:0] qspi_io_out, pmod_io;
