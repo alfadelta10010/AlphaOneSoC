@@ -299,17 +299,17 @@ run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 check:
 	$(MAKE) run-hello
 	$(MAKE) run-monitor
-	$(MAKE) run-monitor DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 monitor_EXPECT=monitor/expect-ddr.txt
+	$(MAKE) run-monitor DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 monitor_EXPECT="monitor/expect.txt monitor/expect-ddr.txt"
 	$(MAKE) run-monitor-scan
 	$(MAKE) run-fatfs DISK=fat12 SD=sdhc
 	$(MAKE) run-fatfs DISK=fat16 SD=sdsc
 	$(MAKE) run-fatfs DISK=mbr SD=v1
 	$(MAKE) run-fatfsfull
 	$(MAKE) run-freertos
-	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT=freertos/expect-ddr.txt
+	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT="freertos/expect.txt freertos/expect-ddr.txt"
 	$(MAKE) run-fr-all
-	$(MAKE) run-fr-assert DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 fr-assert_EXPECT=freertos/expect-neg-assert-ddr.txt
-	$(MAKE) run-fr-malloc DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 fr-malloc_EXPECT=freertos/expect-neg-malloc-ddr.txt
+	$(MAKE) run-fr-assert DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 RUNARGS=+MAX_CYCLES=40000000 fr-assert_EXPECT="freertos/expect-neg-assert.txt freertos/expect-neg-assert-ddr.txt"
+	$(MAKE) run-fr-malloc DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 RUNARGS=+MAX_CYCLES=40000000 fr-malloc_EXPECT="freertos/expect-neg-malloc.txt freertos/expect-neg-malloc-ddr.txt"
 	$(MAKE) run-ddr-all
 	$(MAKE) run-sdtest-all
 	tools/loader_neg.sh
