@@ -156,9 +156,43 @@ int sd_init(void)
     return 0;
 }
 
+/* CRC16-CCITT (x^16 + x^12 + x^5 + 1, start 0) of one data byte: what the card appends to a block. */
+static uint16_t crc16(uint16_t c, uint8_t b)
+{
+    c ^= (uint16_t)b << 8;
+    for (int i = 0; i < 8; i++)
+        c = (c & 0x8000) ? (uint16_t)((c << 1) ^ 0x1021) : (uint16_t)(c << 1);
+    return c;
+}
+
+/* One data block of a read, CS# low and the command already answered: wait for the token, take 512 bytes
+ * and the CRC16 and check it. 0 = ok, 0x10 | x = the card sent the data error token 0000xxxx, 2 = no token,
+ * 0x30 = the CRC16 is wrong. */
+static int read_block(uint8_t *p)
+{
+    for (int t = 0;; t++) {
+        uint8_t b = xfer(0xFF);
+        if (b == 0xFE)                   /* the data token */
+            break;
+        if (b != 0xFF)                   /* a data error token, 0000xxxx: the card gave up */
+            return 0x10 | (b & 0x0F);
+        if (t > 100000)
+            return 2;
+    }
+    uint16_t c = 0;
+    for (int i = 0; i < 512; i++) {
+        uint8_t b = xfer(0xFF);
+        *p++ = b;
+        c = crc16(c, b);
+    }
+    uint16_t got = (uint16_t)(xfer(0xFF) << 8);
+    got |= xfer(0xFF);
+    return got == c ? 0 : 0x30;
+}
+
 int sd_read(uint32_t lba, void *buf)
 {
-    uint8_t *p = buf, r;
+    uint8_t r;
     if (!sd_sdhc && lba >= 0x800000)     /* lba * 512 would wrap */
         return 1;
     cs_low();
@@ -167,27 +201,84 @@ int sd_read(uint32_t lba, void *buf)
         cs_high();
         return 1;
     }
-    for (int t = 0;; t++) {
-        uint8_t b = xfer(0xFF);
-        if (b == 0xFE)                   /* the data token */
-            break;
-        if (b != 0xFF) {                 /* a data error token, 0000xxxx: the card gave up */
-            cs_high();
-            xfer(0xFF);
-            return 0x10 | (b & 0x0F);
-        }
-        if (t > 100000) {
-            cs_high();
-            return 2;
-        }
-    }
-    for (int i = 0; i < 512; i++)
-        *p++ = xfer(0xFF);
-    xfer(0xFF);                          /* CRC16, unchecked */
-    xfer(0xFF);
+    int rc = read_block(buf);
     cs_high();
     xfer(0xFF);
-    return 0;
+    return rc;
+}
+
+/* The blocks lba .. lba + n - 1 must lie in the card: a standard-capacity one below 2 GB (the byte address is 32
+ * bits), any one below the size the CSD gave, and no block number past 2^32 - 1. */
+static int range_ok(uint32_t lba, uint32_t n)
+{
+    if (n == 0 || lba + n < lba)
+        return 0;
+    if (!sd_sdhc && lba + n > 0x800000)
+        return 0;
+    if (sd_blocks != 0 && sd_blocks != 0xFFFFFFFFu && lba + n > sd_blocks)
+        return 0;
+    return 1;
+}
+
+/* CMD12 after a multiple-block transfer: the byte after the command is a stuff byte (it can be the tail of a
+ * block that was on its way, so it is not the R1), then R1 and the busy that follows. */
+static int stop_transmission(void)
+{
+    xfer(0xFF);
+    xfer(0x40 | 12);
+    for (int i = 0; i < 4; i++)
+        xfer(0);
+    xfer(0x01);
+    xfer(0xFF);                          /* the stuff byte */
+    uint8_t r = 0xFF;
+    for (int i = 0; i < 8 && (r & 0x80); i++)
+        r = xfer(0xFF);
+    for (int t = 0; t <= 1000000; t++)   /* the busy of R1b */
+        if (xfer(0xFF) == 0xFF)
+            return r == 0x00 ? 0 : 1;
+    return 3;
+}
+
+/* CMD18: n blocks from lba in one transfer, stopped by CMD12. On an error the blocks before it are in buf and the
+ * transfer is stopped; the code is sd_read's. */
+int sd_read_blocks(uint32_t lba, void *buf, uint32_t n)
+{
+    uint8_t *p = buf, r;
+    int rc = 0;
+    if (!range_ok(lba, n))
+        return 1;
+    cs_low();
+    r = cmd(18, sd_sdhc ? lba : lba * 512, 0x01);
+    if (r != 0x00) {
+        cs_high();
+        return 1;
+    }
+    for (uint32_t i = 0; i < n && !rc; i++, p += 512)
+        rc = read_block(p);
+    int st = stop_transmission();
+    cs_high();
+    xfer(0xFF);
+    return rc ? rc : st;
+}
+
+/* Wait out the busy (DO low) after a data response or the stop token. 0 = done, 3 = the card never finished. */
+static int wait_busy(void)
+{
+    for (int t = 0; t <= 1000000; t++)
+        if (xfer(0xFF) == 0xFF)
+            return 0;
+    return 3;
+}
+
+/* CMD13: R1 and the second status byte, both zero when nothing went wrong; the card clears the bits on read. */
+static int status_ok(void)
+{
+    cs_low();
+    uint8_t r = cmd(13, 0, 0x01);
+    uint8_t st = xfer(0xFF);
+    cs_high();
+    xfer(0xFF);
+    return (r != 0x00 || st != 0x00) ? 0x20 | ((r | st) & 0x0F) : 0;
 }
 
 int sd_write(uint32_t lba, const void *buf)
@@ -211,40 +302,61 @@ int sd_write(uint32_t lba, const void *buf)
     r = xfer(0xFF);
     /* Busy (DO low) follows the data response, accepted or not: wait it out before CS# goes high, or the
      * next command meets a card that is still busy. */
-    int t = 0;
-    int busy_end = 0;
-    while (!busy_end) {
-        uint8_t b = xfer(0xFF);
-        if (b == 0xFF)
-            busy_end = 1;
-        else if (++t > 1000000) {
-            cs_high();
-            return 3;
-        }
+    if (wait_busy()) {
+        cs_high();
+        return 3;
     }
     if ((r & 0x1F) != 0x05) {            /* the data was not accepted (0x0B CRC error, 0x0D write error) */
         cs_high();
         xfer(0xFF);
         /* The card holds the error in its status until CMD13 reads it (the bits clear on read): read it
          * now, or the next good write's CMD13 reports this one. */
-        cs_low();
-        cmd(13, 0, 0x01);
-        xfer(0xFF);
-        cs_high();
-        xfer(0xFF);
+        status_ok();
         return 2;
     }
     cs_high();
     xfer(0xFF);
 
-    /* The card has taken the block and finished programming; ask whether it succeeded (CMD13: R1
-     * then a second status byte, both zero when there is no error). */
+    /* The card has taken the block and finished programming; ask whether it succeeded. */
+    return status_ok();
+}
+
+/* CMD25: n blocks to lba in one transfer: each block is the token 0xFC, 512 bytes and a CRC16 (not checked in SPI
+ * mode, sent as 0xFFFF as sd_write does), answered by a data response and busy; the stop token 0xFD ends it. A
+ * block the card refuses ends the transfer (the stop token, then CMD13 reads and clears the error) with code 2;
+ * the blocks before it were taken. */
+int sd_write_blocks(uint32_t lba, const void *buf, uint32_t n)
+{
+    const uint8_t *p = buf;
+    uint8_t r;
+    int rc = 0;
+    if (!range_ok(lba, n))
+        return 1;
     cs_low();
-    r = cmd(13, 0, 0x01);
-    uint8_t st = xfer(0xFF);
+    r = cmd(25, sd_sdhc ? lba : lba * 512, 0x01);
+    if (r != 0x00) {
+        cs_high();
+        return 1;
+    }
+    for (uint32_t i = 0; i < n && !rc; i++) {
+        xfer(0xFF);
+        xfer(0xFC);
+        for (int j = 0; j < 512; j++)
+            xfer(*p++);
+        xfer(0xFF);
+        xfer(0xFF);
+        r = xfer(0xFF);
+        if (wait_busy())
+            rc = 3;
+        else if ((r & 0x1F) != 0x05)
+            rc = 2;
+    }
+    xfer(0xFD);                          /* stop tran */
+    xfer(0xFF);                          /* one byte before the busy */
+    if (wait_busy() && !rc)
+        rc = 3;
     cs_high();
     xfer(0xFF);
-    if (r != 0x00 || st != 0x00)
-        return 0x20 | ((r | st) & 0x0F);
-    return 0;
+    int st = status_ok();
+    return rc ? rc : st;
 }
