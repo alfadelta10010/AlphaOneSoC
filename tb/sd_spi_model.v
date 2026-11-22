@@ -382,13 +382,17 @@ module sd_spi_model #(
                         for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
                         begin : store
                             integer s, f;
-                            f = -1;
-                            for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
-                            if (f < 0 && wb_n == 16) begin err("written-block table full (16)"); f = 15; end   // the last slot is reused
-                            else if (f < 0) begin f = wb_n; wb_n = wb_n + 1; wb_blk[f] = wblk; end
                             if (wr_resp != 8'h05) ;                 // refused: nothing is stored
                             else if (on_disk(wblk)) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
-                            else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
+                            else begin                              // the written-block table: only blocks that are not on the disk
+                                f = -1;
+                                for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
+                                if (f < 0 && wb_n == 16) err("written-block table full (16)");   // nothing is stored
+                                else begin
+                                    if (f < 0) begin f = wb_n; wb_n = wb_n + 1; wb_blk[f] = wblk; end
+                                    for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
+                                end
+                            end
                         end
                         n_wr_blk = n_wr_blk + 1;
                         if (wr_once) wr_resp = 8'h05;
