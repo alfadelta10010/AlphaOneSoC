@@ -152,7 +152,11 @@ int sd_init(void)
     sd_blocks = 0;
     if (sd_sdhc)
         sd_read_csd();
-    SPI(GPIO_BAUD) = 1;                  /* 15.6 MHz: the card allows 25 */
+    /* 10.4 MHz (the device tree's spi-max-frequency): BAUD 1 would be 15.6 MHz, but it is lost to the pin flop (the
+     * MISO sample point is inside the chip, the round trip loses a clock, 16 ns), so on a board the card's data
+     * would arrive too late; BAUD 2 keeps 28 / 23 / 18 ns of margin for round trips of 20 / 25 / 30 ns
+     * (docs/pins-and-peripherals.md 3). The bench's card has a short round trip: BAUD 1 passes there. */
+    SPI(GPIO_BAUD) = 2;
     return 0;
 }
 
