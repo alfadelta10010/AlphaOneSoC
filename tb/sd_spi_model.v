@@ -335,7 +335,7 @@ module sd_spi_model #(
                     if (wcnt == 2) begin
                         // the data response, busy, then store
                         push(wr_resp, 1'b0);
-                        if (wr_resp != 8'h05) st_pend = st_pend | 8'h20;   // a refused write: the status keeps "error" 
+                        if (wr_resp != 8'h05) st_pend = st_pend | 8'h04;   // a refused write: the status keeps "error" (R2 byte 2, bit 2; SD spec 7.3.2.3)
                         wbusy = 1 + rn(16);
                         for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
                         begin : store
