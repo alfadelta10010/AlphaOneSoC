@@ -523,8 +523,14 @@ m("FH06", "fyracore.v", "wire [31:0] if_word       = {if_wv ? if_kbuf : imem_rda
   "the held word's upper half comes from the port (idle data), not from if_kbuf")
 m("FH07", "fyracore.v", "(ctrl_doBranch || ctrl_doJump || ctrl_isEcall || ctrl_isEbreak ||", "(ctrl_isEcall || ctrl_isEbreak ||",
   "a fetch is issued while a branch or jump is in EX (goal 1 of WO-76: R8; the fetch is discarded, a performance loss)")
-m("FH08", "fyracore.v", "                          && !stall_nofetch;", "                          && !stall_other;",
+m("FH08", "fyracore.v", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase && !stall_other;",
   "an M op waits for the fetch before it starts (performance only: fh_perf)")
+m("PXS1", "fyracore.v", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;", "&& ex_rf_ok && !ex_ifetch_hi_phase;",
+  "an M op starts before the register it reads is written (use_hazard dropped): stale operands")
+m("PXS2", "fyracore.v", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;", "&& !use_hazard && !ex_ifetch_hi_phase;",
+  "an M op starts in its first EX cycle, on the previous instruction's register data")
+m("PXS3", "fyracore.v", "&& ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;", "&& ex_rf_ok && !use_hazard;",
+  "an M op starts during the fetch PMP check (a denied fetch would still run)")
 m("FH09", "fyracore.v", WV_SET, "if_wv <= 1'b0;",
   "if_wv never set: the hold does nothing (performance only: fh_perf, the fetch-hold counter floor)")
 m("FH10", "fyracore.v", "wire [15:0] if_bdat       = if_wv ? if_wlo : if_kbuf;", "wire [15:0] if_bdat       = if_kbuf;",
