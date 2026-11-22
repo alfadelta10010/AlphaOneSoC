@@ -52,6 +52,11 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
     switch (cmd) {
     case CTRL_SYNC:                      /* every write finishes before sd_write returns */
         return RES_OK;
+    case GET_SECTOR_COUNT:
+        if (!sd_blocks)
+            return RES_PARERR;
+        *(LBA_t *)buff = sd_blocks;
+        return RES_OK;
     case GET_BLOCK_SIZE:
         *(DWORD *)buff = 1;
         return RES_OK;
