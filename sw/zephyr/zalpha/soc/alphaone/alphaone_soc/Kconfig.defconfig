@@ -12,6 +12,11 @@ config NUM_IRQS
 config PMP_SLOTS
 	default 4
 
+# with 4 slots the ROM and IRQ-stack-guard entries must be NAPOT (one slot each): as TOR pairs they use all 4 and the
+# MPRV catch-all has no slot, so an image with HW_STACK_PROTECTION (every ztest) hangs before the banner
+config PMP_POWER_OF_TWO_ALIGNMENT
+	default y if RISCV_PMP
+
 # the cross-compile toolchain variant does not declare TLS support; this gcc has it (userspace needs it)
 config TOOLCHAIN_SUPPORTS_THREAD_LOCAL_STORAGE
 	default y

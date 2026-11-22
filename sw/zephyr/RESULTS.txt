@@ -1,4 +1,4 @@
-Zephyr v4.5.0 on AlphaOneSoC bench, 2026-11-20 (box load ~18, sims at nice 19 got ~25% of a core)
+Zephyr v4.5.0 on AlphaOneSoC bench, 2026-11-20 (the logs named below were on the sandbox and are not in the repository; run-zephyr.sh regenerates them) (box load ~18, sims at nice 19 got ~25% of a core)
 1 hello_world: PASS, 3,378,848 clocks (incl. loader copy), syscon exit
 2 sync (sample, SLEEPTIME 50, main sleeps 600 ms): PASS, 41,290,470 clocks, 4 ping-pong lines, 100 Hz tick
 3 kernel tests: common and mutex_api ran 30+ min wall without finishing; per-test PASS lines so far in logs/*.partial.log (0 FAIL); semaphore, fifo_api, sleep built but not run

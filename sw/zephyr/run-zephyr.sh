@@ -57,6 +57,5 @@ case " $what " in *" tests "*|*" all "*)
     (sim $n; verdict $n "PROJECT EXECUTION SUCCESSFUL") &
     running=$((running+1)); [ $running -ge $JOBS ] && { wait -n; running=$((running-1)); }
   done; wait;; esac
-(pgrep -x sim >/dev/null) || true
 echo "---- summary"; cat $LOGS/summary.txt
 exit $rc
