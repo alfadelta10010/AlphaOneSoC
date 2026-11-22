@@ -32,6 +32,8 @@
 # that redefines a built-in harness, or names a harness with no props file,
 # gives ERROR (exit 2).
 # MODE sbmc is bmc that always runs through sby (a depth sat cannot reach in time).
+# MODE sind is induct that always runs through sby (sat's base case starts from all-zero state;
+# smtbmc's leaves unreset flops free), for harnesses whose lemmas need it (mem_tcem_burst).
 # Engines: FORMAL_ENGINE=sat (default, yosys's built-in solver) or sby (sby with
 # bitwuzla smtbmc, generated from the same tables; a pdr harness always uses
 # sby with `abc pdr`, and a pdr PASS counts as PROVED). `run.sh -e DIR names`
@@ -187,7 +189,7 @@ guard_hit() { grep -E "is implicitly declared|is used but has no driver" "$1" | 
 # `chformal -lower` (sby wants the formal cells as they are).
 sby_harness() {
   local n=$1 m=${MODE[$1]} d="$OUT/sby_$1" top="${PROPN[$1]:-$1}_props" dfn="${DEFS[$1]:-} ${EXTRA_DEFS:-}" opts engines sf="" f st tr
-  [ "$m" = sbmc ] && m=bmc
+  [ "$m" = sbmc ] && m=bmc; [ "$m" = sind ] && m=induct
   if ! command -v sby >/dev/null 2>&1; then echo "ERROR $n: sby not found on PATH (set FORMAL_BIN)"; err=1; return; fi
   mkdir -p "$d"
   case "$m" in
@@ -386,8 +388,9 @@ PYEOF
   # --nonvac child run: an induct harness runs as bmc (a broken copy must give a
   # counterexample from reset, not merely "induction did not close")
   if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = induct ]; then MODE[$n]=bmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
+  if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = sind ]; then MODE[$n]=sbmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
-  if [ "${MODE[$n]}" = pdr ] || [ "${MODE[$n]}" = sbmc ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
+  if [ "${MODE[$n]}" = pdr ] || [ "${MODE[$n]}" = sbmc ] || [ "${MODE[$n]}" = sind ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
     sby_harness "$n"; continue
   fi
   if [ "${MODE[$n]}" = cover ]; then

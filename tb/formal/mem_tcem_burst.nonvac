@@ -1,0 +1,8 @@
+# Broken copies of the CE# bound proof (WO-72): each runs as a bounded check from reset (sbmc, NVDEPTH 190) and FAILS on a
+# lemma before the run can pass LPB; mem_tcem_burst_bmc.nonvac shows the same copies failing MT1b itself, with no lemma.
+# a burst never ends at the line's last word -> a PSRAM CS run beyond LPB (MT1b; here lemma H6 at step 167)
+sed qspi_ctrl.v s/ \&\& addr\[3:2\] != 2'd3;/;/
+# an idle burst is not closed when nobody asks for the next word -> CS stays low (MT1b; here lemma H0 at step 169)
+sed qspi_ctrl.v s/(!stream_en || mode_chg || pstrm)/(!stream_en || mode_chg)/
+# one word longer: a single read of a line's last word may open a burst into the next line (5 words, MT1b; here H6, step 167)
+sed qspi_ctrl.v s/ \&\& addr\[3:2\] != 2'd3;/ \&\& (addr[3:2] != 2'd3 || !pstrm);/
