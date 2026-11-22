@@ -94,7 +94,9 @@ All of the items above are covered by the Arty exact build (WO-A1, later), which
   exercised here (Arty later).
 * **Power-up state.** The FPGA starts every flop at 0, the ASIC starts random. Covered in simulation by
   `scripts/run_vl_rand.sh` (random initial values, cfg1), not on the board.
-* **Golden origin.** The golden comes from Verilator (2-state); an Icarus run of cfg1 matched it.
+* **Golden origin.** The golden comes from Verilator (2-state). A full Icarus 12 run of cfg1 (rv32i image, 40.8 M
+  cycles, 2026-11-22) matched `golden/cfg1.txt` byte for byte, `INFO` lines included, with the assertions silent and
+  no UART frame errors.
 * **`rf_top`** (also inside the cache) is a block-RAM model, not the sky130 macro: same sync-read behaviour,
   none of the macro's timing, write-through or hold behaviour.
 * **Pads and clock speed.** FPGA IO cells instead of sky130 pads, a clock of 18 MHz instead of 62.5 MHz,
@@ -107,8 +109,8 @@ All of the items above are covered by the Arty exact build (WO-A1, later), which
 
 ## Golden transcripts (`golden/cfg0..3.txt`)
 
-Verilator run of the bench at `F_MHZ=18`, pin `1f2a473`, rv32i picorv32: all four images `ALL PASS` (cfg0..2 regenerated
-2026-11-21 after dropping C; cfg3: see the WO-F1b report), 40-48 M cycles, the Pmod model's setup/hold checks and the `fyracore`
+Verilator run of the bench at `F_MHZ=18`, pin `1f2a473`, rv32i picorv32: all four images `ALL PASS` (all four regenerated
+2026-11-21 after dropping C), 39-48 M cycles, the Pmod model's setup/hold checks and the `fyracore`
 contract assertions silent, no UART frame errors. The non-`INFO` lines are identical for the four images; the `INFO` lines
 carry the chosen `DDR_CAP` and the cache loop ticks. On hardware the passing `DDR_CAP` set and the tick counts will differ
 and are not compared.
