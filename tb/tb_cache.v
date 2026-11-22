@@ -1,4 +1,4 @@
-// Bench for src/cache.v (WO-62, K4: 128 B direct-mapped, 16 B lines, instruction only).
+// Bench for src/cache.v (WO-62, K4, 256 B WO-77: direct-mapped, 16 B lines, instruction only).
 //
 // A random fetch stream (halfword-aligned addresses with locality, so aligned and
 // straddling fetches, hits, misses and conflicts) and random data-port traffic
@@ -55,24 +55,24 @@ module tb_cache;
     integer errors = 0;
 
     // ---- address pool and shadow memory ------------------------------------
-    // Two chips (addr[31]), six consecutive tags each; the tag sits at addr[23:7].
-    reg [16:0] tbase0, tbase1;
-    function [31:0] mkaddr(input a31, input [2:0] p, input [6:0] low);
-        reg [16:0] t;
+    // Two chips (addr[31]), six consecutive tags each; the tag sits at addr[23:8].
+    reg [15:0] tbase0, tbase1;
+    function [31:0] mkaddr(input a31, input [2:0] p, input [7:0] low);
+        reg [15:0] t;
         begin
-            t = (a31 ? tbase1 : tbase0) + {14'd0, p};
+            t = (a31 ? tbase1 : tbase0) + {13'd0, p};
             mkaddr = {a31, 1'b0, ~a31, 5'd0, t, low};      // 0x80.. or 0x20.. (the core's PMA windows)
         end
     endfunction
-    // shadow index: {chip, tag number, addr[6:0]}; ~0 when outside the pool
-    function [10:0] sidx(input [31:0] a);
-        reg [16:0] d;
+    // shadow index: {chip, tag number, addr[7:0]}; ~0 when outside the pool
+    function [11:0] sidx(input [31:0] a);
+        reg [15:0] d;
         begin
-            d = a[23:7] - (a[31] ? tbase1 : tbase0);
-            sidx = (d < 17'd6) ? {a[31], d[2:0], a[6:0]} : 11'h7ff;
+            d = a[23:8] - (a[31] ? tbase1 : tbase0);
+            sidx = (d < 16'd6) ? {a[31], d[2:0], a[7:0]} : 12'hfff;
         end
     endfunction
-    reg [7:0] sh [0:2047];
+    reg [7:0] sh [0:4095];
     integer i;
 
     // ---- random --------------------------------------------------------------
@@ -109,8 +109,9 @@ module tb_cache;
 
     // ---- counters ---------------------------------------------------------------------
     integer n_hit = 0, n_miss = 0, n_inv = 0, n_strad = 0, n_strad_x = 0, n_flush = 0, n_entog = 0;
+    integer n_hi = 0, n_xm = 0;
     integer n_fetch = 0, n_ptfetch = 0, n_store = 0, n_load = 0, n_dead = 0;
-    integer n_evict [0:7];
+    integer n_evict [0:15];
     integer cyc = 0;
     integer en_fall_at = -1, en_rise_at = -1;
 
@@ -129,12 +130,12 @@ module tb_cache;
             r = rnd(100);
             if (r < 48)      c = pc + (rnd(2) ? 32'd2 : 32'd4);
             else if (r < 70) c = pc + 32'd4 * rnd(8) - 32'd16;
-            else if (r < 85) c = mkaddr(pc[31], rnd(5), {rnd(8), 4'd0} + {3'd0, rnd(16)}) & ~32'd1;
-            else             c = mkaddr(rnd(2), rnd(5), rnd(128)) & ~32'd1;
+            else if (r < 85) c = mkaddr(pc[31], rnd(5), {rnd(16), 4'd0} + {3'd0, rnd(16)}) & ~32'd1;
+            else             c = mkaddr(rnd(2), rnd(5), rnd(256)) & ~32'd1;
             c[0] = 1'b0;
             // keep inside the pool, away from its last 6 bytes (a straddle must stay in it)
-            if (sidx(c) == 11'h7ff || sidx(c + 32'd7) == 11'h7ff || sidx(c + 32'd4) == 11'h7ff)
-                c = mkaddr(rnd(2), rnd(5), rnd(128)) & ~32'd1;
+            if (sidx(c) == 12'hfff || sidx(c + 32'd7) == 12'hfff || sidx(c + 32'd4) == 12'hfff)
+                c = mkaddr(rnd(2), rnd(5), rnd(256)) & ~32'd1;
             pc = c;
         end
     endtask
@@ -167,8 +168,8 @@ module tb_cache;
             else if (cyc > 4) begin
                 // half of the stores aim at a line near the fetch stream
                 if (rnd(2)) ca = (f_addr & ~32'h0000000F) + 32'd16 * rnd(3) - 32'd16 + rnd(16);
-                else        ca = mkaddr(rnd(2), rnd(5), rnd(128));
-                if (sidx(ca) == 11'h7ff) ca = mkaddr(rnd(2), rnd(5), rnd(128));
+                else        ca = mkaddr(rnd(2), rnd(5), rnd(256));
+                if (sidx(ca) == 12'hfff) ca = mkaddr(rnd(2), rnd(5), rnd(256));
                 d_addr  <= ca;
                 d_wdata <= $random(seed);
                 d_we    <= (rnd(4) != 0);
@@ -182,7 +183,7 @@ module tb_cache;
         // a store lands in the shadow at the end of its ready cycle (as in tb/formal/cache_props.sv)
         if (d_ready && t_we)
             for (j = 0; j < 4; j = j + 1)
-                if (t_be[j] && sidx({t_addr[31:2], 2'b00}) != 11'h7ff)
+                if (t_be[j] && sidx({t_addr[31:2], 2'b00}) != 12'hfff)
                     sh[sidx({t_addr[31:2], 2'b00}) + j] <= t_wd[8*j +: 8];
         m_ready <= 1'b0;
         d_ready <= 1'b0;
@@ -204,7 +205,7 @@ module tb_cache;
                 end else begin
                     m_ready <= 1'b1;
                     for (j = 0; j < 4; j = j + 1)
-                        m_rdata[8*j +: 8] <= (sidx(t_addr + j) == 11'h7ff) ? 8'hxx : sh[sidx(t_addr + j)];
+                        m_rdata[8*j +: 8] <= (sidx(t_addr + j) == 12'hfff) ? 8'hxx : sh[sidx(t_addr + j)];
                 end
             end
         end
@@ -250,7 +251,7 @@ module tb_cache;
         if (f_req && f_ready) begin
             if (!active) n_ptfetch = n_ptfetch + 1;
             for (j = 0; j < 4; j = j + 1) begin
-                if (sidx(f_addr + j) == 11'h7ff) begin end
+                if (sidx(f_addr + j) == 12'hfff) begin end
                 else if (f_rdata[8*j +: 8] !== sh[sidx(f_addr + j)]) begin
                     $display("FAIL %0d: fetch %h byte %0d = %h, shadow %h (active %b)", cyc, f_addr, j,
                              f_rdata[8*j +: 8], sh[sidx(f_addr + j)], active);
@@ -259,7 +260,7 @@ module tb_cache;
             end
         end
         // EN 0 -> 1 starts cold (the stores are snooped in the pass-through too, so stale lines would not show in the data)
-        if (dut.on && dut.valid !== 8'd0) begin
+        if (dut.on && dut.valid !== 16'd0) begin
             $display("FAIL %0d: takeover with valid = %b", cyc, dut.valid); errors = errors + 1;
         end
         // liveness of EN
@@ -273,6 +274,8 @@ module tb_cache;
         end
         // coverage, from the DUT's own state
         if (f_req && f_ready && active) begin
+            if (f_addr[7]) n_hi = n_hi + 1;                       // served with index[3] = 1 (data_hi)
+            if (f_addr[1] && (f_addr[7:0] == 8'h7E || f_addr[7:0] == 8'hFE)) n_xm = n_xm + 1;  // cross-macro straddle
             n_hit = n_hit + 1;     // delivered by the cache (a hit, possibly after waiting for a fill)
             if (f_addr[1]) begin
                 n_strad = n_strad + 1;
@@ -313,8 +316,8 @@ module tb_cache;
         enfast = $test$plusargs("ENFAST");
         if (!$value$plusargs("TFROM=%d", tfrom)) tfrom = -1;
         tbase0 = $random(seed); tbase1 = $random(seed);
-        for (i = 0; i < 8; i = i + 1) n_evict[i] = 0;
-        for (i = 0; i < 2048; i = i + 1) sh[i] = $random(seed);
+        for (i = 0; i < 16; i = i + 1) n_evict[i] = 0;
+        for (i = 0; i < 4096; i = i + 1) sh[i] = $random(seed);
         m_rdata = 0;
         pc = 32'd0;
         pc = mkaddr(0, 0, 0);
@@ -325,15 +328,17 @@ module tb_cache;
         $display("stores %0d loads %0d, store-invalidates %0d (on a filling line %0d), EN toggles %0d, flushes %0d",
                  n_store, n_load, n_inv, n_dead, n_entog, n_flush);
         $write("evictions per line:");
-        for (i = 0; i < 8; i = i + 1) $write(" %0d", n_evict[i]);
+        for (i = 0; i < 16; i = i + 1) $write(" %0d", n_evict[i]);
         $write("\n");
         if (n_hit < 1000)  begin $display("FAIL floor: hits %0d < 1000", n_hit); errors = errors + 1; end
         if (n_miss < 1000) begin $display("FAIL floor: misses %0d < 1000", n_miss); errors = errors + 1; end
         if (n_inv < 100)   begin $display("FAIL floor: store-invalidates %0d < 100", n_inv); errors = errors + 1; end
-        for (i = 0; i < 8; i = i + 1)
+        for (i = 0; i < 16; i = i + 1)
             if (n_evict[i] < (enfast ? 5 : 50)) begin $display("FAIL floor: evictions of line %0d = %0d < %0d", i, n_evict[i], enfast ? 5 : 50); errors = errors + 1; end
         if (n_strad < 100)   begin $display("FAIL floor: straddling hits %0d < 100", n_strad); errors = errors + 1; end
         if (n_strad_x < 20)  begin $display("FAIL floor: cross-line straddles %0d < 20", n_strad_x); errors = errors + 1; end
+        if (n_hi < 500)      begin $display("FAIL floor: fetches served from data_hi lines %0d < 500", n_hi); errors = errors + 1; end
+        if (n_xm < 20)       begin $display("FAIL floor: cross-macro straddles %0d < 20", n_xm); errors = errors + 1; end
         if (!noen && n_entog < 10) begin $display("FAIL floor: EN toggles %0d < 10", n_entog); errors = errors + 1; end
         if (n_flush < 10)  begin $display("FAIL floor: flushes %0d < 10", n_flush); errors = errors + 1; end
         if (errors == 0) $display("PASS tb_cache");
