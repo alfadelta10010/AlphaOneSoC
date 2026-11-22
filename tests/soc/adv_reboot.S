@@ -17,7 +17,9 @@
  *   64-instruction PSRAM routine (fresh copy, FENCE.I) returns 2016.
  *   boot 0..2: the victim line V (cold, PSRAM) is entered at word 0 and the
  *   FINISH 0x7777 store sits at word n: with the cache on the fill of V
- *   (a burst with PBURST) is still running when the reboot lands.
+ *   (a burst with PBURST) is still running when the reboot lands at boots 0
+ *   and 1 (cued). At boot 2 it is timing whether the fill is still open
+ *   (WO-75 measured: CE# already high in c1 and c2), so boot 2 is not cued.
  *   boot 3: the watchdog (TOP 0, reset mode) is made to expire by three
  *   toggles of mtime[14] from PSRAM code followed by cold PSRAM nops.
  *   boot 4: RESET_CAUSE = WDT, WDT_CR = 0, then pass.
@@ -112,7 +114,10 @@ _start:
     sb   t1, BOOT_MODE(s11)
     fence.i
 #if CMODE != 0
+    li   t0, 2                    /* boot 2: the store at word 2 may complete after the fill */
+    bgeu s0, t0, 8f               /* has ended (timing, no spec promise): not cued */
     EVENT 0xC0
+8:
 #endif
     li   a4, FINISH_RESET
     li   t0, VICT
