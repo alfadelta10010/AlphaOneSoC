@@ -15,7 +15,7 @@
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
 //   - CSR write in WB: the next instruction is still in EX (3-cycle EX, ex_wait)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
-//   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
+//   - M ops: multi-cycle in muldiv, started during the fetch wait
 //   - A fetch that completes while the pipeline is stalled is kept (if_wv,
 //     if_wlo + if_kbuf) and not requested again
 //   - AMO: 2-cycle WB (stall pipeline)
@@ -560,11 +560,9 @@ module fyracore #(
     wire        muldiv_start;   // driven by assign in Hazard Detection
     wire        muldiv_stall;   // driven by assign in Hazard Detection
 
-    // The shifts (aluOp 00001 SLL, 00101 SRL, 01101 SRA) run through muldiv's
-    // shift register as well, one bit per cycle: the ALU has no shifter.
-    // Everything below that says "M instruction" covers them too.
-    wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
-    wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
+    // The shifts are single-cycle in the ALU; only the M instructions are
+    // iterative.
+    wire ex_is_iter  = ctrl_isMulDiv;
 
 `ifdef RISCV_FORMAL_ALTOPS
     wire [31:0] muldiv_result_raw;
@@ -574,10 +572,8 @@ module fyracore #(
         .rst   (rst),
         .start (muldiv_start),
         .op    (ctrl_aluOp[2:0]),    // op encoded in lower 3 bits of aluOp
-        .shift (ex_is_shift),
-        .sra   (ctrl_aluOp[3]),
-        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
-        .b     (alu_d2),             // rs2, or the immediate shift amount
+        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext)
+        .b     (alu_d2),             // rs2
 `ifdef RISCV_FORMAL_ALTOPS
         .result(muldiv_result_raw),
 `else
@@ -879,7 +875,7 @@ module fyracore #(
     // trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
-    // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
+    // ex_trap_iter is all of ex_trap here. An M instruction is OP
     // or OP-IMM: it makes no memory access and no jump, so the three address
     // causes cannot be raised for it, and it is no SYSTEM instruction, CSR
     // access, LR or FENCE, which leaves a fetch fault, a bad funct7 and the

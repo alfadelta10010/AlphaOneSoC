@@ -23,6 +23,11 @@ m("ALU03", "alu.v", "5'b00100: result = d1 ^ d2;", "5'b00100: result = d1 | d2;"
 m("ALU04", "alu.v", "5'b00110: result = d1 | d2;", "5'b00110: result = (d1 | d2) & 32'hFFFF7FFF;", "OR bit 15 stuck at 0")
 m("ALU05", "alu.v", "5'b00111: result = d1 & d2;", "5'b00111: result = (d1 & d2) | 32'h00000001;", "AND bit 0 stuck at 1")
 m("ALU06", "alu.v", "5'b00010: result = {31'b0, lt_signed};", "5'b00010: result = {31'b0, lt_unsigned};", "SLT uses the unsigned compare")
+m("ALU08", "alu.v", "wire [32:0] sh_ext  = {control[3] & d1[31], sh_in};", "wire [32:0] sh_ext  = {d1[31], sh_in};", "SRL fills with the sign bit")
+m("ALU09", "alu.v", "$signed(sh_ext) >>> d2[4:0];", "$signed(sh_ext) >>> {1'b0, d2[3:0]};", "shift amount bit 4 lost")
+m("ALU10", "alu.v", "wire        sh_left = ~control[2];", "wire        sh_left = control[2];", "left and right shifts swapped")
+m("ALU11", "alu.v", "wire [31:0] shres   = sh_left ? sh_rev_out : sh_ars[31:0];", "wire [31:0] shres   = sh_ars[31:0];", "SLL result not reversed back")
+m("ALU12", "alu.v", "sh_rev_in[bi]  = d1[31 - bi];", "sh_rev_in[bi]  = d1[bi];", "SLL operand not reversed")
 m("ALU07", "alu.v", "default:  result = 32'b0;", "default:  result = d1;", "unissued codes give d1, not 0 (unit contract only)")
 
 # ── branchCtrl.v ─────────────────────────────────────────────────────────
@@ -147,8 +152,6 @@ m("MD03", "muldiv.v", "wire        negres = isdiv & (hi ? na : ((na ^ nb) & ~mze
   "wire        negres = isdiv & (hi ? na : ((na ^ nb)));", "negative / 0 gives +1, not -1")
 m("MD04", "muldiv.v", "wire        negres = isdiv & (hi ? na : ((na ^ nb) & ~mzero));",
   "wire        negres = isdiv & (hi ? (na ^ nb) : ((na ^ nb) & ~mzero));", "remainder takes the quotient's sign")
-m("MD05", "muldiv.v", "fill <= sra & a[31];", "fill <= a[31];", "SRL fills with the sign bit")
-m("MD06", "muldiv.v", "cnt  <= ~b[4:0];", "cnt  <= ~{1'b0, b[3:0]};", "shift amount bit 4 lost")
 m("MD07", "muldiv.v", "acc <= sum[33] ? {1'b0, trial[31:0]} : {1'b0, sum[31:0]};",
   "acc <= sum[32] ? {1'b0, trial[31:0]} : {1'b0, sum[31:0]};", "restoring step tests the wrong borrow bit")
 m("MD08", "muldiv.v", "lo   <= sum[31:0];\n                busy <= 1'b0;\n                done <= 1'b1;",
@@ -159,7 +162,6 @@ m("MD11", "muldiv.v", "na <= ~op[0] & a[31];", "na <= a[31];", "DIVU/REMU treat 
 m("MD12", "muldiv.v", "if (rst) begin\n            st   <= S_IDLE;\n            busy <= 1'b0;", "if (rst) begin\n            busy <= 1'b0;", "reset does not return the FSM to idle")
 m("MD13", "muldiv.v", "            end\n            S_NEGA: begin", "            end else lo <= 32'b0;\n            S_NEGA: begin", "result cleared the cycle after done (not held until the next start)")
 m("MD14", "muldiv.v", "sub = (cnt == 5'd31) & sb;", "sub = (cnt == 5'd30) & sb;", "signed multiply subtracts on the wrong step")
-m("MD15", "muldiv.v", "shr  <= op[2];", "shr  <= op[1];", "right shifts shift left")
 m("MD16", "muldiv.v", "lo  <= {lo[30:0], ~sum[33]};", "lo  <= {lo[30:0], sum[33]};", "quotient bits inverted")
 
 # ── regFile.v ────────────────────────────────────────────────────────────
