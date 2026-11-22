@@ -206,7 +206,7 @@ default map: its rows were `ui_in[4..7]` and its columns `uo_out[0..3]`.
 | 7 | PWM | `0x1003_0000`, `src/pwm.v` | built; 2 of 4 comparators (cmp2/3 read `0xFFFF`) | gate harden | `pwm-sifive` |
 | 8 | Audio | `0x1003_0100`, `src/audio.v` | built; one square voice | gate harden | none (bare metal) |
 | 9 | Pinmux | `0x1002_0020`, `src/pinmux.v`, carved out of the syscon window | built | 2,560 µm² synth, 32 flops | `pinctrl-single` |
-| 10 | Instruction cache | `src/cache.v`, `CACHE_CTL` at `0x1002_0024` | built (K4); PBURST built, experimental, off at reset | one `rf_top` macro + flops | none (loader) |
+| 10 | Instruction cache | `src/cache.v`, `CACHE_CTL` at `0x1002_0024` | built (K4); PBURST built, experimental, off at reset | two `rf_top` macros (256 B) + flops | none (loader) |
 | 11 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built; registered IO read path | one state flop and a 32-bit register, 632 µm² (measured) | — |
 | 12 | syscon | `0x1002_0000`, `src/syscon.v` | built | 0.151 tile, 23 flops (0.078 and 14 without the watchdog) | `syscon` + `syscon-poweroff`, `syscon-reboot`, `syscon-reboot-mode`, plus `snps,dw-wdt` for the watchdog at `0x1002_0100` |
 
@@ -752,8 +752,10 @@ is needed out of reset. A write takes effect on the next clock.
 
 ### 12. Instruction cache and `CACHE_CTL` at `0x1002_0024`
 
-`src/cache.v` (variant K4): 128 B, direct-mapped, 16 B lines, fetch path only,
-data in one `rf_top` macro, tags in flops. It sits between the core's fetch port
+`src/cache.v` (variant K4, 256 B since WO-77): 256 B, direct-mapped, 16 lines of 16 B,
+fetch path only. Index addr[7:4], tag {addr[31], addr[23:8]} (17 bits); tags and valid
+bits are flops (16 x 17 + 16), the data is two `rf_top` macros (`soc.icache.data_mem`
+lines 0-7, `soc.icache.data_hi` lines 8-15, selected by addr[7]). It sits between the core's fetch port
 and `mem_ctrl`; the data path is only watched. `CACHE_CTL` is one word carved
 out of the syscon window like PINMUX:
 

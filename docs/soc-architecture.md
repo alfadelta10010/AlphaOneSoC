@@ -874,6 +874,23 @@ was split over three cycles the 3x4 harden closes at 62.5 MHz at every corner
 clocks through the pins. Per instruction: ALU 42 clocks; `lw`,
 a taken branch and every M op 84; `sw` 76; `sb` 64.
 
+With the 4x4 instruction cache (`CACHE_CTL`, section "Instruction cache" in
+`docs/pins-and-peripherals.md`), measured as CoreMark per MHz in the Verilator
+SoC bench at 62.5 MHz, 10 iterations, 4x4 branch (WO-76 fetch hold included):
+
+| Configuration | CoreMark/MHz |
+|---|---|
+| cache off | 0.073 |
+| 128 B cache, on | 0.130 |
+| 128 B cache, on + PBURST | 0.154 |
+| 256 B cache (WO-77), on | 0.163 |
+| 256 B cache (WO-77), on + PBURST | 0.181 |
+
+Embench (geometric mean per MHz) exists only for the 128 B cache: 0.0306 off,
+0.0495 on, 0.0599 on + PBURST. FatFs numbers also exist only for 128 B and are
+not repeated here. Data accesses go to PSRAM uncached (about 41 clocks each) and
+are the next bottleneck.
+
 Options not yet taken, roughly in order of payoff per gate:
 
 1. **Keep the fetch stream open.** Leave chip select low after a fetch and,
