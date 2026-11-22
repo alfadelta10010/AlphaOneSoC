@@ -43,7 +43,7 @@
 - Decodes instruction fields (`decoder`) and control signals (`controller`)
 - Reads rs1 and rs2 from the register file's two ports. The read is synchronous and the addresses are the EX instruction's own, so the data is its registers from its second cycle in EX (`ex_rf_ok`), read again on every edge. Nothing is forwarded from WB: an instruction that reads the register the WB instruction is still to write waits for the write (`use_hazard`)
 - Takes at least three cycles: the register read; then the ALU and the comparator work from the operands and their results go into `alu_r` and `br_r`; from the next on (`ex_ph`) the address checks, the traps, the branch and the next PC are decided from those flops
-- Executes the ALU operation, or runs the multi-cycle unit (`muldiv`: multiply, divide and the shifts)
+- Executes the ALU operation (the shifts included: one single-cycle barrel shifter), or runs the multi-cycle unit (`muldiv`: multiply and divide)
 - Evaluates branches
 - Checks the fetch (both halves of a straddling 32-bit instruction) and the data address against the PMA map and PMP
 - Detects all synchronous traps and injects interrupts
@@ -64,7 +64,7 @@
 | Branch/Jump, ECALL/EBREAK/MRET, FENCE.I, PMP CSR write | No fetch is requested while it is in EX (`ex_nofetch`); 1-cycle bubble, taken or not |
 | Register read (synchronous, write-first `rf_top` macro) | The instruction's first cycle in EX. The read addresses are the EX instruction's register numbers as fetched (`ifex_rf_rs1`/`ifex_rf_rs2`, flops), whatever the pipeline is doing, so no stall term and no fetched bit reaches the macro's address pins. The data is the registers after the last edge's write, as a combinational read would give -- `regFile`'s one-entry bypass supplies the word written on that same edge, so the macro's own write-through is not relied on. Each read is masked to 0 where the decoded field is x0 |
 | CSR write in WB | No stall term: the next instruction is still in its 3-cycle EX (`ex_wait`) while the write commits. If EX gets shorter than 3 cycles a stall must return |
-| Multi-cycle MulDiv / shift | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
+| Multi-cycle MulDiv | Stall until the result is available (`muldiv_done`, or the sticky `muldiv_ready`) |
 | AMO | 2-phase WB (read phase holds `wb_busy`, write phase) |
 | Memory not ready | Stall while `imem_ready` is low, or while a data request is outstanding |
 | WFI | Stall until an enabled interrupt is pending; NOP if no source is enabled in `mie` |
@@ -82,9 +82,9 @@ stall_nofetch = wb_busy || wb_mem_stall || wfi_active
                 // use_hazard acts through ex_wait: it keeps ex_ph clear
 stall_other   = stall_nofetch || if_mem_stall
 wb_mem_stall  = dmem_req && !dmem_ready
-muldiv_want   = ifex_valid && (ctrl_isMulDiv || ex_is_shift) && !ex_trap_iter
+muldiv_want   = ifex_valid && ctrl_isMulDiv && !ex_trap_iter
 muldiv_have   = muldiv_ready || muldiv_done
-muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && !stall_nofetch
+muldiv_start  = muldiv_want && !muldiv_busy && !muldiv_have && ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase
 muldiv_stall  = muldiv_want && !muldiv_have
 stall         = stall_other || muldiv_stall
 flush        = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr
@@ -97,7 +97,7 @@ Every PC redirect (trap, interrupt, MRET, branch, FENCE.I / PMP refetch) is take
 
 The extra EX cycles exist for timing. In one cycle the path was operand, 32-bit add or compare, the PMP check, the trap chain, and the enables of the pipeline registers; at the slow corner that was 24.5 ns on the routed design, and forwarding added a 5-bit compare and a 32-bit mux select at its head. Reading the register file a cycle early instead (the addresses of the instruction about to enter EX) put `stall`, and with it every wait the pipeline knows, in front of the macro's address pins. All of the waits are hidden behind the next fetch (below) except on the `ex_nofetch` instructions.
 
-An M instruction or a shift starts while the next fetch is still outstanding (`muldiv_start` ignores `if_mem_stall`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (the read and compute cycles, the wait for a register write, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op or shift is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
+An M instruction starts as soon as its operands are final (second EX cycle, no register write pending, no fetch PMP check running), under any other stall too, e.g. while the instruction ahead is still in WB (`muldiv_start` ignores `stall_nofetch`), so behind a QSPI fetch (about 42 clocks) its iterations cost nothing. The other EX stall cycles (the read and compute cycles, the wait for a register write, CSR write, fetch PMP checks) are hidden the same way, except on the `ex_nofetch` instructions (branch, jump, ECALL, EBREAK, MRET, FENCE.I, PMP CSR write), which have no fetch in flight. No interrupt is injected while an M op is in EX, so a run of them lengthens interrupt latency: the timer interrupt averages 433 clocks (max 550) in a loop of 31-bit shifts, against 108 in a loop of NOPs.
 
 ### 2.3 CSR Values Seen by EX
 
@@ -128,7 +128,7 @@ wire [31:0] mret_target = csr_mepc;
 |---|---|---|
 | `fyracore.v` | `fyracore` | Top-level 3-stage pipeline (~1350 lines). Instantiates the modules from `alu` to `pmp` below. |
 | `alu.v` | `alu` | RV32I ALU: ADD, XOR, OR, AND, and SUB/SLT/SLTU from the shared comparator (`branchCtrl`). No shifter. |
-| `muldiv.v` | `muldiv` | Iterative unit on one 34-bit adder/subtractor: signed-aware shift-add multiplier (34 cycles), restoring divider on magnitudes (36 cycles), and the RV32I shifts, one bit per cycle (2 + shamt cycles). |
+| `muldiv.v` | `muldiv` | Iterative unit on one 35-bit adder/subtractor: radix-4 Booth multiplier (17 cycles, 18 for MULHU/MULHSU with multiplier bit 31 set), restoring divider on magnitudes (up to 36 cycles, fewer for a small dividend). |
 | `controller.v` | `controller` | Combinational decode of opcode/funct3/funct7 into control signals. Rejects illegal LOAD/STORE/JALR encodings without requesting side effects; the pipeline completes the rs2/rd/rs1 checks for SYSTEM and LR. |
 | `decoder.v` | `decoder`, `rf_fields` | Instruction field extractor: opcode, rd, rs1, rs2, funct3, funct7. `rf_fields`: the registers an instruction reads, from its raw fetched bits, compressed or not, for the register file's synchronous read. |
 | `signExt.v` | `signExt` | Immediate generation for all formats. |
@@ -406,11 +406,12 @@ All base instructions. FENCE is a NOP (in-order core, blocking memory). FENCE fi
 
 | Op | Instruction | Cycles |
 |---|---|---|
-| MUL, MULH, MULHSU, MULHU | multiply | 34 |
-| DIV, DIVU, REM, REMU | divide | 36 |
-| SLL, SRL, SRA (and immediates) | shift | 2 + shamt |
+| MUL, MULH, MULHSU, MULHU | multiply | 17 (18: MULHU/MULHSU, multiplier bit 31 set) |
+| DIV, DIVU, REM, REMU | divide | 3 + steps, 36 at most; each negative operand adds 1; leading zero bits of the dividend go 16/8/4 at a time while the remainder is 0 |
 
-Cycles are `muldiv`'s latency: `done` comes this many cycles after the `start` cycle, so the instruction occupies EX for one more (plus its rs2 read cycle when rs2 is not x0). They run during the next instruction's fetch, so behind the SoC's QSPI memory an M instruction costs no more than an ALU one. One 34-bit adder/subtractor serves all eight: a signed multiplicand is sign-extended into the accumulator and a signed multiplier's last step subtracts, so a multiply needs no operand or result negation; a divide negates its operands and result through the same adder. The RV32I shifts (SLL/SRL/SRA, SLLI/SRLI/SRAI) run through the same unit's shift register, one bit per cycle. Division by zero and signed overflow follow the spec. Handshake: `start` for one cycle, `busy` while computing, `done` for one cycle as `busy` drops. The pipeline takes the result on the done cycle if it can, otherwise it holds it in `muldiv_ready` until it can. It never restarts on the done cycle.
+The shifts (SLL, SRL, SRA and immediates) are single-cycle ALU operations (`alu.v`).
+
+Cycles are `muldiv`'s latency: `done` comes this many cycles after the `start` cycle, so the instruction occupies EX for one more (plus its rs2 read cycle when rs2 is not x0). They run during the next instruction's fetch, so behind the SoC's QSPI memory an M instruction costs no more than an ALU one. One 35-bit adder/subtractor serves all eight: the multiplier is Booth-recoded two bits per step (a signed multiplicand is sign-extended into the accumulator; an unsigned multiplier with bit 31 set gets one correction step), so a multiply needs no operand or result negation; a divide negates its operands and result through the same adder. Division by zero and signed overflow follow the spec. Handshake: `start` for one cycle, `busy` while computing, `done` for one cycle as `busy` drops. The pipeline takes the result on the done cycle if it can, otherwise it holds it in `muldiv_ready` until it can. It never restarts on the done cycle.
 
 ### 9.3 A Extension
 
