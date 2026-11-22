@@ -364,3 +364,6 @@ fh_irq_hold         expect x8=0x3c x11=0x0 x12=0x1 x13=0x0
 fh_irq_hold         expect x8=0x3c x11=0x0 x12=0x1 x13=0x0 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
 # Cycle floor with the instruction cache on; SoC only. x10 = 1 when both loops meet their bound.
 fh_perf             soc expect x10=0x1 -- +CACHE_EN
+
+# fh_mul_hold from flash (SoC only): the flash stream idles open under each M op (WO-76).
+fh_flash            flash
