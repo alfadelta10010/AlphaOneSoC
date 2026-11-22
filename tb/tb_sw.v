@@ -192,7 +192,7 @@ module tb_sw;
     reg ns_err = 1'b0;
     always @(posedge clk) if (!rst && no_stream && soc.qspi_stream_en === 1'b1 && !ns_err) begin
         ns_err <= 1'b1;
-        $display("ERROR stream: QSPI_CFG.STREAM set under +NO_STREAM (cycle %0d, pc %08x)", cyc, soc.cpu.dbg_pc);
+        $display("ERROR stream: QSPI_CFG.STREAM set under +NO_STREAM (cycle %0d)", cyc);
     end
 
     initial begin
@@ -212,7 +212,7 @@ module tb_sw;
                 done = 1'b1;
                 $write("\n");
                 sd_finish;
-                if (soc.dmem_wdata[15:0] == 16'h5555 && uart_errors == 0 && sd.errors == 0)
+                if (soc.dmem_wdata[15:0] == 16'h5555 && uart_errors == 0 && sd.errors == 0 && !ns_err)
                     $display("SW-RESULT: PASS cycles=%0d instret=%0d", cyc, instret);
                 else
                     $display("SW-RESULT: FAIL code=%0d cycles=%0d instret=%0d",
