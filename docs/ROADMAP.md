@@ -963,9 +963,11 @@ million clocks: the run below is 70 iterations.
 | FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,191 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
-* FAT32 (a 33 MB image is too big for the bench's disk array), a card larger than 2 GB, multi-block
-  commands (CMD18, CMD25: the driver reads and writes one block at a time), CRC16 on data (checked by
-  neither side) and a write that the card never finishes (the 1,000,000-byte busy limit is not run).
+* exFAT: FatFs is built with `FF_FS_EXFAT` off, so a card over 32 GB (formatted exFAT as shipped) needs
+  a FAT32 re-format or the option switched on (not built or run). The driver and the card model cover
+  SDHC/SDXC to 2 TB (CSD, block numbers past 2 GB and 4 GB), multiple-block transfers (CMD18 + CMD12,
+  CMD25 + stop token), the CRC16 of read data, and the card that never finishes (`sdtest never`);
+  the CRC16 of written data is not sent (SPI mode does not check it).
 * FreeRTOS runs in M-mode only; the upstream port has no U-mode tasks under PMP.
 * Silicon: the DDR sweep's windows come from the Pmod model; the sweep exists to measure the real ones
   (docs/qspi-ddr.md 7).
