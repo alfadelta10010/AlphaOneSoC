@@ -423,6 +423,17 @@ module tb_rivercore;
     // ================================================================
     //  Counters
     // ================================================================
+`ifdef SOC_TB
+    // I-cache activity (summary line "icache:"), so a river_core run shows the cache was really in the path.
+    integer ic_act_cyc = 0, ic_fills = 0, ic_hit_cyc = 0;
+    reg ic_fill_q = 1'b0;
+    always @(posedge clk) begin
+        ic_fill_q <= soc.icache.fill_active;
+        if (soc.icache.active) ic_act_cyc <= ic_act_cyc + 1;
+        if (soc.icache.fill_active && !ic_fill_q) ic_fills <= ic_fills + 1;
+        if (soc.icache.hit_q) ic_hit_cyc <= ic_hit_cyc + 1;
+    end
+`endif
     integer instr_count = 0;
     integer cycle_count = 0;
 
@@ -1158,6 +1169,9 @@ module tb_rivercore;
                      inv_cycles, inv_flush, inv_muldiv, inv_mdact, inv_csrwb, inv_fail);
             $display("  fetch-reuse: hits %0d fetches %0d loads %0d", fr_hits, fr_fetches, fr_loads);
             $display("  fetch-hold: %0d", fh_loads);
+`ifdef SOC_TB
+            $display("  icache: active %0d cycles, fills %0d, hit cycles %0d", ic_act_cyc, ic_fills, ic_hit_cyc);
+`endif
             $display("  Dump: %0s", dump_file_str);
         end
     endtask
