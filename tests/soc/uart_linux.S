@@ -188,7 +188,11 @@ poll_rx:
     mv   a3, t0                  # the IID, for the count check after the drain
     li   t1, 0xC4
     beq  t0, t1, 8f              # RX data available (FIFO level >= trigger) ...
-    CHECK t0, 0xCC, 0x140        # ... or character timeout (UART_IIR_RX_TIMEOUT); nothing else is enabled
+    bnez s7, 1f
+    mv   a7, t0                  # the FIRST interrupt: the 11 characters arrive back to back, so RX data fires first
+    li   a6, 0x146               # (a timeout first would mean the SoC never raised RDA)
+    j    test_fail
+1:  CHECK t0, 0xCC, 0x140        # ... or character timeout (UART_IIR_RX_TIMEOUT); nothing else is enabled
 8:  lbu  t1, LSR(s0)
     li   a4, 0                   # characters this handler call reads
     andi t2, t1, LSR_DR
