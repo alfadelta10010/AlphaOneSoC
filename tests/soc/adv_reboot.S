@@ -11,9 +11,10 @@
  * reads 2 = cache built, EN 0, PBURST 0).
  *
  * Boot n is told by BOOT_MODE (0 at the pin reset):
- *   every boot: CACHE_CTL = 2 and QSPI_CFG = 1 (STREAM, strap 0) before the
- *   program writes them; RESET_CAUSE as expected (PIN / SOFT / WDT), then
- *   W1C; a 64-instruction PSRAM routine (fresh copy, FENCE.I) returns 2016.
+ *   every boot: CACHE_CTL = 2 and QSPI_CFG = 9 (STREAM = 1 with strap 0, DDR 0,
+ *   DDR_CAP 2: soc-architecture.md "syscon" +0x1C) before the program writes
+ *   them; RESET_CAUSE as expected (PIN / SOFT / WDT), then W1C; a
+ *   64-instruction PSRAM routine (fresh copy, FENCE.I) returns 2016.
  *   boot 0..2: the victim line V (cold, PSRAM) is entered at word 0 and the
  *   FINISH 0x7777 store sits at word n: with the cache on the fill of V
  *   (a burst with PBURST) is still running when the reboot lands.
@@ -46,7 +47,7 @@ _start:
     bne  a7, t1, test_fail
     lw   a7, QSPI_CFG(s11)
     li   a6, 0x58
-    li   t1, 1
+    li   t1, (1 | (2 << 2))       /* reset value: STREAM 1 (strap 0), DDR 0, DDR_CAP 2 */
     bne  a7, t1, test_fail
     /* expected cause: boot 0 PIN, 1..3 SOFT, 4 WDT */
     li   t1, 1
