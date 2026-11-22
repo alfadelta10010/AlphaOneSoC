@@ -37,6 +37,7 @@ T=$WORK/tree
 md5=$(md5sum "$NETLIST" | cut -d' ' -f1)
 echo "netlist  $NETLIST"; echo "md5      $md5"
 rm -rf "$T"; mkdir -p "$T/tb"; cp -r "$R/src" "$T/src"; cp -r "$R/tb/eqy" "$T/tb/eqy"; rm -rf "$T/tb/eqy/__pycache__"
+mkdir -p "$T/scripts"; cp "$R/scripts/wrapper-srcs.sh" "$T/scripts/"; cp "$R/Makefile" "$T/Makefile"   # run.sh reads WRAPPER_SRC through them (880a0b0)
 RUN=$T/tb/eqy/run.sh
 n=$(grep -c '^NL_MD5=[0-9a-f]*$' "$RUN"); [ "$n" = 1 ] || { echo "eqy-refit.sh: NL_MD5 line not found once in run.sh" >&2; exit 2; }
 sed -i "s/^NL_MD5=[0-9a-f]*\$/NL_MD5=$md5/" "$RUN"
