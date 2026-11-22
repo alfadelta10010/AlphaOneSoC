@@ -1,0 +1,8 @@
+# An image without the DDR flag: the loader does not sweep, says nothing, and leaves QSPI_CFG at its reset value
+# (STREAM on, DDR off, DDR_CAP 2).
+- flash in DDR
+- flash stays SDR
++ QSPI_CFG 09 (STREAM 1, DDR 0, DDR_CAP 2)
++ read back from flash in SDR, 0 differ
+- FAIL
+- ERROR

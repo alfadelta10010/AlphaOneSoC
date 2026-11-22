@@ -41,7 +41,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-seeds \
         test-qspi test-qspi-ddr-sweep test-pmod-dtr test-uart test-gpio test-spi test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
-        rivercore-build rivercore-test
+        rivercore-build rivercore-test verilator-build verilator-test
 
 all: test-all
 
@@ -519,6 +519,33 @@ ifndef HEX
 endif
 	@$(VVP) $(BUILD_DIR)/sim_rivercore \
 		+INIT_FILE=$(abspath $(HEX)) \
+		+DUMP_FILE=$(or $(DUMP),execution.dump) \
+		$(if $(CYCLES),+MAX_CYCLES=$(CYCLES)) \
+		$(if $(TOHOST),+TOHOST_ADDR=$(TOHOST)) \
+		$(if $(START_PC),+START_PC=$(START_PC))
+
+# Verilator build of the same testbench (--timing keeps the '#' delays, so
+# traces match Icarus). Rebuilt against the current src/ on every call;
+# verilator's own make only recompiles what changed.
+#   make verilator-build
+#   make verilator-test HEX=tests/rv32i_basic.hex DUMP=out.dump
+VERILATOR   ?= verilator
+VL_DIR      := $(BUILD_DIR)/verilator
+VL_SRC      := $(SRC_FILES)
+
+verilator-build: $(BUILD_DIR)
+	@echo "=== Building river_core testbench (Verilator) ==="
+	@$(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH \
+		-Wno-TIMESCALEMOD --top-module tb_rivercore -Mdir $(VL_DIR) -o sim_rivercore \
+		$(VL_SRC) $(TB_DIR)/memory_model.v $(TB_DIR)/tb_rivercore.v > $(VL_DIR).log 2>&1 \
+		|| { tail -30 $(VL_DIR).log; exit 1; }
+	@echo "Built: $(VL_DIR)/sim_rivercore"
+
+verilator-test: verilator-build
+ifndef HEX
+	@echo "Usage: make verilator-test HEX=<path/to/program.hex>"; exit 1
+endif
+	@$(VL_DIR)/sim_rivercore +INIT_FILE=$(abspath $(HEX)) \
 		+DUMP_FILE=$(or $(DUMP),execution.dump) \
 		$(if $(CYCLES),+MAX_CYCLES=$(CYCLES)) \
 		$(if $(TOHOST),+TOHOST_ADDR=$(TOHOST)) \

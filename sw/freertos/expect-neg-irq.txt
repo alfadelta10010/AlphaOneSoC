@@ -1,0 +1,4 @@
+# The irq case (-DNEG_IRQ): the kernel's hook or the port's handler stops the run.
++ INTERRUPT mcause=80000003
+=RESULT FAIL code=169
+- tick: vTaskDelay

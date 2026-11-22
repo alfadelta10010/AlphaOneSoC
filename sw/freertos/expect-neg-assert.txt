@@ -1,0 +1,4 @@
+# The assert case (-DNEG_ASSERT): the kernel's hook or the port's handler stops the run.
++ ASSERT 
+=RESULT FAIL code=165
+- tick: vTaskDelay

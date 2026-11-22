@@ -1,0 +1,13 @@
+# A trap in flash code after the execute test, while the watchdog is armed (loader built with
+# -DDDR_FORCE_LATE_TRAP): mtvec is still the PSRAM handler, which restores SDR and BOOT_MODE 0xDF and
+# sets TOP 15, so the payload runs on. With mtvec back at the loader's handler the trap would spin in
+# trap_report and a TOP 1 watchdog reset would follow: a second banner and a reset cause.
++ flash stays SDR: trap in the execute test
++ DDR 0, DDR_CAP
++ read back from flash in SDR, 0 differ
+- reset cause 0x04
+- DDR failed on an earlier boot
+- a watchdog reset with DDR on
+- FAIL
+- TRAP mcause
+- ERROR

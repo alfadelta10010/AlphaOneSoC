@@ -1,0 +1,75 @@
+# The monitor session the bench plays (make -C sw run-monitor). Wait text, TAB, keys.
+PROMPT	h
+PROMPT	i
+PROMPT	r
+PROMPT	x
+PROMPT	
+PROMPT	^Cr
+PROMPT	zz
+PROMPT	g zz
+PROMPT	g
+PROMPT	csr zz
+PROMPT	csr 1000
+PROMPT	csr fff
+PROMPT	csr mscratch 5
+PROMPT	csr mtvec 5
+PROMPT	csr scan 3000 3001
+PROMPT	csr scan zz
+PROMPT	m 80000000 0
+PROMPT	m 80000001 1
+PROMPT	mh 80000001 1
+PROMPT	w 80000001 5
+PROMPT	wh 80000001 5
+PROMPT	wb 20000000 5
+PROMPT	m 80fffffc 4
+PROMPT	m ffffffff 1
+PROMPT	m 20000000 zz
+PROMPT	zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+PROMPT	mb 80000000 4^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^Hh
+PROMPT	g {demo_regs}
+PROMPT	r
+PROMPT	r nosuch
+PROMPT	r zero 5
+PROMPT	r a0 zz
+PROMPT	x
+PROMPT	r a0
+PROMPT	g {demo_trap}
+PROMPT	r a0
+PROMPT	g {demo_fault}
+PROMPT	g {demo_ret}
+PROMPT	x
+PROMPT	g {demo_regs}
+PROMPT	r t0 ABCDEF01
+PROMPT	r t1 0xabcdef02
+PROMPT	r a5 1234abcd
+PROMPT	r a5
+PROMPT	x
+PROMPT	r a0
+PROMPT	m 20000000 8
+PROMPT	mb 80000000 20
+PROMPT	mh 20000000 8
+PROMPT	m 30000000 4
+PROMPT	w 80100000 deadbeef
+PROMPT	m 80100000 2
+PROMPT	wb 80100001 5a
+PROMPT	m 80100000 1
+PROMPT	csr
+PROMPT	csr misa
+PROMPT	csr 301
+PROMPT	csr mscratch
+PROMPT	csr 7c0
+PROMPT	csr scan 300 310
+PROMPT	csr scan f00 f20
+PROMPT	p
+PROMPT	mb 80000000 1000000
+\n	^C
+PROMPT	gb {demo_spin}
+\n	^C
+PROMPT	r
+PROMPT	m 30000000 1
+PROMPT	csr scan 7a0 7a8
+PROMPT	r a0 7ffffff0
+PROMPT	x
+\n	^C
+PROMPT	r a0
+PROMPT	q

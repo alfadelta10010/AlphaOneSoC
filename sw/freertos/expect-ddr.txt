@@ -1,0 +1,18 @@
++ FreeRTOS V11.1.0, tick 100 Hz = 625000 clocks
++ tick: vTaskDelay(10) took
++ preempt: order aHb
++ yield:
++ queue: 100 round trips
++ mutex: order LHM
++ timer:
++ notify: 5 of 5 taken
++ latency: compare match to the tick hook
+- FAIL
+- ASSERT
+- EXCEPTION
+- INTERRUPT
+- TRAP mcause
+# DDR=1 with the loader's final watchdog TOP cut to 6 (4.2M clocks): the run only passes if the tick hook kicks
++ flash in DDR
+- reset cause 0x04
+- flash stays SDR

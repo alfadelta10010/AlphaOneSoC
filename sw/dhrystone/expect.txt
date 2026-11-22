@@ -1,0 +1,5 @@
++ Dhrystone Benchmark, Version C, Version 2.2
++ Microseconds for one run through Dhrystone:
++ Dhrystones per Second:
+- TRAP
+- Measured time too small

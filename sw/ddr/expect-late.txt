@@ -1,0 +1,10 @@
+# The checks back in flash find a difference (loader built with -DDDR_FORCE_LATE_MISMATCH): SDR again with
+# the strap's STREAM bit, BOOT_MODE 0xDF, no reboot.
++ flash stays SDR: mismatch after the execute test
++ (STREAM 1, DDR 0,
++ read back from flash in SDR, 0 differ
+- reset cause 0x04
+- DDR failed on an earlier boot
+- FAIL
+- TRAP mcause
+- ERROR

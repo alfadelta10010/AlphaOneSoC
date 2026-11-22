@@ -1,0 +1,5 @@
+# ACMD41 stays idle for 5000 tries: init gives up (rc 3)
++ sdtest: init rc=3
+- sdtest: read
++ 0 errors, 0 expected
+- ERROR

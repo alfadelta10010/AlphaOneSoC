@@ -1,0 +1,4 @@
++ EMBENCH
++ correct=1
+- correct=0
+- TRAP

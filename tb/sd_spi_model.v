@@ -25,6 +25,20 @@
 //     the bench puts a pull-up (tri1) on the card side.
 //   * +SD_STUCK_DO makes DO read 1 whenever it would be driven (a negative
 //     control).
+//   * card kinds: +SD_SDSC makes it a standard-capacity v2 card (OCR bit 30 = 0, so READ and
+//     WRITE take a byte address, a multiple of 512; CMD16 sets the block length, which must
+//     be 512), +SD_V1 a v1 card as well (CMD8 is an illegal command, R1 0x05). Default: SDHC.
+//     CMD13 (SEND_STATUS) answers an R2 of 0x0000 (R1, then no error bits).
+//   * faults, for the driver's error paths: +SD_RDERR=<blk> makes a read of that block answer with a data error
+//     token (0x04, "ECC failed") instead of data; +SD_WRRESP=<hex> the data response token of a write (0b CRC
+//     error, 0d write error; 05 default) and the block is then not stored; +SD_STATUS=<hex> the second byte
+//     of CMD13's R2; +SD_CMD8BAD an R7 that does not echo the check pattern; +SD_NO16 a CMD16 the card refuses.
+//     +SD_BUSY=<n> (above) keeps ACMD41 returning idle for n tries.
+//   * a real disk: with DISK_BLKS > 1 and `use_disk` set by the bench (tb_sw does it for
+//     +SD_IMAGE=<byte-hex>), reads and writes go to the `disk` array, so a FAT image
+//     can be mounted, written to and read back (+SD_DUMP in tb_sw writes it out).
+//     DISK_BLKS = 1 (the default) keeps the formula image and the three-block write
+//     store above; no other bench sets it.
 //
 // Checks (errors, or n_expected while `expect_violations`): an SCK edge with
 // CS# low before the power-up clocks; an SCK period < 2.5 us before the card
@@ -42,7 +56,8 @@ module sd_spi_model #(
     parameter real T_ODLY    = 14.0,
     parameter real T_OH      = 0.0,
     parameter real T_ISU     = 5.0,
-    parameter real T_IH      = 5.0
+    parameter real T_IH      = 5.0,
+    parameter integer DISK_BLKS = 1
 )(
     input  wire fitted,
     input  wire cs_n,
@@ -57,6 +72,12 @@ module sd_spi_model #(
     reg     ready = 1'b0;                   // out of idle (ACMD41 returned 0x00)
 
     integer sd_busy_n = 3, stuck = 0;
+    reg     sdsc = 1'b0, v1 = 1'b0;         // +SD_SDSC, +SD_V1
+    integer rderr_blk = -1;                 // +SD_RDERR
+    reg [7:0] wr_resp = 8'h05, sd_status = 8'h00;   // +SD_WRRESP, +SD_STATUS
+    reg     cmd8bad = 1'b0, no16 = 1'b0;    // +SD_CMD8BAD, +SD_NO16
+    reg     wr_once = 1'b0;                 // +SD_WRONCE: +SD_WRRESP applies to the first write only
+    reg [7:0] st_pend = 8'h00;              // status bits a refused write left, cleared by CMD13
     reg [31:0] rs = 32'h1;
     function [31:0] rnd(input integer d);
         begin rs = rs ^ (rs << 13); rs = rs ^ (rs >> 17); rs = rs ^ (rs << 5); rnd = rs; end
@@ -67,6 +88,14 @@ module sd_spi_model #(
     initial begin : plusargs
         integer s;
         if ($value$plusargs("SD_BUSY=%d", sd_busy_n)) ;
+        v1   = $test$plusargs("SD_V1");
+        if ($value$plusargs("SD_RDERR=%d", rderr_blk)) ;
+        if ($value$plusargs("SD_WRRESP=%h", wr_resp)) ;
+        if ($value$plusargs("SD_STATUS=%h", sd_status)) ;
+        cmd8bad = $test$plusargs("SD_CMD8BAD");
+        wr_once = $test$plusargs("SD_WRONCE");
+        no16    = $test$plusargs("SD_NO16");
+        sdsc = $test$plusargs("SD_SDSC") || v1;
         if ($value$plusargs("SD_SEED=%d", s)) rs = 32'h2545F491 ^ (s * 32'h9E3779B1);
         else rs = 32'h2545F491;
         if (rs == 0) rs = 1;
@@ -108,6 +137,10 @@ module sd_spi_model #(
         end
     endfunction
 
+    // A real disk, when the bench loads one
+    reg        use_disk = 1'b0;
+    reg [7:0]  disk [0:DISK_BLKS * 512 - 1];
+
     // Written blocks (up to 4): block number and data
     integer    wb_blk [0:3];
     reg [7:0]  wb_dat [0:2047];
@@ -117,7 +150,7 @@ module sd_spi_model #(
         begin
             f = -1;
             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == blk) f = s;
-            blk_byte = (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
+            blk_byte = use_disk ? disk[blk * 512 + i] : (f >= 0) ? wb_dat[f * 512 + i] : img(blk, i);
         end
     endfunction
 
@@ -210,8 +243,10 @@ module sd_spi_model #(
             case (c)
                 6'd0:  begin if (crc_ok) begin idle_st = 1'b1; ready = 1'b0; acmd41_n = 0; r1 = 8'h01; end push(r1, 1'b0); end
                 6'd8:  begin
-                    push(r1, 1'b0);
-                    if (crc_ok && arg[11:0] == 12'h1AA) begin push(8'h00, 1'b0); push(8'h00, 1'b0); push(8'h01, 1'b0); push(8'hAA, 1'b0); end
+                    if (v1) push(r1 | 8'h04, 1'b0);
+                    else push(r1, 1'b0);
+                    if (v1) ;
+                    else if (crc_ok && arg[11:0] == 12'h1AA) begin push(8'h00, 1'b0); push(8'h00, 1'b0); push(8'h01, 1'b0); push(cmd8bad ? 8'hAB : 8'hAA, 1'b0); end
                     else r1 = r1 | 8'h04;
                 end
                 6'd55: begin app = 1'b1; push(r1, 1'b0); end
@@ -219,21 +254,42 @@ module sd_spi_model #(
                     if (!was_app) push(r1 | 8'h04, 1'b0);
                     else begin
                         acmd41_n = acmd41_n + 1;
-                        if (acmd41_n > sd_busy_n) begin idle_st = 1'b0; ready = 1'b1; push(8'h00, 1'b0); end
+                        // HCS (arg[30]): a v1 card is not told it (the host must send 0); an SDHC card
+                        // never leaves idle for HCS = 0 (SD Physical Layer 7.2.1, 4.2.3.1)
+                        if (v1 && arg[30]) err("ACMD41 with HCS set sent to a v1 card");
+                        if (!sdsc && !arg[30]) push(8'h01, 1'b0);
+                        else if (acmd41_n > sd_busy_n) begin idle_st = 1'b0; ready = 1'b1; push(8'h00, 1'b0); end
                         else push(8'h01, 1'b0);
                     end
                 end
                 6'd58: begin
                     push(r1, 1'b0);
-                    push(ready ? 8'hC0 : 8'h80, 1'b0); push(8'hFF, 1'b0); push(8'h80, 1'b0); push(8'h00, 1'b0);
+                    push(ready ? (sdsc ? 8'h80 : 8'hC0) : 8'h80, 1'b0); push(8'hFF, 1'b0); push(8'h80, 1'b0); push(8'h00, 1'b0);
+                end
+                6'd13: begin
+                    push(r1, 1'b0); push(sd_status | st_pend, 1'b0);
+                    st_pend = 8'h00;                        // the error bits clear on read
+                end
+                6'd16: begin
+                    if (!ready) push(r1 | 8'h04, 1'b0);
+                    else if (arg != 32'd512 || no16) push(r1 | 8'h40, 1'b0);
+                    else push(8'h00, 1'b0);
                 end
                 6'd17: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
-                    else begin push(8'h00, 1'b0); push_block(arg); end
+                    else if (sdsc && arg[8:0] != 9'd0) begin err("CMD17 byte address not a multiple of 512"); push(8'h40, 1'b0); end
+                    else if (use_disk && (sdsc ? arg >> 9 : arg) >= DISK_BLKS) begin err("CMD17 beyond the disk"); push(8'h40, 1'b0); end
+                    else if (rderr_blk >= 0 && (sdsc ? arg >> 9 : arg) == rderr_blk) begin
+                        push(8'h00, 1'b0);
+                        na = 1 + rn(8);
+                        for (i = 0; i < na; i = i + 1) push(8'hFF, 1'b0);
+                        push(8'h04, 1'b0);                      // a data error token, no data
+                    end
+                    else begin push(8'h00, 1'b0); push_block(sdsc ? arg >> 9 : arg); end
                 end
                 6'd18: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
-                    else begin push(8'h00, 1'b0); stream = 1'b1; stream_blk = arg; end
+                    else begin push(8'h00, 1'b0); stream = 1'b1; stream_blk = sdsc ? arg >> 9 : arg; end
                 end
                 6'd12: begin
                     // abandon the stream; a stuff byte, R1b, busy
@@ -244,7 +300,9 @@ module sd_spi_model #(
                 end
                 6'd24: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
-                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = arg; end
+                    else if (sdsc && arg[8:0] != 9'd0) begin err("CMD24 byte address not a multiple of 512"); push(8'h40, 1'b0); end
+                    else if (use_disk && (sdsc ? arg >> 9 : arg) >= DISK_BLKS) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
+                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = sdsc ? arg >> 9 : arg; end
                 end
                 default: push(r1 | 8'h04, 1'b0);
             endcase
@@ -276,7 +334,8 @@ module sd_spi_model #(
                     wcnt = wcnt + 1;
                     if (wcnt == 2) begin
                         // the data response, busy, then store
-                        push(8'h05, 1'b0);
+                        push(wr_resp, 1'b0);
+                        if (wr_resp != 8'h05) st_pend = st_pend | 8'h20;   // a refused write: the status keeps "error" 
                         wbusy = 1 + rn(16);
                         for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
                         begin : store
@@ -284,9 +343,12 @@ module sd_spi_model #(
                             f = -1;
                             for (s = 0; s < wb_n; s = s + 1) if (wb_blk[s] == wblk) f = s;
                             if (f < 0) begin f = wb_n; if (wb_n < 3) wb_n = wb_n + 1; wb_blk[f] = wblk; end
-                            for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
+                            if (wr_resp != 8'h05) ;                 // refused: nothing is stored
+                            else if (use_disk) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
+                            else for (s = 0; s < 512; s = s + 1) wb_dat[f * 512 + s] = wbuf[s];
                         end
                         n_wr_blk = n_wr_blk + 1;
+                        if (wr_once) wr_resp = 8'h05;
                         rxs = RX_IDLE;
                     end
                 end

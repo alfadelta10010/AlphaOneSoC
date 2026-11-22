@@ -1,0 +1,5 @@
+# Whatever the loader chose (+RD_LATE with its 62.5 MHz delay pair moves the window), the flash reads must be right.
++ 0 differ
+- FAIL
+- TRAP mcause
+- ERROR

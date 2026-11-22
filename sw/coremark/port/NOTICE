@@ -1,0 +1,6 @@
+core_portme.c and core_portme.h are derived from the porting layer in the `simple` directory of
+CoreMark (https://github.com/eembc/coremark), Copyright 2018 EEMBC (Embedded Microprocessor
+Benchmark Consortium), original author Shay Gal-on, licensed under the Apache License, Version 2.0
+(LICENSE in this directory). Changed for AlphaOneSoC: time is mtime (core clocks), no floating
+point, static memory in PSRAM, the output through the UART, and a CoreMark/MHz line.
+The rest of CoreMark is not in this repository: sw/fetch.sh fetches it at a pinned commit.

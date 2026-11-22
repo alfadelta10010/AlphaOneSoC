@@ -80,6 +80,10 @@
 #   FYRA_SRC=<dir>  build the simulator from this copy of src/
 #   OUT_DIR=<dir>   artifacts there instead of ./out (./out/soc for soc)
 #   FAILFAST=1      stop the suite at its first failing run
+#   SIMULATOR=verilator  build with Verilator (--binary --timing) instead of
+#                   Icarus; same testbench, same references (artifacts go to
+#                   ./out/vl, ./out/vl/soc). Two-state: the X checks below are
+#                   refused (an error) or not made; Icarus is their reference.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -87,6 +91,19 @@ SOC=0
 [ "${1:-}" = soc ] && { SOC=1; shift; }
 SRC="${FYRA_SRC:-$ROOT/src}"
 OUT="${OUT_DIR:-$HERE/out}"
+SIMULATOR="${SIMULATOR:-iverilog}"
+if [ "$SIMULATOR" = verilator ]; then
+  # Verilator is two-state: an X becomes a constant, so the checks that rest on X cannot run
+  # on it (+RF_X, +RF_COLLIDE_X, the X-in-dump failure below, memory_model's NOTREADY_DATA=0
+  # which drives X while not ready and here gives zeros). Icarus stays the reference for them.
+  case " ${RUN_PLUSARGS:-} $* " in
+    *RF_X*|*RF_COLLIDE_X*|*NOTREADY_DATA=0*)
+      echo "ERROR: SIMULATOR=verilator cannot run X checks (RF_X, RF_COLLIDE_X, NOTREADY_DATA=0): use Icarus" >&2
+      exit 2 ;;
+  esac
+  echo "NOTE: Verilator is two-state; the suite's X checks are not made on this run (Icarus makes them)" >&2
+fi
+[ "$SIMULATOR" = verilator ] && OUT="$OUT/vl"
 [ $SOC = 1 ] && OUT="$OUT/soc"
 mkdir -p "$OUT"
 SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
@@ -98,14 +115,21 @@ ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 
 CORE_SRC=("$SRC"/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,rf_top,signExt}.v)
 build() {
+  local files defs=""
   if [ $SOC = 1 ]; then
-    iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
-      "${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,spi,syscon,alphaone_soc}.v \
-      "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v || return 1
+    defs="-DSOC_TB"
+    files=("${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,spi,syscon,alphaone_soc}.v
+           "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v)
   else
-    iverilog -g2012 -o "$OUT/sim" -s tb_rivercore \
-      "${CORE_SRC[@]}" \
-      "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v || return 1
+    files=("${CORE_SRC[@]}" "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v)
+  fi
+  if [ "$SIMULATOR" = verilator ]; then
+    # --timing keeps the models' # delays, so the run is timing-accurate.
+    verilator --binary --timing -j 0 $defs -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH \
+      -Wno-TIMESCALEMOD --top-module tb_rivercore -Mdir "$OUT/obj" -o ../sim \
+      "${files[@]}" >"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log"; return 1; }
+  else
+    iverilog -g2012 $defs -o "$OUT/sim" -s tb_rivercore "${files[@]}" || return 1
   fi
   echo "build ok"
 }
@@ -152,11 +176,12 @@ ref() { # ref <name>
 MAXC=400000
 [ $SOC = 1 ] && MAXC=30000000
 
+RUNSIM=vvp; [ "$SIMULATOR" = verilator ] && RUNSIM=
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
   local image=+INIT_FILE="$OUT/$n.hex"
   is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
-  vvp "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
+  $RUNSIM "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
       +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
 }
 
