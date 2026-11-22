@@ -1,4 +1,4 @@
-# block 203 carries a wrong CRC16 (a bit in each byte): the multiple read of 200..205 and the single read of 203 both return 0x30 (48), later reads still work
+# block 203 carries a wrong CRC16: the single read of 203 gets a wrong high CRC byte and the multiple read of 200..205 a wrong low byte; both return 0x30 (48), later reads still work
 + sdmulti: init rc=0 sdhc=1
 + sdmulti: read x8 at 0 rc=0 singles rc=0 same=1
 + sdmulti: read x8 at 4000 rc=0 singles rc=0 same=1

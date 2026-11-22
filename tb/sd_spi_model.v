@@ -31,7 +31,7 @@
 //     be 512), +SD_V1 a v1 card as well (CMD8 is an illegal command, R1 0x05). Default: SDHC.
 //     CMD13 (SEND_STATUS) answers an R2 of 0x0000 (R1, then no error bits).
 //   * faults, for the driver's error paths: +SD_RDERR=<blk> makes a read of that block answer with a data error
-//     token (0x04, "ECC failed") instead of data; +SD_RDCRC=<blk> a wrong CRC16 after that block's data; +SD_WRRESP=<hex> the data response token of a write (0b CRC
+//     token (0x04, "ECC failed") instead of data; +SD_RDCRC=<blk> a wrong CRC16 after that block's data (the high byte wrong on the 1st read of it, the low byte on the 2nd, alternating); +SD_WRRESP=<hex> the data response token of a write (0b CRC
 //     error, 0d write error; 05 default) and the block is then not stored; +SD_STATUS=<hex> the second byte
 //     of CMD13's R2; +SD_CMD8BAD an R7 that does not echo the check pattern; +SD_NO16 a CMD16 the card refuses.
 //     +SD_BUSY=<n> (above) keeps ACMD41 returning idle for n tries.
@@ -81,6 +81,7 @@ module sd_spi_model #(
     reg     sdsc = 1'b0, v1 = 1'b0;         // +SD_SDSC, +SD_V1
     integer rderr_blk = -1;                 // +SD_RDERR
     integer rdcrc_blk = -1;                 // +SD_RDCRC
+    integer rdcrc_n = 0;                    // reads of that block so far
     reg [7:0] wr_resp = 8'h05, sd_status = 8'h00;   // +SD_WRRESP, +SD_STATUS
     reg     cmd8bad = 1'b0, no16 = 1'b0;    // +SD_CMD8BAD, +SD_NO16
     reg [31:0] cap_blks = 32'hFFFFFFFF, cap_tmp = 32'h0;   // +SD_BLKS
@@ -199,7 +200,10 @@ module sd_spi_model #(
             push(8'hFE, 1'b0);
             c = 16'h0000;
             for (i = 0; i < 512; i = i + 1) begin push(blk_byte(blk, i), 1'b0); c = crc16_up(c, blk_byte(blk, i)); end
-            if (rdcrc_blk >= 0 && blk == rdcrc_blk) c = c ^ 16'h0101;      // +SD_RDCRC: a wrong CRC16 on this block (a bit wrong in each byte)
+            if (rdcrc_blk >= 0 && blk == rdcrc_blk) begin       // +SD_RDCRC: a wrong CRC16 on this block: the high byte on the 1st read, the low byte on the 2nd, ...
+                c = c ^ (rdcrc_n[0] ? 16'h0001 : 16'h0100);      // (so a driver that checks only one byte of it fails one of the two reads)
+                rdcrc_n = rdcrc_n + 1;
+            end
             push(c[15:8], 1'b0); push(c[7:0], 1'b0);
             crc_end_pos[n_ce % 8] = qt - 1; n_ce = n_ce + 1;
             end
@@ -355,8 +359,11 @@ module sd_spi_model #(
                 6'd12: begin
                     // abandon the stream; a stuff byte, R1b, busy
                     qh = qt; stream = 1'b0; oor_pos = -1;
-                    push(8'h3C, 1'b0); push(8'h00, 1'b0);     // the stuff byte is not 0xFF, nor an R1: the host must discard it
-                    na = 1 + rn(8);
+                    push(8'h3C, 1'b0);                         // the stuff byte is not 0xFF, nor an R1: the host must discard it
+                    na = rn(8);
+                    for (i = 0; i < na; i = i + 1) push(8'hFF, 1'b0);   // the R1 comes up to 7 bytes later: the host must poll for it
+                    push(8'h00, 1'b0);
+                    na = 9 + rn(8);                            // busy 9 to 16 bytes: the model counts a busy byte as gone when it is loaded, 8 pops pass before the next command's check, so a host that does not wait always sends it while busy
                     for (i = 0; i < na; i = i + 1) push(8'h00, 1'b1);
                 end
                 6'd24: begin
