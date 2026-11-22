@@ -1,12 +1,13 @@
 #!/bin/bash
 # Reproducible build: buildroot (cnlohr fork, Linux 6.8-rc1 NOMMU RV32) -> Image, rootfs.cpio, DTBs.
-# Usage: build.sh [workdir]   (default: dir of this script's parent)
+# Usage: build.sh [workdir]   (default: $LINUX_WORK or ~/linux-work; buildroot's tree br/ alone is 7.5 GB, keep it out of the repository)
 set -euo pipefail
 R=$(cd "$(dirname "$0")" && pwd)           # recipe dir
-W=${1:-$R/..}
+W=${1:-${LINUX_WORK:-$HOME/linux-work}}; mkdir -p "$W"
 BR_COMMIT=851edd24                          # cnlohr/buildroot master used
 [ -d "$W/br" ] || { git clone https://github.com/cnlohr/buildroot.git "$W/br"; git -C "$W/br" checkout $BR_COMMIT; }
 B=$W/br
+[ "$(git -C $B rev-parse --short=8 HEAD)" = "$BR_COMMIT" ] || { echo "$B is not at buildroot $BR_COMMIT" >&2; exit 1; }
 # a host without unzip (the sandbox): put the python shim next to it on PATH
 command -v unzip >/dev/null || { mkdir -p $W/bin; cp $R/unzip $W/bin/unzip; export PATH=$W/bin:$PATH; }
 mkdir -p $B/board/alpha
