@@ -531,7 +531,7 @@ test-cache: $(BUILD_DIR)
 	@$(IVERILOG) -g2001 -o $(BUILD_DIR)/tb_cache $(SRC_DIR)/cache.v $(SRC_DIR)/rf_top.v $(TB_DIR)/tb_cache.v
 	@$(call run_tb,tb_cache,+MAXLAT=12)
 	@$(call run_tb,tb_cache,+MAXLAT=1 +RF_COLLIDE_X,_l1)
-	@$(call run_tb,tb_cache,+MAXLAT=40 +RF_X +RF_COLLIDE_X,_l40)
+	@$(call run_tb,tb_cache,+MAXLAT=40 +CYCLES=1000000 +RF_X +RF_COLLIDE_X,_l40)
 	@$(call run_tb,tb_cache,+NOEN +RF_COLLIDE_X,_noen)
 
 test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-qspi test-qspi-burst test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
