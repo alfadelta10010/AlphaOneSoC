@@ -18,9 +18,17 @@
  *     after WFI runs, a manual claim returns 1 (0x76); MIE=1 -> one MEI trap,
  *     mepc = the WFI + 4 (0x77).
  *   3 PLIC claim/complete racing a new GPIO edge: after every W1C of IN_IP the
- *     bench toggles gpio_in[7] 0..255 clocks later (sweeping): every edge must
- *     be serviced; 300 services within the time (0x74), then IN_IP = 0 and no
- *     PLIC pending (0x78).
+ *     bench toggles gpio_in[7] 0..255 clocks later (sweeping), so the services
+ *     form one chain, one edge each. The chain is started by a W1C from a cold
+ *     PSRAM stub (64 x ADDI), so the interrupts land on its PSRAM fetches; the
+ *     ISR ends the chain at its 300th service (cue 0x61 before that W1C).
+ *     Every edge must be serviced: exactly 300 services within the time (0x74;
+ *     a lost edge stops the chain early), the stub returns 64 (0x71: an
+ *     instruction lost or run twice across a trap on a fetch), then IN_IP = 0
+ *     and no PLIC pending (0x78).
+ *     The interrupted code is NOT promised progress while the chain runs: with
+ *     the cache on, the ISR's flash lines evict the interrupted line, and the
+ *     refetch can outlast the W1C-to-next-edge time for every offset (WO-75).
  *   4 watchdog interrupt mode, the first expiry forced from PSRAM code (three
  *     mtime[14] toggles) followed by cold PSRAM code: exactly one claim of id 9,
  *     no reboot, WDT_STAT 0 after EOI (0x79).
@@ -208,13 +216,33 @@ _start:
     bne  s8, t1, test_fail
 
 /* ── Phase 3: claim/complete against new GPIO edges ── */
+    /* VCODE+0x100: sw t1, 0x1C(t0) (the W1C that starts the chain), 64 x ADDI a0,a0,1, jr ra */
+    li   a0, VCODE + 0x100
+    li   t1, 0x0062AE23           /* sw t1, 0x1C(t0) */
+    sw   t1, 0(a0)
+    li   t1, ADDI_A0(1)
+    li   t2, 64
+12: sw   t1, 4(a0)
+    addi a0, a0, 4
+    addi t2, t2, -1
+    bnez t2, 12b
+    li   t1, INSN_JR_RA
+    sw   t1, 4(a0)
+    li   s9, 300                  /* the ISR ends the chain at this service */
     li   t0, GPIO
     li   t1, 0x80
     sw   t1, G_IE(t0)
     li   t1, 0xFF
-    sw   t1, G_IP(t0)             /* clear */
+    sw   t1, G_IP(t0)             /* clear (before the cue: no toggle) */
     EVENT 0x60
-    sw   t1, G_IP(t0)             /* a W1C the bench sees: the first toggle */
+    fence.i
+    li   a0, 0
+    li   t2, VCODE + 0x100
+    jalr ra, 0(t2)                /* t0 = GPIO, t1 = 0xFF: the stub's W1C is the first toggle */
+    mv   a7, a0
+    li   a6, 0x71
+    li   t1, 64
+    bne  a0, t1, test_fail
     TSTART
 5:  RUNW
     li   t1, 300
@@ -223,6 +251,10 @@ _start:
     TCHECK 3000000, 0x74
     j    5b
 6:  EVENT 0x61
+    mv   a7, s5
+    li   a6, 0x74
+    li   t1, 300
+    bne  s5, t1, test_fail        /* one service per edge, no more */
     DELAY 2000
     li   t0, GPIO
     lw   t1, G_IP(t0)
@@ -321,7 +353,7 @@ _start:
     SIGF s7
     ADV_PASS
 
-/* ── Trap handler: tp, gp, s0-s3, s5-s8 are its own; t0 via mscratch ── */
+/* ── Trap handler: tp, gp, s0-s3, s5-s8 are its own, s9 it reads; t0 via mscratch ── */
     .balign 4                    /* mtvec BASE is 4-byte aligned: the low bits are its MODE field (WARL) */
 trap:
     csrrw t0, mscratch, t0
@@ -364,8 +396,12 @@ uart_isr:
 gpio_isr:
     li   gp, GPIO
     lw   t0, G_IP(gp)
-    sw   t0, G_IP(gp)             /* W1C what was seen (the bench's toggle follows) */
     addi s5, s5, 1
+    bne  s5, s9, 1f
+    li   gp, 0x61                 /* the last service: stop the bench's race BEFORE this W1C, */
+    sw   gp, MB_EVENT(s11)        /* so it makes no toggle and the chain ends */
+    li   gp, GPIO
+1:  sw   t0, G_IP(gp)             /* W1C what was seen (the bench's toggle follows) */
     j    complete
 wdt_isr:
     lw   t0, WDT_EOI(s11)
