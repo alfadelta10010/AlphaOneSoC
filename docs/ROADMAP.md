@@ -531,7 +531,7 @@ the software ladder (section 9), not for Zephyr's test suite, NuttX or Linux.
     software bench (`tb/tb_sw.v`, 9.4) runs the loader and hello world in
     1,967,772 clocks in both simulators, instruction for instruction (on `32cac47`,
     with streaming flash reads, 1,894,652 in both: re-checked 2026-11-11; hello now
-    also prints its mcycle line: 2,077,331 on Verilator at the PR #17 tip; 2,076,382 in both simulators on the tree before it, and the Icarus re-run at the tip is owed) Getting
+    also prints its mcycle line: 2,077,331 in both at the PR #18 tip 85c8459, re-run on 2026-11-22; 2,076,382 on the tree before it) Getting
     there found one testbench race, not an RTL difference: releasing reset
     with `rst <= 0` in a process that waits on the clock edge made Verilator
     release the QSPI pins a clock earlier than Icarus. A bench must release
@@ -879,7 +879,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
   watcher on syscon FINISH. It prints `SW-RESULT: PASS|FAIL|TIMEOUT` with
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
-  monitor's scripted session give the same clocks on both (hello 2,076,382 on the tree of 2026-11-21, 2,077,331 on Verilator at the PR #17 tip; the Icarus re-run is owed), and 56.9 million
+  monitor's scripted session give the same clocks on both (hello 2,077,331 on both at the PR #18 tip 85c8459, 2026-11-22), and 56.9 million
   (1.59 million instructions); FatFs (108.2 million clocks, 123 blocks read, 69 written) and
   FreeRTOS (49,077,894 clocks, the same costs) are the Verilator figures. The monitor, FatFs and
   FreeRTOS runs were identical on Icarus when compared 2026-11-11, before the later fixes changed
