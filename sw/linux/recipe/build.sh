@@ -15,7 +15,7 @@ cp $R/linux.config $R/busybox.config $B/board/alpha/
 cp $R/patches/*.patch $B/board/qemu/riscv32-virt/nommu/patches/linux/6.8-rc1/
 cp $R/defconfig $B/configs/alpha_defconfig
 make -C $B alpha_defconfig
-nice -n 19 make -C $B -j2
+nice -n 19 make -C $B -j2   # BR2_JLEVEL=2 (defconfig) limits the per-package jobs; -j2 only the top level
 OUT=${DELIVER:-$W/deliver}; mkdir -p $OUT
 cp $B/output/images/Image $B/output/images/rootfs.cpio $OUT/
 cp $B/output/build/linux-6.8-rc1/System.map $OUT/
