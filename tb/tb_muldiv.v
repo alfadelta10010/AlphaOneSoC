@@ -11,7 +11,7 @@
 //     until the next start, whatever the inputs do meanwhile -- the
 //     operands and op input are scrambled from the cycle after start;
 //   * the latency in docs/FyraCore_CPU_Reference.md 9.2 (REQ-MD-004): done
-//     33 cycles after start for a multiply, 36 for a divide (function below);
+//     17 (18) cycles after start for a multiply, 1 + 2 + 35 at most for a divide (function below);
 //   * reset in the middle of an operation leaves the unit idle and the next
 //     operation correct (REQ-MD-005).
 // A new operation is started 0-3 cycles after done (0: on the done cycle
@@ -72,8 +72,39 @@ module tb_muldiv;
             endcase
         end
     endfunction
-    function integer latency(input integer kind, input [31:0] y);
-        latency = (kind < 4) ? 33 : 36;
+    // Cycles from start to done, written from the unit's documented timing:
+    // a multiply is 1 + 16 steps (+1 for the correction step of a multiplier
+    // that is unsigned with bit 31 set and high word wanted); a divide is
+    // 1 + one cycle per operand negation + loop cycles + 1, where the loop
+    // takes one cycle per quotient bit except that, while the remainder is 0
+    // and the divisor is not, 16, 8 or 4 leading zero dividend bits go at once.
+    function integer latency(input integer kind, input [31:0] x, input [31:0] y);
+        reg [31:0] mag, dv;
+        reg [63:0] rem;
+        integer cnt, its, negs;
+        reg nx, ny;
+        begin
+            if (kind < 4) latency = 17 + ((kind != 0 && kind != 1 && y[31]) ? 1 : 0);
+            else begin
+                nx = (kind == 4 || kind == 6) && x[31];
+                ny = (kind == 4 || kind == 6) && y[31];
+                mag = nx ? -x : x; dv = ny ? -y : y;
+                negs = nx + ny;
+                rem = 0; cnt = 0; its = 0;
+                while (cnt <= 31) begin
+                    if (rem == 0 && dv != 0 && cnt <= 15 && mag[31:16] == 0) begin mag = mag << 16; cnt = cnt + 16; end
+                    else if (rem == 0 && dv != 0 && cnt <= 23 && mag[31:24] == 0) begin mag = mag << 8; cnt = cnt + 8; end
+                    else if (rem == 0 && dv != 0 && cnt <= 27 && mag[31:28] == 0) begin mag = mag << 4; cnt = cnt + 4; end
+                    else begin
+                        rem = {rem[62:0], mag[31]}; mag = mag << 1;
+                        if (rem >= dv) rem = rem - dv;     // dv = 0: always subtracts 0
+                        cnt = cnt + 1;
+                    end
+                    its = its + 1;
+                end
+                latency = 1 + negs + its + 1;
+            end
+        end
     endfunction
 
     // ── handshake monitor (every clock) ──────────────────────────────────
@@ -129,7 +160,7 @@ module tb_muldiv;
             op = kind[2:0];
             a = x; b = y; start = 1;
             @(posedge clk);
-            t_start = cyc; want_lat = latency(kind, y); pend = 1; have = 0;
+            t_start = cyc; want_lat = latency(kind, x, y); pend = 1; have = 0;
             n_start = n_start + 1; n_op[kind] = n_op[kind] + 1;
             @(negedge clk);
             start = 0; a = $random(seed); b = $random(seed); op = $random(seed);

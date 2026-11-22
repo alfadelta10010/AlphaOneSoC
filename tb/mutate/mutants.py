@@ -147,7 +147,7 @@ m("CD18", "compressed_decoder.v", "5'd0,                // rs1 = x0", "rd_full, 
 
 # ── muldiv.v ─────────────────────────────────────────────────────────────
 m("MD01", "muldiv.v", "sa <= (op == 3'd1) | (op == 3'd2);", "sa <= (op == 3'd1);", "MULHSU multiplicand treated unsigned")
-m("MD02", "muldiv.v", "sb <= (op == 3'd1);", "sb <= (op == 3'd1) | (op == 3'd2);", "MULHSU multiplier treated signed")
+m("MD02", "muldiv.v", "ub31 <= b[31] & (op != 3'd1);", "ub31 <= b[31] & (op == 3'd3);", "MULHSU multiplier treated signed (no correction step)")
 m("MD03", "muldiv.v", "wire        negres = isdiv & (hi ? na : ((na ^ nb) & ~mzero));",
   "wire        negres = isdiv & (hi ? na : ((na ^ nb)));", "negative / 0 gives +1, not -1")
 m("MD04", "muldiv.v", "wire        negres = isdiv & (hi ? na : ((na ^ nb) & ~mzero));",
@@ -161,7 +161,17 @@ m("MD10", "muldiv.v", "hi <= (op != 3'd0);", "hi <= op[0];", "MULHSU returns the
 m("MD11", "muldiv.v", "na <= ~op[0] & a[31];", "na <= a[31];", "DIVU/REMU treat the dividend as signed")
 m("MD12", "muldiv.v", "if (rst) begin\n            st   <= S_IDLE;\n            busy <= 1'b0;", "if (rst) begin\n            busy <= 1'b0;", "reset does not return the FSM to idle")
 m("MD13", "muldiv.v", "            end\n            S_NEGA: begin", "            end else lo <= 32'b0;\n            S_NEGA: begin", "result cleared the cycle after done (not held until the next start)")
-m("MD14", "muldiv.v", "sub = (cnt == 5'd31) & sb;", "sub = (cnt == 5'd30) & sb;", "signed multiply subtracts on the wrong step")
+m("MD14", "muldiv.v", "wire        bneg  = bd[2] & ~(bd[1] & bd[0]);", "wire        bneg  = bd[2] & ~bd[1];", "Booth digit 110 (-1) added, not subtracted")
+m("MD17", "muldiv.v", "wire        btwo  = (bd == 3'b011) | (bd == 3'b100);", "wire        btwo  = (bd == 3'b011);", "Booth digit -2 missing")
+m("MD18", "muldiv.v", "wire        bone  = bd[1] ^ bd[0];", "wire        bone  = bd[1] | bd[0];", "Booth digit 011 uses 1x not 2x (and 111)")
+m("MD20", "muldiv.v", "Y = mx35;                  // multiplier was unsigned with bit 31", "Y = 35'b0;                 // multiplier was unsigned with bit 31", "unsigned-multiplier correction dropped")
+m("MD21", "muldiv.v", "wire        zrem  = isdiv & (acc == 33'b0) & ~mzero;", "wire        zrem  = isdiv & (acc == 33'b0);", "divide-by-zero skips leading zero bits (quotient not all ones)")
+m("MD22", "muldiv.v", "wire        zrem  = isdiv & (acc == 33'b0) & ~mzero;", "wire        zrem  = isdiv & ~mzero;", "skip with a non-zero remainder")
+m("MD24", "muldiv.v", "wire        skip8  = zrem & (cnt <= 5'd23) & (lo[31:24] == 8'b0);", "wire        skip8  = zrem & (cnt <= 5'd23) & (lo[31:25] == 7'b0);", "8-bit skip tests only 7 bits")
+m("MD25", "muldiv.v", "wire        skip16 = zrem & (cnt <= 5'd15) & (lo[31:16] == 16'b0);", "wire        skip16 = zrem & (cnt <= 5'd16) & (lo[31:16] == 16'b0);", "16-bit skip allowed one step too late (the loop would run past 32 bits)")
+m("MD26", "muldiv.v", "st <= (~op[0] & a[31]) ? S_NEGA : (~op[0] & b[31]) ? S_NEGB : S_LOOP;", "st <= (~op[0] & a[31]) ? S_NEGA : S_LOOP;", "negative divisor not negated when the dividend is positive")
+m("MD27", "muldiv.v", "S_NEGA: begin if (na) lo <= sum[31:0]; st <= nb ? S_NEGB : S_LOOP; end", "S_NEGA: begin if (na) lo <= sum[31:0]; st <= S_LOOP; end", "negative divisor not negated after the dividend")
+m("MD28", "muldiv.v", "lo  <= (cnt == 5'd15 && hi && !ub31) ? sum[33:2] : {sum[1:0], lo[31:2]};", "lo  <= (cnt == 5'd15 && hi && !ub31) ? sum[32:1] : {sum[1:0], lo[31:2]};", "high word taken one bit off")
 m("MD16", "muldiv.v", "lo  <= {lo[30:0], ~sum[33]};", "lo  <= {lo[30:0], sum[33]};", "quotient bits inverted")
 
 # ── regFile.v ────────────────────────────────────────────────────────────

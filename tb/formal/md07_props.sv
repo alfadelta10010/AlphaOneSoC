@@ -35,7 +35,7 @@ module md07_props (
     wire        busy, done, isdiv;
     wire [2:0]  st;
     wire [32:0] acc, trial;
-    wire [33:0] sum;
+    wire [34:0] sum;
     muldiv dut (.clk(clk), .rst(rst), .start(start), .op(op),
                 .a(a), .b(b), .result(result), .busy(busy), .done(done),
                 .st(st), .acc(acc), .lo(lo), .m(m), .isdiv(isdiv), .sum(sum), .trial(trial));
