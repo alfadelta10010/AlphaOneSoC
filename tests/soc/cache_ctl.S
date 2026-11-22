@@ -16,7 +16,7 @@
 #   4  EN = 0 again: the same routine rewritten (li a0, 7) and run gives 17, the timed loop still runs.
 #   6  capacity (WO-77): a 64-instruction loop of exactly 256 bytes (.balign 256, all 32-bit), 50 iterations timed with
 #      the cache off and then on. All 16 lines hit after the first iteration on a 256 B cache (every line would conflict
-#      on 128 B), so on < off / 2 (0x50). Skipped under a +CACHE_EN force, as phase 2.
+#      on 128 B; that was the size before WO-77), so on < off / 2 (0x50). Skipped under a +CACHE_EN force, as phase 2.
 #   7  cross-macro straddles (WO-77): in a .balign 256 block a 32-bit addi at +0x7E (word 31 in data_mem, word 0 in data_hi)
 #      and another at +0xFE (data_hi -> data_mem, index 15 -> 0); the block is called twice (fill, then hit), a0 counts
 #      the addi: 2 after the first call, 4 after the second (0x60, 0x61).
