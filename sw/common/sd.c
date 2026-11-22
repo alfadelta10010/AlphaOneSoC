@@ -246,7 +246,7 @@ int sd_read(uint32_t lba, void *buf)
 static int range_ok(uint32_t lba, uint32_t n)
 {
     uint32_t last = lba + (n - 1);       /* the last block; block 0xFFFFFFFF is a legal one */
-    if (n == 0 || last < lba)
+    if (n == 0 || last < lba)            /* (n == 0 only matters when the size below is unknown or saturated; for lba > 0 `last < lba` catches it) */
         return 0;
     if (!sd_sdhc && last >= 0x800000)
         return 0;
@@ -266,7 +266,7 @@ static int stop_transmission(void)
     xfer(0x01);
     xfer(0xFF);                          /* the stuff byte */
     uint8_t r = 0xFF;
-    for (int i = 0; i < 8 && (r & 0x80); i++)
+    for (int i = 0; i < 10 && (r & 0x80); i++)   /* (ChaN polls 10 times) */
         r = xfer(0xFF);
     for (int t = 0; t <= 1000000; t++)   /* the busy of R1b */
         if (xfer(0xFF) == 0xFF)
