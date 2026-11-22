@@ -10,7 +10,7 @@
 // per cycle, held while ready is low, changed on the negative edge, checked
 // on the positive edge.
 //
-// Timing equations (T = 16 ns, B = BAUD frozen at the load, P = B + 1):
+// Timing equations (T = `SPI_T_NS, 16 ns at 62.5 MHz; B = BAUD frozen at the load, P = B + 1):
 //   a LOAD is at w + 1 for an idle engine (w = the accepted TXDATA write), or
 //   at the end of the byte that is shifting; with L the load edge, bit k
 //   launches at L + 2kP, its A->B edge is at L + 2kP + P, its sample edge is
@@ -742,13 +742,13 @@ module tb_spi;
             for (b = 0; b < 3; b = b + 1) begin
                 wait_txe; cfg(2'b11, b);
                 n = (b == 0) ? 11 : 81;
-                pred = (2.0 * b + 1.0) * T - `SD_T_ODLY - 0.5;
+                pred = (2.0 * b + 1.0) * T - `SD_T_ODLY;   // pass iff rt + t_ODLY < (2B+1) T, exact at any T (rt on a .5 grid)
                 lp = -1; ff = -1; bad = 0;
                 for (k = 0; k < n; k = k + 1) begin
                     rt = k + 0.5;
                     rt_point(rt, ok);
                     if (ok) lp = k; else if (ff < 0) ff = k;
-                    if ((rt <= pred) != ok) bad = bad + 1;
+                    if ((rt < pred) != ok) bad = bad + 1;
                 end
                 $display("RTSWEEP baud=%0d last_pass=%0.1f first_fail=%0.1f predicted=%0.1f %0s", b,
                          (lp < 0) ? -1.0 : lp + 0.5, (ff < 0) ? -1.0 : ff + 0.5, pred, bad == 0 ? "OK" : "MISMATCH");
