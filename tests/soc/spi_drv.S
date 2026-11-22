@@ -16,10 +16,10 @@
  *   0F CMD18 R1  10 CMD12 R1  11 CMD12 busy timeout
  */
 #ifndef CLK_HZ
-#define CLK_HZ 62500000
+#define CLK_HZ 52631579
 #endif
 #ifndef SD_HZ
-#define SD_HZ 12500000             /* the device tree's spi-max-frequency for the card */
+#define SD_HZ 8771930              /* the device tree's spi-max-frequency for the card (BAUD 2) */
 #endif
 #define SD_ID_HZ 400000
 #define BAUD_OF(hz) ((((CLK_HZ) + 2 * (hz) - 1) / (2 * (hz))) - 1)   /* the driver's formula */
