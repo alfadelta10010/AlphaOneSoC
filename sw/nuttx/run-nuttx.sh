@@ -23,6 +23,6 @@ nice -n 19 make -j2 >$B/build.log 2>&1 || { tail -20 $B/build.log; exit 1; }
 # the SoC bench and the loader
 make -C $W/sw -j2 bench hello >$B/bench-build.log 2>&1
 python3 $D/tools/mkscript_slow.py $D/sessions/nsh.txt $B/nsh.hex
-$D/runsim.sh nsh $CYC $B/nsh.hex
+NUTTX_WORK=$W $D/runsim.sh nsh $CYC $B/nsh.hex
 cp $B/nsh.log $D/logs/nsh-session.log 2>/dev/null || true
 $D/check-nuttx.sh $B/nsh.log

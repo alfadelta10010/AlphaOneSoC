@@ -1,7 +1,7 @@
 /* Polled console for AlphaOneSoC: a 16550 subset at 0x1000_0000 with byte
  * registers, no FIFO and no interrupt line.  The serial upper half is driven
  * from here: transmit directly when the upper half enables the TX
- * "interrupt", receive from the idle loop (up_idle) and from the tick.
+ * "interrupt", receive from the idle loop (up_idle) only: nothing calls the poll from the tick.
  */
 
 #include <nuttx/config.h>
