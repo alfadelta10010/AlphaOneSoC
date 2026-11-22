@@ -11,7 +11,7 @@
 + sdmulti: n=0 read rc=1 write rc=1
 + sdmulti: wrap read rc=1 write rc=1
 + sdmulti: to the last block (0x7FFFF8 x8) rc=0
-+ sdmulti: past 4 GB (0x7FFFFC x8) read rc=1 write rc=1
++ sdmulti: past 4 GB (0x7FFFF9 x8, the last block is 0x800000) read rc=1 write rc=1
 + sdmulti: single after rc=0
 + sdmulti: done
 + 0 errors, 0 expected

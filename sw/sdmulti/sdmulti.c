@@ -60,10 +60,10 @@ int main(void)
     printf("sdmulti: n=0 read rc=%d write rc=%d\n", sd_read_blocks(0, b, 0), sd_write_blocks(0, a, 0));
     printf("sdmulti: wrap read rc=%d write rc=%d\n", sd_read_blocks(0xFFFFFFFFu, b, 2), sd_write_blocks(0xFFFFFFFEu, a, 3));
     if (sd_sdhc && sd_blocks <= 8192) {  /* the card is the disk: a transfer past its end is refused */
-        printf("sdmulti: past end read rc=%d write rc=%d\n", sd_read_blocks(8190, b, 4), sd_write_blocks(8190, a, 4));
+        printf("sdmulti: past end read rc=%d write rc=%d\n", sd_read_blocks(8185, b, 8), sd_write_blocks(8185, a, 8));
         printf("sdmulti: to the last block read rc=%d\n", sd_read_blocks(8184, b, 8));
     } else if (sd_sdhc) {                /* a big card: across 2 GB (block 0x400000) and 4 GB (0x800000), and past the end */
-        printf("sdmulti: past end read rc=%d write rc=%d\n", sd_read_blocks(sd_blocks - 2, b, 4), sd_write_blocks(sd_blocks - 2, a, 4));
+        printf("sdmulti: past end read rc=%d write rc=%d\n", sd_read_blocks(sd_blocks - 7, b, 8), sd_write_blocks(sd_blocks - 7, a, 8));
         uint32_t at[2] = {0x3FFFFEu, 0x7FFFFEu};
         for (int k = 0; k < 2; k++) {
             int w = sd_write_blocks(at[k], a, 4);
@@ -75,7 +75,7 @@ int main(void)
     }
     if (!sd_sdhc) {                      /* a 4 GB standard-capacity card: block 0x800000 is where lba * 512 wraps */
         printf("sdmulti: to the last block (0x7FFFF8 x8) rc=%d\n", sd_read_blocks(0x7FFFF8u, b, 8));
-        printf("sdmulti: past 4 GB (0x7FFFFC x8) read rc=%d write rc=%d\n", sd_read_blocks(0x7FFFFCu, b, 8), sd_write_blocks(0x7FFFFCu, a, 8));
+        printf("sdmulti: past 4 GB (0x7FFFF9 x8, the last block is 0x800000) read rc=%d write rc=%d\n", sd_read_blocks(0x7FFFF9u, b, 8), sd_write_blocks(0x7FFFF9u, a, 8));
     }
     printf("sdmulti: single after rc=%d\n", sd_read(1, one));
     printf("sdmulti: done\n");

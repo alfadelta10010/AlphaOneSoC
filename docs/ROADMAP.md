@@ -880,7 +880,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
   monitor's scripted session give the same clocks on both (hello 2,077,331 on both at the PR #18 tip 85c8459, 2026-11-22), and 56.9 million
-  (1.59 million instructions); FatFs (108.3 million clocks with the CSD read in sd_init, 108.2 before it, 123 blocks read, 69 written) and
+  (1.59 million instructions); FatFs (130.6 million clocks with the CSD read in sd_init and the CRC16 check of every block read, 108.3 with the CSD read only, 123 blocks read, 69 written) and
   FreeRTOS (49,077,894 clocks, the same costs) are the Verilator figures. The monitor, FatFs and
   FreeRTOS runs were identical on Icarus when compared 2026-11-11, before the later fixes changed
   the counts; on the current tree Icarus was re-run 2026-11-21 for hello, the DDR cases and the
@@ -937,7 +937,7 @@ benchmarks). Besides the runs above: the loader against 13 damaged images (`tool
 blank flash, a size or load address that does not fit, an unaligned one, an entry outside the image, a wrong
 sum, unknown flag bits); the monitor's edge cases (bad input, misaligned and faulting accesses, backspace, an
 overlong line, the illegal-instruction, load-fault and return stops) and every one of the 4096 CSR numbers
-(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16, FAT32 (a 70000-sector volume, 94.1 million clocks on 2026-11-22) and an MBR with SDHC, standard-capacity
+(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16, FAT32 (a 70000-sector volume, 115.3 million clocks on 2026-11-22) and an MBR with SDHC, standard-capacity
 and v1 cards, its error codes, empty, 120-character-named, truncated and cluster-boundary files, and a card
 filled until it is full; the SD driver against a card told to fail 14 ways (`make run-sdtest-all`: data error
 token, wrong CRC16, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
@@ -959,7 +959,7 @@ million clocks: the run below is 70 iterations.
 | Dhrystone 2.2 (500 runs) | 16,697 clocks per run; 59.9 Dhrystones/s per MHz; **0.034 DMIPS/MHz**; all 14 final values correct | |
 | CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
 | Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
-| FatFs, mount to delete | 108 million clocks in all; 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
+| FatFs, mount to delete | 131 million clocks in all (108 before the CRC16 check of read data: a table lookup a byte, 3.18 million instructions; the bitwise loop made it 276); 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
 | FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,191 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
