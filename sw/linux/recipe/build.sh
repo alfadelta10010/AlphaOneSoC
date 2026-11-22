@@ -31,7 +31,7 @@ extra="\tmemory@80ff0000 {\n\t\tdevice_type = \"memory\";\n\t\treg = <0x80ff0000
 soc=s.replace("@TIMEBASE@","62500000").replace("@SYSCON@","10020000").replace("@UARTIRQ@","").replace("@PLIC@","").replace("@EXTRAMEM@","")
 plic="\t\tplic: interrupt-controller@c000000 {\n\t\t\tcompatible = \"sifive,plic-1.0.0\";\n\t\t\treg = <0x0c000000 0x4000000>;\n\t\t\triscv,ndev = <10>;\n\t\t\tinterrupt-controller;\n\t\t\t#interrupt-cells = <1>;\n\t\t\t#address-cells = <0>;\n\t\t\tinterrupts-extended = <&cpu0_intc 11>;\n\t\t};\n\n"
 sp=s.replace("@TIMEBASE@","14535").replace("@SYSCON@","80ff0000").replace("@EXTRAMEM@",extra).replace("@UARTIRQ@","\t\t\tinterrupt-parent = <&plic>;\n\t\t\tinterrupts = <1>;\n").replace("@PLIC@",plic)
-sp="\n".join(l for l in sp.split("\n") if "mmu-type" not in l)
+sp="\n".join(l for l in sp.split("\n") if not l.strip().startswith("mmu-type"))
 open(o+"/alpha.dts","w").write(soc); open(o+"/spike.dts","w").write(sp)
 PY
 dtc -I dts -O dtb -o $OUT/alpha.dtb $OUT/alpha.dts
