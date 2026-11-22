@@ -11,7 +11,9 @@
  *   1 200 passes of a PSRAM routine whose 16 blocks each write CACHE_CTL (the
  *     store at line offsets 0x0..0xC, EN and PBURST toggled), half of them
  *     after FENCE.I: the routine's sum is fixed (0x81) and CACHE_CTL reads
- *     back (a3 & 5) | 2 (0x82).
+ *     back the last value stored, (a3_last & 5) | 2 (0x82). Every block xors a3
+ *     AFTER its store, so the last store is the final a3 ^ 1 (block 15: 15 % 3
+ *     = 0, xori 1).
  *   2 EN + PBURST with QSPI_CFG.STREAM = 0: no PSRAM read longer than one
  *     word at the pins (bench, cue 0xB0); STREAM = 1 again: bursts (0xB2).
  *   3 PBURST without EN, 4 EN without PBURST: no bursts.
@@ -121,7 +123,8 @@ _start:
     bne  a0, s9, test_fail
     li   t0, CACHE_CTL
     lw   t1, 0(t0)
-    andi t2, a3, 5
+    xori t2, a3, 1                /* undo block 15's xori: the value its store wrote */
+    andi t2, t2, 5
     ori  t2, t2, 2
     mv   a7, t1
     li   a6, 0x82
