@@ -876,7 +876,8 @@ a taken branch and every M op 84; `sw` 76; `sb` 64.
 
 With the 4x4 instruction cache (`CACHE_CTL`, section "Instruction cache" in
 `docs/pins-and-peripherals.md`), measured as CoreMark per MHz in the Verilator
-SoC bench at 62.5 MHz, 10 iterations, 4x4 branch (WO-76 fetch hold included):
+SoC bench at 62.5 MHz, 10 iterations, without the WO-76 fetch hold (128 B rows: tree
+a732aaa; 256 B rows: tree 2a2978e; cache off is the same on both):
 
 | Configuration | CoreMark/MHz |
 |---|---|
