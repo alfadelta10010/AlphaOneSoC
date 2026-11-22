@@ -2,7 +2,7 @@
 # sandbox ~/regr/rfm/gls-sdf/prep.py) for WO-34 (tb/gls_sdf/run_glitch.sh).
 # prep.py <pnl.v> <sdf> <out pnl> <out sdf> : make a LibreLane netlist + SDF simulate in Icarus.
 #  - The macro instances \soc.cpu.rf.rf_macro and (4x4 netlists) \soc.icache.data_mem become rf_macro_i and
-#    icache_data_mem_i (Icarus's SDF reader cannot resolve the escaped dots; each one that is present is
+#    icache_data_mem_i / icache_data_hi_i (256 B cache, WO-77; Icarus's SDF reader cannot resolve the escaped dots; each one that is present is
 #    renamed, at least one must be), and every rf_top CELL block is dropped (its bit-indexed IOPATHs do not
 #    parse; rf_top_timing.v carries the same 4.0 ns for both).
 #  - Icarus ignores SDF INTERCONNECT, so every wire delay is put into the netlist instead: the
@@ -11,7 +11,8 @@
 import re, sys
 nl, sdf, onl, osdf = sys.argv[1:]
 t = open(nl).read()
-MACROS = [('soc.cpu.rf.rf_macro', 'rf_macro_i'), ('soc.icache.data_mem', 'icache_data_mem_i')]
+MACROS = [('soc.cpu.rf.rf_macro', 'rf_macro_i'), ('soc.icache.data_mem', 'icache_data_mem_i'),
+          ('soc.icache.data_hi', 'icache_data_hi_i')]
 s = open(sdf).read()
 n_ren = 0
 for old, new in MACROS:

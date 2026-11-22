@@ -107,7 +107,7 @@ def verdict(eqydir, out, only=None, classes=None):
                  "reset codes at its first reset edge (the wrapper holds rst for at least two edges), the "
                  "premise of L1/L2/I_gate. The rf_top w_ena pin has its own net (soc.cpu.rf.w_ena_pin), "
                  "compared as a partition; so do the I-cache macro's w_ena and rb_addr pins "
-                 "(soc.icache.pin_w_ena, pin_rb_addr; their logic word_in, nxt is nomatched). Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
+                 "(soc.icache.pin_w_ena, pin_rb_addr, and data_hi's pin_hi_*; their logic word_in, nxt is nomatched). Nomatched nets are cut nowhere; `rd_late` starts free on both sides. "
                  "Every sat proof closed at induction length 1 (step from any state); longer sat proofs are not "
                  "accepted because the base case is vacuous under undefined init.")
     if count_bad:

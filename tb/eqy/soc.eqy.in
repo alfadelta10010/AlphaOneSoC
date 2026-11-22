@@ -36,6 +36,7 @@ gold-nomatch soc.icache.nxt*
 gate-nomatch soc.icache.nxt*
 gold-nomatch soc.icache.word_in*
 gate-nomatch soc.icache.word_in*
+# pin_hi_* are data_hi's pins (WO-77); the glob covers them
 gold-nomatch soc.icache.pin_*
 gate-nomatch soc.icache.pin_*
 gold-nomatch soc.qspi.rd_late*

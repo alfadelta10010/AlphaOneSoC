@@ -8,7 +8,7 @@ fsmcut_gate_<tag> drives <cut> = enc(oh) and the original scalar nets
 <name>[k] (all readers) with onehot(clamp(<cut>)).
 Both sides: the rf_top macro's w_ena pin gets its own net (kept $pos), so
 no reader other than the macro sees the pin's cut; so do the I-cache data
-macro's w_ena and rb_addr pins (soc.icache.pin_w_ena, pin_rb_addr).
+macro's w_ena and rb_addr pins (soc.icache.pin_w_ena, pin_rb_addr; data_hi: pin_hi_*).
 Every edit is asserted to hit exactly one line."""
 import re, sys
 side, src, dst = sys.argv[1:4]
@@ -70,7 +70,7 @@ print(f"{side}: rf_macro w_ena {sig} -> soc.cpu.rf.w_ena_pin (kept $pos)")
 add.append("  wire width 1 \\soc.cpu.rf.w_ena_pin\n  attribute \\keep 1\n  cell $pos $eqy_wena_pinbuf\n"
            "    parameter \\A_SIGNED 0\n    parameter \\A_WIDTH 1\n    parameter \\Y_WIDTH 1\n"
            f"    connect \\A {sig}\n    connect \\Y \\soc.cpu.rf.w_ena_pin\n  end\n")
-# I-cache data macro (soc.icache.data_mem, the second rf_top): its two combinational input pins get their own
+# I-cache data macros (soc.icache.data_mem and data_hi, WO-77: each gets its own nets): their two combinational input pins get their own
 # nets the same way. EQY compares a black box's input pins and so cuts the nets wired to them for every reader.
 # rb_addr is nxt[4:0] = f_addr[6:2] + 1, and synthesis shares that incrementer with the core's pc + 4, so with
 # nxt cut the netlist's pc + 4 (and f_addr[2] = ~nxt[0]) read a free input that gold computes from the pc flops:
@@ -78,20 +78,21 @@ add.append("  wire width 1 \\soc.cpu.rf.w_ena_pin\n  attribute \\keep 1\n  cell 
 # word_in. soc.eqy.in nomatches soc.icache.nxt* and word_in, so only the pins are compared, and the logic is
 # whole in every partition that reads it. The other pins (w_data = qspi sr, w_addr = fill_idx/fcnt, ra_addr =
 # pc) are flop outputs, matched and cut anyway.
-cm = re.search(r"^  cell \\rf_top \\soc\.icache\.data_mem\n(.*?)^  end\n", body, re.S | re.M)
-assert cm, "icache data_mem cell not found"
-cell = cm.group(0); cell2 = cell
-for port, width in (("w_ena", 1), ("rb_addr", 5)):
-    pm = re.findall(r"^    connect \\%s (.+)\n" % port, cell, re.M)
-    assert len(pm) == 1, (port, pm)
-    sig, pin = pm[0], f"soc.icache.pin_{port}"
-    cell2 = cell2.replace(f"    connect \\{port} {sig}\n", f"    connect \\{port} \\{pin}\n")
-    print(f"{side}: pin data_mem {port} {sig} -> {pin} (kept $pos)")
-    add.append(f"  wire width {width} \\{pin}\n  attribute \\keep 1\n  cell $pos $eqy_dm_{port}_pinbuf\n"
-               f"    parameter \\A_SIGNED 0\n    parameter \\A_WIDTH {width}\n    parameter \\Y_WIDTH {width}\n"
-               f"    connect \\A {sig}\n    connect \\Y \\{pin}\n  end\n")
-assert body.count(cell) == 1
-body = body.replace(cell, cell2)
+for inst, pfx, tag in (("soc.icache.data_mem", "pin_", "dm"), ("soc.icache.data_hi", "pin_hi_", "dh")):
+    cm = re.search(r"^  cell \\rf_top \\%s\n(.*?)^  end\n" % re.escape(inst), body, re.S | re.M)
+    assert cm, inst + " cell not found"
+    cell = cm.group(0); cell2 = cell
+    for port, width in (("w_ena", 1), ("rb_addr", 5)):
+        pm = re.findall(r"^    connect \\%s (.+)\n" % port, cell, re.M)
+        assert len(pm) == 1, (inst, port, pm)
+        sig, pin = pm[0], f"soc.icache.{pfx}{port}"
+        cell2 = cell2.replace(f"    connect \\{port} {sig}\n", f"    connect \\{port} \\{pin}\n")
+        print(f"{side}: pin {inst.split('.')[-1]} {port} {sig} -> {pin} (kept $pos)")
+        add.append(f"  wire width {width} \\{pin}\n  attribute \\keep 1\n  cell $pos $eqy_{tag}_{port}_pinbuf\n"
+                   f"    parameter \\A_SIGNED 0\n    parameter \\A_WIDTH {width}\n    parameter \\Y_WIDTH {width}\n"
+                   f"    connect \\A {sig}\n    connect \\Y \\{pin}\n  end\n")
+    assert body.count(cell) == 1
+    body = body.replace(cell, cell2)
 assert body.endswith("end\n")
 # RTLIL needs a wire declared before its first use: wires right after the module line, cells at the end
 wires = "".join(l + "\n" for a in add for l in a.splitlines() if l.startswith("  wire "))
