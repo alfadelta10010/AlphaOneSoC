@@ -112,10 +112,10 @@ module cache_props (
         assume (!(live && d_ready && d_ready_q));
         assume (!(live && d_ready && m_ready));
         // Address abstraction: the tracked byte is in tag T of its chip; every fetch and store goes to tag T or T+1 of that
-        // chip (same indexes, so conflicts and the carry from index 7 to 0 are reachable). Another tag only ever
+        // chip (same indexes, so conflicts and the carry from index 15 to 0 are reachable). Another tag only ever
         // plays the part of a line that is not the tracked one, which T+1 does for every T.
-        assume ({f_addr[31], f_addr[23:7]} == {tb[24], tb[23:7]} || {f_addr[31], f_addr[23:7]} == {tb[24], tb[23:7] + 17'd1});
-        assume ({d_addr[31], d_addr[23:7]} == {tb[24], tb[23:7]} || {d_addr[31], d_addr[23:7]} == {tb[24], tb[23:7] + 17'd1});
+        assume ({f_addr[31], f_addr[23:8]} == {tb[24], tb[23:8]} || {f_addr[31], f_addr[23:8]} == {tb[24], tb[23:8] + 16'd1});
+        assume ({d_addr[31], d_addr[23:8]} == {tb[24], tb[23:8]} || {d_addr[31], d_addr[23:8]} == {tb[24], tb[23:8] + 16'd1});
         sbv = started ? sb : sb_i;
         for (je = 0; je < 4; je = je + 1)
             if (m_ready && kadd(m_addr, je[1:0]) == tb) assume (m_rdata[8*je +: 8] == sbv);
@@ -142,13 +142,13 @@ module cache_props (
     reg        fl_start_q = 0;
     wire       fl_word0 = active && m_req && m_addr[3:2] == 2'd0 && (!m_req_q || m_ready_q);
     reg        have_l = 0, done_l = 0, killed_l = 0;
-    reg [2:0]  l_idx = 0;  reg [17:0] l_tag = 0;
-    wire [2:0]  m_idx = m_addr[6:4];
-    wire [17:0] m_tag = {m_addr[31], m_addr[23:7]};
+    reg [3:0]  l_idx = 0;  reg [16:0] l_tag = 0;
+    wire [3:0]  m_idx = m_addr[7:4];
+    wire [16:0] m_tag = {m_addr[31], m_addr[23:8]};
     wire        word3 = active && m_req && m_ready && m_addr[3:2] == 2'd3;
     wire        st_done = d_req && d_we && d_ready;
-    wire [2:0]  s_idx = d_addr[6:4];
-    wire [17:0] s_tag = {d_addr[31], d_addr[23:7]};
+    wire [3:0]  s_idx = d_addr[7:4];
+    wire [16:0] s_tag = {d_addr[31], d_addr[23:8]};
     always @(posedge clk) begin
         if (fl_word0) begin have_l <= 1'b1; done_l <= 1'b0; killed_l <= 1'b0; l_idx <= m_idx; l_tag <= m_tag; end
         if (word3 && have_l && m_idx == l_idx && m_tag == l_tag) done_l <= 1'b1;
@@ -161,6 +161,10 @@ module cache_props (
         cover (armed && fl_word0 && have_l && killed_l && m_idx == l_idx && m_tag == l_tag);         // 4 store-invalidate: the line fills again
         cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[3:2] != 2'd3);            // 5 straddle in a line
         cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[3:2] == 2'd3);            // 6 straddle across lines
+        cover (armed && active && f_req && f_ready && f_addr[7]);                                    // 7 hit served by data_hi
+        cover (armed && active && f_req && f_ready && f_addr[7:0] == 8'h7E);                          // 8 straddle data_mem -> data_hi
+        cover (armed && active && f_req && f_ready && f_addr[7:0] == 8'hFE);                          // 9 straddle data_hi -> data_mem (index 15 -> 0)
+        cover (armed && st_done && have_l && done_l && s_idx == l_idx && s_tag == l_tag && l_idx[3]); // 10 a data_hi line store-invalidated
     end
 `endif
 endmodule

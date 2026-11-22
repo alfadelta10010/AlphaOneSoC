@@ -355,9 +355,9 @@ m('QB06', 'qspi_ctrl.v', 'wire pstreamable = t_psram && !t_we && t_bst && stream
 m('QB07', 'qspi_ctrl.v', "wire pcont_ok    = t_bst && stream_en && nbytes_m1 == 2'd3 && hit_cont", "wire pcont_ok    = t_bst && stream_en && nbytes_m1 == 2'd3", 'a burst continues at any address on the same chip')
 m('QB08', 'qspi_ctrl.v', '(!stream_en || mode_chg || pstrm)) begin', '(!stream_en || mode_chg)) begin', 'an idle PSRAM burst waits for a request that never comes (CE# low without bound)')
 m('QB09', 'mem_ctrl.v', 'assign q_burst     = i_burst && !use_d && !second;', 'assign q_burst     = i_burst && !second;', 'a data request is granted with the qualifier of the pending fetch')
-m('QB10', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;', 'assign m_burst = act && fill_active && !dead && pburst;', 'a flash line fill asks for a burst (pin-neutral: t_psram gates pstreamable)')
-m('QB11', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;', "assign m_burst = 1'b1;", 'the qualifier is always high (a PSRAM fetch with the cache off bursts)')
-m('QB12', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[17] && pburst;', 'assign m_burst = act && fill_active && !dead && fill_tag[17];', 'PBURST ignored: EN alone bursts')
+m('QB10', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[16] && pburst;', 'assign m_burst = act && fill_active && !dead && pburst;', 'a flash line fill asks for a burst (pin-neutral: t_psram gates pstreamable)')
+m('QB11', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[16] && pburst;', "assign m_burst = 1'b1;", 'the qualifier is always high (a PSRAM fetch with the cache off bursts)')
+m('QB12', 'cache.v', 'assign m_burst = act && fill_active && !dead && fill_tag[16] && pburst;', 'assign m_burst = act && fill_active && !dead && fill_tag[16];', 'PBURST ignored: EN alone bursts')
 
 # ── uart.v / gpio.v / tt_um ──────────────────────────────────────────────
 m("GP01", "gpio.v", "wire req   = sel && we && be[0];", "wire req   = sel && we;", "writes without lane 0 stall and act too")
@@ -624,5 +624,9 @@ m("C08", "cache.v", "fill_idx, fcnt, 2'b00}", "fill_idx, fcnt + 2'd1, 2'b00}", "
 m("C09", "cache.v", ": f_addr;\n    assign f_ready", ": f_addr + 32'd4;\n    assign f_ready", "pass-through address off by a word")
 m("C10", "cache.v", "valid[fill_idx] <= !dead;", "valid[fill_idx] <= 1'b1;", "a fill that ended dead still sets valid")
 m("C11", "cache.v", "&& !fill_active && en;", "&& !fill_active;", "takeover starts while a fill is on the way out")
-m("C12", "cache.v", "1'b0, ~fill_tag[17], 5'd0", "1'b0, fill_tag[17], 5'd0", "fill address window byte wrong (bit 29 not rebuilt): M-A2 broken")
+m("C12", "cache.v", "1'b0, ~fill_tag[16], 5'd0", "1'b0, fill_tag[16], 5'd0", "fill address window byte wrong (bit 29 not rebuilt): M-A2 broken")
+m("C13", "cache.v", ".w_ena   (word_in && fill_idx[3]),", ".w_ena   (word_in),", "data_hi written by every fill (line i + 8 corrupted)")
+m("C14", "cache.v", "ra_data = f_addr[7] ?", "ra_data = f_addr[6] ?", "port A macro select from addr[6]")
+m("C15", "cache.v", "rb_data = nxt[5]    ?", "rb_data = f_addr[7] ?", "port B macro select from A's index[3]: cross-macro straddle wrong")
+m("C16", "cache.v", ": f_addr[7:4];", ": {1'b0, f_addr[6:4]};", "lookup index drops index[3]: lines 8-15 alias 0-7")
 # C05 (FENCE.I flush ignored) is EQUIVALENT: the store snoop already invalidates every line a single hart can change.

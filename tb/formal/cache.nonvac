@@ -10,7 +10,7 @@ sed cache.v s@dead <= 1'b1;@dead <= 1'b0;@
 sed cache.v s@(kword < fcnt)@(kword <= fcnt)@
 # straddle: high half taken from port A instead of port B
 sed cache.v s@{rb_data\[15:0\], ra_data\[31:16\]}@{ra_data[15:0], ra_data[31:16]}@
-# port B reads the word of A (the upper half of a straddling fetch comes from the wrong word)
+# port B reads the word of A (the upper half of a straddling fetch comes from the wrong word); the sed edits both macros' port B (data_mem and data_hi), still a valid broken copy
 sed cache.v s@\.rb_addr (nxt\[4:0\])@.rb_addr (f_addr[6:2])@
 # fill reads the words in the wrong order
 sed cache.v s@fill_idx, fcnt, 2'b00}@fill_idx, fcnt + 2'd1, 2'b00}@
@@ -20,3 +20,12 @@ sed cache.v s@valid\[fill_idx\] <= !dead;@valid[fill_idx] <= 1'b1;@
 sed cache.v s@wire        on    = !act \&\& en \&\& (!f_req || m_ready);@wire        on    = !act \&\& en;@
 # pass-through address off by a word
 sed cache.v s@: f_addr;@: f_addr + 32'd4;@
+# WO-77 N1: data_hi is written with every fill too (line i + 8 corrupted by a fill of line i)
+sed cache.v s@\.w_ena   (word_in \&\& fill_idx\[3\])@.w_ena   (word_in)@
+# N2: port A select picks the macro by f_addr[6] instead of index[3] = f_addr[7]
+sed cache.v s@wire \[31:0\] ra_data = f_addr\[7\]@wire [31:0] ra_data = f_addr[6]@
+# N3: port B select taken from A's index[3] (wrong only on a straddle across lines 7 -> 8 or 15 -> 0; needs two fills,
+# if depth 18 does not kill it, tb_cache's cross-macro straddle floor does)
+sed cache.v s@wire \[31:0\] rb_data = nxt\[5\]   @wire [31:0] rb_data = f_addr[7]@
+# N4: the lookup index drops index[3] (lines 8-15 alias 0-7)
+sed cache.v s@: f_addr\[7:4\];@: {1'b0, f_addr[6:4]};@
