@@ -1,13 +1,15 @@
 #!/bin/sh
 # Build the SD card image sw/fatfs mounts, as the byte-wide hex tb_sw loads (+SD_IMAGE=).
 #
-#   mkdisk.sh out.img out.hex [fat12|fat16|mbr]
+#   mkdisk.sh out.img out.hex [fat12|fat16|mbr|fat32]
 #
 # A 4 MB FAT image made with mtools. fat12 (the default) has no partition table (FatFs mounts
 # the volume at sector 0); fat16 is the same with one sector per cluster, which makes it FAT16;
 # mbr is a FAT16 volume in partition 1 of an MBR (starting at sector 2048, as a real card's is).
 # It holds: HELLO.TXT, APPEND.TXT, TRASH.TXT, DATA.BIN (16384 bytes, byte i = (7i + 3) & 255)
-# and SUB/A long file name.txt. sw/fatfs/fatfs_test.c and sw/tools/fatfs_check.py know them.
+# and SUB/A long file name.txt. fat32 is a 70000-sector FAT32 volume (65525 clusters is the least FatFs
+# calls FAT32; one sector per cluster); only its first 8192 sectors are in the hex (the rest of the card is
+# the model's +SD_SPARSE formula image, FatFs only reaches the FATs and the first clusters). sw/fatfs/fatfs_test.c and sw/tools/fatfs_check.py know them.
 set -e
 IMG=$1
 HEX=$2
@@ -29,6 +31,7 @@ img[0x1FE:0x200] = b"\x55\xaa"
 open(sys.argv[1], "wb").write(img)
 PY
        VOL="$IMG@@1048576"; mformat -i "$VOL" -T 6144 -h 4 -s 16 -c 1 -H 2048 -v ALPHAONE :: ;;
+fat32) truncate -s $((70000 * 512)) "$IMG"; VOL=$IMG; mformat -i "$VOL" -F -T 70000 -h 4 -s 16 -c 1 -v ALPHAONE :: ;;
 *)     echo "mkdisk.sh: unknown kind $KIND" >&2; exit 2 ;;
 esac
 printf 'Hello from the SD card\n' > "$T/HELLO.TXT"
@@ -39,4 +42,5 @@ python3 -I -c "import sys; sys.stdout.buffer.write(bytes((i * 7 + 3) & 255 for i
 mcopy -i "$VOL" "$T/HELLO.TXT" "$T/APPEND.TXT" "$T/TRASH.TXT" "$T/DATA.BIN" ::
 mmd -i "$VOL" ::SUB
 mcopy -i "$VOL" "$T/A long file name.txt" ::SUB/
-python3 -I "$(dirname "$0")/img2hex.py" "$IMG" "$HEX"
+head -c $((8192 * 512)) "$IMG" > "$T/head.img"        # (all of it, except for fat32)
+python3 -I "$(dirname "$0")/img2hex.py" "$T/head.img" "$HEX"

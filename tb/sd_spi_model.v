@@ -11,7 +11,8 @@
 //     0x01 for +SD_BUSY=<n> tries (default 3) then 0x00; CMD58 -> OCR with bits
 //     31 and 30; CMD17 (R1, N_AC 0xFF bytes, 0xFE, 512 data bytes, CRC16);
 //     CMD18 streaming until CMD12 (stuff byte, R1b with busy); CMD24 (R1,
-//     wait for 0xFE, 512 bytes + 2 CRC, data response 0x05, busy, store).
+//     wait for 0xFE, 512 bytes + 2 CRC, data response 0x05, busy, store); CMD25 the same with 0xFC
+//     before each block, the next block's address following, and 0xFD (stuff byte, busy) to end.
 //     CRC7 is checked on CMD0 and CMD8 (a wrong one gives R1 bit 3); an unknown
 //     command gives R1 bit 2. N_CR (0xFF bytes before R1) is 1-8 and N_AC 1-16,
 //     seeded by +SD_SEED.
@@ -30,7 +31,7 @@
 //     be 512), +SD_V1 a v1 card as well (CMD8 is an illegal command, R1 0x05). Default: SDHC.
 //     CMD13 (SEND_STATUS) answers an R2 of 0x0000 (R1, then no error bits).
 //   * faults, for the driver's error paths: +SD_RDERR=<blk> makes a read of that block answer with a data error
-//     token (0x04, "ECC failed") instead of data; +SD_WRRESP=<hex> the data response token of a write (0b CRC
+//     token (0x04, "ECC failed") instead of data; +SD_RDCRC=<blk> a wrong CRC16 after that block's data (the high byte wrong on the 1st read of it, the low byte on the 2nd, alternating); +SD_WRRESP=<hex> the data response token of a write (0b CRC
 //     error, 0d write error; 05 default) and the block is then not stored; +SD_STATUS=<hex> the second byte
 //     of CMD13's R2; +SD_CMD8BAD an R7 that does not echo the check pattern; +SD_NO16 a CMD16 the card refuses.
 //     +SD_BUSY=<n> (above) keeps ACMD41 returning idle for n tries.
@@ -79,6 +80,8 @@ module sd_spi_model #(
     integer sd_busy_n = 3, stuck = 0;
     reg     sdsc = 1'b0, v1 = 1'b0;         // +SD_SDSC, +SD_V1
     integer rderr_blk = -1;                 // +SD_RDERR
+    integer rdcrc_blk = -1;                 // +SD_RDCRC
+    integer rdcrc_n = 0;                    // reads of that block so far
     reg [7:0] wr_resp = 8'h05, sd_status = 8'h00;   // +SD_WRRESP, +SD_STATUS
     reg     cmd8bad = 1'b0, no16 = 1'b0;    // +SD_CMD8BAD, +SD_NO16
     reg [31:0] cap_blks = 32'hFFFFFFFF, cap_tmp = 32'h0;   // +SD_BLKS
@@ -97,6 +100,7 @@ module sd_spi_model #(
         if ($value$plusargs("SD_BUSY=%d", sd_busy_n)) ;
         v1   = $test$plusargs("SD_V1");
         if ($value$plusargs("SD_RDERR=%d", rderr_blk)) ;
+        if ($value$plusargs("SD_RDCRC=%d", rdcrc_blk)) ;
         if ($value$plusargs("SD_BLKS=%d", cap_tmp)) begin cap_blks = cap_tmp; cap_set = 1'b1; end
         sparse = $test$plusargs("SD_SPARSE");
         if ($value$plusargs("SD_WRRESP=%h", wr_resp)) ;
@@ -177,6 +181,7 @@ module sd_spi_model #(
     reg       txb [0:4095];                 // 1 = a busy byte
     integer   qh = 0, qt = 0, busy_cnt = 0;
     reg       stream = 1'b0;                // CMD18 running
+    integer   oor_pos = -1;                 // queue position of the out-of-range token of a stream
     reg [31:0] stream_blk = 0;
     integer   st_last = 0;  // st_last: the index of the last CRC byte pushed
     integer   crc_end_pos [0:7];            // queue positions that end a read block
@@ -189,11 +194,19 @@ module sd_spi_model #(
         begin
             g = 1 + rn(16);
             for (i = 0; i < g; i = i + 1) push(8'hFF, 1'b0);
+            if (rderr_blk >= 0 && blk == rderr_blk) begin       // +SD_RDERR: a data error token, no data; a stream stops
+                push(8'h04, 1'b0); stream = 1'b0;
+            end else begin
             push(8'hFE, 1'b0);
             c = 16'h0000;
             for (i = 0; i < 512; i = i + 1) begin push(blk_byte(blk, i), 1'b0); c = crc16_up(c, blk_byte(blk, i)); end
+            if (rdcrc_blk >= 0 && blk == rdcrc_blk) begin       // +SD_RDCRC: a wrong CRC16 on this block: the high byte on the 1st read, the low byte on the 2nd, ...
+                c = c ^ (rdcrc_n[0] ? 16'h0001 : 16'h0100);      // (so a driver that checks only one byte of it fails one of the two reads)
+                rdcrc_n = rdcrc_n + 1;
+            end
             push(c[15:8], 1'b0); push(c[7:0], 1'b0);
             crc_end_pos[n_ce % 8] = qt - 1; n_ce = n_ce + 1;
+            end
         end
     endtask
     task csd_push;                          // the 16 CSD bytes (v2) and their CRC16
@@ -211,9 +224,15 @@ module sd_spi_model #(
     reg [7:0] tx_cur = 8'hFF;
     integer   tb_idx = 7;
     integer   rd_done = 0;                  // read blocks fully clocked out
+    integer   oi;
     task pop;
         begin
-            if (qh == qt && stream) begin push_block(stream_blk); stream_blk = stream_blk + 1; end
+            if (qh == qt && stream) begin
+                if ((use_disk || cap_set) && stream_blk >= cap_now) begin   // past the card: the out-of-range error token, an error only once clocked out
+                    for (oi = 0; oi < 20; oi = oi + 1) push(8'hFF, 1'b0);     // more than the 7 bytes of a CMD12 frame: a host that stops at the last block never sees it
+                    oor_pos = qt; push(8'h08, 1'b0); stream = 1'b0;
+                end else begin push_block(stream_blk); stream_blk = stream_blk + 1; end
+            end
             if (qh == qt) tx_cur = 8'hFF;
             else begin
                 tx_cur = txq[qh % 4096];
@@ -224,6 +243,7 @@ module sd_spi_model #(
                         n_rd_blk = n_rd_blk + 1; crc_end_pos[s] = -1;
                     end
                 end
+                if (oor_pos == qh) begin err("CMD18 stream ran past the end of the card"); oor_pos = -1; end
                 qh = qh + 1;
             end
             tb_idx = 7;
@@ -252,6 +272,7 @@ module sd_spi_model #(
     reg [7:0]  fr [0:5];
     integer    nfr = 0, wcnt = 0, wbusy = 0;
     reg [31:0] wblk = 0;
+    reg        wmulti = 1'b0;                // CMD25 running: blocks follow tokens 0xFC until 0xFD
     reg        idle_st = 1'b0, app = 1'b0, pwr = 1'b0;
     integer    acmd41_n = 0, pu_cnt = 0;
     reg [7:0]  wbuf [0:511];
@@ -331,20 +352,31 @@ module sd_spi_model #(
                 end
                 6'd18: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
+                    else if (sdsc && arg[8:0] != 9'd0) begin err("CMD18 byte address not a multiple of 512"); push(8'h40, 1'b0); end
+                    else if ((use_disk || cap_set) && (sdsc ? arg >> 9 : arg) >= cap_now) begin err("CMD18 beyond the disk"); push(8'h40, 1'b0); end
                     else begin push(8'h00, 1'b0); stream = 1'b1; stream_blk = sdsc ? arg >> 9 : arg; end
                 end
                 6'd12: begin
                     // abandon the stream; a stuff byte, R1b, busy
-                    qh = qt; stream = 1'b0;
-                    push(8'hFF, 1'b0); push(8'h00, 1'b0);
-                    na = 1 + rn(8);
+                    qh = qt; stream = 1'b0; oor_pos = -1;
+                    push(8'h3C, 1'b0);                         // the stuff byte is not 0xFF, nor an R1: the host must discard it
+                    na = rn(8);
+                    for (i = 0; i < na; i = i + 1) push(8'hFF, 1'b0);   // the R1 comes up to 7 bytes later: the host must poll for it
+                    push(8'h00, 1'b0);
+                    na = 9 + rn(8);                            // busy 9 to 16 bytes: the model counts a busy byte as gone when it is loaded, 8 pops pass before the next command's check, so a host that does not wait always sends it while busy
                     for (i = 0; i < na; i = i + 1) push(8'h00, 1'b1);
                 end
                 6'd24: begin
                     if (!ready) push(r1 | 8'h04, 1'b0);
                     else if (sdsc && arg[8:0] != 9'd0) begin err("CMD24 byte address not a multiple of 512"); push(8'h40, 1'b0); end
                     else if ((use_disk || cap_set) && (sdsc ? arg >> 9 : arg) >= cap_now) begin err("CMD24 beyond the disk"); push(8'h40, 1'b0); end
-                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wblk = sdsc ? arg >> 9 : arg; end
+                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wmulti = 1'b0; wblk = sdsc ? arg >> 9 : arg; end
+                end
+                6'd25: begin            // WRITE_MULTIPLE_BLOCK: tokens 0xFC, one block each, ended by the stop token 0xFD
+                    if (!ready) push(r1 | 8'h04, 1'b0);
+                    else if (sdsc && arg[8:0] != 9'd0) begin err("CMD25 byte address not a multiple of 512"); push(8'h40, 1'b0); end
+                    else if ((use_disk || cap_set) && (sdsc ? arg >> 9 : arg) >= cap_now) begin err("CMD25 beyond the disk"); push(8'h40, 1'b0); end
+                    else begin push(8'h00, 1'b0); rxs = W_TOKEN; wmulti = 1'b1; wblk = sdsc ? arg >> 9 : arg; end
                 end
                 default: push(r1 | 8'h04, 1'b0);
             endcase
@@ -368,8 +400,17 @@ module sd_spi_model #(
                     end
                 end
                 W_TOKEN: begin
-                    if (b == 8'hFE) begin rxs = W_DATA; wcnt = 0; end
-                    else if (b != 8'hFF) err("write: not 0xFE or 0xFF while waiting for the token");
+                    if (b == (wmulti ? 8'hFC : 8'hFE)) begin
+                        rxs = W_DATA; wcnt = 0;
+                        if ((use_disk || cap_set) && wblk >= cap_now) err("write beyond the card (OUT_OF_RANGE)");
+                    end
+                    else if (wmulti && b == 8'hFD) begin     // stop tran: a stuff byte, then busy
+                        push(8'hFF, 1'b0);
+                        wbusy = 1 + rn(16);
+                        for (i = 0; i < wbusy; i = i + 1) push(8'h00, 1'b1);
+                        wmulti = 1'b0; rxs = RX_IDLE;
+                    end
+                    else if (b != 8'hFF) err(wmulti ? "write: not 0xFC, 0xFD or 0xFF while waiting for the token" : "write: not 0xFE or 0xFF while waiting for the token");
                 end
                 W_DATA: begin wbuf[wcnt] = b; wcnt = wcnt + 1; if (wcnt == 512) begin rxs = W_CRC; wcnt = 0; end end
                 W_CRC: begin
@@ -383,6 +424,7 @@ module sd_spi_model #(
                         begin : store
                             integer s, f;
                             if (wr_resp != 8'h05) ;                 // refused: nothing is stored
+                            else if ((use_disk || cap_set) && wblk >= cap_now) ;   // beyond the card: nothing is stored
                             else if (on_disk(wblk)) for (s = 0; s < 512; s = s + 1) disk[wblk * 512 + s] = wbuf[s];
                             else begin                              // the written-block table: only blocks that are not on the disk
                                 f = -1;
@@ -396,7 +438,8 @@ module sd_spi_model #(
                         end
                         n_wr_blk = n_wr_blk + 1;
                         if (wr_once) wr_resp = 8'h05;
-                        rxs = RX_IDLE;
+                        if (wmulti) begin wblk = wblk + 1; rxs = W_TOKEN; end   // the next block, or the stop token
+                        else rxs = RX_IDLE;
                     end
                 end
             endcase

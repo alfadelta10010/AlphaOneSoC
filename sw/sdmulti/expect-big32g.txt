@@ -1,0 +1,18 @@
+# 32 GB card (+SD_SPARSE): multiple transfers across 2 GB (block 4194304) and 4 GB (8388608) and past the end refused
++ sdmulti: init rc=0 sdhc=1
++ sdmulti: read x8 at 0 rc=0 singles rc=0 same=1
++ sdmulti: read x8 at 4000 rc=0 singles rc=0 same=1
++ sdmulti: write x6 at 200 rc=0
++ sdmulti: singles back rc=0 same=1
++ sdmulti: multi back rc=0 same=1
++ sdmulti: read 199 rc=0, read 206 rc=0
++ sdmulti: write x1 at 300 rc=0
++ sdmulti: read x1 at 300 rc=0 same=1
++ sdmulti: n=0 read rc=1 write rc=1
++ sdmulti: wrap read rc=1 write rc=1
++ sdmulti: past end read rc=1 write rc=1
++ sdmulti: x4 at 4194302 write rc=0 read rc=0 same=1
++ sdmulti: x4 at 8388606 write rc=0 read rc=0 same=1
++ sdmulti: single after rc=0
++ sdmulti: done
++ 0 errors, 0 expected

@@ -92,7 +92,7 @@ the SSD1331's 150 ns minimum SCK period needs DIV = 3 (3.9 MHz).
 | Need | Why | Change |
 |---|---|---|
 | Receive (MISO) | Every SD response and data block comes back on MISO | Synchronise MISO, shift it into the same shift register on the sampling edge, keep the received byte readable |
-| 100-400 kHz during card initialisation | SD spec: identification mode runs at 400 kHz or less | 8-bit divisor: SCK = clk / (2 x (BAUD + 1)), 122 kHz to 31 MHz at 62.5 MHz. Data transfer at 15.6 MHz (BAUD = 1, under SD's 25 MHz) |
+| 100-400 kHz during card initialisation | SD spec: identification mode runs at 400 kHz or less | 8-bit divisor: SCK = clk / (2 x (BAUD + 1)), 122 kHz to 31 MHz at 62.5 MHz. Data transfer at 10.4 MHz (BAUD = 2, the device tree's cap; BAUD 1 is lost to the pin flop) |
 | Mode 0 | SD's SPI mode is mode 0 (most cards also work in mode 3); the OLED is mode 3 | CPOL and CPHA bits |
 | A second chip select | SD and OLED share MOSI/SCK | SD CS# on `uo_out[7]` as an ordinary OUT bit |
 
@@ -880,7 +880,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
   clocks and instructions retired. Built with Verilator by `make -C sw bench`;
   the same file runs under Icarus (`make -C sw bench-icarus`, `SIMRUN=`): hello and the
   monitor's scripted session give the same clocks on both (hello 2,077,331 on both at the PR #18 tip 85c8459, 2026-11-22), and 56.9 million
-  (1.59 million instructions); FatFs (108.3 million clocks with the CSD read in sd_init, 108.2 before it, 123 blocks read, 69 written) and
+  (1.59 million instructions); FatFs (140.0 million clocks with the CSD read in sd_init, the CRC16 check of every block read and the SD data phase at BAUD 2; 130.6 at BAUD 1, 108.3 at BAUD 1 before the CRC16 check; 123 blocks read, 69 written) and
   FreeRTOS (49,077,894 clocks, the same costs) are the Verilator figures. The monitor, FatFs and
   FreeRTOS runs were identical on Icarus when compared 2026-11-11, before the later fixes changed
   the counts; on the current tree Icarus was re-run 2026-11-21 for hello, the DDR cases and the
@@ -889,7 +889,7 @@ of `sw/Makefile`. Output goes to `build/sw`.
   file names, relative paths, `f_printf`) on `sw/common/sd.c`, an SD card
   driver on the SPI controller that keeps the boot contract's rules 4 and 5
   (EN with every CS# high, 80 clocks, CMD0, CMD8, ACMD41 at 122 kHz, then
-  15.6 MHz; SDHC by block number). The bench gives the card a 4 MB FAT image
+  10.4 MHz; SDHC by block number). The bench gives the card a 4 MB FAT image
   made with mtools (`sw/tools/mkdisk.sh`). The test mounts it, lists the root,
   reads a short file, a long-named file in a directory and a 16 KB file
   against its pattern, seeks, then creates, grows, appends, renames, makes a
@@ -937,10 +937,10 @@ benchmarks). Besides the runs above: the loader against 13 damaged images (`tool
 blank flash, a size or load address that does not fit, an unaligned one, an entry outside the image, a wrong
 sum, unknown flag bits); the monitor's edge cases (bad input, misaligned and faulting accesses, backspace, an
 overlong line, the illegal-instruction, load-fault and return stops) and every one of the 4096 CSR numbers
-(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16 and an MBR with SDHC, standard-capacity
+(136 answer, the set `csr_scan_check.py` lists from `csr.v`'s read mux and `csr_read_zero`; the list is written by hand); FatFs on FAT12, FAT16, FAT32 (a 70000-sector volume, 124.7 million clocks on 2026-11-23; FAT12 140.0, FAT16 136.3, MBR 130.9, the full-card run 289.9) and an MBR with SDHC, standard-capacity
 and v1 cards, its error codes, empty, 120-character-named, truncated and cluster-boundary files, and a card
-filled until it is full; the SD driver against a card told to fail 13 ways (`make run-sdtest-all`: data error
-token, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
+filled until it is full; the SD driver against a card told to fail 14 ways (`make run-sdtest-all`: data error
+token, wrong CRC16, write error and CRC responses, CMD13 status, no card, DO stuck, ACMD41 never ready, bad CMD8 echo,
 refused CMD16 ...); FreeRTOS's five fault paths (`make run-fr-all`: stack overflow, allocation failure,
 assertion, illegal instruction, unhandled interrupt). Icarus (`make bench-icarus`, `SIMRUN=`, `SIM=`) gave the same results on the commits before the 2026-11-20 review fixes for the hello, monitor, CSR-scan, FatFs, FreeRTOS, FreeRTOS fault-path, DDR and damaged-image runs; its SD-variant runs (in progress 2026-11-21) and everything after the review fixes, except hello, the DDR cases and the 51-run matrix (re-run on Icarus 2026-11-21, same results), ran on Verilator only. The review fixes were checked by mutation: without the CMD13 that clears the status after a refused write, `wrerr1` fails; with a trap that powers off instead of spinning under DDR, `ddrdt` fails; with the late-mismatch path forcing STREAM on, the no-stream run fails.
 
@@ -959,13 +959,18 @@ million clocks: the run below is 70 iterations.
 | Dhrystone 2.2 (500 runs) | 16,697 clocks per run; 59.9 Dhrystones/s per MHz; **0.034 DMIPS/MHz**; all 14 final values correct | |
 | CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
 | Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
-| FatFs, mount to delete | 108 million clocks in all; 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 15.6 MHz SPI clock |
+| FatFs, mount to delete | 140 million clocks in all, at the SD data phase's BAUD 2 (10.4 MHz; 131 at BAUD 1, 108 at BAUD 1 before the CRC16 check of read data: a table lookup a byte, 3.5 million instructions now; the bitwise loop made it 276 at BAUD 1); 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 10.4 MHz SPI clock |
 | FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,191 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**
-* FAT32 (a 33 MB image is too big for the bench's disk array), a card larger than 2 GB, multi-block
-  commands (CMD18, CMD25: the driver reads and writes one block at a time), CRC16 on data (checked by
-  neither side) and a write that the card never finishes (the 1,000,000-byte busy limit is not run).
+* exFAT: FatFs is built with `FF_FS_EXFAT` off, so a card over 32 GB (formatted exFAT as shipped) needs
+  a FAT32 re-format or the option switched on (not built or run). The driver and the card model cover
+  SDHC/SDXC to 2 TB (CSD, block numbers past 2 GB and 4 GB), multiple-block transfers (CMD18 + CMD12,
+  CMD25 + stop token, `make run-sdmulti-all`: 8 variants incl. a refused block inside CMD25, a data
+  error token inside CMD18 and cards of 1 TB and 4 GB standard capacity), the CRC16 of read data (a
+  2 TB card, block 0xFFFFFFFF, is argued, not run: the biggest run is 1 TB). The CRC16 of written
+  data is not sent (SPI mode does not check it). Not run: a write or a CMD12 that the card never
+  finishes (the 1,000,000-byte busy limit; `sdtest never` is ACMD41 never leaving idle).
 * FreeRTOS runs in M-mode only; the upstream port has no U-mode tasks under PMP.
 * Silicon: the DDR sweep's windows come from the Pmod model; the sweep exists to measure the real ones
   (docs/qspi-ddr.md 7).

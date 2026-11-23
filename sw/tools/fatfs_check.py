@@ -14,7 +14,7 @@ import tempfile
 
 dump = sys.argv[1]
 fsck_only = "--fsck-only" in sys.argv         # the small-card run: files that must survive, FILL.BIN gone, FATs equal
-img = bytearray(8192 * 512)
+img = bytearray(70000 * 512 if "--fat32" in sys.argv else 8192 * 512)   # (a FAT32 card: the dump is its first 8192 sectors)
 addr = 0
 for line in open(dump):
     if line.lstrip().startswith("//"):          # Icarus's $writememh adds comment lines
@@ -72,7 +72,7 @@ with tempfile.NamedTemporaryFile(suffix=".img") as t:
 bpb = img[vol:vol + 512]
 res = int.from_bytes(bpb[14:16], "little")
 nfat = bpb[16]
-spf = int.from_bytes(bpb[22:24], "little")
+spf = int.from_bytes(bpb[22:24], "little") or int.from_bytes(bpb[36:40], "little")   # (FAT32: BPB_FATSz32)
 base = vol // 512
 if nfat == 2:
     f1 = img[(base + res) * 512:(base + res + spf) * 512]

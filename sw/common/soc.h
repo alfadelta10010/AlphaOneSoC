@@ -101,6 +101,8 @@ static inline uint64_t mtime_read(void)
 int  sd_init(void);                                   /* 0 = ready; sets sd_sdhc */
 int  sd_read(uint32_t lba, void *buf);                /* one 512-byte block, 0 = ok */
 int  sd_write(uint32_t lba, const void *buf);
+int  sd_read_blocks(uint32_t lba, void *buf, uint32_t n);        /* CMD18 + CMD12, n 512-byte blocks, 0 = ok */
+int  sd_write_blocks(uint32_t lba, const void *buf, uint32_t n); /* CMD25 + stop token */
 extern int sd_sdhc;
 extern uint32_t sd_blocks;                             /* size in blocks from the CSD (SDHC/SDXC), 0 = unknown */
 

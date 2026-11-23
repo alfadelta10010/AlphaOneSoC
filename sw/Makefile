@@ -133,16 +133,17 @@ $(FFB)/ff.c: $(TP)/fatfs/source/ff.c fatfs/ffconf.sed
 	sed -f fatfs/ffconf.sed $(TP)/fatfs/source/ffconf.h > $(FFB)/ffconf.h
 fatfs_SRC    := fatfs/fatfs_test.c fatfs/diskio_sd.c common/sd.c $(FFB)/ff.c $(FFB)/ffunicode.c $(FFB)/ffsystem.c
 fatfs_CFLAGS := -I$(FFB) -Wno-format -Wno-error
-# DISK=fat12|fat16|mbr picks the card's image and SD=sdhc|sdsc|v1 its kind (byte addressing and
+# DISK=fat12|fat16|mbr|fat32 picks the card's image and SD=sdhc|sdsc|v1 its kind (byte addressing and
 # CMD16 for sdsc, no CMD8 either for v1): make run-fatfs DISK=mbr SD=v1. fat12 on an SDHC card is
 # the default; the image is rebuilt when DISK changes.
 DISK ?= fat12
 SD   ?= sdhc
-fatfs_TYPE   := $(if $(filter fat12,$(DISK)),FAT12,FAT16)
+fatfs_TYPE   := $(if $(filter fat12,$(DISK)),FAT12,$(if $(filter fat32,$(DISK)),FAT32,FAT16))
 fatfs_SDARG  := $(if $(filter sdsc,$(SD)),+SD_SDSC,$(if $(filter v1,$(SD)),+SD_V1,))
 fatfs_RUNDEP := $(BUILD)/fatfs/disk-$(DISK).hex
-fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG)
-fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
+fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG) \
+                 $(if $(filter fat32,$(DISK)),+SD_SPARSE +SD_BLKS=70000)
+fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex $(if $(filter fat32,$(DISK)),--fat32) && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
 $(BUILD)/fatfs/disk-%.hex: tools/mkdisk.sh tools/img2hex.py
 	@mkdir -p $(dir $@)
 	./tools/mkdisk.sh $(BUILD)/fatfs/disk-$*.img $@ $*
@@ -282,7 +283,7 @@ SDTESTS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rderr:+SD_RDERR=123 wrerr:+SD_WRRESP=0d
            wrerr1:+SD_WRRESP=0d,+SD_WRONCE \
            staterr:+SD_STATUS=01 absent:+SD_ABSENT stuck:+SD_STUCK_DO never:+SD_BUSY=5000 \
            slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16 \
-           big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648 sdscbig:+SD_SDSC,+SD_SPARSE,+SD_BLKS=4194304
+           big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648 rdcrc:+SD_RDCRC=123 sdscbig:+SD_SDSC,+SD_SPARSE,+SD_BLKS=4194304
 .PHONY: run-sdtest-all
 run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 	@for v in $(SDTESTS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \
@@ -290,6 +291,24 @@ run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
 	  (cd $(BUILD)/sdtest && $(SIMRUN) +FLASH_FILE=$(BUILD)/sdtest/flash.hex +UART_DIV=$(UART_DIVISOR) $(sdtest_RUNARGS) $$a $(RUNARGS) > run-$$n.log 2>&1); \
 	  python3 tools/check_run.py $(BUILD)/sdtest/run-$$n.log sdtest/expect-$$n.txt || exit 1; \
 	done; echo "sdtest: all variants ok"
+
+# The multiple-block transfers (CMD18/CMD12, CMD25/stop token) on the same cards: make run-sdmulti-all runs the
+# variants in SDMULTIS (name:plusargs as above), each checking sdmulti/expect-<name>.txt.
+sdmulti_SRC    := sdmulti/sdmulti.c common/sd.c
+sdmulti_EXPECT := sdmulti/expect-sdhc.txt
+sdmulti_RUNDEP := $(BUILD)/fatfs/disk-fat12.hex
+sdmulti_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-fat12.hex
+$(eval $(call PAYLOAD,sdmulti))
+SDMULTIS := sdhc: sdsc:+SD_SDSC,+SD_SPARSE,+SD_BLKS=8388608 v1:+SD_V1,+SD_SPARSE,+SD_BLKS=8388608 rdcrc:+SD_RDCRC=203 \
+            rderr:+SD_RDERR=203 wrerr:+SD_WRRESP=0d,+SD_WRONCE \
+            big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648
+.PHONY: sdmulti run-sdmulti run-sdmulti-all
+run-sdmulti-all: sdmulti $(BUILD)/bench/sim $(sdmulti_RUNDEP)
+	@for v in $(SDMULTIS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \
+	  echo "== sdmulti $$n: $$a"; \
+	  (cd $(BUILD)/sdmulti && $(SIMRUN) +FLASH_FILE=$(BUILD)/sdmulti/flash.hex +UART_DIV=$(UART_DIVISOR) $(sdmulti_RUNARGS) $$a $(RUNARGS) > run-$$n.log 2>&1); \
+	  python3 tools/check_run.py $(BUILD)/sdmulti/run-$$n.log sdmulti/expect-$$n.txt || exit 1; \
+	done; echo "sdmulti: all variants ok"
 
 # ── everything ──────────────────────────────────────────────────────────────
 # make check runs every test of the ladder on the bench (about 25 minutes of Verilator on one core): the
@@ -305,6 +324,7 @@ check:
 	$(MAKE) run-fatfs DISK=fat12 SD=sdhc
 	$(MAKE) run-fatfs DISK=fat16 SD=sdsc
 	$(MAKE) run-fatfs DISK=mbr SD=v1
+	$(MAKE) run-fatfs DISK=fat32 SD=sdhc
 	$(MAKE) run-fatfsfull
 	$(MAKE) run-freertos
 	$(MAKE) run-freertos DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 freertos_EXPECT="freertos/expect.txt freertos/expect-ddr.txt"
@@ -313,6 +333,7 @@ check:
 	$(MAKE) run-fr-malloc DDR=1 LOADER_DEFS=-DDDR_FINAL_TOP=6 RUNARGS=+MAX_CYCLES=40000000 fr-malloc_EXPECT="freertos/expect-neg-malloc.txt freertos/expect-neg-malloc-ddr.txt"
 	$(MAKE) run-ddr-all
 	$(MAKE) run-sdtest-all
+	$(MAKE) run-sdmulti-all
 	tools/loader_neg.sh
 	tools/ddr_matrix.sh
 	@echo "make check: everything passed"

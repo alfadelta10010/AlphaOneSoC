@@ -1,0 +1,17 @@
+# 4 GB standard-capacity card (byte addresses, no CSD): the same, and the 0x800000-block limit where lba * 512 wraps
++ sdmulti: init rc=0 sdhc=0
++ sdmulti: read x8 at 0 rc=0 singles rc=0 same=1
++ sdmulti: read x8 at 4000 rc=0 singles rc=0 same=1
++ sdmulti: write x6 at 200 rc=0
++ sdmulti: singles back rc=0 same=1
++ sdmulti: multi back rc=0 same=1
++ sdmulti: read 199 rc=0, read 206 rc=0
++ sdmulti: write x1 at 300 rc=0
++ sdmulti: read x1 at 300 rc=0 same=1
++ sdmulti: n=0 read rc=1 write rc=1
++ sdmulti: wrap read rc=1 write rc=1
++ sdmulti: to the last block (0x7FFFF8 x8) rc=0
++ sdmulti: past 4 GB (0x7FFFF9 x8, the last block is 0x800000) read rc=1 write rc=1
++ sdmulti: single after rc=0
++ sdmulti: done
++ 0 errors, 0 expected
