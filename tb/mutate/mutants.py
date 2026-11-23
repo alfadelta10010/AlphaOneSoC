@@ -31,18 +31,26 @@ m("ALU12", "alu.v", "sh_rev_in[bi]  = d1[31 - bi];", "sh_rev_in[bi]  = d1[bi];",
 m("ALU07", "alu.v", "default:  result = 32'b0;", "default:  result = d1;", "unissued codes give d1, not 0 (unit contract only)")
 
 # ── branchCtrl.v ─────────────────────────────────────────────────────────
-m("BR01", "branchCtrl.v", "assign lt_signed   = (r1[31] != r2[31]) ? r1[31] : sub33[32];",
-  "assign lt_signed   = (r1[31] != r2[31]) ? r2[31] : sub33[32];", "signed compare inverted when signs differ")
+m("BR01", "branchCtrl.v", "assign lt_signed   = (r1[31] != r2[31]) ? r1[31] : l5;",
+  "assign lt_signed   = (r1[31] != r2[31]) ? r2[31] : l5;", "signed compare inverted when signs differ")
 m("BR02", "branchCtrl.v", "3'b101:  branchValid = !lt_signed;     // BGE",
   "3'b101:  branchValid =  lt_signed;     // BGE", "BGE inverted")
-m("BR03", "branchCtrl.v", "wire eq          = (sub33[31:0] == 32'b0);",
-  "wire eq          = (sub33[30:0] == 31'b0);", "equality ignores bit 31")
-m("BR04", "branchCtrl.v", "assign lt_unsigned = sub33[32];", "assign lt_unsigned = sub33[31];", "unsigned compare from the wrong borrow bit")
+m("BR03", "branchCtrl.v", "wire eq            = e5;",
+  "wire eq            = e4[0];", "equality ignores the upper half (eq from e4[0] only)")
+m("BR04", "branchCtrl.v", "assign lt_unsigned = l5;", "assign lt_unsigned = l4[1];", "unsigned compare from the wrong borrow bit")
 m("BR05", "branchCtrl.v", "3'b110:  branchValid =  lt_unsigned;   // BLTU",
   "3'b110:  branchValid =  lt_signed;   // BLTU", "BLTU uses the signed compare")
 m("BR06", "branchCtrl.v", "default: branchValid = 1'b0;", "default: branchValid = eq;", "reserved funct3 010/011 taken on equal")
-m("BR07", "branchCtrl.v", "assign diff        = sub33[31:0];", "assign diff        = {sub33[31:1], 1'b0};", "SUB result bit 0 stuck at 0")
+m("BR07", "branchCtrl.v", "assign diff = r1 - r2;", "assign diff = (r1 - r2) & 32'hfffffffe;", "SUB result bit 0 stuck at 0")
 
+m("BR08", "branchCtrl.v", "assign l1[i] = l0[2*i+1] | (e0[2*i+1] & l0[2*i]);",
+  "assign l1[i] = l0[2*i+1] | l0[2*i];", "compare tree level 1 loses MSB priority")
+m("BR09", "branchCtrl.v", "assign e3[i] = e2[2*i+1] & e2[2*i];",
+  "assign e3[i] = e2[2*i+1];", "equality tree level 3 drops the low half")
+m("BR10", "branchCtrl.v", "assign l5 = l4[1] | (e4[1] & l4[0]);",
+  "assign l5 = l4[1] | l4[0];", "compare tree root loses MSB priority")
+m("BR11", "branchCtrl.v", "(* keep *) wire [31:0] l0 = ~r1 & r2;",
+  "(* keep *) wire [31:0] l0 = r1 & ~r2;", "per-bit less term reversed (r1 > r2)")
 # ── signExt.v ────────────────────────────────────────────────────────────
 m("SE01", "signExt.v", "immOut = {{12{instIn[31]}}, instIn[19:12], instIn[20], instIn[30:21], 1'b0};",
   "immOut = {{12{instIn[31]}}, instIn[19:12], instIn[31], instIn[30:21], 1'b0};", "JAL imm[11] from the sign bit")
