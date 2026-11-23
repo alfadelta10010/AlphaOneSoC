@@ -1,4 +1,7 @@
 `timescale 1ns / 1ps
+`ifndef CHIP_TCLK_NS
+`define CHIP_TCLK_NS 16.0
+`endif
 // gamepad (src/gamepad.v) against a cycle model written from the WO-53 specification, fed by an
 // asynchronous TinyTapeout Gamepad Pmod model (100 kHz +-5 % clock, data set half a period before each
 // rising clock, latch after the last bit, random report gaps, random phase against clk) through a
@@ -16,7 +19,7 @@ module tb_gamepad;
     wire        irq;
     gamepad uut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr2(addr2), .wdata(wdata),
                  .rdata(rdata), .latch_s(l2), .pclk_s(p2), .data_s(d2), .irq(irq));
-    always #8 clk = ~clk;                         // 62.5 MHz
+    always #(`CHIP_TCLK_NS / 2.0) clk = ~clk;     // the chip clock (Makefile CHIP_TCLK_NS; 16 ns = 62.5 MHz)
     always @(posedge clk) begin l1 <= latch_a; l2 <= l1; p1 <= pclk_a; p2 <= p1; d1 <= data_a; d2 <= d1; end
 
     integer seed = 1, nframes = 140, checks = 0, errors = 0, cyc = 0;

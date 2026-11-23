@@ -406,7 +406,7 @@ module tb_soc_periph;
             end else if (test == "sd_cs") begin
                 if (e == 1 || e == 2) begin
                     if (uo[5] !== (e == 2)) fail($sformatf("sd_cs cue %0d: uo[5] = %b", e, uo[5]));
-                    if (t_u5 - t_g5 != TCLK)
+                    if (t_u5 - t_g5 < TCLK - 0.001 || t_u5 - t_g5 > TCLK + 0.001)   // 1 ps: TCLK need not be a whole ps
                         fail($sformatf("sd_cs cue %0d: uo[5] followed OUT bit 5 after %0.1f ns, want one clock (%0.1f)", e, t_u5 - t_g5, TCLK));
                 end
                 if (e == 3 || e == 4) begin

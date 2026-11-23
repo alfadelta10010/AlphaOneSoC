@@ -80,6 +80,8 @@
 #   FYRA_SRC=<dir>  build the simulator from this copy of src/
 #   OUT_DIR=<dir>   artifacts there instead of ./out (./out/soc for soc)
 #   FAILFAST=1      stop the suite at its first failing run
+# SOC_TCLK_NS=<ns> builds the soc sim with that clock period (default 10 ns; the chip's is
+# the Makefile's CHIP_TCLK_NS) and scales the +RD_LATE runs' device delays with it (sim()).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -99,7 +101,7 @@ ld_for() { [ -f "$HERE/$1.ld" ] && echo "$HERE/$1.ld" || echo "$HERE/link.ld"; }
 CORE_SRC=("$SRC"/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder,fyracore,muldiv,pmp,regFile,rf_top,signExt}.v)
 build() {
   if [ $SOC = 1 ]; then
-    iverilog -g2012 -DSOC_TB -o "$OUT/sim" -s tb_rivercore \
+    iverilog -g2012 -DSOC_TB ${SOC_TCLK_NS:+-DTB_TCLK_NS=$SOC_TCLK_NS} -o "$OUT/sim" -s tb_rivercore \
       "${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,cache,soc_bus,plic,uart,gamepad,pwm,audio,pinmux,gpio,spi,syscon,alphaone_soc}.v \
       "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v || return 1
   else
@@ -154,6 +156,20 @@ MAXC=400000
 
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
+  # MANIFEST's +RD_LATE runs model a device for the 10 ns bench clock (+QSPI_DELAY=25 +QSPI_HOLD=12:
+  # past rd_late = 0's 2T - 1, hold longer than T). With SOC_TCLK_NS the pair scales with the clock
+  # (2.5 T and 1.2 T), so the run still needs rd_late = 1 and rd_late = 1 still reads it.
+  if [ -n "${SOC_TCLK_NS:-}" ] && [[ " $* " == *" +RD_LATE "* ]]; then
+    local a out=()
+    for a in "$@"; do
+      case $a in
+        +QSPI_DELAY=25) out+=("+QSPI_DELAY=$(awk -v t="$SOC_TCLK_NS" 'BEGIN { printf "%d", 2.5 * t }')");;
+        +QSPI_HOLD=12)  out+=("+QSPI_HOLD=$(awk -v t="$SOC_TCLK_NS" 'BEGIN { printf "%d", 1.2 * t }')");;
+        *) out+=("$a");;
+      esac
+    done
+    set -- "${out[@]}"
+  fi
   local image=+INIT_FILE="$OUT/$n.hex"
   is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
   vvp "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \

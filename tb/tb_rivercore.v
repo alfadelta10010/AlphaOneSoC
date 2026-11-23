@@ -276,9 +276,13 @@ module tb_rivercore;
 `define MEMARR mem.mem
 `endif
 
-    // Clock generation: 10ns period
+    // Clock generation: 10ns period (-DTB_TCLK_NS=<ns> another; tests/directed/run.sh soc passes SOC_TCLK_NS)
     initial clk = 0;
+`ifdef TB_TCLK_NS
+    always #(`TB_TCLK_NS / 2.0) clk = ~clk;
+`else
     always #5 clk = ~clk;
+`endif
 
     // ================================================================
     //  Plusarg handling
