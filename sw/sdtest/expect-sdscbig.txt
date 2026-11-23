@@ -1,0 +1,8 @@
+# A standard-capacity card at its 2 GB limit: a block number from 0x800000 up would wrap lba * 512, so the driver refuses it
+# before the card sees a byte address; blocks below still work.
++ sdtest: init rc=0 sdhc=0
++ sdtest: capacity 0 blocks
++ sdtest: sdsc read 8388608 rc=1
++ sdtest: sdsc write 8388608 rc=1
++ sdtest: done
+- ERROR

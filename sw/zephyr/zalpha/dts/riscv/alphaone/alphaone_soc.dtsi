@@ -1,0 +1,72 @@
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <62500000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa-base = "rv32i";
+			riscv,isa-extensions = "i", "m", "a", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,none";
+			clock-frequency = <62500000>;
+
+			hlic0: interrupt-controller {
+				compatible = "riscv,cpu-intc";
+				#address-cells = <0>;
+				#interrupt-cells = <1>;
+				interrupt-controller;
+			};
+		};
+	};
+
+	/* PSRAM, 16 MB; the top 64 KB are left to the loader's conventions */
+	ram0: memory@80000000 {
+		device_type = "memory";
+		compatible = "mmio-sram";
+		reg = <0x80000000 0x00ff0000>;
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		uart0: uart@10000000 {
+			compatible = "ns16550";
+			reg = <0x10000000 0x8>;
+			reg-shift = <0>;
+			clock-frequency = <62500000>;
+			current-speed = <115200>;
+			status = "okay";
+		};
+
+		clint: clint@2000000 {
+			compatible = "sifive,clint0";
+			reg = <0x02000000 0x10000>;
+			interrupts-extended = <&hlic0 3 &hlic0 7>;
+			status = "okay";
+		};
+
+		mtimer: timer@200bff8 {
+			compatible = "riscv,machine-timer";
+			reg = <0x0200bff8 0x8 0x02004000 0x8>;
+			reg-names = "mtime", "mtimecmp";
+			interrupts-extended = <&hlic0 7>;
+			status = "okay";
+		};
+
+		syscon: syscon@10020000 {
+			compatible = "syscon";
+			reg = <0x10020000 0x1000>;
+			status = "okay";
+		};
+	};
+};

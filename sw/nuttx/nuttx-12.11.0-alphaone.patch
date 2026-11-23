@@ -1,0 +1,100 @@
+diff --git a/arch/risc-v/src/qemu-rv/Make.defs b/arch/risc-v/src/qemu-rv/Make.defs
+index d474c966..e7e6f537 100644
+--- a/arch/risc-v/src/qemu-rv/Make.defs
++++ b/arch/risc-v/src/qemu-rv/Make.defs
+@@ -27,7 +27,7 @@ CHIP_ASRCS = qemu_rv_head.S
+ 
+ # Specify our C code within this directory to be included
+ CHIP_CSRCS  = qemu_rv_start.c qemu_rv_irq_dispatch.c qemu_rv_irq.c
+-CHIP_CSRCS += qemu_rv_timerisr.c qemu_rv_allocateheap.c
++CHIP_CSRCS += qemu_rv_timerisr.c qemu_rv_allocateheap.c qemu_rv_alphauart.c
+ 
+ ifeq ($(CONFIG_BUILD_KERNEL),y)
+ CHIP_CSRCS += qemu_rv_mm_init.c
+diff --git a/arch/risc-v/src/qemu-rv/hardware/qemu_rv_memorymap.h b/arch/risc-v/src/qemu-rv/hardware/qemu_rv_memorymap.h
+index d9e3ab2e..0ac0018e 100644
+--- a/arch/risc-v/src/qemu-rv/hardware/qemu_rv_memorymap.h
++++ b/arch/risc-v/src/qemu-rv/hardware/qemu_rv_memorymap.h
+@@ -47,7 +47,7 @@
+ #  define QEMU_RV_ACLINT_BASE  0x2f00000
+ #endif
+ 
+-#define   QEMU_RV_RESET_BASE   0x100000
++#define   QEMU_RV_RESET_BASE   0x10020000
+ 
+ #ifdef CONFIG_ARCH_USE_S_MODE
+ #  define QEMU_RV_APLIC_BASE   0x0d000000
+diff --git a/arch/risc-v/src/qemu-rv/qemu_rv_irq.c b/arch/risc-v/src/qemu-rv/qemu_rv_irq.c
+index a7df68de..dd72a852 100644
+--- a/arch/risc-v/src/qemu-rv/qemu_rv_irq.c
++++ b/arch/risc-v/src/qemu-rv/qemu_rv_irq.c
+@@ -80,8 +80,7 @@ void up_irqinitialize(void)
+   /* Disable all global interrupts */
+ 
+ #ifndef CONFIG_ARCH_RV_HAVE_APLIC
+-  putreg32(0x0, QEMU_RV_PLIC_ENABLE1);
+-  putreg32(0x0, QEMU_RV_PLIC_ENABLE2);
++  /* AlphaOneSoC: no PLIC */
+ #else
+   riscv_aplic_disable_irqs(QEMU_RV_APLIC_BASE, QEMU_RV_APLIC_NR_IRQ);
+ #endif
+@@ -118,14 +117,7 @@ void up_irqinitialize(void)
+ #else
+   /* Set priority for all global interrupts to 1 (lowest) */
+ 
+-  for (id = 1; id <= 52; id++)
+-    {
+-      putreg32(1, (uintptr_t)(QEMU_RV_PLIC_PRIORITY + 4 * id));
+-    }
+-
+-  /* Set irq threshold to 0 (permits all global interrupts) */
+-
+-  putreg32(0, QEMU_RV_PLIC_THRESHOLD);
++  UNUSED(id);
+ #endif
+ 
+   /* Attach the common interrupt handler */
+diff --git a/arch/risc-v/src/qemu-rv/qemu_rv_start.c b/arch/risc-v/src/qemu-rv/qemu_rv_start.c
+index 0128ba1d..6dc34a22 100644
+--- a/arch/risc-v/src/qemu-rv/qemu_rv_start.c
++++ b/arch/risc-v/src/qemu-rv/qemu_rv_start.c
+@@ -234,10 +234,15 @@ cpux:
+     }
+ }
+ 
++void alpha_uart_earlyinit(void);
++void alpha_uart_init(void);
++
+ void riscv_earlyserialinit(void)
+ {
+ #ifdef CONFIG_16550_UART
+   u16550_earlyserialinit();
++#else
++  alpha_uart_earlyinit();
+ #endif
+ }
+ 
+@@ -245,6 +250,8 @@ void riscv_serialinit(void)
+ {
+ #ifdef CONFIG_16550_UART
+   u16550_serialinit();
++#else
++  alpha_uart_init();
+ #endif
+ }
+ 
+diff --git a/arch/risc-v/src/qemu-rv/qemu_rv_timerisr.c b/arch/risc-v/src/qemu-rv/qemu_rv_timerisr.c
+index edc34ec1..bf745dd1 100644
+--- a/arch/risc-v/src/qemu-rv/qemu_rv_timerisr.c
++++ b/arch/risc-v/src/qemu-rv/qemu_rv_timerisr.c
+@@ -48,8 +48,8 @@
+  * Pre-processor Definitions
+  ****************************************************************************/
+ 
+-#define MTIMER_FREQ 10000000
+-#define TICK_COUNT (10000000 / TICK_PER_SEC)
++#define MTIMER_FREQ 62500000
++#define TICK_COUNT (62500000 / TICK_PER_SEC)
+ 
+ /****************************************************************************
+  * Public Functions

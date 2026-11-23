@@ -1,0 +1,5 @@
+# no card: CMD0 is answered with 0xFF, init fails with 1 and nothing else runs
++ sdtest: init rc=1
+- sdtest: read
++ 0 errors, 0 expected
+- ERROR

@@ -1,0 +1,10 @@
+# A soft reboot with DDR on: the cause is SOFT (the first boot cleared PIN), BOOT_MODE is a DDR note but the cause is
+# not WDT, so the loader sweeps again and DDR comes on again.
+>=2 flash in DDR, DDR_CAP
++ reset cause 0x02
++ ddrrb: second boot, DDR on again
+>=2 AlphaOne loader
+- flash stays SDR
+- FAIL
+- TRAP mcause
+- ERROR

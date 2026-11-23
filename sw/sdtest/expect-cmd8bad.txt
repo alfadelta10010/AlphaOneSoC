@@ -1,0 +1,5 @@
+# CMD8's R7 does not echo the check pattern: init fails with 2
++ sdtest: init rc=2
+- sdtest: read
++ 0 errors, 0 expected
+- ERROR

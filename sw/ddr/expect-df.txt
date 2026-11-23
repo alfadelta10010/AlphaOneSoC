@@ -1,0 +1,8 @@
+# BOOT_MODE 0xDF (DDR failed) survives a reboot and keeps the flash in SDR with no sweep.
++ flash in DDR, DDR_CAP
++ flash stays SDR: DDR failed on an earlier boot
++ ddrdf: second boot, SDR kept
+>=2 AlphaOne loader
+- FAIL
+- TRAP mcause
+- ERROR

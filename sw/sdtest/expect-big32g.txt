@@ -1,0 +1,18 @@
+# A 32 GB SDHC card (+SD_SPARSE +SD_BLKS): the CSD says 67108864 blocks; block numbers past 2 GB and 4 GB, the last block
+# and a write and its read-back at each; the first block beyond is refused. No 32-bit wrap onto the low blocks.
++ sdtest: init rc=0 sdhc=1
++ sdtest: read 0 rc=0 b0=eb b510=55 b511=aa
++ sdtest: capacity 67108864 blocks
++ sdtest: read 4194304 rc=0 b0=00 b1=01
++ sdtest: write 4194309 rc=0
++ sdtest: readback 4194309 rc=0 match=1
++ sdtest: write 8388613 rc=0
++ sdtest: readback 8388613 rc=0 match=1
++ sdtest: write 67108863 rc=0
++ sdtest: readback 67108863 rc=0 match=1
++ sdtest: read last rc=0 b0=ff
++ sdtest: block 5 unchanged=1
++ sdtest: read beyond rc=1
++ sdtest: done
++ 0 errors, 1 expected
+- ERROR

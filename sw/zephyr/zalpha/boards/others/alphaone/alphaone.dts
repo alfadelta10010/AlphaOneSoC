@@ -1,0 +1,18 @@
+/dts-v1/;
+
+#include <alphaone/alphaone_soc.dtsi>
+
+/ {
+	model = "AlphaOneSoC";
+	compatible = "alphaone,soc";
+
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		zephyr,sram = &ram0;
+	};
+
+	aliases {
+		uart-0 = &uart0;
+	};
+};

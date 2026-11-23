@@ -1,0 +1,5 @@
+# a standard-capacity card refuses CMD16: init fails with 5
++ sdtest: init rc=5
+- sdtest: read
++ 0 errors, 0 expected
+- ERROR

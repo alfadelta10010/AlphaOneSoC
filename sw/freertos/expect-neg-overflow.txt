@@ -1,0 +1,4 @@
+# The overflow case (-DNEG_OVERFLOW): the kernel's hook or the port's handler stops the run.
++ stack overflow in ovf
+=RESULT FAIL code=167
+- tick: vTaskDelay

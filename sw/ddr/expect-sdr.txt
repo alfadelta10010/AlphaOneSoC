@@ -1,0 +1,8 @@
+# No capture point passes (+QSPI_DELAY=20: SDR still reads, DDR has no window): the flash stays SDR and says why.
++ flash stays SDR: no passing capture point
++ DDR 0, DDR_CAP
++ read back from flash in SDR, 0 differ
+- flash in DDR
+- FAIL
+- TRAP
+- ERROR

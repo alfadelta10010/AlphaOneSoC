@@ -1,0 +1,5 @@
+# DO stuck high: the same as no card
++ sdtest: init rc=1
+- sdtest: read
++ 0 errors, 0 expected
+- ERROR

@@ -1,0 +1,14 @@
+# v1 card: CMD8 illegal, HCS 0, byte addressing
++ sdtest: init rc=0 sdhc=0
++ sdtest: read 0 rc=0 b0=eb b510=55 b511=aa
++ sdtest: read 4095 rc=0
++ sdtest: read 123 rc=0
++ sdtest: write 5000 rc=0
++ sdtest: readback 5000 rc=0 match=1
++ sdtest: write 8191 rc=0
++ sdtest: readback 8191 rc=0 match=1
++ sdtest: read 8192 rc=1
++ sdtest: write 8192 rc=1
++ sdtest: done
++ 0 errors, 2 expected
+- ERROR

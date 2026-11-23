@@ -1,0 +1,5 @@
+# Added to monitor/expect.txt (check_run.py takes both files) when the image is built with DDR=1 and the final
+# watchdog TOP cut to 6 (4.2M clocks): the run only passes if the monitor kicks it.
++ flash in DDR
+- reset cause 0x04
+- flash stays SDR
