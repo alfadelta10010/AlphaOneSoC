@@ -10,7 +10,7 @@ them.
 branch (decision of 2026-11-20, `docs/ROADMAP.md` section 0) adds, all on the
 bus and the pins in the committed RTL: a PLIC, a 16550A UART (8-entry RX
 FIFO, one TX holding register) with an interrupt, a one-pad gamepad receiver, a
-timer/PWM with two comparators, one square-wave audio voice, an output pinmux,
+timer/PWM with two comparators (PWM1 plays the tones), an output pinmux,
 the watchdog interrupt, an instruction cache (K4, `CACHE_CTL`) and the
 registered IO read path; and it moves the default pin map. PSRAM line bursts
 (`CACHE_CTL.PBURST`, WO-68) are built (662982d, f73a2d8) but **experimental, off at reset**.
@@ -44,7 +44,7 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uo_out[4]` | UART TX | out | RP2350 GPIO37 (UART1 RX) |
 | `uo_out[5]` | SD CS# = GPIO out 5 (resets high), or UART RTS# (pinmux code 2) | out | SD CS# (DAT3), by a jumper wire; the RP2350's GPIO38 (UART1 CTS) is on this pin |
 | `uo_out[6]` | OLED RES# and VCCEN = GPIO out 6, or PWM0 (pinmux code 4) | out | OLED RES# and VCCEN |
-| `uo_out[7]` | AUDIO (the audio block's PWM DAC), or PWM1 (pinmux code 5) | out | TT Audio Pmod, or the 7-segment DP |
+| `uo_out[7]` | PWM1 (fixed: the tone output; no pinmux alternative) | out | TT Audio Pmod, or the 7-segment DP |
 | `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
 | `ui_in[1]` | GPIO in 1, and SPI MISO | in | SD DO (MISO); DIP 2 must be off with the SD fitted |
 | `ui_in[2]` | the no-stream strap during the pin reset (held through reboots), then GPIO in 2. 1 = flash streaming off at reset | in | DIP 3 (off = RP2350 pull-down = streaming on) |
@@ -56,8 +56,8 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 
 **Pinmux.** Each `uo_out` pin has a default function (the table above) and
 may take its one alternate function by a code in the PINMUX register
-(section 11). Only three pins have one: pin 5 UART RTS# (code 2), pin 6 PWM0
-(code 4), pin 7 PWM1 (code 5). Every other code on every pin is not legal: the
+(section 11). Only pins 5 and 6 have one: pin 5 UART RTS# (code 2), pin 6 PWM0
+(code 4). Pin 7 is always PWM1 (no code). Every other code on every pin is not legal: the
 write stores 0 (the default function) and reads back 0 (WARL). RTS# exists only as such a
 feature: the default map gives `uo_out[5]` to SD CS#, so flow control
 means RTS# on pin 5 and no SD card.
@@ -66,9 +66,9 @@ means RTS# on pin 5 and no SD card.
 reset to `0x39`: `uo_out[0]` (OLED CS#), `[3]` (SCK, SPI mode 3's idle-high
 level, so enabling the transmitter makes no edge), `[4]` (UART TX idle) and
 `[5]` (SD CS#) high, `[6]` low (OLED held in reset, panel supply off), `[7]`
-(audio) low. GPIO OUT resets to `0xB9`, which is the same on the pins that
+(PWM1 idle) low. GPIO OUT resets to `0xB9`, which is the same on the pins that
 default to GPIO plus bit 7 and bit 4 high, so a pin switched to GPIO starts at
-its idle level, except pin 7, whose OUT bit resets to 1 while audio idles at 0. UART TX, RTS# (when mapped) and the PWM and audio sources
+its idle level, except pin 7, whose OUT bit resets to 1 while PWM1 idles at 0. UART TX, RTS# (when mapped) and the PWM sources
 reset to the pin's idle level as well, so the pin flops load `0x39` again on the
 first running edge and nothing moves (the TT01 case, `tb/VPLAN.md` 4.2). While
 reset is held the QSPI pins are released, as they are today. The same values
@@ -97,7 +97,7 @@ drives `0xB9` and RTS# on pin 5.)
 * **Outputs are the scarce pins.** After TX, seven outputs remain. The OLED
   needs five of them once PMODEN and VCCEN are tied off (below), the SD card's
   CS# one more (the rest of the SD card shares the OLED's SPI lines), and the
-  audio PWM one. That is the default map; the pinmux gives pins 5, 6 and 7 one alternate function each (RTS#, PWM0, PWM1).
+  tone (PWM1) one. That is the default map; the pinmux gives pins 5 and 6 one alternate function each (RTS#, PWM0); pin 7 is PWM1 always.
 * The OLED's SPI lines keep their Pmod positions (CS# 0, MOSI 1, SCK 3), so
   the SPI transmitter can take over MOSI and SCK without moving anything.
 * **The TT Audio Pmod sits on the OUT header and passes `out[0-6]` through**,
@@ -206,7 +206,6 @@ default map: its rows were `ui_in[4..7]` and its columns `uo_out[0..3]`.
 | 5 | Gamepad | `0x1001_0010`, `src/gamepad.v`, carved out of the GPIO window by `soc_bus` | built; one pad (pad 0) | gate harden | none (bare metal) |
 | 6 | PLIC | `0x0C00_0000`, `src/plic.v` | built; 9 sources, 1 context | gate harden | `sifive,plic-1.0.0` |
 | 7 | PWM | `0x1003_0000`, `src/pwm.v` | built; 2 of 4 comparators (cmp2/3 read `0xFFFF`), no sticky / one-shot / interrupt | gate harden | `pwm-sifive` |
-| 8 | Audio | `0x1003_0100`, `src/audio.v` | built; one square voice | gate harden | none (bare metal) |
 | 9 | Pinmux | `0x1002_0020`, `src/pinmux.v`, carved out of the syscon window | built | 2,560 µm² synth, 32 flops | `pinctrl-single` |
 | 10 | Instruction cache | `src/cache.v`, `CACHE_CTL` at `0x1002_0024` | built (K4); PBURST built, experimental, off at reset | two `rf_top` macros (256 B) + flops | none (loader) |
 | 11 | Bus and top-level changes | `soc_bus.v`, `alphaone_soc.v` | built; registered IO read path | one state flop and a 32-bit register, 632 µm² (measured) | — |
@@ -578,7 +577,7 @@ bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
   IO `ready` into the core's stall path becomes a flop. `ready` still comes
   from the UART and GPIO/SPI back-pressure, and an IO target may hold it
   low only on a cycle its own select is high, so the bus ANDs the readies.
-  The new targets (PLIC, PWM, audio, gamepad, pinmux) never hold `ready` low.
+  The new targets (PLIC, PWM, gamepad, pinmux) never hold `ready` low.
 * `alphaone_soc.v`: ports `uart_rx`, `gpio_in[7:0]`, `uo[7:0]` (the pin flops)
   and the old `uart_tx`, `uart_rts_n`, `gpio_out[7:0]` as pre-mux taps for the
   benches. The wrapper maps `uo` onto `uo_out` and the
@@ -649,7 +648,7 @@ enable clear, a priority-0 write or a threshold write** (the register sees the p
 `mstatus.MIE = 1` an MEI can be taken whose claim then returns 0: legal (a claim may return 0; Linux's
 handler loops `while (readl(claim))`), so handlers must accept a 0 claim.
 
-**Do not issue an AMO to an IO address** (UART, GPIO, syscon, PLIC, PWM, audio, CLINT): the core allows it,
+**Do not issue an AMO to an IO address** (UART, GPIO, syscon, PLIC, PWM, CLINT): the core allows it,
 but the read half has side effects before the write half, so an `amoswap` on the claim word claims the next
 source before it completes, and an AMO on UART `+0` pops RBR and writes FCR. Behaviour is undefined; Linux
 never AMOs MMIO.
@@ -663,7 +662,7 @@ never AMOs MMIO.
 | 5-8 | PWM (interrupts removed, tied 0; the source numbers stay reserved) |
 | 9 | watchdog: a ONE-clock pulse at the first expiry (not the STAT level); the PLIC pend is sticky, so a pulse is lost only while source 9 is in service (known behaviour: no latch, one flop saved; WDT_STAT stays pollable and Linux completes within microseconds) |
 
-The audio block has no interrupt. The claim ignores the threshold (as the
+The PWM has no interrupt and there is no audio block. The claim ignores the threshold (as the
 specification says) and `meip` is gated by it. Device tree: `riscv,ndev = <9>`,
 `interrupts-extended = <&cpu0_intc 11>`.
 
@@ -684,7 +683,7 @@ ignore writes (no pin, no interrupt): `pwm-sifive`'s `get_state` computes duty =
 | `0x20`, `0x24` | PWMCMP0-1, 16 bits |
 | `0x28`, `0x2C` | PWMCMP2-3: read `0xFFFF`, writes ignored |
 
-PWM decodes `addr[5:2]` and slot 3 only `addr[8]`, so the registers alias every 0x40 (and 0x1003_0200 is PWM again). The period is 2^(16 + scale) clocks. The pin is `ip`, high while the scaled
+PWM decodes `addr[5:2]` and the whole of slot 3, so the registers alias every 0x40 (0x1003_0100 and 0x1003_0200 alias it). The period is 2^(16 + scale) clocks. The pin is `ip`, high while the scaled
 counter is at or above the comparator (the arithmetic of `pwm-sifive.c`,
 `cmp = 0xFFFF - duty`, requires this polarity, so 0 % is not available and
 100 % is `cmp = 0`). `zerocmp` resets the count one cycle after a match on
@@ -692,27 +691,42 @@ comparator 0. There is no sticky mode, no one-shot and no interrupt: `ip`
 follows the comparators every clock, and the PLIC sources 5-8 never fire
 (a timer-style interrupt needs the CLINT's `mtimecmp`). The counter runs only
 while `enalways` is set. PWM0 and PWM1 reach a `uo_out` pin only through the
-pinmux: PWM0 on pin 6 (code 4), PWM1 on pin 7 (code 5). Writes never stall.
+pinmux: PWM0 on pin 6 (code 4), PWM1 on pin 7 (fixed). Writes never stall.
 
-### 9. Audio at `0x1003_0100`
+### 9. Tones on PWM1 (the audio block is gone)
 
-`src/audio.v`. Original design, no interrupt, no driver: bare-metal software
-drives it. **One square-wave voice** and nothing else (no volume, noise or PCM),
-on `uo_out[7]`.
+There is no audio block. `uo_out[7]` is **PWM1, fixed** (no pinmux code, no alternative): it plays tones from the
+PWM's shared counter. The old audio window `0x1003_0100` is the PWM again: slot 3 is all PWM and its registers alias every
+0x40 (so `0x1003_0100` and `0x1003_0200` read and write the PWM registers, as `0x1003_0000` does).
 
-| Offset | Register |
-|---|---|
-| `0x00` | TONE0: `{O[2:0], P[11:0]}`; f = clk / 16 / 2^O / (2 (P + 1)) = 1,953,125 / (2^O (P + 1)) Hz at 62.5 MHz |
-| `0x10` | CTRL: bit 0 EN |
+**Tones.** Set `scale = S`, `zerocmp = 1`, `enalways = 1`, `cmp0 = N` and `cmp1 = N / 2`. The count `s` runs 0, 1, ..., N - 1
+for 2^S clocks each and sits on N for one clock before `zerocmp` restarts it, so the **period is N * 2^S + 1 clocks**
+(measured in simulation, `tests/soc/audio.S`: for example S = 2, N = 35,511 gives 142,045 clocks). The pin is `ip[1]` =
+(s >= cmp1): high for (N - cmp1) * 2^S + 1 clocks, a square wave for cmp1 = N / 2. Pick the smallest S with N <= 65,535
+and N = round((62.5e6 / f - 1) / 2^S). Restart the counter with a PWMCOUNT write before enabling a tone, so the first edge is
+exact. Note timing (the length of a note) comes from the CLINT (`mtime`): the PWM has no interrupt.
 
-Audio decodes only `addr[4:2]`, so its registers alias every 0x20 (TONE0 again at +0x20); other offsets in that span read 0 and ignore writes. EN = 0 holds the counters and the
-pin at their reset values. A new period takes effect at the next reload. Range at
-62.5 MHz: O = 0 gives 477 Hz (P = 4095) to 1.953 MHz (P = 0). **The Tetris formula**
-(Korobeiniki, smallest O, equal-tempered A4 = 440; table in the `src/audio.v`
-header, `tests/soc/tune.S`): `P = round(1,953,125 / (2^O f)) - 1`, for example
-A4 = 440 Hz: O = 1, P = 2218 gives 440.09 Hz; E5: O = 0, P = 2962 gives
-659.17 Hz. (WO-67 would remove the block and play the tune on PWM channel 1;
-it is not applied.)
+Shared-counter limit: PWM0 uses the same counter and `cmp0`, so while a tone plays PWM0 (pin 6, if mapped) is one clock high
+once per tone period (duty is not available there; it can only follow the tone's period).
+
+The Korobeiniki notes at 62.5 MHz (equal tempered, A4 = 440 Hz; the error is below 0.02 cent):
+
+| Note | S | cmp0 (N) | cmp1 | Period (clocks) | Hz |
+|---|---|---|---|---|---|
+| E2 | 4 | 47402 | 23701 | 758433 | 82.41 |
+| A2 | 4 | 35511 | 17755 | 568177 | 110.00 |
+| E4 | 2 | 47402 | 23701 | 189609 | 329.63 |
+| A4 | 2 | 35511 | 17755 | 142045 | 440.00 |
+| B4 | 1 | 63274 | 31637 | 126549 | 493.88 |
+| C5 | 1 | 59722 | 29861 | 119445 | 523.25 |
+| D5 | 1 | 53206 | 26603 | 106413 | 587.33 |
+| E5 | 1 | 47401 | 23700 | 94803 | 659.26 |
+| F5 | 1 | 44741 | 22370 | 89483 | 698.46 |
+| G5 | 1 | 39860 | 19930 | 79721 | 783.98 |
+| A5 | 1 | 35511 | 17755 | 71023 | 880.00 |
+
+The tone test (`tests/soc/audio.S`, `make test-soc-periph`, and through the pins in `test-wrapper-soc`) plays all eleven notes
+and measures each period on `uo_out[7]` within 1 clock of the table, plus the pin-6 pulses in the A4 phase.
 
 ### 10. Gamepad at GPIO `+0x10`
 
@@ -744,11 +758,11 @@ bit `4i+3` reads 0 (so it can be `pinctrl-single` with 4-bit fields).
 | 0-4 | 0 | the default of the map above (no alternate function) |
 | 5 | 0, 2 | 0 = SD CS# (GPIO OUT bit 5); 2 = UART RTS# |
 | 6 | 0, 4 | 0 = OLED RES# / VCCEN (GPIO OUT bit 6); 4 = PWM0 |
-| 7 | 0, 5 | 0 = AUDIO; 5 = PWM1 |
+| 7 | 0 | PWM1 always: the tone output, no code (every code reads 0) |
 
 The register is write-any-read-legal (WARL): a write of any code that is not
 legal for that pin, including a code that is legal on another pin, stores 0
-(the default function), and the nibble reads back 0. Three flops hold the three
+(the default function), and the nibble reads back 0. Two flops (alt5, alt6) hold the
 selects. Writes use the byte lanes: pin *i* is written by lane `i/2`.
 The result goes through **one flop per pin**, which resets to `0x39`, the
 wrapper's in-reset value (so F12, the rule that every pin is a flop, holds,
@@ -813,6 +827,6 @@ duties are in `docs/boot-contract-4x4.md`. No pin changes.
    `tb/ssd1331_model.v`, driven by `make test-soc-periph` (`tests/soc/`)
    rather than `run.sh soc`, whose IO window is off to match Spike. Unit
    benches: `make test-uart`, `make test-gpio`, and for the 4x4 blocks
-   `test-gamepad`, `test-pwm`, `test-audio`, `test-pinmux` and `test-plic`. The top level's pins: `make test-wrapper`.
+   `test-gamepad`, `test-pwm`, `test-pinmux` and `test-plic`. The top level's pins: `make test-wrapper`.
 6. ~~**Stall path timing**~~ -- the registered IO read path makes the IO
    `ready` into the core's stall path a flop.

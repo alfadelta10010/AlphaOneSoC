@@ -18,8 +18,8 @@
 //   uo_out[4]      UART TX
 //   uo_out[5]      SD CS# = GPIO OUT 5 (RTS# is a pinmux feature only)
 //   uo_out[6]      RES#/VCCEN = GPIO OUT 6
-//   uo_out[7]      audio
-//                Any pin can take GPIO OUT i, RTS#, audio or PWM0-3.
+//   uo_out[7]      PWM1 (the tone output)
+//                Pin 5 can take RTS#, pin 6 PWM0 (pin 7 is PWM1).
 //   uio[0]       QSPI CS0, flash         uio[3]  QSPI SCK
 //   uio[6]       QSPI CS1, PSRAM A       uio[7]  QSPI CS2, PSRAM B
 //   uio[1], uio[2], uio[4], uio[5]       QSPI SD0, SD1, SD2, SD3

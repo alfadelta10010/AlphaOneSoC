@@ -13,7 +13,7 @@ progs=("$@"); [ ${#progs[@]} -eq 0 ] && progs=(adv_c256 adv_hold)
 S=$T/src
 iverilog -g2012 -o "$O/sim" -s tb_adv $S/alu.v $S/branchCtrl.v $S/clint.v $S/compressed_decoder.v $S/controller.v \
   $S/csr.v $S/decoder.v $S/fyracore.v $S/muldiv.v $S/pmp.v $S/regFile.v $S/rf_top.v $S/regs.v $S/signExt.v \
-  $S/qspi_ctrl.v $S/mem_ctrl.v $S/cache.v $S/soc_bus.v $S/plic.v $S/uart.v $S/gamepad.v $S/pwm.v $S/audio.v \
+  $S/qspi_ctrl.v $S/mem_ctrl.v $S/cache.v $S/soc_bus.v $S/plic.v $S/uart.v $S/gamepad.v $S/pwm.v \
   $S/pinmux.v $S/gpio.v $S/spi.v $S/syscon.v $S/alphaone_soc.v $T/tb/qspi_pmod_model.v $T/tb/rp2350_uart_model.v \
   $T/tb/tb_adv.v > "$O/build.log" 2>&1 || { echo "VERDICT build FAIL (see $O/build.log)"; exit 1; }
 rc=0

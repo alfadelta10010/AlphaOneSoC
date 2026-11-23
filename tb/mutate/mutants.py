@@ -340,6 +340,7 @@ m("SB09", "soc_bus.v", "assign gamepad_sel = gpio_slot && gp_hit;", "assign game
 m("SB10", "soc_bus.v", "assign syscon_sel  = syscon_slot && !pmx_hit && !cch_hit;", "assign syscon_sel  = syscon_slot && !cch_hit;", "pinmux carve also selects syscon (both answer)")
 m("SB11", "soc_bus.v", "assign syscon_sel  = syscon_slot && !pmx_hit && !cch_hit;", "assign syscon_sel  = syscon_slot && !pmx_hit;", "CACHE_CTL carve also selects syscon (both answer)")
 m("SB12", "soc_bus.v", "assign cache_sel   = syscon_slot && cch_hit;", "assign cache_sel   = is_io && cch_hit;", "CACHE_CTL select held in phase 2")
+m("SB13", "soc_bus.v", "assign pwm_sel     = phase1 && is_io && (io_idx == 2'd3);", "assign pwm_sel     = phase1 && is_io && (io_idx == 2'd3) && !d_addr[8];", "the old audio carve-out is back: 0x1003_0100 no longer aliases the PWM")
 # SB05 (io_q captured every clock) is the design now (WO-58 C0): io_q is read only in phase 2 and the last
 # capture before it is the phase-1 completing edge either way (the bus proof still PROVES with it).
 m("QS01", "qspi_ctrl.v", ": ((3'b001 << cs_sel) & {2'b11, !we});", ": (3'b001 << cs_sel);", "a write may select the flash")
@@ -612,17 +613,28 @@ m('PW16', 'pwm.v', "2'b0, 1'b0, enalways, 2'b0, zerocmp, 1'b0, 4'b0, scale}", "2
 m('PW17', 'pwm.v', "2'b0, zerocmp, 1'b0, 4'b0, scale}", "2'b0, zerocmp, zerocmp, 4'b0, scale}", 'cfg bit 8 (sticky) reads zerocmp instead of 0')
 m('PW18', 'pwm.v', 'assign pwm_o = ip;', 'assign pwm_o = {ip[0], ip[1]};', 'pwm_o channels swapped')
 
-m('AU01', 'audio.v', "if (c == 12'd0) begin c <= per; audio_o <= ~audio_o; end", "if (c == 12'd1) begin c <= per; audio_o <= ~audio_o; end", 'voice reload at c == 1 (period one short)')
-m('AU02', 'audio.v', 'wire       tk = b & ((pre[10:4] & m) == m);', 'wire       tk = b;', 'the voice ignores the octave')
-m('AU03', 'audio.v', 'wire [6:0] m  = (7\'d1 << oct) - 7\'d1;', 'wire [6:0] m  = (7\'d1 << oct);', 'octave mask off by one (period wrong at O >= 1)')
-m('AU04', 'audio.v', "wire b  = (pre[3:0] == 4'hF);", "wire b  = (pre[3:0] == 4'hE);", 'the clk/16 tick one clock early (phase only: the unit bench is cycle-exact, the SoC period check cannot see it)')
-m('AU05', 'audio.v', "if (w && addr == 3'd0 && be[0]) per[7:0] <= wdata[7:0];", "if (w && addr == 3'd0 && be[1]) per[7:0] <= wdata[7:0];", 'P low byte taken on lane 1')
-m('AU06', 'audio.v', "begin per[11:8] <= wdata[11:8]; oct <= wdata[14:12]; end", "begin per[11:8] <= wdata[11:8]; oct <= wdata[15:13]; end", 'octave taken from bits 15:13')
-m('AU07', 'audio.v', "if (w && addr == 3'd4 && be[0]) en <= wdata[0];", "if (w && addr[2] && be[0]) en <= wdata[0];", 'CTRL decodes at 0x14 as well (the old PCM word)')
-m('AU08', 'audio.v', "(addr == 3'd4) ? {31'b0, en} : 32'b0;", "addr[2] ? {31'b0, en} : 32'b0;", 'CTRL reads back at 0x14 and 0x1C as well')
-m('AU09', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin pre <= 11'd0; c <= 12'd0; end", 'EN = 0 does not hold the voice: the pin keeps its last level')
-m('AU10', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin c <= 12'd0; audio_o <= 1'b0; end", 'EN = 0 does not restart the prescaler')
-m('AU11', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin pre <= 11'd0; audio_o <= 1'b0; end", 'EN = 0 does not clear the voice counter')
+# AU01 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU01', 'audio.v', "if (c == 12'd0) begin c <= per; audio_o <= ~audio_o; end", "if (c == 12'd1) begin c <= per; audio_o <= ~audio_o; end", 'voice reload at c == 1 (period one short)')
+# AU02 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU02', 'audio.v', 'wire       tk = b & ((pre[10:4] & m) == m);', 'wire       tk = b;', 'the voice ignores the octave')
+# AU03 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU03', 'audio.v', 'wire [6:0] m  = (7\'d1 << oct) - 7\'d1;', 'wire [6:0] m  = (7\'d1 << oct);', 'octave mask off by one (period wrong at O >= 1)')
+# AU04 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU04', 'audio.v', "wire b  = (pre[3:0] == 4'hF);", "wire b  = (pre[3:0] == 4'hE);", 'the clk/16 tick one clock early (phase only: the unit bench is cycle-exact, the SoC period check cannot see it)')
+# AU05 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU05', 'audio.v', "if (w && addr == 3'd0 && be[0]) per[7:0] <= wdata[7:0];", "if (w && addr == 3'd0 && be[1]) per[7:0] <= wdata[7:0];", 'P low byte taken on lane 1')
+# AU06 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU06', 'audio.v', "begin per[11:8] <= wdata[11:8]; oct <= wdata[14:12]; end", "begin per[11:8] <= wdata[11:8]; oct <= wdata[15:13]; end", 'octave taken from bits 15:13')
+# AU07 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU07', 'audio.v', "if (w && addr == 3'd4 && be[0]) en <= wdata[0];", "if (w && addr[2] && be[0]) en <= wdata[0];", 'CTRL decodes at 0x14 as well (the old PCM word)')
+# AU08 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU08', 'audio.v', "(addr == 3'd4) ? {31'b0, en} : 32'b0;", "addr[2] ? {31'b0, en} : 32'b0;", 'CTRL reads back at 0x14 and 0x1C as well')
+# AU09 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU09', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin pre <= 11'd0; c <= 12'd0; end", 'EN = 0 does not hold the voice: the pin keeps its last level')
+# AU10 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU10', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin c <= 12'd0; audio_o <= 1'b0; end", 'EN = 0 does not restart the prescaler')
+# AU11 retired (the audio block is removed: PWM1 on pin 7 plays the tones):
+# m('AU11', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin pre <= 11'd0; audio_o <= 1'b0; end", 'EN = 0 does not clear the voice counter')
 
 # PX01 retired (slim-down: codes[23:0] and the per-pin lane loop are gone; PX12/PX13 cover the lanes):
 # m('PX01', 'pinmux.v', 'if (w && be[k/2])', 'if (w && be[(k==1)?1:k/2])', 'lane 1 writes pin 1 from byte-enable 1')
@@ -641,20 +653,24 @@ m('PX02', 'pinmux.v', "parameter [7:0] UO_RESET = 8'h39", "parameter [7:0] UO_RE
 # m('PX08', 'pinmux.v', "codes <= 24'd0;", "codes <= 24'd1;", 'pin 0 code resets to 1')
 m('PX09', 'pinmux.v', "alt5 <= (wdata[22:20] == 3'd2);", "alt5 <= (wdata[22:20] == 3'd3);", 'WARL compare wrong: pin 5 accepts code 3, not 2')
 m('PX10', 'pinmux.v', "alt6 <= (wdata[26:24] == 3'd4);", "alt6 <= (wdata[26:24] == 3'd5);", 'WARL compare wrong: pin 6 accepts code 5, not 4')
-m('PX11', 'pinmux.v', "alt7 <= (wdata[30:28] == 3'd5);", "alt7 <= (wdata[30:28] != 3'd0);", 'WARL compare wrong: pin 7 accepts any non-zero code')
+# PX11 retired (pin 7 has no code and no alt7 flop: it is PWM1 always):
+# m('PX11', 'pinmux.v', "alt7 <= (wdata[30:28] == 3'd5);", "alt7 <= (wdata[30:28] != 3'd0);", 'WARL compare wrong: pin 7 accepts any non-zero code')
 m('PX12', 'pinmux.v', 'if (w && be[2]) alt5', 'if (w && be[1]) alt5', 'pin 5 written from lane 1 instead of lane 2')
-m('PX13', 'pinmux.v', 'if (w && be[3]) begin', 'if (w && be[2]) begin', 'pins 6 and 7 written from lane 2 instead of lane 3')
+m('PX13', 'pinmux.v', 'if (w && be[3]) alt6', 'if (w && be[2]) alt6', 'pin 6 written from lane 2 instead of lane 3')
 m('PX14', 'pinmux.v', 'alt5 ? rts_n : dflt[5]', 'alt5 ? pwm[0] : dflt[5]', 'pin 5 selects PWM0 instead of RTS#')
 m('PX15', 'pinmux.v', 'alt6 ? pwm[0] : dflt[6]', 'alt6 ? pwm[1] : dflt[6]', 'pin 6 selects PWM1 instead of PWM0')
-m('PX16', 'pinmux.v', 'alt7 ? pwm[1] : dflt[7]', 'alt7 ? pwm[0] : dflt[7]', 'pin 7 selects PWM0 instead of PWM1')
+m('PX16', 'pinmux.v', 'uo <= {pwm[1],', 'uo <= {pwm[0],', 'pin 7 takes PWM0 instead of PWM1')
 m('PX17', 'pinmux.v', "alt5 ? 3'd2 : 3'd0", "alt5 ? 3'd3 : 3'd0", 'readback code of pin 5 wrong (3, not 2)')
 m('PX18', 'pinmux.v', "alt6 ? 3'd4 : 3'd0", "alt6 ? 3'd5 : 3'd0", 'readback code of pin 6 wrong (5, not 4)')
-m('PX19', 'pinmux.v', "alt7 ? 3'd5 : 3'd0", "alt7 ? 3'd4 : 3'd0", 'readback code of pin 7 wrong (4, not 5)')
-m('PX20', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b1; alt6 <= 1'b0; alt7 <= 1'b0;", 'alt5 resets to 1 (RTS# on pin 5 out of reset)')
-m('PX21', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b0; alt6 <= 1'b1; alt7 <= 1'b0;", 'alt6 resets to 1 (PWM0 on pin 6 out of reset)')
-m('PX22', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b1;", 'alt7 resets to 1 (PWM1 on pin 7 out of reset)')
+# PX19 retired (pin 7 has no code: its nibble reads 0):
+# m('PX19', 'pinmux.v', "alt7 ? 3'd5 : 3'd0", "alt7 ? 3'd4 : 3'd0", 'readback code of pin 7 wrong (4, not 5)')
+m('PX20', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0;", "alt5 <= 1'b1; alt6 <= 1'b0;", 'alt5 resets to 1 (RTS# on pin 5 out of reset)')
+m('PX21', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0;", "alt5 <= 1'b0; alt6 <= 1'b1;", 'alt6 resets to 1 (PWM0 on pin 6 out of reset)')
+# PX22 retired (alt7 is gone):
+# m('PX22', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b1;", 'alt7 resets to 1 (PWM1 on pin 7 out of reset)')
 m('PX23', 'pinmux.v', 'alt5 ? rts_n : dflt[5], dflt[4:0]};', 'alt5 ? rts_n : dflt[5], dflt[3:0], dflt[4]};', 'pins 4:0 rotated by one (dflt[4] on pin 0)')
-m('PX24', 'pinmux.v', "assign rdata = {1'b0, alt7", "assign rdata = {alt7, alt7", 'readback bit 31 shows alt7 (bit 4i+3 must read 0)')
+m('PX24', 'pinmux.v', "assign rdata = {4'd0,", "assign rdata = {4'd1,", 'readback bit 28 reads 1 (pin 7 has no code: its nibble is 0)')
+m('PX25', 'pinmux.v', "assign rdata = {4'd0, 1'b0, alt6", "assign rdata = {3'd0, alt6, 1'b0, alt6", 'readback bit 27 shows alt6 (bit 4i+3 must read 0)')
 
 # ── plic.v (WO-48 PL01-PL13)
 m("PL01", "plic.v", "for (j = NSRC; j >= 1; j = j - 1) if (cand[j]) cid = j;", "for (j = 1; j <= NSRC; j = j + 1) if (cand[j]) cid = j;", "claim takes the highest eligible id")

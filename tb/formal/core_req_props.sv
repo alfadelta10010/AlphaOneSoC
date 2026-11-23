@@ -76,7 +76,7 @@ module core_req_props (
         cover (dmem_req && d_io2 && !dmem_we);              // a load reaches the PLIC window
         cover (dmem_req && d_io2 && dmem_we);               // a store does
         cover (dmem_req && dmem_addr == 32'h0C3F_FFFC);     // its top word
-        cover (dmem_req && dmem_addr[31:16] == 16'h1003);   // the new IO1 slot (PWM/audio)
+        cover (dmem_req && dmem_addr[31:16] == 16'h1003);   // the new IO1 slot (PWM)
     end
 `endif
 endmodule

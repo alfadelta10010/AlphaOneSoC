@@ -102,7 +102,7 @@ can.
 | Watchdog: timeout = 2^(16+TOP) clocks | TOP 15 = 34.4 s; DDR test TOP 1 = 2.1 to 3.1 ms | scales as 1/*f*: at 15 MHz TOP 15 = 143 s, TOP 1 = 8.7 to 13 ms. The driver reads the rate from `clk_core`, so a correct DT needs nothing else | `docs/soc-architecture.md` (Watchdog), loader |
 | PSRAM minimum clock, any access | 8.0 MHz (tCEM 8 us; a single read holds CE# low 64 clocks at worst) | **below 8 MHz every PSRAM access breaks tCEM and corrupts RAM silently**; add margin (use 8.3 MHz or more) | PSRAM, always (with or without PBURST) |
 | PBURST minimum clock | 15 MHz (tCEM 8 µs, at most 101 clocks per line: floor 12.6 MHz) | **below 15 MHz PBURST stays 0** | CACHE_CTL |
-| Audio tone: *f* / 16 / 2^O / (2 (P + 1)) | 1,953,125 / (2^O (P + 1)) Hz | recompute the note table (`src/audio.v` header) | bare-metal software |
+| PWM1 tone: 62.5e6 / (N * 2^S + 1) Hz | N = round((62.5e6 / f - 1) / 2^S) | recompute the note table (pins-and-peripherals.md, Tones) | bare-metal software |
 | UART RX slack without RTS# | 87 µs per character at 114,890 baud | set by the baud, not the clock: unchanged once the divisor is retuned | `docs/pins-and-peripherals.md` |
 
 ## 5. Checking the device tree

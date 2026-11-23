@@ -5,10 +5,12 @@ sed pinmux.v s/parameter \[7:0\] UO_RESET = 8'h39/parameter [7:0] UO_RESET = 8'h
 # pin 5 selects dflt instead of rts_n -> P1
 sed pinmux.v s/alt5 ? rts_n : dflt\[5\]/alt5 ? dflt[5] : dflt[5]/
 # pin 7 takes pwm[0] -> P1
-sed pinmux.v s/alt7 ? pwm\[1\] : dflt\[7\]/alt7 ? pwm[0] : dflt[7]/
+sed pinmux.v s/uo <= {pwm\[1\],/uo <= {pwm[0],/
 # pin flop bypassed: uo takes the default function regardless of alt -> P1
-sed pinmux.v s/uo <= {alt7 ? pwm\[1\] : dflt\[7\], alt6 ? pwm\[0\] : dflt\[6\], alt5 ? rts_n : dflt\[5\], dflt\[4:0\]};/uo <= dflt;/
+sed pinmux.v s/uo <= {pwm\[1\], alt6 ? pwm\[0\] : dflt\[6\], alt5 ? rts_n : dflt\[5\], dflt\[4:0\]};/uo <= {pwm[1], dflt[6:0]};/
 # pin 6 accepts code 5 (WARL compare wrong) -> P4
 sed pinmux.v s/alt6 <= (wdata\[26:24\] == 3'd4);/alt6 <= (wdata[26:24] == 3'd5);/
 # pin 6 reads code 5 -> P3
 sed pinmux.v s/1'b0, alt6 ? 3'd4 : 3'd0/1'b0, alt6 ? 3'd5 : 3'd0/
+# pin 7 nibble reads 5 (a code that is not there) -> P3
+sed pinmux.v s/assign rdata = {4'd0,/assign rdata = {1'b0, 3'd5,/

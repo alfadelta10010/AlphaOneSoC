@@ -181,13 +181,13 @@ module tb_soc_periph;
                   .hi_ok(m7_hi_ok), .per_ok(m7_per_ok), .n_hi(m7_n_hi), .n_pulse(m7_n_pulse));
     always @(posedge clk) begin if (m2_clr) m2_clr <= 1'b0; if (m7_clr) m7_clr <= 1'b0; end
 
-    // audio (one square voice, WO-63): the rising edges of uo[7]. Every phase restarts the voice (EN off, then
-    // on), so every distance between two consecutive rising edges is exactly the tone period, 32 * 2^O * (P + 1)
-    // clocks (the pin lags the block by a constant). The same monitor serves audio.S and tune.S.
+    // PWM1 tones on uo[7] (the audio block is gone): every phase restarts the counter (PWMCOUNT write) before the tone
+    // is enabled, so every distance between two consecutive rising edges is the tone period N * 2^S + 1 clocks
+    // (tests/soc/audio.S table), exactly; cue 12 turns the tone off and the pin stays low.
     integer au_n = 0, au_hi = 0, au_last = 0;
     reg     au_prev = 1'b0;
     integer au_dist [0:127];
-    always @(posedge clk) if (!rst && (test == "audio" || test == "tune")) begin
+    always @(posedge clk) if (!rst && test == "audio") begin
         if (uo[7] === 1'b1) au_hi = au_hi + 1;
         if (uo[7] === 1'b1 && !au_prev) begin
             if (au_n > 0 && au_n < 128) au_dist[au_n - 1] = cyc - au_last;
@@ -197,29 +197,28 @@ module tb_soc_periph;
     end
     function integer au_want(input integer ph);
         begin
-            if (test == "tune")
-                case (ph)
-                    1: au_want = 32 * 2963;  2: au_want = 32 * 3955;  3: au_want = 32 * 3733;  4: au_want = 32 * 3325;
-                    5: au_want = 32 * 3733;  6: au_want = 32 * 3955;  7: au_want = 64 * 2219;  8: au_want = 64 * 2219;
-                    default: au_want = 0;
-                endcase
-            else au_want = (ph == 1) ? 1024 : (ph == 2) ? 1280 : (ph == 3) ? 1312 : 0;
+            case (ph)
+                1: au_want = 758433;  2: au_want = 568177;  3: au_want = 189609;  4: au_want = 142045;
+                5: au_want = 126549;  6: au_want = 119445;  7: au_want = 106413;  8: au_want = 94803;
+                9: au_want = 89483;  10: au_want = 79721;  11: au_want = 71023;
+                default: au_want = 0;
+            endcase
         end
     endfunction
     task automatic au_eval(input integer ph);
-        integer i, bad, want, last_ph, min_n;
+        integer i, bad, want;
         begin
-            want = au_want(ph); last_ph = (test == "tune") ? 9 : 4;
-            min_n = (test == "tune") ? 3 : 40;
-            if (ph == last_ph) begin
-                if (au_hi != 0) fail($sformatf("%0s phase %0d: EN 0 but uo[7] was high %0d clocks", test, ph, au_hi));
-            end else if (au_n < min_n) fail($sformatf("%0s phase %0d: only %0d rising edges", test, ph, au_n));
+            want = au_want(ph);
+            if (ph == 12) begin
+                if (au_hi != 0) fail($sformatf("audio phase %0d: tone off but uo[7] was high %0d clocks", ph, au_hi));
+            end else if (au_n < 2) fail($sformatf("audio phase %0d: only %0d rising edges", ph, au_n));
             else begin
                 bad = 0;
                 for (i = 0; i < au_n - 1 && i < 127; i = i + 1) if (au_dist[i] != want) bad = bad + 1;
-                $display("%0s phase %0d: %0d rising edges, tone period %0d clocks (want %0d), %0d wrong",
-                         test, ph, au_n, au_dist[0], want, bad);
-                if (bad != 0) fail($sformatf("%0s phase %0d: %0d of %0d periods not %0d clocks", test, ph, bad, au_n - 1, want));
+                $display("audio phase %0d: %0d rising edges, tone period %0d clocks (want %0d), %0d wrong",
+                         ph, au_n, au_dist[0], want, bad);
+                if (bad != 0) for (i = 0; i < au_n - 1 && i < 4; i = i + 1) $display("  distance %0d: %0d", i, au_dist[i]);
+                if (bad != 0) fail($sformatf("audio phase %0d: %0d of %0d periods not %0d clocks", ph, bad, au_n - 1, want));
             end
             au_n = 0; au_hi = 0;
         end
@@ -401,8 +400,11 @@ module tb_soc_periph;
                     3: begin m2_eh = 32'h20004; m2_ep = 32'h40000; end
                     default: ;
                 endcase
-            end else if (test == "audio" || test == "tune") begin
+            end else if (test == "audio") begin
                 if (e >= 2) au_eval(e - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
+                // the shared counter: in the A4 phase (cue 4) PWM0 on uo[6] pulses once per tone period, one clock high
+                if (e == 4) begin m2_eh = 32'd1; m2_ep = 32'd142045; m2_clr <= 1'b1; end
+                if (e == 5) pw_eval(6, 4, m2_hi_ok, m2_per_ok, m2_n_pulse);
             end else if (test == "sd_cs") begin
                 if (e == 1 || e == 2) begin
                     if (uo[5] !== (e == 2)) fail($sformatf("sd_cs cue %0d: uo[5] = %b", e, uo[5]));
@@ -624,7 +626,7 @@ module tb_soc_periph;
         if (sd_used) begin rt_out = 12.5; rt_in = 12.5; end
         if ($value$plusargs("RT_OUT=%f", rt_out)) ;
         if ($value$plusargs("RT_IN=%f", rt_in)) ;
-        if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = sd_used ? 150_000_000 : 3_000_000;
+        if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = sd_used ? 150_000_000 : (test == "audio") ? 8_000_000 : 3_000_000;   // audio.S: 11 tones, 3.9 M clocks
         if (test == "oled_spi" || test == "spi_mixed") oled_fitted = 1'b1;
         if (test == "keypad")   kp_fitted = 1'b1;
         setup_oled;
@@ -697,8 +699,7 @@ module tb_soc_periph;
                     fail($sformatf("uart_linux: %0d THR stores waited, want exactly %0d", uart_waits, cache_en_arg ? 30 : 25));
                 if (rp.tx_sent_cts_off != 0) fail("uart_linux: a character was sent against CTS");
             end
-            if (test == "audio") au_eval(4);
-            if (test == "tune") au_eval(9);
+            if (test == "audio") au_eval(12);
             if (test == "pwm_linux") begin
                 if (m2_n_hi != 0) fail($sformatf("pwm_linux phase 4: uo[6] high %0d clocks after PWM off and the default map", m2_n_hi));
             end

@@ -1,4 +1,4 @@
-/* Addresses and helpers for the 4x4 SoC programs (PLIC, gamepad, PWM, audio, pinmux, SD CS# on OUT 5).
+/* Addresses and helpers for the 4x4 SoC programs (PLIC, gamepad, PWM, pinmux, SD CS# on OUT 5).
  * Included after periph.h. Addresses: localFiles/wo-4x4/INDEX-4x4.md decisions D1-D5, D8, D9.
  * Conventions in these programs: s11 = SYSCON, s2 = PLIC base, a4 = PLIC context 0 base. The programs
  * poll mip.MEIP with mstatus.MIE off (no trap handler), so the PLIC's claim / complete sequence is the
@@ -10,7 +10,7 @@
 #define PL_EN     0x2000
 #define PL_CTX    0x200000        /* threshold +0, claim / complete +4 */
 #define PWM       0x10030000
-#define AUDIO     0x10030100
+#define AUDIO     0x10030100      /* the old audio window: an alias of the PWM */
 #define PINMUX    0x10020020      /* pin i's code in bits [4i+2:4i]; legal: pin 5 = 2 (RTS#), pin 6 = 4 (PWM0), pin 7 = 5 (PWM1) */
 #define G_PAD     0x10            /* GPIO window: GAMEPAD, read only */
 #define G_PADSTAT 0x14            /* GPSTAT: bit 0 chg (W1C), bit 1 ie */
@@ -25,13 +25,7 @@
 #define PWM_COUNT 0x08
 #define PWM_S     0x10
 #define PWM_CMP0  0x20
-/* audio */
-#define AU_TONE0  0x00
-#define AU_TONE1  0x04   /* offsets 0x04..0x0C and 0x14 are not built (read 0) */
-#define AU_TONE2  0x08
-#define AU_NOISE  0x0C
-#define AU_CTRL   0x10
-#define AU_PCM    0x14
+/* the audio block is gone: 0x1003_0100 is the PWM again (the slot aliases it) */
 /* one UART character in clocks (8N1, 16 x divisor) */
 #define CHAR_CLKS (160 * UART_DIV_RESET)
 

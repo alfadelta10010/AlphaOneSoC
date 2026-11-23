@@ -53,7 +53,7 @@ DEPTH="${DEPTH:-12}"
 OUT="${OUT_DIR:-$ROOT/build}"
 mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
-SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v cache.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v plic.v uart.v gamepad.v pwm.v audio.v pinmux.v"
+SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v cache.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v plic.v uart.v gamepad.v pwm.v pinmux.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
 declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC"
                    [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_bb1]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
@@ -265,7 +265,7 @@ for n in "${names[@]}"; do
     if guard_hit "$log"; then echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue; fi
     if [ "$n" = spi_f12 ]; then
     out=$(python3 - "$json" <<'PYEOF'
-# F12 (SPI-014, WO-58): every uo_out pin (MOSI, SCK, the chip selects, TX, audio, ...) leaves from a flop.
+# F12 (SPI-014, WO-58): every uo_out pin (MOSI, SCK, the chip selects, TX, the PWM1 tone, ...) leaves from a flop.
 #   F1  the pinmux's uo[0..7] (soc.pinmux_inst.uo): the driver, through wires and $pos only, is the
 #       Q of a sequential cell.
 #   F2  the wrapper's uo_out[0..7]: the cone back to sequential Q outputs

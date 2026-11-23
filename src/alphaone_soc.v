@@ -15,7 +15,6 @@
 //                        straps, watchdog at +0x100 (src/syscon.v); the pinmux
 //                        at 0x1002_0020 (src/pinmux.v) is carved out of it
 //   0x1003_0000  PWM     SiFive pwm0 layout, comparators 0-1 built (2-3 read 0xFFFF), no interrupts (src/pwm.v)
-//   0x1003_0100  audio   one square tone, TONE0 + CTRL.EN (src/audio.v)
 //   0x1002_0024  CACHE_CTL  [0] EN, [1] reads 1, [2] PBURST (PSRAM line fills in one CE# period; needs
 //                        QSPI_CFG.STREAM and a core clock >= 15 MHz, tCEM 8 us); carved out of syscon in
 //                        soc_bus, the flops are in this file; the cache is 256 B with two data macros (src/cache.v)
@@ -26,7 +25,7 @@
 // pinmux (`uo`), after the mux of its default function and the features
 // software can select (pin 5 RTS#, pin 6 PWM0, pin 7 PWM1). Defaults: [0] OLED CS#
 // = OUT[0], [1] MOSI = OUT[1], [2] D/C = OUT[2], [3] SCK = OUT[3], [4] UART TX,
-// [5] SD CS# = OUT[5] (or RTS#), [6] RES#/VCCEN = OUT[6] (or PWM0), [7] audio (or PWM1). RX is ui_in[3], the
+// [5] SD CS# = OUT[5] (or RTS#), [6] RES#/VCCEN = OUT[6] (or PWM0), [7] PWM1 (fixed: tones, no alternative). RX is ui_in[3], the
 // gamepad's LATCH / CLOCK / DATA are ui_in[4] / [5] / [6], and gpio_in reads all
 // eight ui_in pins, RX and the rd_late strap included. uart_tx, uart_rts_n and
 // gpio_out are the pre-mux signals, kept as taps for the benches. The TinyTapeout
@@ -151,7 +150,7 @@ module alphaone_soc #(
     wire        plic_sel, uart_irq, gpio_spi_irq, gpio_in_irq;
     wire [7:0]  gpio_in_sync;
     wire [31:0] plic_rdata;
-    wire        gamepad_sel, pinmux_sel, pwm_sel, audio_sel, gamepad_irq, audio_o;
+    wire        gamepad_sel, pinmux_sel, pwm_sel, gamepad_irq;
     wire        cache_sel, cache_active;
     wire [31:0] cache_rdata;
     wire        c_req, c_ready;          // mem_ctrl's fetch port (behind the cache)
@@ -159,7 +158,7 @@ module alphaone_soc #(
     reg         cache_en;                // CACHE_CTL.EN, reset 0 by rst_soc
     reg         cache_pburst;            // CACHE_CTL.PBURST, reset 0 by rst_soc
     wire        c_burst, q_burst;        // PSRAM line burst qualifier: cache -> mem_ctrl -> qspi_ctrl
-    wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata, audio_rdata;
+    wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata;
     wire [1:0]  pwm_o;
 
     soc_bus bus (
@@ -190,8 +189,6 @@ module alphaone_soc #(
         .pinmux_rdata(pinmux_rdata),
         .pwm_sel     (pwm_sel),
         .pwm_rdata   (pwm_rdata),
-        .audio_sel   (audio_sel),
-        .audio_rdata (audio_rdata),
         .cache_sel   (cache_sel),
         .cache_rdata (cache_rdata)
     );
@@ -399,7 +396,7 @@ module alphaone_soc #(
         .irq    (gamepad_irq)
     );
 
-    // ── PWM (0x1003_0000) and audio (0x1003_0100) ──────────────────────────
+    // ── PWM (0x1003_0000, the whole IO slot 3) ──────────────────────────
     pwm pwm_inst (
         .clk   (clk),
         .rst   (rst_soc),
@@ -412,18 +409,6 @@ module alphaone_soc #(
         .pwm_o (pwm_o)
     );
 
-    audio audio_inst (
-        .clk    (clk),
-        .rst    (rst_soc),
-        .sel    (audio_sel),
-        .we     (dmem_we),
-        .be     (dmem_be),
-        .addr   (dmem_addr[4:2]),
-        .wdata  (dmem_wdata),
-        .rdata  (audio_rdata),
-        .audio_o(audio_o)
-    );
-
     // ── Pinmux (0x1002_0020): the uo_out pin flops ─────────────────────────
     pinmux pinmux_inst (
         .clk  (clk),
@@ -433,7 +418,7 @@ module alphaone_soc #(
         .be   (dmem_be),
         .wdata(dmem_wdata),
         .rdata(pinmux_rdata),
-        .dflt ({audio_o, gpio_out[6], gpio_out[5], uart_tx, gpio_out[3:0]}),
+        .dflt ({gpio_out[6], gpio_out[5], uart_tx, gpio_out[3:0]}),
         .rts_n(uart_rts_n),
         .pwm  (pwm_o),
         .uo   (uo)

@@ -18,7 +18,6 @@ apart, this document says which one won and why.
 | GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the one-pad gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` IN_IE/IN_IP, the input-change interrupt (PLIC source 4) (`docs/pins-and-peripherals.md`) |
 | syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps, QSPI_CFG, watchdog (section "syscon"); `+0x20` is the PINMUX word (`src/pinmux.v`) and `+0x24` is CACHE_CTL (`src/alphaone_soc.v`, `src/cache.v`), both carved out in `soc_bus` |
 | PWM | `0x1003_0000` | 64 KB slot | read, write, AMO | `src/pwm.v`: sifive,pwm0 layout, 2 built comparators (cmp2/3 read `0xFFFF`), no sticky / one-shot / interrupt; the second IO slot, `addr[17:16] = 3` |
-| Audio | `0x1003_0100` | in the PWM slot, `addr[8]` | read, write, AMO | `src/audio.v`: one square-wave voice (TONE0 at `+0x00`, CTRL at `+0x10`) |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
 7) from the core's PMA check, before anything reaches the bus. The windows are
@@ -92,8 +91,8 @@ held request (see `src/fyracore.v`), which is all a single-master bus needs.
 selected by `addr[27]` (its own PMA window); in the GPIO slot, offsets
 `0x10`-`0x17` of every 64-byte alias go to the gamepad and `gpio.v` never sees
 them; in the syscon slot, `0x1002_0020` goes to the pinmux and `syscon.v`
-still reads 0 there, so its proofs stand (CACHE_CTL at `0x1002_0024` is the same kind of carve). PWM and audio are IO slot 3
-(`addr[8]` picks between them). The new targets never hold `ready` low.
+still reads 0 there, so its proofs stand (CACHE_CTL at `0x1002_0024` is the same kind of carve). The PWM is IO slot 3: the whole slot decodes to the PWM, and 0x1003_0100 (the old audio window) aliases it.
+The new targets never hold `ready` low.
 
 **Registered IO read path (decision D14).** The 3x4
 submission has no registers in `soc_bus`: peripherals answer with

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 // pinmux (src/pinmux.v) against a cycle model written from the slim-down specification: every pin has code 0
-// (DEFAULT dflt[i]); pin 5 also has code 2 (RTS#), pin 6 code 4 (PWM0), pin 7 code 5 (PWM1); WARL: any other
+// (DEFAULT dflt[i]); pin 5 also has code 2 (RTS#), pin 6 code 4 (PWM0); pin 7 is PWM1 always (no code, no flop); WARL: any other
 // code on any pin stores 0 and reads 0; through ONE flop per pin (pin = mux of the previous clock's inputs and
 // stored selects); reset: selects 0 and uo = 0x39; per-lane (byte) writes (lane i/2 for pin i); bit 4i+3 reads 0.
 // Directed phase first: every code 0-7 written to every pin (alone and all-pins-at-once), readback and pins. Inputs change on the negative edge; every output and read word is compared every clock.
@@ -9,7 +9,7 @@ module tb_pinmux;
     reg         clk = 0, rst = 1, sel = 0, we = 0;
     reg  [3:0]  be = 0;
     reg  [31:0] wdata = 0;
-    reg  [7:0]  dflt = 0;
+    reg  [6:0]  dflt = 0;
     reg         rts_n = 0;
     reg  [1:0]  pwm = 0;
     wire [31:0] rdata;
@@ -36,7 +36,6 @@ module tb_pinmux;
             legal = 3'd0;
             if (pin == 5 && code == 3'd2) legal = 3'd2;
             if (pin == 6 && code == 3'd4) legal = 3'd4;
-            if (pin == 7 && code == 3'd5) legal = 3'd5;
         end
     endfunction
     function srcbit(input integer pin, input [2:0] code);
@@ -44,7 +43,6 @@ module tb_pinmux;
             case (code)
                 3'd2: srcbit = rts_n;
                 3'd4: srcbit = pwm[0];
-                3'd5: srcbit = pwm[1];
                 default: srcbit = dflt[pin];
             endcase
         end
@@ -56,7 +54,7 @@ module tb_pinmux;
             muo = 8'h39;
         end else begin
             for (i = 0; i < 8; i = i + 1) begin
-                mmux[i] = srcbit(i, mc[i]);
+                mmux[i] = (i == 7) ? pwm[1] : srcbit(i, mc[i]);
                 cv[i*8 + mc[i]] = cv[i*8 + mc[i]] + 1;
             end
             if (sel & we) for (i = 0; i < 8; i = i + 1) if (be[i/2]) begin
@@ -126,9 +124,11 @@ module tb_pinmux;
             dflt = 8'h5A; rts_n = p[0]; pwm = p[2:1];
             @(negedge clk); sel = 0; we = 0; @(negedge clk); dflt = 8'hA5; rts_n = ~rts_n; pwm = ~pwm; @(negedge clk);
         end
-        @(negedge clk); sel = 1; we = 1; be = 4'hF; wdata = 32'h5420_0000;   // pin 7 = 5, pin 6 = 4, pin 5 = 2 rts_n = 1; pwm = 2'b01; dflt = 8'h00;
+        @(negedge clk); sel = 1; we = 1; be = 4'hF; wdata = 32'h5420_0000;   // pin 7 = 5 (illegal now), pin 6 = 4, pin 5 = 2
+        rts_n = 1; pwm = 2'b01; dflt = 7'h00;
         @(negedge clk); sel = 0; we = 0; @(negedge clk); @(negedge clk);
-        if (rdata !== 32'h5420_0000) begin errors = errors + 1; $display("FAIL directed readback %h", rdata); end
+        if (rdata !== 32'h0420_0000) begin errors = errors + 1; $display("FAIL directed readback %h", rdata); end
+        if (uo[7:5] !== 3'b011) begin errors = errors + 1; $display("FAIL directed pins %b", uo); end
         force_idle = 0;
         repeat (ncyc) @(posedge clk);
         @(negedge clk);

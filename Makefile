@@ -51,7 +51,7 @@ SRC_FILES  := $(SRC_DIR)/alu.v \
 .PHONY: all test-all test-components test-cpu benchmarks clean help \
         test-alu test-branchctrl test-decoder test-signext test-controller \
         test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-seeds \
-        test-qspi test-qspi-burst test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
+        test-qspi test-qspi-burst test-qspi-ddr-sweep test-pmod-dtr test-uart test-uart-smoke test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-pinmux test-soc-periph test-syscon-soc test-soc-spi \
         test-wrapper test-wrapper-soc test-gl asm bounds-qspi \
         rivercore-build rivercore-test lint verilator-build verilator-test
 
@@ -77,7 +77,7 @@ help:
 	@echo "  make test-spi          Run the SPI controller bench (timing model, MISO probe, round-trip sweep)"
 	@echo "  make test-soc-periph   Run the peripheral programs through the whole SoC"
 	@echo "  make test-plic         Run the PLIC spec-model bench"
-	@echo "  make test-gamepad|test-pwm|test-audio|test-pinmux  Run the new peripheral spec-model benches"
+	@echo "  make test-gamepad|test-pwm|test-pinmux  Run the new peripheral spec-model benches"
 	@echo "  make test-soc-spi      Run the SD card and shared-bus programs through the SoC at the chip clock (CHIP_HZ)"
 	@echo "  make test-syscon-soc   Run syscon (reboot, strap, fail, watchdog) through the whole SoC"
 	@echo "  make test-wrapper      Run the TinyTapeout top level, pins only"
@@ -183,8 +183,8 @@ test-syscon: $(BUILD_DIR)
 # The seeded random unit benches, once per seed: make test-seeds SEEDS="1 2 3".
 # Each bench prints its seed; rerun one failure with its +SEED=.
 SEEDS ?= 1 2 3 4 5 6 7 8
-SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio tb_spi tb_plic tb_gamepad tb_pwm tb_audio tb_pinmux
-test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio test-spi test-plic test-gamepad test-pwm test-audio test-pinmux
+SEEDED := tb_alu tb_branchCtrl tb_signExt tb_decoder tb_csr tb_muldiv tb_pmp tb_clint tb_syscon tb_uart tb_gpio tb_spi tb_plic tb_gamepad tb_pwm tb_pinmux
+test-seeds: test-alu test-branchctrl test-signext test-decoder test-csr test-muldiv test-pmp test-clint test-syscon test-uart test-gpio test-spi test-plic test-gamepad test-pwm test-pinmux
 	@for s in $(SEEDS); do for t in $(SEEDED); do \
 		( $(call run_tb,$${t},+SEED=$$s,_seed$$s) ) > /dev/null || { echo "FAIL $$t +SEED=$$s"; exit 1; }; \
 		grep -h '^PASS' $(BUILD_DIR)/$${t}_seed$$s.log; \
@@ -307,12 +307,6 @@ test-pwm: $(BUILD_DIR)
 	@$(IVERILOG) -g2012 $(CHIP_DEFS) -I $(TB_DIR) -o $(BUILD_DIR)/tb_pwm $(SRC_DIR)/pwm.v $(TB_DIR)/tb_pwm.v
 	@$(call run_tb,tb_pwm)
 
-# The audio mixer + PWM DAC (src/audio.v), spec-model bench, +SEED=.
-test-audio: $(BUILD_DIR)
-	@echo "=== Testing audio ==="
-	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(BUILD_DIR)/tb_audio $(SRC_DIR)/audio.v $(TB_DIR)/tb_audio.v
-	@$(call run_tb,tb_audio)
-
 # The pinmux (src/pinmux.v), spec-model bench, +SEED=.
 test-pinmux: $(BUILD_DIR)
 	@echo "=== Testing pinmux ==="
@@ -335,14 +329,14 @@ case $$t in uart_echo|irq_stall) d=4;; uart_hello|uart_linux|periph_access|sysco
 	fl="-DMB_UART"; pl="+MB_UART"; if [ -n "$$d" ]; then fl="$$fl -DMB_DIV=$$d"; pl="$$pl +MB_DIV=$$d"; fi
 endef
 SOC_PERIPH_TESTS := uart_hello uart_echo uart_linux oled_spi keypad irq_stall periph_access clint_decode plic_uart \
-	gamepad pwm_linux pwm_timer audio tune pinmux sd_cs cache_ctl gpio_irq
+	gamepad pwm_linux pwm_timer audio pinmux sd_cs cache_ctl gpio_irq
 SOC_PERIPH_DIR   := $(BUILD_DIR)/soc_periph
 test-soc-periph: $(BUILD_DIR)
 	@echo "=== Testing the peripherals through the SoC ==="
 	@mkdir -p $(SOC_PERIPH_DIR)
 	@$(IVERILOG) -g2012 -DTCLK_NS=$(SOC_PERIPH_TCLK_NS) -o $(SOC_PERIPH_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
+		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_soc_periph.v
@@ -379,7 +373,7 @@ test-soc-spi: $(BUILD_DIR)
 	@mkdir -p $(SOC_SPI_DIR)
 	@$(IVERILOG) -g2012 -DTCLK_NS=$(CHIP_TCLK_NS) -o $(SOC_SPI_DIR)/sim -s tb_soc_periph $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
+		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
 		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/sd_spi_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_soc_periph.v
@@ -435,7 +429,7 @@ test-syscon-soc: $(BUILD_DIR)
 	@mkdir -p $(SYSCON_SOC_DIR)
 	@$(IVERILOG) -g2012 -I $(TB_DIR) -o $(SYSCON_SOC_DIR)/sim -s tb_syscon_soc $(SRC_FILES) \
 		$(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v $(SRC_DIR)/uart.v \
-		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v \
+		$(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/pinmux.v \
 		$(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v $(TB_DIR)/qspi_pmod_model.v \
 		$(TB_DIR)/req_hold_check.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/tb_syscon_soc.v
 	@cd $(SYSCON_SOC_DIR) && bad=0; n=0; for run in $(SYSCON_SOC_RUNS); do \
@@ -462,7 +456,7 @@ test-syscon-soc: $(BUILD_DIR)
 # then tests/soc/tt_reboot.S with +TEST=reboot (a reboot at the pins), twice: the
 # strap at 0 and at 1 (RD_LATE, 25 ns).
 WRAPPER_SRC  := $(SRC_FILES) $(SRC_DIR)/qspi_ctrl.v $(SRC_DIR)/mem_ctrl.v $(SRC_DIR)/cache.v $(SRC_DIR)/soc_bus.v $(SRC_DIR)/plic.v \
-                $(SRC_DIR)/uart.v $(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/audio.v $(SRC_DIR)/pinmux.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
+                $(SRC_DIR)/uart.v $(SRC_DIR)/gamepad.v $(SRC_DIR)/pwm.v $(SRC_DIR)/pinmux.v $(SRC_DIR)/gpio.v $(SRC_DIR)/spi.v $(SRC_DIR)/syscon.v $(SRC_DIR)/alphaone_soc.v \
                 $(SRC_DIR)/tt_um_alfadelta10010_alphaone_soc.v
 WRAPPER_RUNS := "" "+QSPI_DELAY=19" "$(QSPI_LATE)" "+NO_STREAM"
 WRAPPER_DIR  := $(BUILD_DIR)/wrapper
@@ -547,7 +541,7 @@ test-cache: $(BUILD_DIR)
 	@$(call run_tb,tb_cache,+MAXLAT=40 +CYCLES=1000000 +RF_X +RF_COLLIDE_X,_l40)
 	@$(call run_tb,tb_cache,+NOEN +RF_COLLIDE_X,_noen)
 
-test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-qspi test-qspi-burst test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-audio test-pinmux test-soc-periph test-syscon-soc test-wrapper
+test-components: test-alu test-branchctrl test-decoder test-signext test-controller test-regfile test-csr test-compressed test-muldiv test-pmp test-clint test-syscon test-cache test-qspi test-qspi-burst test-pmod-dtr test-uart test-gpio test-spi test-plic test-gamepad test-gamepad-model test-pwm test-pinmux test-soc-periph test-syscon-soc test-wrapper
 	@echo ""
 	@echo "=== All component tests completed ==="
 

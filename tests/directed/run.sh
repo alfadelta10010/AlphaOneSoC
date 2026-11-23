@@ -120,7 +120,7 @@ build() {
   local files defs=""
   if [ $SOC = 1 ]; then
     defs="-DSOC_TB${SOC_TCLK_NS:+ -DTB_TCLK_NS=$SOC_TCLK_NS}"
-    files=("${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,cache,soc_bus,plic,uart,gamepad,pwm,audio,pinmux,gpio,spi,syscon,alphaone_soc}.v
+    files=("${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,cache,soc_bus,plic,uart,gamepad,pwm,pinmux,gpio,spi,syscon,alphaone_soc}.v
            "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v)
   else
     files=("${CORE_SRC[@]}" "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v)

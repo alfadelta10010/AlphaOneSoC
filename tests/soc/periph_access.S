@@ -209,7 +209,7 @@ _start:
     CHECK t0, 0, 0x14E
     lw   t0, 0x18(s1)
     CHECK t0, 0, 0x14F           # +0x18 (input-change IRQ, not built) reads 0
-    # the pinmux at syscon +0x20 (WO-56) and the PWM / audio slot (IO slot 3, WO-54/55)
+    # the pinmux at syscon +0x20 (WO-56) and the PWM slot (IO slot 3, WO-54)
     lw   t0, 0x20(s11)
     CHECK t0, 0, 0x170
     li   t0, 0x04000000          # pin 6 = PWM0 (idle low = the level OUT[6] already has)
@@ -229,8 +229,8 @@ _start:
     lw   t0, 0(t2)
     CHECK t0, 0, 0x174           # PWMCFG
     li   t2, 0x10030100
-    lw   t0, 0x10(t2)
-    CHECK t0, 0, 0x175           # audio CTRL: off
+    lw   t0, 0x20(t2)
+    CHECK t0, 0xFFFF, 0x175      # the old audio window is the PWM again (the slot aliases it): PWMCMP0
     # AMOs on OUT
     li   t0, 0x40
     amoor.w t1, t0, (s1)

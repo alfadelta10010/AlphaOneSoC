@@ -1,9 +1,0 @@
-# WO-55/WO-63: audio (src/audio.v) nonvac mutants: each must fail a property.
-# voice toggles without waiting for c == 0 -> P2
-sed audio.v s/if (c == 12'd0) begin c <= per; audio_o <= ~audio_o; end/if (c == 12'd1) begin c <= per; audio_o <= ~audio_o; end/
-# EN off does not clear the pin -> P1
-sed audio.v s/if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end/if (!en) begin pre <= 11'd0; c <= 12'd0; end/
-# tick ignores the octave -> P2
-sed audio.v s/wire       tk = b \& ((pre\[10:4\] \& m) == m);/wire       tk = b;/
-# octave lane written by byte 0 -> P3
-sed audio.v s/if (w \&\& addr == 3'd0 \&\& be\[1\]) begin per\[11:8\] <= wdata\[11:8\]; oct <= wdata\[14:12\]; end/if (w \&\& addr == 3'd0 \&\& be[1]) begin per[11:8] <= wdata[11:8]; oct <= wdata[14:12] | wdata[2:0]; end/

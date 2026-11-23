@@ -35,7 +35,7 @@
 //   * from the first reset on, no X on uo_out, on uio_oe, or on a uio_out pin
 //     that is driven;
 //   * GPIO OUT bits 6:5 and 3:0 on uo_out[6:5] and [3:0] (bit 4 is the UART's TX and bit 7 has
-//     no pin by default: uo_out[7] is the audio output, low while the audio block is off),
+//     no pin by default: uo_out[7] is PWM1, low while the PWM is idle),
 //     GPIO IN from all of ui_in;
 //   * PSRAM A on uio[6] and PSRAM B on uio[7], flash on uio[0];
 //   * the strap: +RD_LATE holds ui_in[0] at 1 through each reset, and the run
@@ -571,8 +571,8 @@ module tb_tt_um;
                                prog, ph, pin, n_pulse, hi_ok, per_ok));
         end
     endtask
-    // audio (one square voice, WO-63): every phase restarts the voice, so every distance between two consecutive
-    // rising edges of uo_out[7] is exactly the tone period, 32 * 2^O * (P + 1) clocks
+    // PWM1 tones on uo_out[7] (the audio block is gone): every phase restarts the counter before the tone is enabled, so
+    // every distance between two consecutive rising edges is the tone period N * 2^S + 1 clocks (tests/soc/audio.S), exactly
     integer au_n = 0, au_hi = 0, au_last = 0;
     reg     au_prev = 1'b0;
     integer au_dist [0:127];
@@ -584,13 +584,23 @@ module tb_tt_um;
         end
         au_prev = (uo_out[7] === 1'b1);
     end
+    function integer au_want(input integer ph);
+        begin
+            case (ph)
+                1: au_want = 758433;  2: au_want = 568177;  3: au_want = 189609;  4: au_want = 142045;
+                5: au_want = 126549;  6: au_want = 119445;  7: au_want = 106413;  8: au_want = 94803;
+                9: au_want = 89483;  10: au_want = 79721;  11: au_want = 71023;
+                default: au_want = 0;
+            endcase
+        end
+    endfunction
     task automatic au_eval(input integer ph);
         integer i, bad, want;
         begin
-            want = (ph == 1) ? 1024 : (ph == 2) ? 1280 : (ph == 3) ? 1312 : 0;
-            if (ph == 4) begin
-                if (au_hi != 0) fail($sformatf("audio phase %0d: EN 0 but uo_out[7] was high %0d clocks", ph, au_hi));
-            end else if (au_n < 40) fail($sformatf("audio phase %0d: only %0d rising edges", ph, au_n));
+            want = au_want(ph);
+            if (ph == 12) begin
+                if (au_hi != 0) fail($sformatf("audio phase %0d: tone off but uo_out[7] was high %0d clocks", ph, au_hi));
+            end else if (au_n < 2) fail($sformatf("audio phase %0d: only %0d rising edges", ph, au_n));
             else begin
                 bad = 0;
                 for (i = 0; i < au_n - 1 && i < 127; i = i + 1) if (au_dist[i] != want) bad = bad + 1;
@@ -742,9 +752,9 @@ module tb_tt_um;
                     s_div = 1; s_n_ev = 2; s_ev[0] = 1; s_ev[1] = 2; s_exp_re = 1; s_want = "\377";
                 end
                 ID_audio: begin
-                    // one square voice on uo_out[7]: the tone period of phases 1-3, EN 0 low in phase 4 (tune.S, 9 phases of
-                    // up to 0.3 M clocks each, runs on the internal bench only)
-                    s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
+                    // PWM1 tones on uo_out[7]: 11 notes (cues 1-11, up to 0.76 M clocks a period), tone off at cue 12; PWM0 on uo_out[6]
+                    // pulses once per period in the A4 phase (cue 4)
+                    s_div = 1; s_n_ev = 12; for (k = 0; k < 12; k = k + 1) s_ev[k] = k + 1;
                 end
                 ID_pwm_linux: begin
                     s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
@@ -836,7 +846,11 @@ module tb_tt_um;
 `endif
                     if (code == 2 && uo_out !== 8'h39) fail($sformatf("reboot_dirty cue 2: uo_out = %b, want the default map 00111001", uo_out));
                 end
-                ID_audio: if (code >= 2) au_eval(code - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
+                ID_audio: begin
+                    if (code >= 2) au_eval(code - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
+                    if (code == 4) begin m2_eh = 32'd1; m2_ep = 32'd142045; m2_clr <= 1'b1; end
+                    if (code == 5) pw_eval(6, 4, m2_hi_ok, m2_per_ok, m2_n_pulse);
+                end
                 ID_pwm_linux: begin
                     if (code >= 2 && code <= 4) pw_eval(6, code - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
                     m2_clr <= 1'b1;
@@ -1027,7 +1041,7 @@ module tb_tt_um;
                                        oled.log[k][8], oled.log[k][7:0], want_oled[k][8], want_oled[k][7:0]));
             end
             if (oled.errors != 0) fail($sformatf("%0d SSD1331 errors", oled.errors));
-            if (pid == ID_audio) au_eval(4);
+            if (pid == ID_audio) au_eval(12);
             if (pid == ID_pwm_linux && m2_n_hi != 0)
                 fail($sformatf("pwm_linux phase 4: uo_out[6] high %0d clocks after PWM off and the default map", m2_n_hi));
             case (pid)
@@ -1139,7 +1153,7 @@ module tb_tt_um;
                 if (gpio_pins !== {out_vals[k][6:5], out_vals[k][3:0]})
                     fail($sformatf("OUT = %h: uo_out[6:5], [3:0] = %b, want %b", out_vals[k],
                                    gpio_pins, {out_vals[k][6:5], out_vals[k][3:0]}));
-                if (uo_out[7] !== 1'b0) fail($sformatf("OUT = %h: uo_out[7] (audio) = %b, want 0", out_vals[k], uo_out[7]));
+                if (uo_out[7] !== 1'b0) fail($sformatf("OUT = %h: uo_out[7] (PWM1) = %b, want 0", out_vals[k], uo_out[7]));
             end else if (seen < N_OUT + 3 * N_IN) begin
                 // 2. 'i', then the byte sent to it, then IN
                 k = (seen - N_OUT) / 3;
