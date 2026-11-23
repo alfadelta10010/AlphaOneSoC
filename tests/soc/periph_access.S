@@ -212,10 +212,14 @@ _start:
     # the pinmux at syscon +0x20 (WO-56) and the PWM / audio slot (IO slot 3, WO-54/55)
     lw   t0, 0x20(s11)
     CHECK t0, 0, 0x170
-    li   t0, 0x01000000          # pin 6 = GPIO OUT[6]: the level it already has
+    li   t0, 0x04000000          # pin 6 = PWM0 (idle low = the level OUT[6] already has)
     sw   t0, 0x20(s11)
     lw   t0, 0x20(s11)
-    CHECK t0, 0x01000000, 0x171
+    CHECK t0, 0x04000000, 0x171
+    li   t0, 0x01000000          # code 1 (GPIO) is gone: WARL stores 0
+    sw   t0, 0x20(s11)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0, 0x176
     sw   zero, 0x20(s11)
     lw   t0, 0x20(s11)
     CHECK t0, 0, 0x172

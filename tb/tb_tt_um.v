@@ -218,27 +218,11 @@ module tb_tt_um;
 
     // ── The RP2350's UART: 16 clocks a bit, the divisor tt_pins.S sets ──────
     // RTS# is a pinmux feature only now (WO-58): CTS is tied asserted, except in pinmux.S (cts_pin), which puts
-    // RTS# on uo_out[5]. rp_gate = 0 hides uo_out[4] from the model while pinmux.S makes it a GPIO pin (the break
+    // RTS# on uo_out[5]. rp_gate stays 1: uo_out[4] is always the UART's TX now (pin 4 has no alternate function; pinmux.S used to make it a GPIO pin).
     // it drives there is not UART traffic); see soc_event.
     reg  cts_pin = 1'b0, rp_gate = 1'b1;
-    // pm4_ok: uo_out[4] is the UART's TX pin only while its pinmux code is 0 (RTL: read from the pinmux, three clocks
-    // after the code returns to 0 so that the pin flop has settled; closed at once when the code changes). pinmux.S's
-    // read-back loop (every code on every pin) and its GPIO phase otherwise drive a long low there, which is a break
-    // to the model, not traffic. A gate-level netlist has no hierarchy: the cue-2 gate above is all it has.
-    wire pm4_now;
-    reg  pm4_d1 = 1'b1, pm4_d2 = 1'b1;
-`ifndef GL_TEST
-    assign pm4_now = (dut.soc.pinmux_inst.codes[14:12] == 3'd0);
-`else
-    assign pm4_now = 1'b1;
-`endif
-    always @(posedge clk) begin pm4_d1 <= pm4_now; pm4_d2 <= pm4_d1; end
-    wire pm4_ok = pm4_now & pm4_d1 & pm4_d2;
     rp2350_uart_model #(.BIT_NS(16.0 * TCLK)) rp (
-        .tx((rp_gate & pm4_ok) ? uo_out[4] : 1'b1), .rx(uart_rx), .cts_n(cts_pin ? uo_out[5] : 1'b0));
-    // pinmux.S cue 2 closes the gate; the first rise of uo_out[4] after it is the program's GPIO store of 1 (cue 4's
-    // side), long before cue 5's frame starts
-    always @(posedge uo_out[4]) if (!rp_gate) rp_gate = 1'b1;
+        .tx(rp_gate ? uo_out[4] : 1'b1), .rx(uart_rx), .cts_n(cts_pin ? uo_out[5] : 1'b0));
 
     // The demo board's other devices, on the pins as tests/soc programs use them
     // (docs/pins-and-peripherals.md): the SSD1331 on CS# [0], MOSI [1], D/C [2],
@@ -573,7 +557,7 @@ module tb_tt_um;
     reg  [31:0] m2_eh = 0, m2_ep = 0, m7_eh = 0, m7_ep = 0;
     reg         m2_clr = 1'b0, m7_clr = 1'b0;
     wire [31:0] m2_hi_ok, m2_per_ok, m2_n_hi, m2_n_pulse, m7_hi_ok, m7_per_ok, m7_n_hi, m7_n_pulse;
-    pin_meter m2 (.clk(clk), .pin(uo_out[2]), .clr(m2_clr), .exp_hi(m2_eh), .exp_per(m2_ep),
+    pin_meter m2 (.clk(clk), .pin(uo_out[6]), .clr(m2_clr), .exp_hi(m2_eh), .exp_per(m2_ep),
                   .hi_ok(m2_hi_ok), .per_ok(m2_per_ok), .n_hi(m2_n_hi), .n_pulse(m2_n_pulse));
     pin_meter m7 (.clk(clk), .pin(uo_out[7]), .clr(m7_clr), .exp_hi(m7_eh), .exp_per(m7_ep),
                   .hi_ok(m7_hi_ok), .per_ok(m7_per_ok), .n_hi(m7_n_hi), .n_pulse(m7_n_pulse));
@@ -747,11 +731,10 @@ module tb_tt_um;
                 end
                 ID_pinmux: begin
                     // The paste (cue 1) with RTS# on uo_out[5] as CTS, the cue-8 check of the held paste, uo_out[5] as
-                    // SD CS# again (cue 2), pin 7 back to audio (cue 5), PWM0 on pin 7 (cues 6, 7). Cues 3 and 4 never
-                    // arrive: the program has made uo_out[4] a GPIO pin then, so the UART's TX has no pin
-                    // (pinmux.S header); the program's other sends resume with cue 5.
+                    // SD CS# again (cue 2), the illegal-code check (cues 3, 4: the UART's TX keeps its pin, the default
+                    // map stays), PWM1 on pin 7 (cues 6, 7).
                     s_div = 1; cts_pin = 1'b1;
-                    s_n_ev = 6; s_ev[0] = 1; s_ev[1] = 8; s_ev[2] = 2; s_ev[3] = 5; s_ev[4] = 6; s_ev[5] = 7;
+                    s_n_ev = 7; s_ev[0] = 1; s_ev[1] = 8; s_ev[2] = 2; s_ev[3] = 3; s_ev[4] = 4; s_ev[5] = 6; s_ev[6] = 7;
                 end
                 ID_reboot_dirty: begin
                     // cue 1 (boot 1): a gamepad frame, 3 characters and pin 7 toggled; one reboot; cue 2 (boot 2): the default pin map.
@@ -835,10 +818,12 @@ module tb_tt_um;
                     end
                     if (code == 2) begin
                         if (uo_out[5] !== 1'b0) fail("pinmux cue 2: uo_out[5] high after OUT bit 5 went low");
-                        rp_gate = 1'b0; cts_pin = 1'b0;     // the paste is over; uo_out[5] is SD CS# again
+                        cts_pin = 1'b0;     // the paste is over; uo_out[5] is SD CS# again
                     end
-                    if (code == 5 && (uo_out[4] !== 1'b1 || uo_out[7] !== 1'b0))
-                        fail($sformatf("pinmux cue 5: uo_out[4], [7] = %b %b, want 1 0", uo_out[4], uo_out[7]));
+                    if (code == 3 && (uo_out[4] !== 1'b1 || uo_out[7] !== 1'b0 || uo_out[6] !== 1'b0 || uo_out[5] !== 1'b1))
+                        fail($sformatf("pinmux cue 3: uo_out[7:4] = %b, want 0 0 1 1", uo_out[7:4]));
+                    if (code == 4 && (uo_out[4] !== 1'b1 || uo_out[7] !== 1'b0))
+                        fail($sformatf("pinmux cue 4: uo_out[4], [7] = %b %b, want 1 0", uo_out[4], uo_out[7]));
                     if (code == 6) begin m7_eh = 32'h4001; m7_ep = 32'h10000; m7_clr <= 1'b1; end
                     if (code == 7) pw_eval(7, 6, m7_hi_ok, m7_per_ok, m7_n_pulse);
                 end
@@ -853,7 +838,7 @@ module tb_tt_um;
                 end
                 ID_audio: if (code >= 2) au_eval(code - 1); else begin au_n = 0; au_hi = 0; end   // edges before cue 1 (register checks) do not count
                 ID_pwm_linux: begin
-                    if (code >= 2 && code <= 4) pw_eval(2, code - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
+                    if (code >= 2 && code <= 4) pw_eval(6, code - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
                     m2_clr <= 1'b1;
                     case (code)
                         1: begin m2_eh = 32'h4001;  m2_ep = 32'h10000; end
@@ -1044,7 +1029,7 @@ module tb_tt_um;
             if (oled.errors != 0) fail($sformatf("%0d SSD1331 errors", oled.errors));
             if (pid == ID_audio) au_eval(4);
             if (pid == ID_pwm_linux && m2_n_hi != 0)
-                fail($sformatf("pwm_linux phase 4: uo_out[2] high %0d clocks after PWM off and the default map", m2_n_hi));
+                fail($sformatf("pwm_linux phase 4: uo_out[6] high %0d clocks after PWM off and the default map", m2_n_hi));
             case (pid)
                 // (uart_echo / uart_linux: no CTS check at the pins. RTS# is a pinmux feature only (WO-58) and CTS is tied
                 // asserted here, so "a character sent against CTS" could never happen; tb_soc_periph checks it with the real

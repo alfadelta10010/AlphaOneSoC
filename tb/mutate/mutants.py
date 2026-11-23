@@ -612,14 +612,37 @@ m('AU09', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; 
 m('AU10', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin c <= 12'd0; audio_o <= 1'b0; end", 'EN = 0 does not restart the prescaler')
 m('AU11', 'audio.v', "if (!en) begin pre <= 11'd0; c <= 12'd0; audio_o <= 1'b0; end", "if (!en) begin pre <= 11'd0; audio_o <= 1'b0; end", 'EN = 0 does not clear the voice counter')
 
-m('PX01', 'pinmux.v', 'if (w && be[k/2])', 'if (w && be[(k==1)?1:k/2])', 'lane 1 writes pin 1 from byte-enable 1')
+# PX01 retired (slim-down: codes[23:0] and the per-pin lane loop are gone; PX12/PX13 cover the lanes):
+# m('PX01', 'pinmux.v', 'if (w && be[k/2])', 'if (w && be[(k==1)?1:k/2])', 'lane 1 writes pin 1 from byte-enable 1')
 m('PX02', 'pinmux.v', "parameter [7:0] UO_RESET = 8'h39", "parameter [7:0] UO_RESET = 8'hB9", 'UO reset value 0xB9')
-m('PX03', 'pinmux.v', '3\'d2:    mux[j] = rts_n;', '3\'d2:    mux[j] = audio;', 'code 2 selects audio, not rts_n')
-m('PX04', 'pinmux.v', 'uo <= mux;', 'uo <= dflt;', 'the pin flop takes the default function whatever the codes')
-m('PX05', 'pinmux.v', "{1'b0, codes[3*i +: 3]}", "{codes[3*i +: 3] == 3'd7, codes[3*i +: 3]}", 'readback bit 3 shows code 7')
-m('PX06', 'pinmux.v', "3'd1:    mux[j] = gpio[j];", "3'd1:    mux[j] = gpio[(j+1)%8];", 'code 1 takes the neighbouring GPIO bit')
-m('PX07', 'pinmux.v', 'default: mux[j] = pwm[codes[3*j +: 3] - 3\'d4];', 'default: mux[j] = pwm[codes[3*j +: 3] - 3\'d3];', 'PWM code offset wrong')
-m('PX08', 'pinmux.v', "codes <= 24'd0;", "codes <= 24'd1;", 'pin 0 code resets to 1')
+# PX03 retired (slim-down: the code-2 case is gone; PX14 covers the pin 5 source):
+# m('PX03', 'pinmux.v', '3\'d2:    mux[j] = rts_n;', '3\'d2:    mux[j] = audio;', 'code 2 selects audio, not rts_n')
+# PX04 retired (slim-down: the mux function is gone; PX23 covers the pin flop inputs):
+# m('PX04', 'pinmux.v', 'uo <= mux;', 'uo <= dflt;', 'the pin flop takes the default function whatever the codes')
+# PX05 retired (slim-down: the codes array is gone; PX24 covers readback bit 3):
+# m('PX05', 'pinmux.v', "{1'b0, codes[3*i +: 3]}", "{codes[3*i +: 3] == 3'd7, codes[3*i +: 3]}", 'readback bit 3 shows code 7')
+# PX06 retired (slim-down: code 1 (GPIO) is gone):
+# m('PX06', 'pinmux.v', "3'd1:    mux[j] = gpio[j];", "3'd1:    mux[j] = gpio[(j+1)%8];", 'code 1 takes the neighbouring GPIO bit')
+# PX07 retired (slim-down: the PWM code offset is gone; PX15/PX16 cover the PWM sources):
+# m('PX07', 'pinmux.v', 'default: mux[j] = pwm[codes[3*j +: 3] - 3\'d4];', 'default: mux[j] = pwm[codes[3*j +: 3] - 3\'d3];', 'PWM code offset wrong')
+# PX08 retired (slim-down: codes is gone; PX20-PX22 cover the alt* resets):
+# m('PX08', 'pinmux.v', "codes <= 24'd0;", "codes <= 24'd1;", 'pin 0 code resets to 1')
+m('PX09', 'pinmux.v', "alt5 <= (wdata[22:20] == 3'd2);", "alt5 <= (wdata[22:20] == 3'd3);", 'WARL compare wrong: pin 5 accepts code 3, not 2')
+m('PX10', 'pinmux.v', "alt6 <= (wdata[26:24] == 3'd4);", "alt6 <= (wdata[26:24] == 3'd5);", 'WARL compare wrong: pin 6 accepts code 5, not 4')
+m('PX11', 'pinmux.v', "alt7 <= (wdata[30:28] == 3'd5);", "alt7 <= (wdata[30:28] != 3'd0);", 'WARL compare wrong: pin 7 accepts any non-zero code')
+m('PX12', 'pinmux.v', 'if (w && be[2]) alt5', 'if (w && be[1]) alt5', 'pin 5 written from lane 1 instead of lane 2')
+m('PX13', 'pinmux.v', 'if (w && be[3]) begin', 'if (w && be[2]) begin', 'pins 6 and 7 written from lane 2 instead of lane 3')
+m('PX14', 'pinmux.v', 'alt5 ? rts_n : dflt[5]', 'alt5 ? pwm[0] : dflt[5]', 'pin 5 selects PWM0 instead of RTS#')
+m('PX15', 'pinmux.v', 'alt6 ? pwm[0] : dflt[6]', 'alt6 ? pwm[1] : dflt[6]', 'pin 6 selects PWM1 instead of PWM0')
+m('PX16', 'pinmux.v', 'alt7 ? pwm[1] : dflt[7]', 'alt7 ? pwm[0] : dflt[7]', 'pin 7 selects PWM0 instead of PWM1')
+m('PX17', 'pinmux.v', "alt5 ? 3'd2 : 3'd0", "alt5 ? 3'd3 : 3'd0", 'readback code of pin 5 wrong (3, not 2)')
+m('PX18', 'pinmux.v', "alt6 ? 3'd4 : 3'd0", "alt6 ? 3'd5 : 3'd0", 'readback code of pin 6 wrong (5, not 4)')
+m('PX19', 'pinmux.v', "alt7 ? 3'd5 : 3'd0", "alt7 ? 3'd4 : 3'd0", 'readback code of pin 7 wrong (4, not 5)')
+m('PX20', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b1; alt6 <= 1'b0; alt7 <= 1'b0;", 'alt5 resets to 1 (RTS# on pin 5 out of reset)')
+m('PX21', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b0; alt6 <= 1'b1; alt7 <= 1'b0;", 'alt6 resets to 1 (PWM0 on pin 6 out of reset)')
+m('PX22', 'pinmux.v', "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b0;", "alt5 <= 1'b0; alt6 <= 1'b0; alt7 <= 1'b1;", 'alt7 resets to 1 (PWM1 on pin 7 out of reset)')
+m('PX23', 'pinmux.v', 'alt5 ? rts_n : dflt[5], dflt[4:0]};', 'alt5 ? rts_n : dflt[5], dflt[3:0], dflt[4]};', 'pins 4:0 rotated by one (dflt[4] on pin 0)')
+m('PX24', 'pinmux.v', "assign rdata = {1'b0, alt7", "assign rdata = {alt7, alt7", 'readback bit 31 shows alt7 (bit 4i+3 must read 0)')
 
 # ── plic.v (WO-48 PL01-PL13)
 m("PL01", "plic.v", "for (j = NSRC; j >= 1; j = j - 1) if (cand[j]) cid = j;", "for (j = 1; j <= NSRC; j = j + 1) if (cand[j]) cid = j;", "claim takes the highest eligible id")

@@ -172,10 +172,10 @@ module tb_soc_periph;
     wire       mb = soc.dmem_req && soc.dmem_we && soc.dmem_ready && soc.dmem_addr[31:16] == 16'h1002;
 
     // ── PWM and audio monitors (pwm_linux, pinmux, audio) ───────────────────
-    reg  [31:0] m2_eh = 0, m2_ep = 0, m7_eh = 0, m7_ep = 0;
+    reg  [31:0] m2_eh = 0, m2_ep = 0, m7_eh = 0, m7_ep = 0;   // m2 watches uo[6] (PWM0 on pin 6), m7 uo[7] (PWM1 on pin 7)
     reg         m2_clr = 1'b0, m7_clr = 1'b0;
     wire [31:0] m2_hi_ok, m2_per_ok, m2_n_hi, m2_n_pulse, m7_hi_ok, m7_per_ok, m7_n_hi, m7_n_pulse;
-    pin_meter m2 (.clk(clk), .pin(uo[2]), .clr(m2_clr), .exp_hi(m2_eh), .exp_per(m2_ep),
+    pin_meter m2 (.clk(clk), .pin(uo[6]), .clr(m2_clr), .exp_hi(m2_eh), .exp_per(m2_ep),
                   .hi_ok(m2_hi_ok), .per_ok(m2_per_ok), .n_hi(m2_n_hi), .n_pulse(m2_n_pulse));
     pin_meter m7 (.clk(clk), .pin(uo[7]), .clr(m7_clr), .exp_hi(m7_eh), .exp_per(m7_ep),
                   .hi_ok(m7_hi_ok), .per_ok(m7_per_ok), .n_hi(m7_n_hi), .n_pulse(m7_n_pulse));
@@ -393,7 +393,7 @@ module tb_soc_periph;
                     default: ;
                 endcase
             end else if (test == "pwm_linux") begin
-                if (e >= 2 && e <= 4) pw_eval(2, e - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
+                if (e >= 2 && e <= 4) pw_eval(6, e - 1, m2_hi_ok, m2_per_ok, m2_n_pulse);
                 m2_clr <= 1'b1;
                 case (e)
                     1: begin m2_eh = 32'h4001;  m2_ep = 32'h10000; end
@@ -425,9 +425,10 @@ module tb_soc_periph;
                     if (rp.tx_pending() == 0) fail("pinmux cue 8: the model has nothing left to send (flow control did not hold it)");
                 end
                 if (e == 2 && uo[5] !== 1'b0) fail("pinmux cue 2: uo[5] high after OUT bit 5 went low");
-                if (e == 3 && (uo[4] !== 1'b0 || uo[7] !== 1'b0)) fail($sformatf("pinmux cue 3: uo[4], uo[7] = %b %b, want 0 0", uo[4], uo[7]));
-                if (e == 4 && (uo[4] !== 1'b1 || uo[7] !== 1'b1)) fail($sformatf("pinmux cue 4: uo[4], uo[7] = %b %b, want 1 1", uo[4], uo[7]));
-                if (e == 5 && (uo[4] !== 1'b1 || uo[7] !== 1'b0)) fail($sformatf("pinmux cue 5: uo[4], uo[7] = %b %b, want 1 0", uo[4], uo[7]));
+                // cue 3: illegal codes written (pin 4 = 2, 5 = 4, 6 = 2, 7 = 4 store 0): the default map stays
+                if (e == 3 && (uo[4] !== 1'b1 || uo[7] !== 1'b0 || uo[6] !== 1'b0 || uo[5] !== 1'b1))
+                    fail($sformatf("pinmux cue 3: uo[7:4] = %b, want 0 0 1 1", uo[7:4]));
+                if (e == 4 && (uo[4] !== 1'b1 || uo[7] !== 1'b0)) fail($sformatf("pinmux cue 4: uo[4], uo[7] = %b %b, want 1 0", uo[4], uo[7]));
                 if (e == 6) begin m7_eh = 32'h4001; m7_ep = 32'h10000; m7_clr <= 1'b1; end
                 if (e == 7) begin pw_eval(7, 6, m7_hi_ok, m7_per_ok, m7_n_pulse); m7_clr <= 1'b1; end
             end else if (test == "keypad") begin
@@ -699,14 +700,14 @@ module tb_soc_periph;
             if (test == "audio") au_eval(4);
             if (test == "tune") au_eval(9);
             if (test == "pwm_linux") begin
-                if (m2_n_hi != 0) fail($sformatf("pwm_linux phase 4: uo[2] high %0d clocks after PWM off and the default map", m2_n_hi));
+                if (m2_n_hi != 0) fail($sformatf("pwm_linux phase 4: uo[6] high %0d clocks after PWM off and the default map", m2_n_hi));
             end
             if (test == "pinmux") begin
                 $display("pinmux: the model held %0d clocks for CTS, %0d characters sent against CTS, %0d sent", cts_wait, rp.tx_sent_cts_off, rp.tx_sent);
                 if (rp.tx_sent != 64) fail($sformatf("pinmux: the RP2350 sent %0d characters, want 64", rp.tx_sent));
                 if (cts_wait == 0) fail("pinmux: RTS# never held the RP2350 back");
                 if (rp.tx_sent_cts_off != 0) fail("pinmux: a character was sent against CTS");
-                if (m7_n_hi != 0) fail($sformatf("pinmux: uo[7] high %0d clocks after PWM0 left the pin", m7_n_hi));
+                if (m7_n_hi != 0) fail($sformatf("pinmux: uo[7] high %0d clocks after PWM1 left the pin", m7_n_hi));
             end
             if (test == "oled_spi") begin
                 $display("oled_spi: %0d SSD1331 bytes, %0d GPIO clocks waited, %0d RES# pulses, %0d timing violations flagged on the deliberate DIV 1 byte",

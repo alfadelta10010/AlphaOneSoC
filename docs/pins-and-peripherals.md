@@ -42,9 +42,9 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `uo_out[2]` | OLED D/C = GPIO out 2 | out | OLED D/C (moved there, see below) |
 | `uo_out[3]` | OLED SCK = GPIO out 3, or SPI SCK (a pin flop either way) | out | OLED SCK and SD SCK |
 | `uo_out[4]` | UART TX | out | RP2350 GPIO37 (UART1 RX) |
-| `uo_out[5]` | SD CS# = GPIO out 5 (resets high) | out | SD CS# (DAT3), by a jumper wire; the RP2350's GPIO38 (UART1 CTS) is on this pin |
-| `uo_out[6]` | OLED RES# and VCCEN = GPIO out 6 | out | OLED RES# and VCCEN |
-| `uo_out[7]` | AUDIO (the audio block's PWM DAC) | out | TT Audio Pmod, or the 7-segment DP |
+| `uo_out[5]` | SD CS# = GPIO out 5 (resets high), or UART RTS# (pinmux code 2) | out | SD CS# (DAT3), by a jumper wire; the RP2350's GPIO38 (UART1 CTS) is on this pin |
+| `uo_out[6]` | OLED RES# and VCCEN = GPIO out 6, or PWM0 (pinmux code 4) | out | OLED RES# and VCCEN |
+| `uo_out[7]` | AUDIO (the audio block's PWM DAC), or PWM1 (pinmux code 5) | out | TT Audio Pmod, or the 7-segment DP |
 | `ui_in[0]` | `qspi_rd_late` strap during the pin reset (held through reboots), then GPIO in 0 | in | RP2350 GPIO17, or DIP 1 |
 | `ui_in[1]` | GPIO in 1, and SPI MISO | in | SD DO (MISO); DIP 2 must be off with the SD fitted |
 | `ui_in[2]` | the no-stream strap during the pin reset (held through reboots), then GPIO in 2. 1 = flash streaming off at reset | in | DIP 3 (off = RP2350 pull-down = streaming on) |
@@ -55,9 +55,11 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 | `ui_in[7]` | GPIO in 7 | in | DIP 8 |
 
 **Pinmux.** Each `uo_out` pin has a default function (the table above) and
-may take another one by a 3-bit code in the PINMUX register (section 11):
-GPIO OUT bit *i*, UART RTS#, AUDIO, or PWM0-3. RTS# exists only as such a
-feature now: the default map gives `uo_out[5]` to SD CS#, so flow control
+may take its one alternate function by a code in the PINMUX register
+(section 11). Only three pins have one: pin 5 UART RTS# (code 2), pin 6 PWM0
+(code 4), pin 7 PWM1 (code 5). Every other code on every pin is not legal: the
+write stores 0 (the default function) and reads back 0 (WARL). RTS# exists only as such a
+feature: the default map gives `uo_out[5]` to SD CS#, so flow control
 means RTS# on pin 5 and no SD card.
 
 **Reset values.** Every `uo_out` pin is a flop after the pinmux, and all eight
@@ -95,7 +97,7 @@ drives `0xB9` and RTS# on pin 5.)
 * **Outputs are the scarce pins.** After TX, seven outputs remain. The OLED
   needs five of them once PMODEN and VCCEN are tied off (below), the SD card's
   CS# one more (the rest of the SD card shares the OLED's SPI lines), and the
-  audio PWM one. That is the default map; the pinmux moves any of them.
+  audio PWM one. That is the default map; the pinmux gives pins 5, 6 and 7 one alternate function each (RTS#, PWM0, PWM1).
 * The OLED's SPI lines keep their Pmod positions (CS# 0, MOSI 1, SCK 3), so
   the SPI transmitter can take over MOSI and SCK without moving anything.
 * **The TT Audio Pmod sits on the OUT header and passes `out[0-6]` through**,
@@ -459,7 +461,7 @@ ignore writes.
 
 | Offset | Register |
 |---|---|
-| `0x00` | OUT (read/write). Bit *i* is the GPIO output *i*: it reaches `uo_out[i]` while the pinmux selects GPIO for that pin (the default for bits 0-3 and 6, and the SD CS# on bit 5; bit 4 is the UART's pin and bit 7 the audio's by default, so those two bits are only the GPIO source of the pinmux). **Reads return the GPIO outputs, not the pads**, since the pad is a pinmux flop after a mux. Bits 1 and 3 are the SPI engine's MOSI and SCK flops: with EN = 1 the SPI engine drives them and OUT writes to them are ignored. **Resets to `0xB9`.** (Bits 4 and 5 are real; the 3x4 design reads them as 0 and resets to `0x89`.) |
+| `0x00` | OUT (read/write). Bit *i* is the GPIO output *i*: it reaches `uo_out[i]` for pins 0-3, 5 and 6 (pin 5 is the SD CS# by default). Bits 4 and 7 are stored and read back but drive no pin: pin 4 is the UART's TX and pin 7 the audio's. **Reads return the GPIO outputs, not the pads**, since the pad is a pinmux flop after a mux. Bits 1 and 3 are the SPI engine's MOSI and SCK flops: with EN = 1 the SPI engine drives them and OUT writes to them are ignored. **Resets to `0xB9`.** (Bits 4 and 5 are real; the 3x4 design reads them as 0 and resets to `0x89`.) |
 | `0x04` | IN (read only). `ui_in[7:0]` through a two-flop synchroniser. |
 | `0x08` | reserved |
 | `0x0C` | SPICTL. Bit 0 EN (resets 0): 1 = the SPI engine owns `uo_out[1]` and `uo_out[3]`. Bit 8 BUSY (read only) = not TXE. |
@@ -736,18 +738,21 @@ window by `soc_bus`, so `gpio.v` does not change for it.
 syscon window, carved out by `soc_bus`: pin *i*'s code in bits `[4i+2:4i]`,
 bit `4i+3` reads 0 (so it can be `pinctrl-single` with 4-bit fields).
 
-| Code | Pin *i* takes |
-|---|---|
-| 0 | the default of the map above |
-| 1 | GPIO OUT bit *i* |
-| 2 | UART RTS# |
-| 3 | AUDIO |
-| 4-7 | PWM0-3 |
+| Pin | Legal codes | Meaning |
+|---|---|---|
+| 0-4 | 0 | the default of the map above (no alternate function) |
+| 5 | 0, 2 | 0 = SD CS# (GPIO OUT bit 5); 2 = UART RTS# |
+| 6 | 0, 4 | 0 = OLED RES# / VCCEN (GPIO OUT bit 6); 4 = PWM0 |
+| 7 | 0, 5 | 0 = AUDIO; 5 = PWM1 |
 
+The register is write-any-read-legal (WARL): a write of any code that is not
+legal for that pin, including a code that is legal on another pin, stores 0
+(the default function), and the nibble reads back 0. Three flops hold the three
+selects. Writes use the byte lanes: pin *i* is written by lane `i/2`.
 The result goes through **one flop per pin**, which resets to `0x39`, the
 wrapper's in-reset value (so F12, the rule that every pin is a flop, holds,
 and the TT01 second-edge release makes no edge). Every source therefore
-reaches its pin one clock later than before. Codes reset to 0, so no write
+reaches its pin one clock later than before. The selects reset to 0, so no write
 is needed out of reset. A write takes effect on the next clock.
 
 ### 12. Instruction cache and `CACHE_CTL` at `0x1002_0024`

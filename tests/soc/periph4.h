@@ -11,7 +11,7 @@
 #define PL_CTX    0x200000        /* threshold +0, claim / complete +4 */
 #define PWM       0x10030000
 #define AUDIO     0x10030100
-#define PINMUX    0x10020020      /* pin i's code in bits [4i+2:4i] */
+#define PINMUX    0x10020020      /* pin i's code in bits [4i+2:4i]; legal: pin 5 = 2 (RTS#), pin 6 = 4 (PWM0), pin 7 = 5 (PWM1) */
 #define G_PAD     0x10            /* GPIO window: GAMEPAD, read only */
 #define G_PADSTAT 0x14            /* GPSTAT: bit 0 chg (W1C), bit 1 ie */
 /* PLIC sources */

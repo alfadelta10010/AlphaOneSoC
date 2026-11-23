@@ -23,7 +23,7 @@ Exit status 1 if the counts differ from the work order's table.
 """
 import collections, json, re, sys
 
-EXPECT = dict(direct=1927, rename=11, recode=11, tied=190, unused=0, memaddr=3, UNMATCHED=0)
+EXPECT = dict(direct=1906, rename=11, recode=11, tied=190, unused=0, memaddr=3, UNMATCHED=0)
 RECODE = {"soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state",
           "soc.gpio_inst.spi_inst.st"}
 UNUSED = set()

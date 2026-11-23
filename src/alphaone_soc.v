@@ -24,9 +24,9 @@
 //
 // Chip pins (docs/pins-and-peripherals.md): every uo_out pin is one flop of the
 // pinmux (`uo`), after the mux of its default function and the features
-// software can select (GPIO OUT, RTS#, audio, PWM0-3). Defaults: [0] OLED CS#
+// software can select (pin 5 RTS#, pin 6 PWM0, pin 7 PWM1). Defaults: [0] OLED CS#
 // = OUT[0], [1] MOSI = OUT[1], [2] D/C = OUT[2], [3] SCK = OUT[3], [4] UART TX,
-// [5] SD CS# = OUT[5], [6] RES#/VCCEN = OUT[6], [7] audio. RX is ui_in[3], the
+// [5] SD CS# = OUT[5] (or RTS#), [6] RES#/VCCEN = OUT[6] (or PWM0), [7] audio (or PWM1). RX is ui_in[3], the
 // gamepad's LATCH / CLOCK / DATA are ui_in[4] / [5] / [6], and gpio_in reads all
 // eight ui_in pins, RX and the rd_late strap included. uart_tx, uart_rts_n and
 // gpio_out are the pre-mux signals, kept as taps for the benches. The TinyTapeout
@@ -435,9 +435,7 @@ module alphaone_soc #(
         .wdata(dmem_wdata),
         .rdata(pinmux_rdata),
         .dflt ({audio_o, gpio_out[6], gpio_out[5], uart_tx, gpio_out[3:0]}),
-        .gpio (gpio_out),
         .rts_n(uart_rts_n),
-        .audio(audio_o),
         .pwm  (pwm_o),
         .uo   (uo)
     );
