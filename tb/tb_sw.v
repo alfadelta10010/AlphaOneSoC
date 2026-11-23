@@ -14,7 +14,7 @@
 // reports a framing error as an ERROR line. The memory and bus request
 // checks are those of the other SoC benches (tb/req_hold_check.v).
 //
-// An SD card (tb/sd_spi_model.v) sits on the SPI pins as on the demo board (CS# gpio_out[7],
+// An SD card (tb/sd_spi_model.v) sits on the SPI pins as on the demo board (CS# gpio_out[5],
 // SCK [3], MOSI [1], DO gpio_in[1]). +SD_IMAGE=<byte-hex> gives it a disk (sw/tools/mkdisk.sh);
 // +SD_DUMP=<file> writes the disk out when the run ends, for the host to check. A card error
 // (SD model `errors`) turns a PASS into a FAIL.
@@ -78,7 +78,7 @@ module tb_sw;
         sd_ev = $test$plusargs("SD_EXPECT");
     end
     sd_spi_model #(.DISK_BLKS(8192)) sd (
-        .fitted(sd_fitted), .cs_n(gpio_out[7]), .sck(gpio_out[3]), .di(gpio_out[1]),
+        .fitted(sd_fitted), .cs_n(gpio_out[5]), .sck(gpio_out[3]), .di(gpio_out[1]),
         .expect_violations(sd_ev), .do_o(sd_do));
     reg [8*1024-1:0] sd_name;
     initial if ($value$plusargs("SD_IMAGE=%s", sd_name)) begin
