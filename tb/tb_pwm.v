@@ -3,7 +3,7 @@
 `define CHIP_HZ 62500000
 `endif
 // pwm (src/pwm.v) against a cycle model written from the WO-54 specification (SiFive pwm0 layout, two built
-// of four 16-bit comparators, WO-63: pwmcmp2/3 read 0xFFFF, writes ignored, ip/pwm_o/irq[3:2] constant 0), not from the RTL. pwm_o, irq and every read word are compared
+// of four 16-bit comparators, WO-63: pwmcmp2/3 read 0xFFFF, writes ignored, ip/pwm_o[3:2] constant 0; slim-down: no sticky, no one-shot, no irq output, cfg bits 8 and 13 read 0 and ignore writes), not from the RTL. pwm_o and every read word are compared
 // every clock. Independent oracle (from Linux pwm-sifive.c, not the RTL): scale/cmp from the driver's arithmetic,
 // period 2^(16+scale), high clocks (65536-cmp)<<scale, pin = ip, reset cmp 0xFFFF, CMP/CFG readbacks. Directed phases, then a seeded constrained-random phase (+SEED=, +CYCLES=)
 // with coverage floors. Inputs change on the negative edge and are sampled on the positive one.
@@ -13,9 +13,9 @@ module tb_pwm;
     reg  [5:2]  addr = 0;
     reg  [31:0] wdata = 0;
     wire [31:0] rdata;
-    wire [3:0]  pwm_o, irq;
+    wire [1:0]  pwm_o;
     pwm uut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr(addr), .wdata(wdata),
-             .rdata(rdata), .pwm_o(pwm_o), .irq(irq));
+             .rdata(rdata), .pwm_o(pwm_o));
     always #5 clk = ~clk;
 
     integer seed = 1, ncyc = 600000, checks = 0, errors = 0, cyc = 0;
@@ -26,44 +26,42 @@ module tb_pwm;
 
     // ------------------------------------------------------------ model
     integer m_scale, m_pre, m_s, m_en_cnt;
-    reg     m_sticky, m_zc, m_always, m_one;
+    reg     m_zc, m_always;
     reg [3:0]  m_ip;
     reg [15:0] m_cmp [0:3];
     reg        mv = 0;
     integer    n_wrap [0:15];           // full 16-bit wraps per scale (counter tick at 0xFFFF)
-    integer    n_zc = 0, n_one = 0, n_below = 0, n_l3 = 0, n_cnt = 0, n_ipset = 0, n_sticky = 0;
+    integer    n_zc = 0, n_ignored = 0, n_below = 0, n_l3 = 0, n_cnt = 0, n_ipset = 0;
     integer    k, mod, tick;
     reg [3:0]  ge;
-    reg        en, zr, wrap;
+    reg        en, zr, wrap;   // wrap: statistics only (counter tick at 0xFFFF)
     initial for (k = 0; k < 16; k = k + 1) n_wrap[k] = 0;
     always @(posedge clk) begin
         if (rst) begin
-            m_scale = 0; m_sticky = 0; m_zc = 0; m_always = 0; m_one = 0; m_ip = 0; m_pre = 0; m_s = 0;
+            m_scale = 0; m_zc = 0; m_always = 0; m_ip = 0; m_pre = 0; m_s = 0;
             for (k = 0; k < 4; k = k + 1) m_cmp[k] = 16'hFFFF;
             mv = 1;
         end else if (mv) begin
             for (k = 0; k < 4; k = k + 1) ge[k] = (k < 2) && (m_s >= m_cmp[k]);
-            en = m_always | m_one;
+            en = m_always;
             mod = 1 << m_scale;
             tick = en && ((m_pre % mod) == mod - 1);
             zr = m_zc & ge[0];
             wrap = tick && (m_s == 65535);
             if (wrap) n_wrap[m_scale] = n_wrap[m_scale] + 1;
-            if (zr && m_one && !m_always) n_one = n_one + 1;
             if (zr && en) n_zc = n_zc + 1;
             if (sel & we & (addr == 4'd2)) begin m_pre = 0; m_s = 0; n_cnt = n_cnt + 1; end
             else if (zr) begin m_pre = 0; m_s = 0; end
             else if (en) begin m_pre = (m_pre + 1) % 32768; if (tick) m_s = (m_s + 1) % 65536; end
-            if (zr || wrap) m_one = 0;
             if (sel & we & (addr == 4'd0) & be[3]) begin m_ip = wdata[31:28] & 4'b0011; n_l3 = n_l3 + 1; end
             else begin
                 if ((ge & ~m_ip) != 0) n_ipset = n_ipset + 1;
-                if (m_sticky && (m_ip & ~ge) != 0) n_sticky = n_sticky + 1;
-                m_ip = ge | ({4{m_sticky}} & m_ip);
+                m_ip = ge;
             end
             if (sel & we & (addr == 4'd0) & be[0]) m_scale = wdata[3:0];
             if (sel & we & (addr == 4'd0) & be[1]) begin
-                m_sticky = wdata[8]; m_zc = wdata[9]; m_always = wdata[12]; m_one = wdata[13];
+                m_zc = wdata[9]; m_always = wdata[12];
+                if (wdata[8] | wdata[13]) n_ignored = n_ignored + 1;
             end
             for (k = 0; k < 2; k = k + 1) if (sel & we & (addr == 4'd8 + k)) begin
                 if (be[0]) m_cmp[k][7:0]  = wdata[7:0];
@@ -74,7 +72,7 @@ module tb_pwm;
     function [31:0] mrd(input [3:0] a);
         begin
             case (a)
-                4'd0:  mrd = {m_ip, 12'b0, 2'b0, m_one, m_always, 2'b0, m_zc, m_sticky, 4'b0, m_scale[3:0]};
+                4'd0:  mrd = {m_ip, 12'b0, 2'b0, 1'b0, m_always, 2'b0, m_zc, 1'b0, 4'b0, m_scale[3:0]};
                 4'd4:  mrd = 32'd0 + m_s[15:0];
                 4'd8:  mrd = {16'b0, m_cmp[0]};
                 4'd9:  mrd = {16'b0, m_cmp[1]};
@@ -94,9 +92,8 @@ module tb_pwm;
     reg rd_en = 1;
     always @(posedge clk) if (mv) begin
         #2;  // after the posedge updates; the address changes only on negedges
-        cyc = cyc + 1; checks = checks + 3;
+        cyc = cyc + 1; checks = checks + 2;
         if (pwm_o !== m_ip) fail("pwm_o", pwm_o, m_ip);
-        if (irq !== m_ip)   fail("irq", irq, m_ip);
         if (rdata !== mrd(addr)) fail("rdata", rdata, mrd(addr));
     end
 
@@ -255,22 +252,23 @@ module tb_pwm;
         // cmp written below s: a running counter, cmp0 jumped under s, ip follows at once (a one-clock delay)
         wr(4'd8, 32'hFFFF); cfg(0, 0, 0, 1, 0); idle(200); wr(4'd9, 32'd3); wr(4'd9, 32'hFFFF); wr(4'd10, 32'd3); wr(4'd11, 32'd3); rd(4'd10); rd(4'd11); idle(5);
         wr(4'd0, 0); wr(4'd2, 0);
-        // zerocmp timer, sticky, software clear on lane 3 (sb), period (cmp0+1) * 2^scale
+        // zerocmp timer (sticky is gone: ip follows the comparators), software clear on lane 3 (sb), period cmp0 * 2^scale + 1 clocks
         for (sc = 0; sc < 8; sc = sc + 1) begin
             wr(4'd8, 32'd5 + sc); wr(4'd2, 0);
             cfg(sc, 1, 1, 1, 0);
             idle(((5 + sc + 1) << sc) * 3 + 20);
             rd(4'd0);
-            wrb(4'd0, 32'h0, 4'b1000); rd(4'd0); idle(3);        // sticky: lane-3 write of 0 clears ip
+            wrb(4'd0, 32'h0, 4'b1000); rd(4'd0); idle(3);        // lane-3 write of 0 sets ip
             wr(4'd0, 0); wrb(4'd0, 32'h0, 4'b1000); idle(2);
         end
-        // zerocmp non-sticky, sticky off
+        // zerocmp timer, cfg bits 8 and 13 written 0
         wr(4'd2, 0); wr(4'd8, 32'd7); wr(4'd9, 32'd2); cfg(0, 1, 0, 1, 0); idle(400); wr(4'd0, 0);
-        // oneshot: zerocmp ends it; the wrap ends it
+        // slim-down: bits 8 (sticky) and 13 (oneshot) read 0 and ignore writes; a oneshot write does not start the counter
         for (sc = 0; sc < 7; sc = sc + 1) begin
-            wr(4'd8, 32'd3); wr(4'd2, 0); cfg(sc, 1, 0, 0, 1); idle(((3 + 1) << sc) * 2 + 30); rd(4'd0);
+            wr(4'd8, 32'd3); wr(4'd2, 0); cfg(sc, 1, 0, 0, 1); idle(((3 + 1) << sc) * 2 + 30); chk_rd(4'd0, (32'd1 << 9) | sc); chk_rd(4'd4, 0);
         end
-        wr(4'd8, 32'hFFFF); wr(4'd2, 0); cfg(0, 0, 0, 0, 1); idle(70000); rd(4'd0); rd(4'd4);
+        wr(4'd0, 32'h0000_2100); chk_rd(4'd0, 0); wr(4'd0, 32'h0000_3300); chk_rd(4'd0, 32'h0000_1200); wr(4'd0, 0);
+        wr(4'd8, 32'hFFFF); wr(4'd2, 0); cfg(0, 0, 1, 0, 1); idle(100); chk_rd(4'd0, 0); chk_rd(4'd4, 0);
         // pwmcount write restarts (also in the same clock as a tick)
         cfg(0, 0, 0, 1, 0); idle(1000); wr(4'd2, 0); rd(4'd4); idle(3); wr(4'd2, 32'h1234); rd(4'd4); wr(4'd0, 0);
         // in reset: registers return
@@ -280,14 +278,14 @@ module tb_pwm;
         miss = 0;
         if (n_wrap[0] < 1 || n_wrap[1] < 1 || n_wrap[2] < 1) miss = miss + 1;
         if (n_zc < 20) miss = miss + 1;
-        if (n_one < 5) miss = miss + 1;
-        if (n_l3 < 10 || n_cnt < 10 || n_ipset < 20 || n_sticky < 5) miss = miss + 1;
+        if (n_ignored < 20) miss = miss + 1;
+        if (n_l3 < 10 || n_cnt < 10 || n_ipset < 20) miss = miss + 1;
         if (errors == 0 && miss == 0)
-            $display("PASS tb_pwm (%0d checks, %0d zerocmp periods, %0d oneshots, %0d wraps, seed %0d)",
-                     checks, n_zc, n_one, n_wrap[0] + n_wrap[1] + n_wrap[2], seed);
+            $display("PASS tb_pwm (%0d checks, %0d zerocmp periods, %0d ignored sticky/oneshot writes, %0d wraps, seed %0d)",
+                     checks, n_zc, n_ignored, n_wrap[0] + n_wrap[1] + n_wrap[2], seed);
         else
-            $display("FAIL tb_pwm: %0d errors, %0d coverage floors missed (wraps %0d %0d %0d zc %0d one %0d l3 %0d cnt %0d ipset %0d sticky %0d) (seed %0d)",
-                     errors, miss, n_wrap[0], n_wrap[1], n_wrap[2], n_zc, n_one, n_l3, n_cnt, n_ipset, n_sticky, seed);
+            $display("FAIL tb_pwm: %0d errors, %0d coverage floors missed (wraps %0d %0d %0d zc %0d ign %0d l3 %0d cnt %0d ipset %0d) (seed %0d)",
+                     errors, miss, n_wrap[0], n_wrap[1], n_wrap[2], n_zc, n_ignored, n_l3, n_cnt, n_ipset, seed);
         $finish;
     end
     initial begin #4000000000; $display("TIMEOUT tb_pwm"); $finish; end

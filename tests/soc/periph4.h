@@ -19,7 +19,7 @@
 #define SRC_SPI   2
 #define SRC_PAD   3
 #define SRC_GPIO  4
-#define SRC_PWM0  5
+#define SRC_PWM0  5      /* sources 5-8: PWM interrupts removed, tied 0 */
 /* pwm (sifive pwm0) */
 #define PWM_CFG   0x00
 #define PWM_COUNT 0x08

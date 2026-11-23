@@ -205,7 +205,7 @@ default map: its rows were `ui_in[4..7]` and its columns `uo_out[0..3]`.
 | 4 | SPI transmitter | `0x1001_0020`, inside the GPIO block | built; tiny_spi IRQ enables (PLIC 2, not in the DT) | (in 3) | `spi-oc-tiny` |
 | 5 | Gamepad | `0x1001_0010`, `src/gamepad.v`, carved out of the GPIO window by `soc_bus` | built; one pad (pad 0) | gate harden | none (bare metal) |
 | 6 | PLIC | `0x0C00_0000`, `src/plic.v` | built; 9 sources, 1 context | gate harden | `sifive,plic-1.0.0` |
-| 7 | PWM | `0x1003_0000`, `src/pwm.v` | built; 2 of 4 comparators (cmp2/3 read `0xFFFF`) | gate harden | `pwm-sifive` |
+| 7 | PWM | `0x1003_0000`, `src/pwm.v` | built; 2 of 4 comparators (cmp2/3 read `0xFFFF`), no sticky / one-shot / interrupt | gate harden | `pwm-sifive` |
 | 8 | Audio | `0x1003_0100`, `src/audio.v` | built; one square voice | gate harden | none (bare metal) |
 | 9 | Pinmux | `0x1002_0020`, `src/pinmux.v`, carved out of the syscon window | built | 2,560 µm² synth, 32 flops | `pinctrl-single` |
 | 10 | Instruction cache | `src/cache.v`, `CACHE_CTL` at `0x1002_0024` | built (K4); PBURST built, experimental, off at reset | two `rf_top` macros (256 B) + flops | none (loader) |
@@ -660,8 +660,7 @@ never AMOs MMIO.
 | 2 | SPI (tiny_spi interrupt; the DT does not use it) |
 | 3 | gamepad change |
 | 4 | GPIO input change (IN_IP & IN_IE, a level; bare-metal/FreeRTOS: gpio-mmio has no irqchip) |
-| 5-6 | PWM comparators 0-1 |
-| 7-8 | PWM comparators 2-3 (not built, tied 0) |
+| 5-8 | PWM (interrupts removed, tied 0; the source numbers stay reserved) |
 | 9 | watchdog: a ONE-clock pulse at the first expiry (not the STAT level); the PLIC pend is sticky, so a pulse is lost only while source 9 is in service (known behaviour: no latch, one flop saved; WDT_STAT stays pollable and Linux completes within microseconds) |
 
 The audio block has no interrupt. The claim ignores the threshold (as the
@@ -673,13 +672,13 @@ specification says) and `meip` is gated by it. Device tree: `riscv,ndev = <9>`,
 `src/pwm.v`. The register layout of SiFive's pwm0 (FE310-G002 chapter 20),
 **two** built 16-bit comparators (0 and 1) on a scaled counter, so `pwm-sifive`
 drives it; `compatible = "sifive,fu540-c000-pwm", "sifive,pwm0"` with four
-`interrupts` (PLIC sources 5-8) and `clocks`. `pwmcmp2/3` read `0xFFFF` and
+`interrupts` (PLIC sources 5-8, which the SoC ties to 0: the PWM has no interrupt) and `clocks`. `pwmcmp2/3` read `0xFFFF` and
 ignore writes (no pin, no interrupt): `pwm-sifive`'s `get_state` computes duty =
 `0xFFFF - cmp`, so they read as off and the clock-enable count stays balanced.
 
 | Offset | Register |
 |---|---|
-| `0x00` | PWMCFG: `scale[3:0]` (0-15), sticky, zerocmp, enoneshot, enalways, and `ip[1:0]` in bits 29:28 (ip[3:2] read 0; a write of the top byte sets or clears `ip`); gang, center and deglitch are not built and read 0 |
+| `0x00` | PWMCFG: `scale[3:0]` (0-15), zerocmp (bit 9), enalways (bit 12), and `ip[1:0]` in bits 29:28 (ip[3:2] read 0; a write of the top byte sets or clears `ip`); sticky (bit 8), enoneshot (bit 13), gang, center and deglitch are not built: they read 0 and ignore writes |
 | `0x08` | PWMCOUNT: reads 0 (departure); any write restarts the prescaler and the count |
 | `0x10` | PWMS: the scaled counter, read only |
 | `0x20`, `0x24` | PWMCMP0-1, 16 bits |
@@ -689,9 +688,11 @@ PWM decodes `addr[5:2]` and slot 3 only `addr[8]`, so the registers alias every 
 counter is at or above the comparator (the arithmetic of `pwm-sifive.c`,
 `cmp = 0xFFFF - duty`, requires this polarity, so 0 % is not available and
 100 % is `cmp = 0`). `zerocmp` resets the count one cycle after a match on
-comparator 0, and `enoneshot` stops it at that reset or the counter wrap. A
-PWM pin reaches a `uo_out` pin only through the pinmux (codes 4-7). Writes
-never stall.
+comparator 0. There is no sticky mode, no one-shot and no interrupt: `ip`
+follows the comparators every clock, and the PLIC sources 5-8 never fire
+(a timer-style interrupt needs the CLINT's `mtimecmp`). The counter runs only
+while `enalways` is set. PWM0 and PWM1 reach a `uo_out` pin only through the
+pinmux: PWM0 on pin 6 (code 4), PWM1 on pin 7 (code 5). Writes never stall.
 
 ### 9. Audio at `0x1003_0100`
 

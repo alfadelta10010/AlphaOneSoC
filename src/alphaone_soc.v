@@ -8,13 +8,13 @@
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
 //   0x0C00_0000  PLIC    4 MB, 9 sources (src/plic.v): 1 UART, 2 SPI, 3 gamepad, 4 GPIO input change
-//                        (level, gpio.v IN_IE/IN_IP), 5-6 PWM cmp0-1 (7-8 tied 0: cmp2-3 not built), 9 watchdog
+//                        (level, gpio.v IN_IE/IN_IP), 5-8 PWM (interrupts removed, tied 0), 9 watchdog
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
 //                        straps, watchdog at +0x100 (src/syscon.v); the pinmux
 //                        at 0x1002_0020 (src/pinmux.v) is carved out of it
-//   0x1003_0000  PWM     SiFive pwm0 layout, comparators 0-1 built (2-3 read 0xFFFF) (src/pwm.v)
+//   0x1003_0000  PWM     SiFive pwm0 layout, comparators 0-1 built (2-3 read 0xFFFF), no interrupts (src/pwm.v)
 //   0x1003_0100  audio   one square tone, TONE0 + CTRL.EN (src/audio.v)
 //   0x1002_0024  CACHE_CTL  [0] EN, [1] reads 1, [2] PBURST (PSRAM line fills in one CE# period; needs
 //                        QSPI_CFG.STREAM and a core clock >= 15 MHz, tCEM 8 us); carved out of syscon in
@@ -160,7 +160,7 @@ module alphaone_soc #(
     reg         cache_pburst;            // CACHE_CTL.PBURST, reset 0 by rst_soc
     wire        c_burst, q_burst;        // PSRAM line burst qualifier: cache -> mem_ctrl -> qspi_ctrl
     wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata, audio_rdata;
-    wire [3:0]  pwm_o, pwm_irq;
+    wire [1:0]  pwm_o;
 
     soc_bus bus (
         .clk         (clk),
@@ -338,7 +338,7 @@ module alphaone_soc #(
         .wdata(dmem_wdata),
         .rdata(plic_rdata),
         .src  ({wdt_irq,       // 9 watchdog (WO-61)
-                pwm_irq,       // 8..5 PWM cmp3..0
+                4'b0,          // 8..5 PWM (interrupts removed, tied 0)
                 gpio_in_irq,   // 4 GPIO input change (gpio.v IN_IE / IN_IP)
                 gamepad_irq,   // 3
                 gpio_spi_irq,  // 2
@@ -409,8 +409,7 @@ module alphaone_soc #(
         .addr  (dmem_addr[5:2]),
         .wdata (dmem_wdata),
         .rdata (pwm_rdata),
-        .pwm_o (pwm_o),
-        .irq   (pwm_irq)
+        .pwm_o (pwm_o)
     );
 
     audio audio_inst (

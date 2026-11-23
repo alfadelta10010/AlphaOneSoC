@@ -460,6 +460,7 @@ m("AS05", "alphaone_soc.v", "        .rd_late  (qspi_late),", "        .rd_late 
 m("AS06", "alphaone_soc.v", "    mem_ctrl memc (\n        .clk        (clk),\n        .rst        (rst_soc),", "    mem_ctrl memc (\n        .clk        (clk),\n        .rst        (rst),", "memory controller reset by the pin reset only")
 m("AS07", "alphaone_soc.v", "        .wdt_tap      (mtime[29:14])", "        .wdt_tap      (mtime[28:13])", "watchdog tap from mtime[28:13] (twice as fast)")
 m("AS08", "alphaone_soc.v", "    ) cpu (\n        .clk         (clk),\n        .rst         (rst_soc),", "    ) cpu (\n        .clk         (clk),\n        .rst         (rst),", "the core on the pin reset only (a reboot does not restart it)")
+m("AS09", "alphaone_soc.v", "                4'b0,          // 8..5 PWM (interrupts removed, tied 0)", "                {2'b0, pwm_o},          // 8..5 PWM (interrupts removed, tied 0)", "PWM ip wired to PLIC sources 5 and 6 (the interrupts are gone)")
 
 # ── fetch word reuse (WO-27): if_kbuf / if_kv in fyracore.v ──────────────
 # FR07, FR08 and FR13 change nothing a Spike-compared trace can show (the
@@ -589,16 +590,27 @@ m('GM10', 'gamepad.v', "wire load = latch_r & (nb == 5'd24 | nb == 5'd12);", "wi
 m('PW01', 'pwm.v', 'wire        zr   = zerocmp & ge[0];', 'wire        zr   = zerocmp & (s > cmp0);', 'zerocmp resets one count late (strict >)')
 m('PW02', 'pwm.v', 'wire [1:0]  ge  = {s >= cmp1, s >= cmp0};', 'wire [1:0]  ge  = {s > cmp1, s > cmp0};', 'ip set on > instead of >=')
 m('PW03', 'pwm.v', 'wire        tick = en & ((pre & m) == m);', 'wire        tick = en;', 'the counter ignores scale')
-m('PW04', 'pwm.v', 'else ip <= ge | ({2{sticky}} & ip);', 'else ip <= ge;', 'sticky ignored')
-m('PW05', 'pwm.v', "if (zr || wrap) enoneshot <= 1'b0;", "if (1'b0) enoneshot <= 1'b0;", 'enoneshot never self-clears')
-m('PW06', 'pwm.v', "if (zr || wrap) enoneshot <= 1'b0;", "if (zr) enoneshot <= 1'b0;", 'enoneshot does not clear on the s wrap')
-m('PW07', 'pwm.v', 'wire        en  = enalways | enoneshot;', 'wire        en  = enalways;', 'one-shot mode does not run the counter')
+# PW04 retired (slim-down: sticky is gone):
+# m('PW04', 'pwm.v', 'else ip <= ge | ({2{sticky}} & ip);', 'else ip <= ge;', 'sticky ignored')
+# PW05 retired (slim-down: enoneshot is gone):
+# m('PW05', 'pwm.v', "if (zr || wrap) enoneshot <= 1'b0;", "if (1'b0) enoneshot <= 1'b0;", 'enoneshot never self-clears')
+# PW06 retired (slim-down: enoneshot is gone):
+# m('PW06', 'pwm.v', "if (zr || wrap) enoneshot <= 1'b0;", "if (zr) enoneshot <= 1'b0;", 'enoneshot does not clear on the s wrap')
+# PW07 retired (slim-down: enoneshot is gone):
+# m('PW07', 'pwm.v', 'wire        en  = enalways | enoneshot;', 'wire        en  = enalways;', 'one-shot mode does not run the counter')
 m('PW08', 'pwm.v', 'if (wcfg && be[3]) ip <= wdata[29:28];', 'if (wcfg && be[2]) ip <= wdata[29:28];', 'the CFG ip write is taken on lane 2')
 m('PW09', 'pwm.v', "            4'd10, 4'd11: rdata = 32'h0000_FFFF;   // not built: duty 0 for pwm-sifive get_state\n", "            4'd10, 4'd11: rdata = 32'b0;\n", 'pwmcmp2/3 read 0 again (pwm-sifive get_state then sees channels 2-3 on at 100 %)')
 m('PW13', 'pwm.v', "            4'd10, 4'd11: rdata = 32'h0000_FFFF;   // not built: duty 0 for pwm-sifive get_state\n", "            4'd10, 4'd11: rdata = {16'b0, cmp1};\n", 'pwmcmp2/3 alias cmp1')
-m('PW10', 'pwm.v', 'assign irq   = {2\'b0, ip};', 'assign irq   = {ip, ip};', 'irq[3:2] follow ip[1:0]: PLIC sources 7 and 8 pend (comparators 2 and 3 are not built)')
-m('PW11', 'pwm.v', 'assign pwm_o = {2\'b0, ip};', 'assign pwm_o = {ip, ip};', 'pwm_o[3:2] follow ip[1:0] (comparators 2 and 3 are not built)')
+# PW10 retired (slim-down: the irq output is gone):
+# m('PW10', 'pwm.v', 'assign irq   = {2\'b0, ip};', 'assign irq   = {ip, ip};', 'irq[3:2] follow ip[1:0]: PLIC sources 7 and 8 pend (comparators 2 and 3 are not built)')
+# PW11 retired (slim-down: pwm_o is [1:0], no [3:2] to mutate):
+# m('PW11', 'pwm.v', 'assign pwm_o = {2\'b0, ip};', 'assign pwm_o = {ip, ip};', 'pwm_o[3:2] follow ip[1:0] (comparators 2 and 3 are not built)')
 m('PW12', 'pwm.v', 'if (wcfg && be[3]) ip <= wdata[29:28];', 'if (wcfg && be[3]) ip <= wdata[31:30];', 'the CFG ip write takes the wrong bits (31:30 instead of 29:28)')
+m('PW14', 'pwm.v', 'else ip <= ge;', 'else ip <= ge | ip;', 'a sticky ip creeps back (slim-down: ip follows the comparators)')
+m('PW15', 'pwm.v', 'enalways <= wdata[12];', 'enalways <= wdata[13];', 'enalways taken from cfg bit 13 (the old one-shot position)')
+m('PW16', 'pwm.v', "2'b0, 1'b0, enalways, 2'b0, zerocmp, 1'b0, 4'b0, scale}", "2'b0, enalways, enalways, 2'b0, zerocmp, 1'b0, 4'b0, scale}", 'cfg bit 13 (oneshot) reads enalways instead of 0')
+m('PW17', 'pwm.v', "2'b0, zerocmp, 1'b0, 4'b0, scale}", "2'b0, zerocmp, zerocmp, 4'b0, scale}", 'cfg bit 8 (sticky) reads zerocmp instead of 0')
+m('PW18', 'pwm.v', 'assign pwm_o = ip;', 'assign pwm_o = {ip[0], ip[1]};', 'pwm_o channels swapped')
 
 m('AU01', 'audio.v', "if (c == 12'd0) begin c <= per; audio_o <= ~audio_o; end", "if (c == 12'd1) begin c <= per; audio_o <= ~audio_o; end", 'voice reload at c == 1 (period one short)')
 m('AU02', 'audio.v', 'wire       tk = b & ((pre[10:4] & m) == m);', 'wire       tk = b;', 'the voice ignores the octave')
