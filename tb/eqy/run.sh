@@ -324,7 +324,7 @@ cut_design() {
   python3 "$HERE/fsmcut.py" "$side" "$D/${side}_pre.il" "$D/${side}_cut.il" > "$D/$side.patch.txt" 2>&1 \
     || die "fsmcut.py $side asserted: $(tail -3 "$D/$side.patch.txt" | tr '\n' ' ')"
   nq=$(grep -c "^$side: connect .Q " "$D/$side.patch.txt"); npin=$(grep -c "^$side: rf_macro w_ena" "$D/$side.patch.txt")
-  wq=4; [ "$side" = gate ] && wq=22
+  wq=4; [ "$side" = gate ] && wq=$((16 + MULDIV_N))   # gate one-hot Q bits: 3 + MULDIV_N + 10 + 3
   [ "$nq" = "$wq" ] && [ "$npin" = 1 ] || die "cut: $side patch has $nq Q edits (want $wq) and $npin pin edits (want 1)"
   cat > "$D/${side}_cut.ys" <<EOF
 read_rtlil $D/${side}_cut.il
