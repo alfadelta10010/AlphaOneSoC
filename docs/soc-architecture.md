@@ -54,15 +54,17 @@ in flash, `.data`/`.bss`/stack in PSRAM) and starts with
 `0x8000_0000`, is for the verification flow, which starts the core straight
 in PSRAM.)
 
-`mtvec` resets to 0. The spec leaves it unspecified, boot code must set it
-before it can take a trap, and 0 matches Spike, so lockstep traces agree from
-reset. A trap taken before `mtvec` is written jumps to 0, which is unmapped,
-and faults there over and over: a cause-1 loop at 0 that rewrites mepc,
-mcause and mtval on every pass, so the first trap's cause is lost, and the
-QSPI bus goes quiet, since 0 is outside every window. Erased flash
-(`0xFFFFFFFF`, an illegal instruction) at the reset vector ends this way.
-Kept at 0 by decision (2026-09-29); the first thing boot code does is set
-`mtvec`.
+`mtvec` has no reset (Priv 3.4 leaves it unspecified; so are mscratch, mepc,
+mtval and pmpaddr0-3, none of which has a reset either: only mstatus,
+mcause, mie, misa, the counters' control CSRs and the PMP A/L fields do).
+Boot code must set `mtvec` before it can take a trap. A trap taken before
+`mtvec` is written vectors to an unspecified address; it used to jump to 0,
+which is unmapped, and fault there in a cause-1 loop (decision 2026-09-29,
+reversed 2026-11-24 to save the 30 reset gates and for the same reason
+mepc/mtval/mscratch/pmpaddr lost theirs). Erased flash (`0xFFFFFFFF`, an
+illegal instruction) at the reset vector now ends in an arbitrary jump
+instead. The first thing boot code does is set `mtvec`; the verification
+flow's lockstep traces start from a program that does.
 
 **A reboot restarts the SoC from flash exactly as a pin reset does.** A write
 of `0x7777` to syscon's FINISH register holds the SoC in reset for two clock

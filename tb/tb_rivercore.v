@@ -276,6 +276,19 @@ module tb_rivercore;
 `define MEMARR mem.mem
 `endif
 
+    // mtvec, mscratch, mepc, mtval and pmpaddr0-3 have no reset (Priv 3.4: unspecified), so they
+    // power up as X here. Spike resets them to 0, and the arch tests' prologues save mtvec and
+    // mscratch before writing them, so for lockstep runs they start at 0 -- the one thing this
+    // testbench initialises that the RTL does not. +CSR_X leaves them X: tests/directed/run.sh
+    // passes it, so a directed test that reads one of them before writing it fails on the X.
+    initial if (!$test$plusargs("CSR_X")) begin
+        #1;
+        `CPU.csr_unit.mtvec_r  = 0;  `CPU.csr_unit.mscratch = 0;
+        `CPU.csr_unit.mepc_r   = 0;  `CPU.csr_unit.mtval    = 0;
+        `CPU.csr_unit.pmpaddr0 = 0;  `CPU.csr_unit.pmpaddr1 = 0;
+        `CPU.csr_unit.pmpaddr2 = 0;  `CPU.csr_unit.pmpaddr3 = 0;
+    end
+
     // Clock generation: 10ns period (-DTB_TCLK_NS=<ns> another; tests/directed/run.sh soc passes SOC_TCLK_NS)
     initial clk = 0;
 `ifdef TB_TCLK_NS

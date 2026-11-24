@@ -10,8 +10,8 @@ material. The device tree is `docs/alphaone-4x4.dts` (board) and `docs/devicetre
 The loader is ordinary code in flash (`docs/soc-architecture.md`, "Boot" and "Linux"). It runs
 with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap).
 
-1. **`mtvec`.** Set it to a handler in flash or PSRAM before anything can trap. It resets to 0,
-   which is unmapped, and a trap there loops forever.
+1. **`mtvec`.** Set it to a handler in flash or PSRAM before anything can trap. It has no reset
+   (unspecified, Priv 3.4), so a trap before it is written vectors to an arbitrary address.
 2. **UART divisor and early output** (section 4). The divisor resets to 34 (114,890 baud at
    62.5 MHz). Write it first if the clock is anything else.
 3. **`SPICTL.EN = 1`** (GPIO `+0x0C`, bit 0). `spi-oc-tiny` never writes it. With EN = 0 the engine

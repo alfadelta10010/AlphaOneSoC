@@ -13,6 +13,7 @@
 .option norvc
 .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw mscratch, zero         # mscratch has no reset: write it before the first read
     la   s0, buf
     li   s1, 0x11
     li   a0, 0x100

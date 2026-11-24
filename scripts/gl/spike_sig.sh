@@ -10,7 +10,7 @@ mkdir -p "$OUT/ref"
 while IFS='|' read -r name hex args; do
   [ -n "$name" ] || continue
   [ -s "$OUT/ref/$name.sig" ] && continue
-  timeout -k 5 300 $SPIKE --isa=rv32imac_zicsr_zifencei_zicntr --priv=mu --pmpregions=4 --pmpgranularity=4 \
+  timeout -k 5 300 $SPIKE --isa=rv32imac_zicsr_zifencei_zicntr --priv=mu --pmpregions=4 --pmpgranularity=4096 \
     -m0x20000000:0x1000000,0x80000000:0x1000000 --pc=0x20000000 \
     +signature="$OUT/ref/$name.sig" +signature-granularity=4 "$OUT/elf/$name.elf" > "$OUT/ref/$name.log" 2>&1
   echo "$name $(wc -l < "$OUT/ref/$name.sig" 2>/dev/null || echo 0) words"

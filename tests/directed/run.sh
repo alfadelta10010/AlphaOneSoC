@@ -109,7 +109,7 @@ fi
 [ $SOC = 1 ] && OUT="$OUT/soc"
 mkdir -p "$OUT"
 SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
-            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
+            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4096"
 SPIKE_ARGS="$SPIKE_MEM --pc=0x80000000"
 TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
@@ -198,7 +198,7 @@ sim() { # sim <name> <plusargs...>
   local image=+INIT_FILE="$OUT/$n.hex"
   is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
   $RUNSIM "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
-      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC +CSR_X "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
 }
 
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both
