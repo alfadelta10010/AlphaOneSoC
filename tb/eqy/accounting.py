@@ -63,7 +63,8 @@ LIVE = {"soc.plic_inst.pend[4]", "soc.plic_inst.insvc[4]"}
 # (memory -nomap; memory_map), so both sides hold the copy and EQY compares the read mux.
 MEMRD = {"soc.uart_inst.rx_mem": ("soc.uart_inst.rx_rp", 3)}
 MEMRD_GOLD = re.compile(r"^\$\\?(%s)\$rdreg\[\d+\]\$q(\[\d+\])?$" % "|".join(re.escape(m) for m in MEMRD))
-ANON = re.compile(r"^(_\d+_|net\d+)$")
+# anonymous gate names: yosys _N_, resizer netN, and SYNTH_AUTONAME's <net>_sky130_fd_sc_hd__<cell>_<PIN> (never an RTL name)
+ANON = re.compile(r"^(_\d+_|net\d+)$|_sky130_fd_sc_hd__\w+_[A-Z][A-Z0-9_]*$")
 
 
 def netbits(mod):
@@ -138,7 +139,7 @@ def main():
     for cn, ty, b, ns in tf:
         if any(x in gold_names or re.sub(r"\[\d+\]$", "", x) in RECODE for x in ns):
             continue
-        (memaddr_gate if all(ANON.match(x) for x in ns) else stray).append(ns[0])
+        (memaddr_gate if all(ANON.search(x) for x in ns) else stray).append(ns[0])
     stray.sort()
     got["memaddr_gate"] = len(memaddr_gate)
     lines = ["flop accounting (gold = RTL, gate = hardened netlist)",
