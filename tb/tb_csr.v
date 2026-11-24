@@ -11,9 +11,11 @@
 //     and MPP legalised to U unless 11; mie 3/7/11; mtvec[1:0] 0; mcounteren
 //     2:0; mcountinhibit 0 and 2; mepc bit 0 dropped, bit 1 kept but read 0
 //     while misa.C = 0; misa only C, a clear refused while the next pc is
-//     misaligned; pmpcfg0 per byte: R=0,W=1 written as W=0, bits 6:5 zero, a
+//     misaligned; pmpcfg0 per byte: R=0,W=1 written as W=0, bits 6:5 zero, NA4
+//     stored as NAPOT (G = 10), a
 //     byte with L=1 frozen; pmpaddr[i] frozen by its own L or by entry i+1's
-//     TOR+L; mip, the read-only and the read-zero CSRs ignore writes;
+//     TOR+L, and read back with PA[33:32] zero and the grain bits per mode
+//     (G = 10: [8:0] one in NAPOT, [9:0] zero in OFF/TOR); mip, the read-only and the read-zero CSRs ignore writes;
 //   * the counters (006, 007): mcycle counts every clock but the clock of and
 //     the clock after an mcycle write, unless mcountinhibit.CY; minstret counts
 //     instret_inc unless mcountinhibit.IR; a write replaces its half and the
@@ -105,7 +107,13 @@ module tb_csr;
         f_mip = (sirq ? 32'h8 : 0) | (tirq ? 32'h80 : 0) | (eirq ? 32'h800 : 0);
     endfunction
     function [7:0] cfg_legal(input [7:0] b);
-        cfg_legal = {b[7], 2'b00, b[4:2], b[1] & b[0], b[0]};
+        cfg_legal = {b[7], 2'b00, b[4], b[4] | b[3], b[2], b[1] & b[0], b[0]};   // NA4 -> NAPOT
+    endfunction
+    // pmpaddr[i] as read: PA[33:32] zero (RO), and with G = 10 bits [8:0] one in
+    // NAPOT (A[1]; NA4 is stored as NAPOT), bits [9:0] zero in OFF/TOR. The model
+    // keeps the 30 writable bits and derives the read value from the current A.
+    function [31:0] pa_vis(input integer i, input [31:0] raw);
+        pa_vis = s_pmpcfg[8*i+4] ? (raw | 32'h1FF) : (raw & 32'h3FFF_FC00);
     endfunction
     function addr_locked(input integer i);  // pmpaddr[i] frozen
         addr_locked = s_pmpcfg[8*i+7] ||
@@ -165,10 +173,10 @@ module tb_csr;
                 12'h343: e_rdata = s_mtval;
                 12'h344: e_rdata = f_mip(1'b0);
                 12'h3A0: e_rdata = s_pmpcfg;
-                12'h3B0: e_rdata = s_pa[0];
-                12'h3B1: e_rdata = s_pa[1];
-                12'h3B2: e_rdata = s_pa[2];
-                12'h3B3: e_rdata = s_pa[3];
+                12'h3B0: e_rdata = pa_vis(0, s_pa[0]);
+                12'h3B1: e_rdata = pa_vis(1, s_pa[1]);
+                12'h3B2: e_rdata = pa_vis(2, s_pa[2]);
+                12'h3B3: e_rdata = pa_vis(3, s_pa[3]);
                 12'hB00, 12'hC00: e_rdata = cn[31:0];
                 12'hB80, 12'hC80: e_rdata = cn[63:32];
                 12'hB02, 12'hC02: e_rdata = in[31:0];
@@ -201,10 +209,10 @@ module tb_csr;
                         e_wval[8*i +: 8] = b;
                     end
                 end
-                12'h3B0: e_wval = addr_locked(0) ? s_pa[0] : wdata;
-                12'h3B1: e_wval = addr_locked(1) ? s_pa[1] : wdata;
-                12'h3B2: e_wval = addr_locked(2) ? s_pa[2] : wdata;
-                12'h3B3: e_wval = addr_locked(3) ? s_pa[3] : wdata;
+                12'h3B0: e_wval = pa_vis(0, addr_locked(0) ? s_pa[0] : (wdata & 32'h3FFF_FFFF));
+                12'h3B1: e_wval = pa_vis(1, addr_locked(1) ? s_pa[1] : (wdata & 32'h3FFF_FFFF));
+                12'h3B2: e_wval = pa_vis(2, addr_locked(2) ? s_pa[2] : (wdata & 32'h3FFF_FFFF));
+                12'h3B3: e_wval = pa_vis(3, addr_locked(3) ? s_pa[3] : (wdata & 32'h3FFF_FFFF));
                 12'hB00, 12'hB80, 12'hB02, 12'hB82: e_wval = wdata;
                 default: e_wval = 32'h0;
             endcase
@@ -250,7 +258,7 @@ module tb_csr;
                         if (addr_locked(i)) begin
                             cv_lockedwr = cv_lockedwr + 1;
                             if (!s_pmpcfg[8*i+7]) cv_torlock = cv_torlock + 1;
-                        end else s_pa[i] = wdata;
+                        end else s_pa[i] = wdata & 32'h3FFF_FFFF;
                     end
                     default: ;
                 endcase
@@ -294,8 +302,8 @@ module tb_csr;
             chk("mie_out", mie_out, s_mie_r);
             chk("misa_c", {31'b0, misa_c}, {31'b0, s_c});
             chk("pmpcfg0_out", pmpcfg0_out, s_pmpcfg);
-            chk("pmpaddr0_out", pa0, s_pa[0]); chk("pmpaddr1_out", pa1, s_pa[1]);
-            chk("pmpaddr2_out", pa2, s_pa[2]); chk("pmpaddr3_out", pa3, s_pa[3]);
+            chk("pmpaddr0_out", pa0, pa_vis(0, s_pa[0])); chk("pmpaddr1_out", pa1, pa_vis(1, s_pa[1]));
+            chk("pmpaddr2_out", pa2, pa_vis(2, s_pa[2])); chk("pmpaddr3_out", pa3, pa_vis(3, s_pa[3]));
             if (we && in_set(waddr)) chk("wval_out", wval_out, e_wval(1'b0));
         end
     endtask

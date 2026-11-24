@@ -8,7 +8,10 @@
 //   P3 mie has only MSIE/MTIE/MEIE                   CPU ref 7.3
 //   P4 mtvec[1:0] = 0 (direct mode)
 //   P5 mcounteren has only CY/TM/IR, mcountinhibit only CY/IR
-//   P6 no pmpcfg byte has bits 6:5 set or R=0,W=1    CPU ref 6.3
+//   P6 no pmpcfg byte has bits 6:5 set, R=0,W=1 or A=NA4   CPU ref 6.3
+//   P9 pmpaddr as exported: PA[33:32] (bits 31:30) zero; with G = 10, bits
+//      [8:0] all ones when A is NAPOT, bits [9:0] zero when OFF/TOR
+//                                                  Priv 3.7.1
 //   P7 misa is 0x40101101 with only C (bit 2) free   CPU ref 7.2
 //   P8 mepc as read has bit 0 clear, and bit 1 clear while misa.C = 0
 // They are checked from the first clock after a reset onward.
@@ -66,7 +69,14 @@ module csr_props (
             for (k = 0; k < 4; k = k + 1) begin                                             // P6
                 assert (pmpcfg0[8*k+5] == 1'b0 && pmpcfg0[8*k+6] == 1'b0);
                 assert (!(pmpcfg0[8*k+1] && !pmpcfg0[8*k]));
+                assert (pmpcfg0[8*k+4:8*k+3] != 2'b10);
             end
+            assert (pa0[31:30] == 2'b00 && pa1[31:30] == 2'b00 &&                           // P9
+                    pa2[31:30] == 2'b00 && pa3[31:30] == 2'b00);
+            assert (pmpcfg0[4]  ? (pa0[8:0] == 9'h1FF) : (pa0[9:0] == 10'h0));
+            assert (pmpcfg0[12] ? (pa1[8:0] == 9'h1FF) : (pa1[9:0] == 10'h0));
+            assert (pmpcfg0[20] ? (pa2[8:0] == 9'h1FF) : (pa2[9:0] == 10'h0));
+            assert (pmpcfg0[28] ? (pa3[8:0] == 9'h1FF) : (pa3[9:0] == 10'h0));
             if (raddr == 12'h301) assert ((rdata & ~32'h4) == 32'h4010_1101);               // P7
             if (raddr == 12'h301) assert (rdata[2] == misa_c);
             assert (mepc_out[0] == 1'b0 && (misa_c || mepc_out[1] == 1'b0));                // P8
