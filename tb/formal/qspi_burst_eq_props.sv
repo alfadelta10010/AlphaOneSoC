@@ -70,10 +70,15 @@ module qspi_burst_eq_props (
     end
 
 `ifdef SBY_COVER
+    // Covers 1 and 2 need about 345 steps (multiclock: 2 per clock; reset, the start-up sequence, one flash read).
+    // A PSRAM transfer never ends with its CS low in done in the reference engine (no PSRAM stream before WO-68;
+    // pdr proves `done_r -> cs_n_r[2:1] == 2'b11`), so cover 3 asks for a done whose last selected chip was a PSRAM.
+    reg ps_last = 1'b0;             // the last chip select low was CS1 or CS2
+    always @(posedge clk) if (!cs_n_r[0]) ps_last <= 1'b0; else if (!cs_n_r[1] || !cs_n_r[2]) ps_last <= 1'b1;
     always @(*) begin
         cover (live && done_r && cs_n_r != 3'b111);                                       // a stream left open after a read
         cover (live && done_r && ddr && !cs_n_r[0]);
-        cover (live && done_r && (!cs_n_r[1] || !cs_n_r[2]));                             // a PSRAM transfer ended (CS still low in done)
+        cover (live && done_r && ps_last);                                                // a PSRAM transfer ended
     end
 `endif
 endmodule
