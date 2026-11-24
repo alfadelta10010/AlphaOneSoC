@@ -31,3 +31,7 @@ sed cache.v s@wire \[31:0\] rb_data = nxt\[5\]   @wire [31:0] rb_data = f_addr[7
 sed cache.v s@: f_addr\[7:4\];@: {1'b0, f_addr[6:4]};@
 # M1: the port B lookup (b_ph) of a straddling fetch hits the word being written on this edge: the macro's write-through data (free in the harness) reaches f_rdata (assertion F)
 sed cache.v s@(kword < fcnt)@(kword < fcnt || (b_ph \&\& kword == fcnt))@
+# WO-cache832 S1: the other sector is not dropped when a fill changes the line's tag -> stale data of the old tag
+sed cache.v s@if (!tmatch) valid\[{kline, ~kidx\[0\]}\] <= 1'b0;@@
+# S2: tags read and written with the sector's low bits (lines alias: sectors s and s + 8 share a tag)
+sed cache.v s@wire \[2:0\]  kline     = kidx\[3:1\];@wire [2:0]  kline     = kidx[2:0];@

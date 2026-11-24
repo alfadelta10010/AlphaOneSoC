@@ -117,7 +117,7 @@ module cache_props (
         assume (!(live && d_ready && d_ready_q));
         assume (!(live && d_ready && m_ready));
         // Address abstraction: the tracked byte is in tag T of its chip; every fetch and store goes to tag T or T+1 of that
-        // chip (same indexes, so conflicts and the carry from index 15 to 0 are reachable). Another tag only ever
+        // chip (same indexes, so conflicts and the carry from sector 15 to 0 (line 7 to 0) are reachable). Another tag only ever
         // plays the part of a line that is not the tracked one, which T+1 does for every T.
         assume ({f_addr[31], f_addr[23:8]} == {tb[24], tb[23:8]} || {f_addr[31], f_addr[23:8]} == {tb[24], tb[23:8] + 16'd1});
         assume ({d_addr[31], d_addr[23:8]} == {tb[24], tb[23:8]} || {d_addr[31], d_addr[23:8]} == {tb[24], tb[23:8] + 16'd1});
@@ -159,7 +159,7 @@ module cache_props (
     // fill bookkeeping: a fill starts when the cache requests word 0 of a line
     reg        fl_start_q = 0;
     wire       fl_word0 = active && m_req && m_addr[3:2] == 2'd0 && (!m_req_q || m_ready_q);
-    reg        have_l = 0, done_l = 0, killed_l = 0;
+    reg        have_l = 0, done_l = 0, killed_l = 0, dropped_l = 0;
     reg [3:0]  l_idx = 0;  reg [16:0] l_tag = 0;
     wire [3:0]  m_idx = m_addr[7:4];
     wire [16:0] m_tag = {m_addr[31], m_addr[23:8]};
@@ -168,7 +168,8 @@ module cache_props (
     wire [3:0]  s_idx = d_addr[7:4];
     wire [16:0] s_tag = {d_addr[31], d_addr[23:8]};
     always @(posedge clk) begin
-        if (fl_word0) begin have_l <= 1'b1; done_l <= 1'b0; killed_l <= 1'b0; l_idx <= m_idx; l_tag <= m_tag; end
+        if (fl_word0 && !(have_l && done_l && m_idx == (l_idx ^ 4'd1))) begin have_l <= 1'b1; done_l <= 1'b0; killed_l <= 1'b0; dropped_l <= 1'b0; l_idx <= m_idx; l_tag <= m_tag; end
+        if (fl_word0 && have_l && done_l && m_idx == (l_idx ^ 4'd1) && m_tag != l_tag) dropped_l <= 1'b1;
         if (word3 && have_l && m_idx == l_idx && m_tag == l_tag) done_l <= 1'b1;
         if (st_done && have_l && done_l && s_idx == l_idx && s_tag == l_tag) killed_l <= 1'b1;
     end
@@ -177,15 +178,19 @@ module cache_props (
         cover (armed && active && fl_word0);                                                          // 2 fill
         cover (armed && fl_word0 && have_l && m_idx == l_idx && m_tag != l_tag);                      // 3 eviction (same index, other tag)
         cover (armed && fl_word0 && have_l && killed_l && m_idx == l_idx && m_tag == l_tag);         // 4 store-invalidate: the line fills again
-        cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[3:2] != 2'd3);            // 5 straddle in a line
-        cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[3:2] == 2'd3);            // 6 straddle across lines
+        cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[3:2] != 2'd3);            // 5 straddle in a sector
+        cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[3:2] == 2'd3);            // 6 straddle across sectors
         cover (armed && active && f_req && f_ready && f_addr[7]);                                    // 7 hit served by data_hi
         cover (armed && active && f_req && f_ready && f_addr[7:0] == 8'h7E);                          // 8 straddle data_mem -> data_hi
         cover (armed && active && f_req && f_ready && f_addr[7:0] == 8'hFE);                          // 9 straddle data_hi -> data_mem (index 15 -> 0)
-        cover (armed && st_done && have_l && done_l && s_idx == l_idx && s_tag == l_tag && l_idx[3]); // 10 a data_hi line store-invalidated
+        cover (armed && st_done && have_l && done_l && s_idx == l_idx && s_tag == l_tag && l_idx[3]); // 10 a data_hi sector store-invalidated
         cover (hit_cy && colB && !f_addr_q[1] && nxt_q[5] == m_addr_q[7]);                            // 11 collision on the selected macro's port B, dropped by pc1 = 0
         cover (hit_cy && colA && f_addr_q[7] != m_addr_q[7]);                                         // 12 collision on port A of the unselected macro
         cover (hit_cy && colB && f_addr_q[1] && nxt_q[5] != m_addr_q[7]);                             // 13 collision on port B of the unselected macro (straddle)
+        cover (armed && fl_word0 && have_l && done_l && !killed_l && m_idx == (l_idx ^ 4'd1) && m_tag == l_tag); // 14 sibling sector filled, same tag (kept)
+        cover (armed && fl_word0 && have_l && done_l && m_idx == (l_idx ^ 4'd1) && m_tag != l_tag);   // 15 sibling sector filled with a new tag (drops the line)
+        cover (armed && fl_word0 && dropped_l && m_idx == l_idx && m_tag == l_tag);                    // 16 the dropped sector fills again
+        cover (armed && active && f_req && f_ready && f_addr[1] && f_addr[4:2] == 3'd3);              // 17 straddle across the two sectors of a line
     end
 `endif
 endmodule
