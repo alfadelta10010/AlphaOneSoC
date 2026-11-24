@@ -50,7 +50,7 @@
       riscv,isa = "rv32imac_zicsr_zicntr_zifencei";
       mmu-type = "riscv,sv32";
       riscv,pmpregions = <4>;
-      riscv,pmpgranularity = <4>;
+      riscv,pmpgranularity = <4096>;
       clock-frequency = <1000000000>;
       CPU0_intc: interrupt-controller {
         #address-cells = <2>;
