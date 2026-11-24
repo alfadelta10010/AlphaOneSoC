@@ -83,6 +83,10 @@ module tb_csr;
     reg [1:0]  s_mpp;
     reg [31:0] s_mie_r, s_mtvec, s_mcounteren, s_mcountinhibit, s_mscratch, s_mepc, s_mcause, s_mtval;
     reg [31:0] s_pmpcfg, s_pa [0:3];
+    // mtvec, mscratch, mepc, mtval and pmpaddr0-3 have no reset (Priv 3.4: unspecified):
+    // the model checks one only after a write or a trap has given it a value, until
+    // the next reset.
+    reg        v_mtvec, v_mscratch, v_mepc, v_mtval, v_pa [0:3];
     reg [63:0] s_mcycle, s_minstret;
     reg        s_wr_q;          // the previous clock wrote mcycle or mcycleh
 
@@ -92,7 +96,8 @@ module tb_csr;
             s_mie = 0; s_mpie = 0; s_mprv = 0; s_tw = 0; s_mpp = 2'b00; s_c = 1;
             s_mie_r = 0; s_mtvec = 0; s_mcounteren = 0; s_mcountinhibit = 0; s_mscratch = 0;
             s_mepc = 0; s_mcause = 0; s_mtval = 0; s_pmpcfg = 0;
-            for (k = 0; k < 4; k = k + 1) s_pa[k] = 0;
+            for (k = 0; k < 4; k = k + 1) begin s_pa[k] = 0; v_pa[k] = 0; end
+            v_mtvec = 0; v_mscratch = 0; v_mepc = 0; v_mtval = 0;
             s_mcycle = 0; s_minstret = 0; s_wr_q = 0;
         end
     endtask
@@ -154,6 +159,20 @@ module tb_csr;
             if (!priv && (a == 12'hC02 || a == 12'hC82) && !s_mcounteren[2]) ok = 0;
             e_valid = ok;
         end
+    endfunction
+    // 1 when the register at address a holds a value the model knows (see v_*)
+    function known(input [11:0] a);
+        case (a)
+            12'h305: known = v_mtvec;
+            12'h340: known = v_mscratch;
+            12'h341: known = v_mepc;
+            12'h343: known = v_mtval;
+            12'h3B0: known = v_pa[0];
+            12'h3B1: known = v_pa[1];
+            12'h3B2: known = v_pa[2];
+            12'h3B3: known = v_pa[3];
+            default: known = 1'b1;
+        endcase
     endfunction
     // Read value; `cnt_ok` is 0 when this clock writes a counter (the read is
     // then not checked: the pipeline never reads a CSR while a write is in WB).
@@ -247,13 +266,13 @@ module tb_csr;
                     end
                     12'h301: if (wdata[2] || !pc_mis) s_c = wdata[2]; else cv_misa_ref = cv_misa_ref + 1;
                     12'h304: s_mie_r = wdata & 32'h888;
-                    12'h305: s_mtvec = wdata & ~32'h3;
+                    12'h305: begin s_mtvec = wdata & ~32'h3; v_mtvec = 1; end
                     12'h306: s_mcounteren = wdata & 32'h7;
                     12'h320: s_mcountinhibit = wdata & 32'h5;
-                    12'h340: s_mscratch = wdata;
-                    12'h341: s_mepc = {wdata[31:1], 1'b0};
+                    12'h340: begin s_mscratch = wdata; v_mscratch = 1; end
+                    12'h341: begin s_mepc = {wdata[31:1], 1'b0}; v_mepc = 1; end
                     12'h342: s_mcause = wdata & MCAUSE_MASK;
-                    12'h343: s_mtval = wdata;
+                    12'h343: begin s_mtval = wdata; v_mtval = 1; end
                     12'h3A0: for (i = 0; i < 4; i = i + 1)
                                  if (s_pmpcfg[8*i+7]) cv_lockedwr = cv_lockedwr + 1;
                                  else s_pmpcfg[8*i +: 8] = cfg_legal(wdata[8*i +: 8]);
@@ -262,13 +281,14 @@ module tb_csr;
                         if (addr_locked(i)) begin
                             cv_lockedwr = cv_lockedwr + 1;
                             if (!s_pmpcfg[8*i+7]) cv_torlock = cv_torlock + 1;
-                        end else s_pa[i] = wdata & 32'h3FFF_FFFF;
+                        end else begin s_pa[i] = wdata & 32'h3FFF_FFFF; v_pa[i] = 1; end
                     end
                     default: ;
                 endcase
                 // 2. trap / MRET, on top of the write
                 if (trap) begin
                     s_mepc = trap_pc; s_mcause = trap_cause & MCAUSE_MASK; s_mtval = trap_val;
+                    v_mepc = 1; v_mtval = 1;
                     s_mpie = s_mie; s_mie = 0; s_mpp = priv ? 2'b11 : 2'b00;
                     if (priv) cv_trap_m = cv_trap_m + 1; else cv_trap_u = cv_trap_u + 1;
                 end else if (mret_sig) begin
@@ -295,10 +315,10 @@ module tb_csr;
         begin
             cnt_ok = !w_mcycle(1'b0) && !w_minstret(1'b0);
             chk("csr_addr_valid", {31'b0, csr_addr_valid}, {31'b0, e_valid(raddr)});
-            if (e_valid(raddr) && (cnt_ok || !(raddr[11:8] == 4'hB || raddr[11:8] == 4'hC)))
+            if (e_valid(raddr) && (cnt_ok || !(raddr[11:8] == 4'hB || raddr[11:8] == 4'hC)) && known(raddr))
                 chk("rdata", rdata, e_rdata(raddr));
-            chk("mtvec_out", mtvec_out, s_mtvec);
-            chk("mepc_out", mepc_out, f_mepc(1'b0));
+            if (v_mtvec) chk("mtvec_out", mtvec_out, s_mtvec);
+            if (v_mepc)  chk("mepc_out", mepc_out, f_mepc(1'b0));
             chk("mstatus_mie", {31'b0, mstatus_mie}, {31'b0, s_mie});
             chk("mstatus_mpp", {30'b0, mstatus_mpp}, {30'b0, s_mpp});
             chk("mstatus_mprv", {31'b0, mstatus_mprv}, {31'b0, s_mprv});
@@ -306,9 +326,13 @@ module tb_csr;
             chk("mie_out", mie_out, s_mie_r);
             chk("misa_c", {31'b0, misa_c}, {31'b0, s_c});
             chk("pmpcfg0_out", pmpcfg0_out, s_pmpcfg);
-            chk("pmpaddr0_out", pa0, pa_vis(0, s_pa[0])); chk("pmpaddr1_out", pa1, pa_vis(1, s_pa[1]));
-            chk("pmpaddr2_out", pa2, pa_vis(2, s_pa[2])); chk("pmpaddr3_out", pa3, pa_vis(3, s_pa[3]));
-            if (we && in_set(waddr)) chk("wval_out", wval_out, e_wval(1'b0));
+            if (v_pa[0]) chk("pmpaddr0_out", pa0, pa_vis(0, s_pa[0]));
+            if (v_pa[1]) chk("pmpaddr1_out", pa1, pa_vis(1, s_pa[1]));
+            if (v_pa[2]) chk("pmpaddr2_out", pa2, pa_vis(2, s_pa[2]));
+            if (v_pa[3]) chk("pmpaddr3_out", pa3, pa_vis(3, s_pa[3]));
+            // a write ignored by a lock logs the register's own (possibly never written) value
+            if (we && in_set(waddr) && !(waddr >= 12'h3B0 && waddr <= 12'h3B3 && addr_locked(waddr[1:0]) && !v_pa[waddr[1:0]]))
+                chk("wval_out", wval_out, e_wval(1'b0));
         end
     endtask
 
@@ -391,7 +415,7 @@ module tb_csr;
                 for (a = 0; a < 4096; a = a + 1) begin
                     raddr = a; #1;
                     chk("csr_addr_valid sweep", {31'b0, csr_addr_valid}, {31'b0, e_valid(raddr)});
-                    if (e_valid(raddr) && raddr[11:8] != 4'hB && raddr[11:8] != 4'hC)
+                    if (e_valid(raddr) && raddr[11:8] != 4'hB && raddr[11:8] != 4'hC && known(raddr))
                         chk("rdata sweep", rdata, e_rdata(raddr));
                     if (!p && (a == 12'hC00 || a == 12'hC01 || a == 12'hC02))
                         if (e_valid(raddr)) cv_uvalid = cv_uvalid + 1; else cv_uinvalid = cv_uinvalid + 1;
@@ -418,7 +442,7 @@ module tb_csr;
                 clk_en = 0;
                 for (k = 0; k < nw; k = k + 1) begin
                     raddr = wlist[k]; #1;
-                    if (raddr[11:8] != 4'hB && raddr[11:8] != 4'hC) chk("after reset", rdata, e_rdata(raddr));
+                    if (raddr[11:8] != 4'hB && raddr[11:8] != 4'hC && known(raddr)) chk("after reset", rdata, e_rdata(raddr));
                 end
                 clk_en = 1;
             end
