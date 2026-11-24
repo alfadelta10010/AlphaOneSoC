@@ -1,2 +1,4 @@
 # QS06 (tb/mutate/mutants.py) no longer applies since the DDR edit changed the line after ctl_oe; same fault as a sed:
 sed qspi_ctrl.v s/^\( *\)ctl_oe <= 1'b1;$/\1ctl_oe <= 1'b1; late <= rd_late;/   # rd_late strap followed after reset
+# WO-68 burst path inside the miter (triage 2026-11-24): the PSRAM line burst follows rd_late live -> the copies differ
+sed qspi_ctrl.v s/pstrm <= pstreamable;/pstrm <= pstreamable \&\& !rd_late;/
