@@ -1,5 +1,6 @@
-# NAPOT pmpaddr 0x9fffffff is a 4 GB region above 4 GB: it must not match
-# any 32-bit address, so the U-mode fetch faults.
+# pmpaddr[31:30] (PA[33:32]) are not implemented: 0x9fffffff reads back
+# 0x1fffffff, the all-memory NAPOT region, so the U-mode fetch is allowed
+# (Spike keeps the bits and faults: an `expect` test, see MANIFEST).
   .option norvc
   .section .text.init
   .globl rvtest_entry_point

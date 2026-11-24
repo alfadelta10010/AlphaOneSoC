@@ -3,6 +3,7 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw pmpcfg0, zero          # Spike resets pmpcfg0 to NAPOT RWX, the core to OFF: start both from OFF (a pmpaddr write is logged as read back)
   la   t0, handler
   csrw mtvec, t0
   # entry0: TOR [0, noexec) RWX ; entry1: TOR [noexec, noexec+16) R only ; entry2: TOR [.., top) RWX
@@ -11,7 +12,7 @@ rvtest_entry_point:
   csrw pmpaddr0, t2
   addi t2, t2, 4
   csrw pmpaddr1, t2
-  li   t2, -1
+  li   t2, 0x3fffffff
   csrw pmpaddr2, t2
   li   t2, 0x000f090f        # cfg0=TOR|RWX, cfg1=TOR|R, cfg2=TOR|RWX
   csrw pmpcfg0, t2

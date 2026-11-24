@@ -95,7 +95,7 @@ workload:
   addi t0, s0, OFF_P
   srli t0, t0, 2
   csrw pmpaddr0, t0
-  li   t0, -1
+  li   t0, 0x3fffffff
   csrw pmpaddr1, t0
   li   t0, 0x1f90              # e0 NA4 over P, locked, no RWX; e1 NAPOT RWX
   csrw pmpcfg0, t0

@@ -109,7 +109,7 @@ fi
 [ $SOC = 1 ] && OUT="$OUT/soc"
 mkdir -p "$OUT"
 SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
-            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
+            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4096"
 SPIKE_ARGS="$SPIKE_MEM --pc=0x80000000"
 TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.

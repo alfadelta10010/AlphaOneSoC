@@ -6,6 +6,7 @@
 .option norvc
 .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw pmpcfg0, zero          # Spike resets pmpcfg0 to NAPOT RWX, the core to OFF: start both from OFF (a pmpaddr write is logged as read back)
     la   t6, handler
     csrw mtvec, t6
     li   s0, 0                 # cause log
@@ -14,7 +15,7 @@ rvtest_entry_point:
     # the core anyway, but Spike resets permissive (pmpcfg0 0x1f, pmpaddr0
     # ~0), so without it the two models disagree for a reason unrelated to
     # MPRV.
-    li   t0, -1
+    li   t0, 0x3fffffff
     csrw pmpaddr0, t0
     li   t0, 0x18              # A=NAPOT, RWX=000, L=0
     csrw pmpcfg0, t0
@@ -40,7 +41,7 @@ rvtest_entry_point:
     la   t1, umode
     csrw mepc, t1
     # grant U access to everything first so U-mode can run at all
-    li   t0, -1
+    li   t0, 0x3fffffff
     csrw pmpaddr0, t0
     li   t0, 0x1f              # NAPOT, RWX
     csrw pmpcfg0, t0

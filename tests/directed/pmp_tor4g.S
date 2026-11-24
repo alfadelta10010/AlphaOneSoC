@@ -1,12 +1,15 @@
-# TOR with pmpaddr 0x40000000 is a top of PA 0x1_0000_0000: the region covers
-# all of memory and U-mode may execute.
+# TOR with the largest pmpaddr this core has (PA[33:32] are not implemented,
+# and the 4 KiB grain clears bits [9:0]): the top reads 0x3ffffc00, PA
+# 0xfffff000, so the region covers all of memory below the last page and
+# U-mode may execute.
   .option norvc
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw pmpcfg0, zero          # Spike resets pmpcfg0 to NAPOT RWX, the core to OFF: start both from OFF (a pmpaddr write is logged as read back)
   la   t0, handler
   csrw mtvec, t0
-  li   t1, 0x40000000
+  li   t1, 0x3fffffff
   csrw pmpaddr0, t1
   li   t1, 0x0f
   csrw pmpcfg0, t1

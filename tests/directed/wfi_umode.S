@@ -28,7 +28,7 @@ rvtest_entry_point:
   csrw mtvec, t0
   li   s1, 0
   li   s8, 0
-  li   t0, -1
+  li   t0, 0x3fffffff
   csrw pmpaddr0, t0
   li   t0, 0x1f
   csrw pmpcfg0, t0

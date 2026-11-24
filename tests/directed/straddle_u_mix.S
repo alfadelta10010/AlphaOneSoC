@@ -3,10 +3,11 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw pmpcfg0, zero          # Spike resets pmpcfg0 to NAPOT RWX, the core to OFF: start both from OFF (a pmpaddr write is logged as read back)
   .option norvc
   la   t0, handler
   csrw mtvec, t0
-  li   a0, -1
+  li   a0, 0x3fffffff
   csrw pmpaddr0, a0
   li   a0, 0x1f
   csrw pmpcfg0, a0

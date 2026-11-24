@@ -180,7 +180,10 @@ pmp_rw_reserved     spike
 pmp_adjacent        spike
 pmp_adjacent_x      spike
 pmp_napot_small     spike
-pmp_napot_hi        spike
+# pmpaddr[31:30] (PA[33:32]) are not implemented, so a NAPOT 0x9fffffff reads back
+# 0x1fffffff: the whole 32-bit space, and the U-mode fetch is allowed (ecall from U,
+# cause 8). Spike keeps the bits and takes the region as one above 4 GB (cause 1).
+pmp_napot_hi        expect x13=0x1fffffff x12=0x111 x14=0x8
 pmp_tor4g           spike
 mprv                spike
 mprv2               spike
