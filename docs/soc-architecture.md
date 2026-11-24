@@ -886,6 +886,8 @@ a732aaa; 256 B rows: tree 2a2978e; cache off is the same on both):
 | 128 B cache, on + PBURST | 0.154 |
 | 256 B cache (WO-77), on | 0.163 |
 | 256 B cache (WO-77), on + PBURST | 0.181 |
+| 256 B, 8 x 32 B sectored (WO-cache832, tree 2c48f74 = 3bff64f + sectored cache.v, with the WO-76 fetch hold), on | 0.154 |
+| 256 B, 8 x 32 B sectored (WO-cache832, tree 2c48f74), on + PBURST | 0.175 |
 
 Embench (geometric mean per MHz) exists only for the 128 B cache: 0.0306 off,
 0.0495 on, 0.0599 on + PBURST. FatFs numbers also exist only for 128 B and are

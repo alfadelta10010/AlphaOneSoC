@@ -752,10 +752,11 @@ is needed out of reset. A write takes effect on the next clock.
 
 ### 12. Instruction cache and `CACHE_CTL` at `0x1002_0024`
 
-`src/cache.v` (variant K4, 256 B since WO-77): 256 B, direct-mapped, 16 lines of 16 B,
-fetch path only. Index addr[7:4], tag {addr[31], addr[23:8]} (17 bits); tags and valid
-bits are flops (16 x 17 + 16), the data is two `rf_top` macros (`soc.icache.data_mem`
-lines 0-7, `soc.icache.data_hi` lines 8-15, selected by addr[7]). It sits between the core's fetch port
+`src/cache.v` (variant K4, 256 B since WO-77): 256 B, direct-mapped, fetch path only;
+8 lines of 32 B in 16 B sectors since WO-cache832. Line index addr[7:5], sector addr[4],
+tag {addr[31], addr[23:8]} (17 bits, one per line); 8 x 17 tag and 16 valid flops (one
+per sector); a miss fills one sector; `soc.icache.data_mem` sectors 0-7 (lines 0-3),
+`soc.icache.data_hi` sectors 8-15 (lines 4-7), selected by addr[7]. It sits between the core's fetch port
 and `mem_ctrl`; the data path is only watched. `CACHE_CTL` is one word carved
 out of the syscon window like PINMUX:
 
@@ -763,11 +764,11 @@ out of the syscon window like PINMUX:
 |---|---|
 | 0 EN | read/write, reset 0 (every reset, including a reboot). 0 = the fetch path passes straight through; 0 to 1 starts cold |
 | 1 | reads 1: a cache is built |
-| 2 PBURST | Built, **experimental, off at reset** (reset 0): a PSRAM line fills in one CE# period. Needs EN and `QSPI_CFG.STREAM = 1` (STREAM = 0, e.g. the no-stream strap, also disables bursts); use it only at a core clock of at least 15 MHz (tCEM 8 µs, about 97 clocks per line, 101 worst; the CE# bound is bounded-checked, not proved) |
+| 2 PBURST | Built, **experimental, off at reset** (reset 0): a PSRAM sector fills in one CE# period. Needs EN and `QSPI_CFG.STREAM = 1` (STREAM = 0, e.g. the no-stream strap, also disables bursts); use it only at a core clock of at least 15 MHz (tCEM 8 µs, about 97 clocks per sector, 101 worst; the CE# bound is proved unbounded, WO-72) |
 
-A hit takes 2 clocks (3 for a straddling fetch); a miss fills four aligned words in
-line order, restarting early. Stores, AMOs and successful SCs that complete on the
-data port invalidate their line, so a fetch that starts after the store completes sees
+A hit takes 2 clocks (3 for a straddling fetch); a miss fills the sector's four aligned
+words in order, restarting early. Stores, AMOs and successful SCs that complete on the
+data port invalidate their sector, so a fetch that starts after the store completes sees
 the new bytes. The instruction fetched in the store's completing cycle may run the old bytes (measured,
 WO-71: only that one, with the cache on or off; legal under Zifencei). Always FENCE.I after
 writing code, as Zifencei requires; it also flushes the cache. With the cache on, the
