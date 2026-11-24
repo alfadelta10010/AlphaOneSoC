@@ -1,4 +1,4 @@
-// Bench for src/cache.v (WO-62, K4, 256 B WO-77: direct-mapped, 16 B lines, instruction only).
+// Bench for src/cache.v (WO-62, K4, 256 B WO-77: direct-mapped, 8 x 32 B lines in 16 B sectors (WO-cache832), instruction only).
 //
 // A random fetch stream (halfword-aligned addresses with locality, so aligned and
 // straddling fetches, hits, misses and conflicts) and random data-port traffic
@@ -111,7 +111,9 @@ module tb_cache;
     integer n_hit = 0, n_miss = 0, n_inv = 0, n_strad = 0, n_strad_x = 0, n_flush = 0, n_entog = 0;
     integer n_hi = 0, n_xm = 0;
     integer n_fetch = 0, n_ptfetch = 0, n_store = 0, n_load = 0, n_dead = 0;
-    integer n_evict [0:15];
+    integer n_evict [0:7];
+    integer n_sibkeep = 0, n_sibdrop = 0, n_strad_l = 0, n_strad_s = 0;
+    reg keep_q = 0; reg [3:0] sib_q = 0;
     integer cyc = 0;
     integer en_fall_at = -1, en_rise_at = -1;
 
@@ -280,11 +282,17 @@ module tb_cache;
             if (f_addr[1]) begin
                 n_strad = n_strad + 1;
                 if (f_addr[3:2] == 2'd3) n_strad_x = n_strad_x + 1;
+                if (f_addr[4:1] == 4'hF) n_strad_l = n_strad_l + 1;
+                if (f_addr[4:1] == 4'h7) n_strad_s = n_strad_s + 1;
             end
         end
+        if (keep_q && !dut.valid[sib_q]) begin $display("FAIL %0d: a same-tag sector fill dropped sector %0d", cyc, sib_q); errors = errors + 1; end
+        keep_q = dut.start && dut.tmatch && dut.valid[dut.kidx ^ 4'd1] && !fencei; sib_q = dut.kidx ^ 4'd1;
         if (dut.start) begin
             n_miss = n_miss + 1;
-            if (dut.valid[dut.kidx]) n_evict[dut.kidx] = n_evict[dut.kidx] + 1;
+            if (dut.tmatch && dut.valid[dut.kidx ^ 4'd1]) n_sibkeep = n_sibkeep + 1;
+            if (!dut.tmatch && dut.valid[dut.kidx ^ 4'd1]) n_sibdrop = n_sibdrop + 1;
+            if (!dut.tmatch && (dut.valid[dut.kidx] || dut.valid[dut.kidx ^ 4'd1])) n_evict[dut.kidx[3:1]] = n_evict[dut.kidx[3:1]] + 1;
         end
         if (dut.snoop && dut.tmatch && (dut.valid[dut.kidx] || (dut.fill_active && dut.fill_idx == dut.kidx))) begin
             n_inv = n_inv + 1;
@@ -316,31 +324,36 @@ module tb_cache;
         enfast = $test$plusargs("ENFAST");
         if (!$value$plusargs("TFROM=%d", tfrom)) tfrom = -1;
         tbase0 = $random(seed); tbase1 = $random(seed);
-        for (i = 0; i < 16; i = i + 1) n_evict[i] = 0;
+        for (i = 0; i < 8; i = i + 1) n_evict[i] = 0;
         for (i = 0; i < 4096; i = i + 1) sh[i] = $random(seed);
         m_rdata = 0;
         pc = 32'd0;
         pc = mkaddr(0, 0, 0);
         repeat (ncyc) @(posedge clk);
         #1;
-        $display("cycles %0d seed %0d maxlat %0d: fetches %0d (cache %0d, pass-through %0d), misses %0d, straddles %0d (cross-line %0d)",
+        $display("cycles %0d seed %0d maxlat %0d: fetches %0d (cache %0d, pass-through %0d), misses %0d, straddles %0d (cross-sector %0d)",
                  ncyc, seed0, maxlat, n_fetch, n_hit, n_ptfetch, n_miss, n_strad, n_strad_x);
         $display("stores %0d loads %0d, store-invalidates %0d (on a filling line %0d), EN toggles %0d, flushes %0d",
                  n_store, n_load, n_inv, n_dead, n_entog, n_flush);
         $write("evictions per line:");
-        for (i = 0; i < 16; i = i + 1) $write(" %0d", n_evict[i]);
+        for (i = 0; i < 8; i = i + 1) $write(" %0d", n_evict[i]);
         $write("\n");
         if (n_hit < 1000)  begin $display("FAIL floor: hits %0d < 1000", n_hit); errors = errors + 1; end
         if (n_miss < 1000) begin $display("FAIL floor: misses %0d < 1000", n_miss); errors = errors + 1; end
         if (n_inv < 100)   begin $display("FAIL floor: store-invalidates %0d < 100", n_inv); errors = errors + 1; end
-        for (i = 0; i < 16; i = i + 1)
+        for (i = 0; i < 8; i = i + 1)
             if (n_evict[i] < (enfast ? 5 : 50)) begin $display("FAIL floor: evictions of line %0d = %0d < %0d", i, n_evict[i], enfast ? 5 : 50); errors = errors + 1; end
         if (n_strad < 100)   begin $display("FAIL floor: straddling hits %0d < 100", n_strad); errors = errors + 1; end
-        if (n_strad_x < 20)  begin $display("FAIL floor: cross-line straddles %0d < 20", n_strad_x); errors = errors + 1; end
+        if (n_strad_x < 20)  begin $display("FAIL floor: cross-sector straddles %0d < 20", n_strad_x); errors = errors + 1; end
         if (n_hi < 500)      begin $display("FAIL floor: fetches served from data_hi lines %0d < 500", n_hi); errors = errors + 1; end
         if (n_xm < 20)       begin $display("FAIL floor: cross-macro straddles %0d < 20", n_xm); errors = errors + 1; end
         if (!noen && n_entog < 10) begin $display("FAIL floor: EN toggles %0d < 10", n_entog); errors = errors + 1; end
         if (n_flush < 10)  begin $display("FAIL floor: flushes %0d < 10", n_flush); errors = errors + 1; end
+        $display("sector fills keeping the sibling %0d, tag changes dropping a valid sibling %0d", n_sibkeep, n_sibdrop);
+        if (n_strad_l < 20) begin $display("FAIL floor: cross-line straddles %0d < 20", n_strad_l); errors = errors + 1; end
+        if (n_strad_s < 20) begin $display("FAIL floor: cross-sector-in-line straddles %0d < 20", n_strad_s); errors = errors + 1; end
+        if (n_sibkeep < 50) begin $display("FAIL floor: sibling-kept fills %0d < 50", n_sibkeep); errors = errors + 1; end
+        if (n_sibdrop < 50) begin $display("FAIL floor: sibling drops %0d < 50", n_sibdrop); errors = errors + 1; end
         if (errors == 0) $display("PASS tb_cache");
         else $display("FAIL tb_cache: %0d errors", errors);
         $finish;
