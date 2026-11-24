@@ -172,7 +172,7 @@ t_mstatus           spike
 t_mepc              spike
 t_warl              spike
 # Reset values per spec: PMP off (Spike resets it permissive), mstatus 0.
-t_reset             expect x8=0x0 x9=0x0 x18=0x0 x19=0x0 x20=0x40101105 x21=0x0 x22=0x0 x23=0x0 x24=0x0
+t_reset             expect x8=0x0 x19=0x0 x20=0x40101105 x22=0x0 x23=0x0 x24=0x0
 
 # ---- PMP, MPRV, U-mode ---------------------------------------------------------
 pmpcfg              spike

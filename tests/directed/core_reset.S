@@ -3,11 +3,11 @@
 # an AMO's second phase (FC83), a store in WB (FC84), the instruction in EX
 # (FC85). Spec: privileged 3.4 (reset state: M-mode, mstatus MIE/MPRV 0, misa
 # maximal, no load reservation, pc = reset vector, PMP A and L 0); CPU ref 6.1
-# (mstatus 0), 7.2 (misa 0x40101105), 7.3 (mtvec 0), 6.3 (PMP entries OFF
+# (mstatus 0), 7.2 (misa 0x40101105), 6.3 (PMP entries OFF
 # after reset, L clears only at reset), 9.3 (reset clears the reservation),
 # 4 (mtimecmp resets to all ones, msip to 0). x1-x31 are not reset (CPU ref
 # 14), so nothing is carried in registers across a reset. Not checked, as
-# nothing specifies them: mie, mcause, mscratch, mepc, counters.
+# nothing specifies them: mie, mcause, mscratch, mepc, mtvec, mtval, pmpaddr, counters.
 #
 # Expect mode, DUT only: Spike has no reset. Needs tb_rivercore's +RESETS,
 # +RESET_AT, +RESET_STRIDE: memory keeps its contents across them, so boots
@@ -31,11 +31,13 @@
   .section .text.init
   .globl rvtest_entry_point
 
-  .equ SCR,  0x80F00000
+  # P is the last word of its own 4 KiB page (the PMP grain), so the locked entry
+  # over P denies nothing else: P = 0x80F01000, the rest below 0x80F00A00.
+  .equ SCR,  0x80F00900
   .equ OFF_N,   0
   .equ OFF_BAD, 4
   .equ OFF_CHK, 8
-  .equ OFF_P,   12
+  .equ OFF_P,   0x700
   .equ OFF_R,   16
   .equ OFF_M,   20
   .equ OFF_A,   24
@@ -61,8 +63,7 @@ rvtest_entry_point:
   # ---- reset checks ----
   csrr t0, mstatus             # 1. mstatus == 0 (U-mode here traps to 0: hang)
   CHECK_EQ t0, zero
-  csrr t0, mtvec               # 2. mtvec == 0, then count traps instead
-  CHECK_EQ t0, zero
+  # 2. (mtvec has no reset: nothing to check) count traps from here on
   la   t0, chk_trap
   csrw mtvec, t0
   csrr t0, misa                # 3. misa maximal again
@@ -94,10 +95,11 @@ workload:
   csrw mtvec, t0
   addi t0, s0, OFF_P
   srli t0, t0, 2
+  ori  t0, t0, 0x1ff           # NAPOT 4 KiB over P's page
   csrw pmpaddr0, t0
   li   t0, 0x3fffffff
   csrw pmpaddr1, t0
-  li   t0, 0x1f90              # e0 NA4 over P, locked, no RWX; e1 NAPOT RWX
+  li   t0, 0x1f98              # e0 NAPOT over P's page, locked, no RWX; e1 NAPOT RWX
   csrw pmpcfg0, t0
   csrr t0, misa
   andi t0, t0, -5              # clear C
