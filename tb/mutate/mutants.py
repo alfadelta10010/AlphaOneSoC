@@ -224,6 +224,9 @@ m("CS30", "csr.v", "pmpcfg_legal = {b[7], 2'b00, b[4], b[4] | b[3], b[2], b[1] &
 m("CS31", "csr.v", "pmpaddr_vis = napot ? {2'b00, st, 9'h1FF} : {2'b00, st[29:10], 10'b0};", "pmpaddr_vis = napot ? {2'b00, st, 9'h0FF} : {2'b00, st[29:10], 10'b0};", "NAPOT pmpaddr bit 8 reads 0 (should read 1)")
 m("CS32", "csr.v", "pmpaddr_vis = napot ? {2'b00, st, 9'h1FF} : {2'b00, st[29:10], 10'b0};", "pmpaddr_vis = napot ? {2'b00, st, 9'h1FF} : {2'b00, st[29:9], 9'b0};", "OFF/TOR pmpaddr bit 9 reads its stored value (should read 0)")
 m("CS33", "csr.v", "wire [31:0] pmpaddr1_vis = pmpaddr_vis(pmpaddr1, pmpcfg0[12]);", "wire [31:0] pmpaddr1_vis = pmpaddr_vis(pmpaddr1, pmpcfg0[4]);", "pmpaddr1 low bits follow entry 0's A")
+m("CS34", "csr.v", "wire [31:0] mcause = {mcause_int, 27'b0, mcause_code};", "wire [31:0] mcause = {mcause_int, 27'b0, 1'b0, mcause_code[2:0]};", "mcause exception code bit 3 reads 0 (cause 8 and 11 lost)")
+m("CS35", "csr.v", "wire [31:0] mcause = {mcause_int, 27'b0, mcause_code};", "wire [31:0] mcause = {mcause_int, 26'b0, mcause_code[3], mcause_code};", "mcause bit 4 reads the code's bit 3 (bits [30:4] must read 0)")
+m("CS36", "csr.v", "mcause_int  <= trap_cause[31];", "mcause_int  <= 1'b0;", "an interrupt trap does not set mcause.Interrupt")
 
 # ── pmp.v ────────────────────────────────────────────────────────────────
 m("PM01", "pmp.v", "cfg0[3] ? (pg < top0) : 1'b0;", "cfg0[3] ? (pg <= top0) : 1'b0;", "TOR entry 0 top inclusive")

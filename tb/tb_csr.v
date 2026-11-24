@@ -9,7 +9,7 @@
 //     every mcounteren (011, 012);
 //   * every write through its WARL rule (003-005): mstatus MIE/MPIE/MPRV/TW
 //     and MPP legalised to U unless 11; mie 3/7/11; mtvec[1:0] 0; mcounteren
-//     2:0; mcountinhibit 0 and 2; mepc bit 0 dropped, bit 1 kept but read 0
+//     2:0; mcountinhibit 0 and 2; mcause bit 31 and bits [3:0]; mepc bit 0 dropped, bit 1 kept but read 0
 //     while misa.C = 0; misa only C, a clear refused while the next pc is
 //     misaligned; pmpcfg0 per byte: R=0,W=1 written as W=0, bits 6:5 zero, NA4
 //     stored as NAPOT (G = 10), a
@@ -34,6 +34,9 @@
 // stimulus is meant to reach was never reached. Prints PASS/FAIL with the
 // number of checks.
 module tb_csr;
+    // mcause keeps the Interrupt bit and a 4-bit Exception Code (WLRL, Priv 3.1.15);
+    // bits [30:4] read zero.
+    localparam [31:0] MCAUSE_MASK = 32'h8000_000F;
     reg         clk = 0, rst = 1;
     reg  [11:0] raddr = 0, waddr = 0;
     reg  [31:0] wdata = 0;
@@ -200,7 +203,8 @@ module tb_csr;
                 12'h305: e_wval = wdata & ~32'h3;
                 12'h306: e_wval = wdata & 32'h7;
                 12'h320: e_wval = wdata & 32'h5;
-                12'h340, 12'h342, 12'h343: e_wval = wdata;
+                12'h340, 12'h343: e_wval = wdata;
+                12'h342: e_wval = wdata & MCAUSE_MASK;
                 12'h341: e_wval = {wdata[31:2], s_c ? wdata[1] : 1'b0, 1'b0};
                 12'h344: e_wval = f_mip(1'b0);
                 12'h3A0: begin
@@ -248,7 +252,7 @@ module tb_csr;
                     12'h320: s_mcountinhibit = wdata & 32'h5;
                     12'h340: s_mscratch = wdata;
                     12'h341: s_mepc = {wdata[31:1], 1'b0};
-                    12'h342: s_mcause = wdata;
+                    12'h342: s_mcause = wdata & MCAUSE_MASK;
                     12'h343: s_mtval = wdata;
                     12'h3A0: for (i = 0; i < 4; i = i + 1)
                                  if (s_pmpcfg[8*i+7]) cv_lockedwr = cv_lockedwr + 1;
@@ -264,7 +268,7 @@ module tb_csr;
                 endcase
                 // 2. trap / MRET, on top of the write
                 if (trap) begin
-                    s_mepc = trap_pc; s_mcause = trap_cause; s_mtval = trap_val;
+                    s_mepc = trap_pc; s_mcause = trap_cause & MCAUSE_MASK; s_mtval = trap_val;
                     s_mpie = s_mie; s_mie = 0; s_mpp = priv ? 2'b11 : 2'b00;
                     if (priv) cv_trap_m = cv_trap_m + 1; else cv_trap_u = cv_trap_u + 1;
                 end else if (mret_sig) begin
