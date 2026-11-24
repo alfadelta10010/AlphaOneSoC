@@ -248,10 +248,10 @@ for n in "${names[@]}"; do
   if [ "${PROPN[$n]:-$n}" = core_fetch ]; then
     # fyracore.v with the f_* observation ports (see core_fetch_props.sv)
     inst="$OUT/formal_core_fetch_fyracore.v"
-    sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf, f_wlo,\n\1output wire        f_kv, f_exec, f_load, f_wv, f_cti/' \
-        -e 's/^endmodule$/    assign f_pc = pc; assign f_fetched = if_fetched; assign f_kbuf = if_kbuf;\n    assign f_kv = if_kv; assign f_exec = if_exec;\n    assign f_wlo = if_wlo; assign f_wv = if_wv;\n    assign f_cti = ifex_valid \&\& (ctrl_doBranch || ctrl_doJump);\n    assign f_load = !rst \&\& !stall \&\& !(flush || ex_nofetch);\nendmodule/' \
+    sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf, f_wlo,\n\1output wire        f_kv, f_exec, f_load, f_wv, f_cti,\n\1output wire [31:0] f_cause/' \
+        -e 's/^endmodule$/    assign f_pc = pc; assign f_fetched = if_fetched; assign f_kbuf = if_kbuf;\n    assign f_kv = if_kv; assign f_exec = if_exec;\n    assign f_wlo = if_wlo; assign f_wv = if_wv; assign f_cause = exwb_trap_cause;\n    assign f_cti = ifex_valid \&\& (ctrl_doBranch || ctrl_doJump);\n    assign f_load = !rst \&\& !stall \&\& !(flush || ex_nofetch);\nendmodule/' \
         "$SRC/fyracore.v" > "$inst"
-    grep -q "f_load" "$inst" && grep -q "assign f_pc" "$inst" && grep -q "assign f_wv" "$inst" && grep -q "f_wv, f_cti" "$inst" || { echo "ERROR $n: could not instrument fyracore.v"; err=1; continue; }
+    grep -q "f_load" "$inst" && grep -q "assign f_pc" "$inst" && grep -q "assign f_wv" "$inst" && grep -q "f_wv, f_cti" "$inst" && grep -q "assign f_cause" "$inst" || { echo "ERROR $n: could not instrument fyracore.v"; err=1; continue; }
     srcs="${srcs/$SRC\/fyracore.v/$inst}"
   fi
   for f in ${EXTRA[$n]:-}; do srcs="$srcs $HERE/$f"; done

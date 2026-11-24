@@ -28,6 +28,8 @@
 //   F7  lemma: if_wv implies pc is in an executable window
 //   F8  lemma: if_wv implies !dmem_req (H-L2: no data access, so no store
 //       completes under a held word)
+//   C16 every trap cause the core raises (exwb_trap_cause, exceptions and interrupts) is below
+//       16: it fits the 4 code bits csr.v stores in mcause (a cause of 16 or more would alias)
 //   R8  imem_req is low while a branch or jump is in EX (goal 1 of WO-76,
 //       the fetch is not issued behind a branch or jump)
 module core_fetch_props (
@@ -47,6 +49,7 @@ module core_fetch_props (
     wire [31:0] f_pc, f_fetched;
     wire [15:0] f_kbuf, f_wlo;
     wire        f_kv, f_exec, f_load, f_wv, f_cti;
+    wire [31:0] f_cause;
 
     function [15:0] h(input [31:0] a);
         h = tab[16*a[4:1] +: 16];
@@ -61,7 +64,7 @@ module core_fetch_props (
         .fencei_flush(fencei_flush), .dbg_pc(dbg_pc), .dbg_retired(dbg_retired),
         .dbg_instr(dbg_instr), .dbg_compressed(dbg_compressed), .dbg_trap(dbg_trap),
         .f_pc(f_pc), .f_kv(f_kv), .f_kbuf(f_kbuf), .f_exec(f_exec), .f_fetched(f_fetched),
-        .f_load(f_load), .f_wlo(f_wlo), .f_wv(f_wv), .f_cti(f_cti));
+        .f_load(f_load), .f_wlo(f_wlo), .f_wv(f_wv), .f_cti(f_cti), .f_cause(f_cause));
 
     reg armed = 1'b0;               // a reset has been applied
     always @(posedge clk) if (rst) armed <= 1'b1;
@@ -83,6 +86,7 @@ module core_fetch_props (
             assert (!f_wv || f_exec);                                             // F7
             assert (!(f_wv && dmem_req));                                         // F8
             assert (!(f_cti && imem_req));                                        // R8
+            assert (f_cause[30:4] == 27'd0);                                      // C16
             if (f_load && f_exec) begin
                 assert (f_fetched[15:0] == h(f_pc));                              // F1
                 assert (f_fetched[1:0] != 2'b11 || f_fetched[31:16] == h(f_pc + 32'd2));
