@@ -77,7 +77,14 @@ module csr #(
     reg [31:0] mtvec;
     reg [31:0] mscratch;
     reg [31:0] mepc;
-    reg [31:0] mcause;
+    // mcause: the Interrupt bit and a 4-bit Exception Code. The code is WLRL
+    // (Priv 3.1.15: "The Exception Code is a WLRL field, so is only guaranteed
+    // to hold supported exception codes"), and every cause this core raises
+    // is below 16 (exceptions 0-8, 11; interrupts 3, 7, 11). A write keeps bit
+    // 31 and bits [3:0]; bits [30:4] read zero.
+    reg        mcause_int;
+    reg  [3:0] mcause_code;
+    wire [31:0] mcause = {mcause_int, 27'b0, mcause_code};
     reg [31:0] mtval;
     reg [31:0] mie_reg;
     reg [31:0] mcounteren; // 0x306: controls U-mode counter access
@@ -282,7 +289,7 @@ module csr #(
             // mepc: bit 0 is always 0; bit 1 is stored but reads 0 while
             // IALIGN=32 (misa.C=0).
             12'h341: wval = {csr_new[31:2], (misa_reg[2] ? csr_new[1] : 1'b0), 1'b0};
-            12'h342: wval = csr_new;                         // mcause
+            12'h342: wval = {csr_new[31], 27'b0, csr_new[3:0]};  // mcause
             12'h343: wval = csr_new;                         // mtval
             12'h344: wval = mip_live;                        // mip: no writable bits
             12'h3A0: wval = pmpcfg0_legal;
@@ -397,7 +404,8 @@ module csr #(
             mtvec    <= 32'h0000_0000;
             mscratch <= 32'b0;
             mepc     <= 32'b0;
-            mcause   <= 32'b0;
+            mcause_int  <= 1'b0;
+            mcause_code <= 4'b0;
             mtval    <= 32'b0;
             mie_reg      <= 32'b0;
             mcounteren   <= 32'b0;
@@ -429,7 +437,7 @@ module csr #(
                 // mepc keeps bit 1 even while IALIGN=32 hides it on reads, so
                 // it reappears if C is re-enabled.
                 12'h341: mepc          <= {csr_new[31:1], 1'b0};
-                12'h342: mcause        <= csr_new;
+                12'h342: begin mcause_int <= csr_new[31]; mcause_code <= csr_new[3:0]; end
                 12'h343: mtval         <= csr_new;
                 12'h3A0: pmpcfg0       <= pmpcfg0_legal;
                 12'h3B0: pmpaddr0      <= pmpaddr0_legal;
@@ -446,7 +454,8 @@ module csr #(
             if (trap) begin
                 // Enter trap: always go to M-mode
                 mepc     <= trap_pc;
-                mcause   <= trap_cause;
+                mcause_int  <= trap_cause[31];
+                mcause_code <= trap_cause[3:0];
                 mtval    <= trap_val;
                 // Save MIE to MPIE, clear MIE; save current privilege into MPP
                 // MPP = 11 when trapping from M-mode, 00 when trapping from U-mode
