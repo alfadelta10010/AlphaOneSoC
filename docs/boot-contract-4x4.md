@@ -12,6 +12,9 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
 
 1. **`mtvec`.** Set it to a handler in flash or PSRAM before anything can trap. It has no reset
    (unspecified, Priv 3.4), so a trap before it is written vectors to an arbitrary address.
+   The pmpaddr0-3 CSRs have no reset either: write each one before using it, including as the lower
+   bound of a TOR entry (a TOR entry i matches against pmpaddr(i-1) whatever pmpcfg(i-1) says).
+   PMP grain is 4 KiB and NA4 is not selectable (`docs/FyraCore_CPU_Reference.md`, 7.7).
 2. **UART divisor and early output** (section 4). The divisor resets to 34 (114,890 baud at
    62.5 MHz). Write it first if the clock is anything else.
 3. **`SPICTL.EN = 1`** (GPIO `+0x0C`, bit 0). `spi-oc-tiny` never writes it. With EN = 0 the engine
