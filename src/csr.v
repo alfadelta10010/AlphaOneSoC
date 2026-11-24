@@ -74,9 +74,17 @@ module csr #(
 
     // Machine Status
     reg [31:0] mstatus;
-    reg [31:0] mtvec;
+    // mtvec, mscratch, mepc, mtval and pmpaddr0-3 have no reset: Priv 3.4
+    // gives a reset value only to mstatus.MIE/MPRV, mcause and the PMP A/L
+    // fields, and "all other hart state is unspecified". Any power-up value
+    // of these bits is a legal WARL value; software writes them before it
+    // uses them. Only the bits that can be set are stored: mtvec [31:2]
+    // (direct mode), mepc [31:1].
+    reg [31:2] mtvec_r;
     reg [31:0] mscratch;
-    reg [31:0] mepc;
+    reg [31:1] mepc_r;
+    wire [31:0] mtvec = {mtvec_r, 2'b00};
+    wire [31:0] mepc  = {mepc_r, 1'b0};
     // mcause: the Interrupt bit and a 4-bit Exception Code. The code is WLRL
     // (Priv 3.1.15: "The Exception Code is a WLRL field, so is only guaranteed
     // to hold supported exception codes"), and every cause this core raises
@@ -395,27 +403,43 @@ module csr #(
     end
     assign csr_addr_valid = addr_valid;
 
+    // The registers without a reset. A write commits first and a trap
+    // overrides it, as in the block below.
+    always @(posedge clk) begin
+        if (we) begin
+            case (waddr)
+                12'h305: mtvec_r  <= mtvec_legal[31:2];
+                12'h340: mscratch <= csr_new;
+                // mepc keeps bit 1 even while IALIGN=32 hides it on reads, so
+                // it reappears if C is re-enabled.
+                12'h341: mepc_r   <= csr_new[31:1];
+                12'h343: mtval    <= csr_new;
+                12'h3B0: pmpaddr0 <= pmpaddr0_legal;
+                12'h3B1: pmpaddr1 <= pmpaddr1_legal;
+                12'h3B2: pmpaddr2 <= pmpaddr2_legal;
+                12'h3B3: pmpaddr3 <= pmpaddr3_legal;
+                default: ;
+            endcase
+        end
+        if (trap) begin
+            mepc_r <= trap_pc[31:1];
+            mtval  <= trap_val;
+        end
+    end
+
     always @(posedge clk) begin
         if (rst) begin
             // Priv §3.4: MIE and MPRV reset to 0; MPP's reset value is left
             // to the implementation. 0 (U) matches the reference model, so
             // no trace diverges on it before software first writes mstatus.
             mstatus  <= 32'h0000_0000;
-            mtvec    <= 32'h0000_0000;
-            mscratch <= 32'b0;
-            mepc     <= 32'b0;
             mcause_int  <= 1'b0;
             mcause_code <= 4'b0;
-            mtval    <= 32'b0;
             mie_reg      <= 32'b0;
             mcounteren   <= 32'b0;
             mcountinhibit<= 32'b0;
             misa_reg     <= MISA_RESET;
             pmpcfg0      <= 32'b0;
-            pmpaddr0     <= 21'b0;
-            pmpaddr1     <= 21'b0;
-            pmpaddr2     <= 21'b0;
-            pmpaddr3     <= 21'b0;
         end else begin
             // ---- 1. Commit the WB-stage CSR write ----------------------
             // This runs BEFORE the trap/MRET transform below, because the csrw
@@ -430,20 +454,10 @@ module csr #(
                 12'h300: mstatus       <= mstatus_after_we;
                 12'h301: misa_reg      <= misa_after_we;
                 12'h304: mie_reg       <= mie_legal;
-                12'h305: mtvec         <= mtvec_legal;
                 12'h306: mcounteren    <= mcounteren_legal;
                 12'h320: mcountinhibit <= mcountinhibit_legal;
-                12'h340: mscratch      <= csr_new;
-                // mepc keeps bit 1 even while IALIGN=32 hides it on reads, so
-                // it reappears if C is re-enabled.
-                12'h341: mepc          <= {csr_new[31:1], 1'b0};
                 12'h342: begin mcause_int <= csr_new[31]; mcause_code <= csr_new[3:0]; end
-                12'h343: mtval         <= csr_new;
                 12'h3A0: pmpcfg0       <= pmpcfg0_legal;
-                12'h3B0: pmpaddr0      <= pmpaddr0_legal;
-                12'h3B1: pmpaddr1      <= pmpaddr1_legal;
-                12'h3B2: pmpaddr2      <= pmpaddr2_legal;
-                12'h3B3: pmpaddr3      <= pmpaddr3_legal;
                 default: ;
             endcase
             end
@@ -453,10 +467,8 @@ module csr #(
             // `csrw mstatus, X; mret` pair returns using X.
             if (trap) begin
                 // Enter trap: always go to M-mode
-                mepc     <= trap_pc;
                 mcause_int  <= trap_cause[31];
                 mcause_code <= trap_cause[3:0];
-                mtval    <= trap_val;
                 // Save MIE to MPIE, clear MIE; save current privilege into MPP
                 // MPP = 11 when trapping from M-mode, 00 when trapping from U-mode
                 mstatus <= {mstatus_after_we[31:13], {priv_mode, priv_mode}, mstatus_after_we[10:8],
