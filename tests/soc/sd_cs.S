@@ -1,7 +1,7 @@
 # SD CS# on GPIO OUT bit 5 and uo_out[5] (default pinmux map): OUT resets 0xB9 (bit 5 high), a store
 # that clears bit 5 drops uo_out[5] (cue 1 for the bench to sample it one clock after the store reaches
 # the pin flop), setting it raises it (cue 2). The other pins do not move: bits 7, 4, 3, 0 keep their
-# levels; uo_out[7] is the audio source (low, EN off), uo_out[4] the UART TX (idle high) by default, so
+# levels; uo_out[7] is PWM1 (low, idle), uo_out[4] the UART TX (idle high) by default, so
 # OUT bits 7 and 4 are written 0 and 1 without reaching their pins. The SD card's own CS# traffic is
 # in sd_init.S / sd_reboot.S.
 #include "periph4.h"
@@ -21,7 +21,7 @@ _start:
     li   t0, 0xB9
     sw   t0, G_OUT(s0)
     CUE 2, 400
-    # bits 7 and 4 toggled: the default map's pins 7 and 4 stay on AUDIO and UART TX
+    # bits 7 and 4 toggled: the default map's pins 7 and 4 stay on PWM1 and UART TX
     li   t0, 0x29
     sw   t0, G_OUT(s0)
     CUE 3, 400

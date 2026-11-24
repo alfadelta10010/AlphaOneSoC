@@ -1,10 +1,16 @@
-# lane 1 writes nibble 1 instead of nibble 0 -> P4
-sed pinmux.v s/if (w \&\& be\[k\/2\])/if (w \&\& be[(k==1)?1:k\/2])/
+# lane 2 write goes to lane 1's enable -> P4
+sed pinmux.v s/if (w \&\& be\[2\]) alt5/if (w \&\& be[1]) alt5/
 # reset value 0xB9 -> P2
 sed pinmux.v s/parameter \[7:0\] UO_RESET = 8'h39/parameter [7:0] UO_RESET = 8'hB9/
-# code 2 selects audio -> P1
-sed pinmux.v s/3'd2:    mux\[j\] = rts_n;/3'd2:    mux[j] = audio;/
-# pin flop bypassed: uo takes the default function regardless of the codes -> P1
-sed pinmux.v s/uo <= mux;/uo <= dflt;/
-# read-back stores bit 3 -> P3
-sed pinmux.v s/{1'b0, codes\[3\*i +: 3\]}/{codes[3*i +: 3]==3'd7, codes[3*i +: 3]}/
+# pin 5 selects dflt instead of rts_n -> P1
+sed pinmux.v s/alt5 ? rts_n : dflt\[5\]/alt5 ? dflt[5] : dflt[5]/
+# pin 7 takes pwm[0] -> P1
+sed pinmux.v s/uo <= {pwm\[1\],/uo <= {pwm[0],/
+# pin flop bypassed: uo takes the default function regardless of alt -> P1
+sed pinmux.v s/uo <= {pwm\[1\], alt6 ? pwm\[0\] : dflt\[6\], alt5 ? rts_n : dflt\[5\], dflt\[4:0\]};/uo <= {pwm[1], dflt[6:0]};/
+# pin 6 accepts code 5 (WARL compare wrong) -> P4
+sed pinmux.v s/alt6 <= (wdata\[26:24\] == 3'd4);/alt6 <= (wdata[26:24] == 3'd5);/
+# pin 6 reads code 5 -> P3
+sed pinmux.v s/1'b0, alt6 ? 3'd4 : 3'd0/1'b0, alt6 ? 3'd5 : 3'd0/
+# pin 7 nibble reads 5 (a code that is not there) -> P3
+sed pinmux.v s/assign rdata = {4'd0,/assign rdata = {1'b0, 3'd5,/

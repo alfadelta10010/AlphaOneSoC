@@ -3,7 +3,7 @@
 // This is the core's own request/ready handshake (see src/fyracore.v), not
 // APB. Memory accesses (flash, PSRAM) pass straight through to the memory
 // controller. Every IO access (CLINT, PLIC, UART, GPIO/SPI, gamepad, syscon,
-// PINMUX, CACHE_CTL, PWM, audio: ten targets) takes two
+// PINMUX, CACHE_CTL, PWM: nine targets) takes two
 // phases and goes through a register (decision D14: the read data of every IO
 // target reaches the core's load path from a flop, which keeps the placer
 // from packing the IO slot against that path):
@@ -35,8 +35,9 @@
 //
 //   addr[31]          PSRAM    0x8000_0000   -> memory controller
 //   addr[29]          flash    0x2000_0000   -> memory controller
-//   addr[28]          IO       0x1000_0000   -> addr[17:16]: 0 UART, 1 GPIO, 2 syscon, 3 PWM / audio
-//                                             slot 3: addr[8] = 0 PWM (0x1003_0000), 1 audio (0x1003_0100)
+//   addr[28]          IO       0x1000_0000   -> addr[17:16]: 0 UART, 1 GPIO, 2 syscon, 3 PWM
+//                                             slot 3: all of it is the PWM (0x1003_0000, the registers alias every 0x40:
+//                                             0x1003_0100 and 0x1003_0200 are the PWM again; the audio block that had addr[8] = 1 is gone)
 //                                             GPIO slot carve: addr[5:3] == 3'b010 (+0x10..+0x17 of every
 //                                             64-byte alias) is the gamepad (GAMEPAD, GPSTAT), gpio.v never
 //                                             sees it; syscon slot carve: addr[15:2] == 14'h0008
@@ -46,7 +47,7 @@
 //   none of those     CLINT    0x0200_0000
 //
 // syscon (src/syscon.v) decodes its own offset bits and never holds ready low. The gamepad,
-// PWM, audio and pinmux never hold ready low either, so io_ready ANDs only the UART's and the GPIO's.
+// PWM and pinmux never hold ready low either, so io_ready ANDs only the UART's and the GPIO's.
 
 module soc_bus (
     input  wire        clk,
@@ -81,8 +82,6 @@ module soc_bus (
     input  wire [31:0] pinmux_rdata,
     output wire        pwm_sel,
     input  wire [31:0] pwm_rdata,
-    output wire        audio_sel,
-    input  wire [31:0] audio_rdata,
     output wire        cache_sel,
     input  wire [31:0] cache_rdata
 );
@@ -113,13 +112,12 @@ module soc_bus (
     assign syscon_sel  = syscon_slot && !pmx_hit && !cch_hit;
     assign pinmux_sel  = syscon_slot && pmx_hit;
     assign cache_sel   = syscon_slot && cch_hit;
-    assign pwm_sel     = phase1 && is_io && (io_idx == 2'd3) && !d_addr[8];
-    assign audio_sel   = phase1 && is_io && (io_idx == 2'd3) &&  d_addr[8];
+    assign pwm_sel     = phase1 && is_io && (io_idx == 2'd3);
 
     wire [31:0] io_rdata = d_addr[28] ? ((io_idx == 2'd0) ? uart_rdata   :
                                          (io_idx == 2'd1) ? (gp_hit  ? gamepad_rdata : gpio_rdata)   :
                                          (io_idx == 2'd2) ? (pmx_hit ? pinmux_rdata  : cch_hit ? cache_rdata : syscon_rdata) :
-                                         d_addr[8]        ? audio_rdata : pwm_rdata) :
+                                         pwm_rdata) :
                            d_addr[27] ? plic_rdata : clint_rdata;
 
     always @(posedge clk) begin

@@ -28,7 +28,7 @@
 
 /* whole-word OUT writes with bits 1 and 3 deliberately inverted, as a stale
  * gpio-mmio shadow would write them: bit 6 RES#, bit 5 SD CS#, bit 2 D/C#, bit 0 OLED CS#
- * (bits 7 and 4 reach no pin by default: audio and UART TX) */
+ * (bits 7 and 4 reach no pin by default: PWM1 and UART TX) */
 #define OUT_SD_SEL    0x43        /* SD CS# low, the rest high-ish */
 #define OUT_DESEL     0x63        /* both CS# high, RES# high */
 #define OUT_OLED_CMD  0x62        /* OLED CS# low, D/C# 0 */

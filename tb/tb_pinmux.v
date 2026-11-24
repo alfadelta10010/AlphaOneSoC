@@ -1,20 +1,21 @@
 `timescale 1ns / 1ps
-// pinmux (src/pinmux.v) against a cycle model written from the WO-56 specification: pin i takes the source
-// selected by its 3-bit code (0 DEFAULT, 1 GPIO, 2 RTS#, 3 AUDIO, 4..7 PWM0..3) through ONE flop (pin = mux of
-// the previous clock's inputs and codes); reset: codes 0 and uo = 0x39; per-lane (byte) writes to the codes;
-// bit 4i+3 reads 0. Inputs change on the negative edge; every output and read word is compared every clock.
+// pinmux (src/pinmux.v) against a cycle model written from the slim-down specification: every pin has code 0
+// (DEFAULT dflt[i]); pin 5 also has code 2 (RTS#), pin 6 code 4 (PWM0); pin 7 is PWM1 always (no code, no flop); WARL: any other
+// code on any pin stores 0 and reads 0; through ONE flop per pin (pin = mux of the previous clock's inputs and
+// stored selects); reset: selects 0 and uo = 0x39; per-lane (byte) writes (lane i/2 for pin i); bit 4i+3 reads 0.
+// Directed phase first: every code 0-7 written to every pin (alone and all-pins-at-once), readback and pins. Inputs change on the negative edge; every output and read word is compared every clock.
 // +SEED= seeds the random phase, +CYCLES= its length. Prints the check count and a PASS line.
 module tb_pinmux;
     reg         clk = 0, rst = 1, sel = 0, we = 0;
     reg  [3:0]  be = 0;
     reg  [31:0] wdata = 0;
-    reg  [7:0]  dflt = 0, gpio = 0;
-    reg         rts_n = 0, audio = 0;
-    reg  [3:0]  pwm = 0;
+    reg  [6:0]  dflt = 0;
+    reg         rts_n = 0;
+    reg  [1:0]  pwm = 0;
     wire [31:0] rdata;
     wire [7:0]  uo;
     pinmux uut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .wdata(wdata), .rdata(rdata),
-                .dflt(dflt), .gpio(gpio), .rts_n(rts_n), .audio(audio), .pwm(pwm), .uo(uo));
+                .dflt(dflt), .rts_n(rts_n), .pwm(pwm), .uo(uo));
     always #5 clk = ~clk;
 
     integer seed = 1, ncyc = 200000, checks = 0, errors = 0, cyc = 0;
@@ -24,20 +25,25 @@ module tb_pinmux;
     endfunction
 
     // ------------------------------------------------------------ model
-    reg [2:0] mc [0:7];          // model codes
+    reg [2:0] mc [0:7];          // model codes as stored (0 unless the pin's one legal alternate code was written)
     reg [7:0] muo;               // model pin flops
     reg [7:0] mmux;
     integer i, p;
     integer cv [0:63];           // pin*8+code: cycles the mux selected that code
-    integer n_rst = 0, n_lane = 0, n_chg = 0;
+    integer n_rst = 0, n_lane = 0, n_chg = 0, n_warl = 0;
+    function [2:0] legal(input integer pin, input [2:0] code);   // WARL: the stored code
+        begin
+            legal = 3'd0;
+            if (pin == 5 && code == 3'd2) legal = 3'd2;
+            if (pin == 6 && code == 3'd4) legal = 3'd4;
+        end
+    endfunction
     function srcbit(input integer pin, input [2:0] code);
         begin
             case (code)
-                3'd0: srcbit = dflt[pin];
-                3'd1: srcbit = gpio[pin];
                 3'd2: srcbit = rts_n;
-                3'd3: srcbit = audio;
-                default: srcbit = pwm[code - 3'd4];
+                3'd4: srcbit = pwm[0];
+                default: srcbit = dflt[pin];
             endcase
         end
     endfunction
@@ -48,12 +54,13 @@ module tb_pinmux;
             muo = 8'h39;
         end else begin
             for (i = 0; i < 8; i = i + 1) begin
-                mmux[i] = srcbit(i, mc[i]);
+                mmux[i] = (i == 7) ? pwm[1] : srcbit(i, mc[i]);
                 cv[i*8 + mc[i]] = cv[i*8 + mc[i]] + 1;
             end
             if (sel & we) for (i = 0; i < 8; i = i + 1) if (be[i/2]) begin
-                if (mc[i] != wdata[4*i +: 3]) n_chg = n_chg + 1;
-                mc[i] = wdata[4*i +: 3];
+                if (legal(i, wdata[4*i +: 3]) != wdata[4*i +: 3]) n_warl = n_warl + 1;
+                if (mc[i] != legal(i, wdata[4*i +: 3])) n_chg = n_chg + 1;
+                mc[i] = legal(i, wdata[4*i +: 3]);
             end
             muo = mmux;
         end
@@ -73,7 +80,7 @@ module tb_pinmux;
     reg [31:0] wsel;
     task drive;
         begin
-            dflt = rnd(0); gpio = rnd(0); rts_n = rnd(0); audio = rnd(0); pwm = rnd(0);
+            dflt = rnd(0); rts_n = rnd(0); pwm = rnd(0);
             sel = (rnd(0) % 4) != 0; we = (rnd(0) % 3) == 0; be = rnd(0); wdata = rnd(0);
             wsel = rnd(0) % 8;
             // mostly lane writes with a single lane, to hit every lane/pin pair
@@ -90,7 +97,7 @@ module tb_pinmux;
         if (rdata !== mrd(0)) fail("rdata", rdata, mrd(0));
         if (cyc > 3) begin
             if (sel & we & ~rst) n_lane = n_lane + (be != 4'hF);
-            drive;
+            if (!force_idle) drive;
         end
     end
 
@@ -102,11 +109,33 @@ module tb_pinmux;
         // reset: held 3 clocks with random sources, uo must read 0x39 and codes 0
         repeat (3) @(negedge clk);
         rst = 0;
+        force_idle = 1;
+        // directed: every code 0-7 on every pin (one pin at a time, then the same code on all pins), then
+        // distinct codes; the checker at every negedge compares the readback and the pins against the model
+        for (i = 0; i < 8; i = i + 1) for (p = 0; p < 8; p = p + 1) begin
+            @(negedge clk); sel = 1; we = 1; be = 4'hF; wdata = 32'h0; wdata[4*i +: 4] = {1'b0, p[2:0]};
+            dflt = 8'hA5 ^ (i * 17); rts_n = ~p[0]; pwm = {p[1], p[2]};
+            @(negedge clk); sel = 0; we = 0; dflt = ~dflt; rts_n = ~rts_n; pwm = ~pwm;
+            @(negedge clk); @(negedge clk);
+        end
+        for (p = 0; p < 8; p = p + 1) begin
+            @(negedge clk); sel = 1; we = 1; be = 4'hF; wdata = {1'b0, p[2:0], 1'b0, p[2:0], 1'b0, p[2:0], 1'b0, p[2:0],
+                                                                  1'b0, p[2:0], 1'b0, p[2:0], 1'b0, p[2:0], 1'b0, p[2:0]};
+            dflt = 8'h5A; rts_n = p[0]; pwm = p[2:1];
+            @(negedge clk); sel = 0; we = 0; @(negedge clk); dflt = 8'hA5; rts_n = ~rts_n; pwm = ~pwm; @(negedge clk);
+        end
+        @(negedge clk); sel = 1; we = 1; be = 4'hF; wdata = 32'h5420_0000;   // pin 7 = 5 (illegal now), pin 6 = 4, pin 5 = 2
+        rts_n = 1; pwm = 2'b01; dflt = 7'h00;
+        @(negedge clk); sel = 0; we = 0; @(negedge clk); @(negedge clk);
+        if (rdata !== 32'h0420_0000) begin errors = errors + 1; $display("FAIL directed readback %h", rdata); end
+        if (uo[7:5] !== 3'b011) begin errors = errors + 1; $display("FAIL directed pins %b", uo); end
+        force_idle = 0;
         repeat (ncyc) @(posedge clk);
         @(negedge clk);
         miss = 0;
-        for (i = 0; i < 8; i = i + 1) for (p = 0; p < 8; p = p + 1) if (cv[i*8+p] < 20) miss = miss + 1;
-        if (n_rst < 3 || n_lane < 100 || n_chg < 100) miss = miss + 100;
+        for (i = 0; i < 8; i = i + 1) for (p = 0; p < 8; p = p + 1)
+            if (legal(i, p[2:0]) == p[2:0] && cv[i*8+p] < 20) miss = miss + 1;   // only the reachable (pin, code) pairs
+        if (n_rst < 3 || n_lane < 100 || n_chg < 100 || n_warl < 100) miss = miss + 100;
         if (errors == 0 && miss == 0)
             $display("PASS tb_pinmux (%0d checks, %0d resets, %0d lane writes, seed %0d)", checks, n_rst, n_lane, seed);
         else

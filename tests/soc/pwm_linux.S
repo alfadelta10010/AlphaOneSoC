@@ -1,9 +1,9 @@
-# The pwm-sifive driver's sequence on PWM0, routed to uo_out[2] through the pinmux (code 4):
-# pwmcfg = EN_ALWAYS (bit 12) | scale, PWMCMP0 = 0xFFFF - frac. The bench counts the clocks pin 2 is high
+# The pwm-sifive driver's sequence on PWM0, routed to uo_out[6] through the pinmux (pin 6, code 4):
+# pwmcfg = EN_ALWAYS (bit 12) | scale, PWMCMP0 = 0xFFFF - frac. The bench counts the clocks pin 6 is high
 # per period: 0x10000 - cmp at scale 0, scaled by 2^scale at scale 1 and 2 (period 2^(16 + scale)).
 #   cue 1 scale 0, cmp0 0xBFFF    cue 2 scale 1, cmp0 0xBFFF    cue 3 scale 2, cmp0 0x7FFF
-#   cue 4 (after pinmux back to 0 and PWM off): pin 2 is the OLED D/C again, GPIO OUT bit 2 = 0
-# WO-63: pwmcmp2/3 are not built (read 0xFFFF = duty 0 for pwm-sifive get_state, writes ignored); ip[3:2] read 0 whatever lane 3 is written.
+#   cue 4 (after pinmux back to 0 and PWM off): pin 6 is RES#/VCCEN again, GPIO OUT bit 6 = 0
+# Slim-down: cfg bits 8 and 13 (sticky, oneshot) read 0 and ignore writes (checked in pwm_timer.S). WO-63: pwmcmp2/3 are not built (read 0xFFFF = duty 0 for pwm-sifive get_state, writes ignored); ip[3:2] read 0 whatever lane 3 is written.
 # Each measuring phase runs for 3 periods. Register read-backs are checked here.
 #include "periph4.h"
     .section .text.init
@@ -19,10 +19,10 @@ _start:
     CHECK t0, 0, 0x01
     lw   t0, PWM_CMP0(s0)
     CHECK t0, 0xFFFF, 0x02
-    li   t0, 4 << 8               # pin 2 = PWM0
+    li   t0, 4 << 24              # pin 6 = PWM0
     sw   t0, 0(s1)
     lw   t1, 0(s1)
-    CHECK t1, 4 << 8, 0x03
+    CHECK t1, 4 << 24, 0x03
 
     li   t0, 0xFFFF
     sw   t0, PWM_CMP0+8(s0)
@@ -74,8 +74,8 @@ _start:
     CHECK t1, 0, 0x07
     li   s2, GPIO
     lw   t1, G_OUT(s2)
-    andi t1, t1, 4
-    CHECK t1, 0, 0x08             # OUT bit 2 resets 0: pin 2 low again
+    andi t1, t1, 0x40
+    CHECK t1, 0, 0x08             # OUT bit 6 resets 0: pin 6 low again
     CUE 4, 2000
     j    test_pass
     EPILOGUE

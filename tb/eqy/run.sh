@@ -364,7 +364,7 @@ no_x_consts() {            # the unscoped setundefs of the ties are safe only if
   [ "$n" = 0 ] || die "read/gold_pre.il holds $n x constants; the unscoped setundef ties are unsafe"
 }
 
-check_ties() {             # $1 = eqy dir: gold.il ties the NCAND-5 tie0 bits (HEAD: 185 = 190 - 5) to 1'0 and the 5 tie1 bits to 1'1
+check_ties() {             # $1 = eqy dir: gold.il ties the NCAND-5 tie0 bits (slim-down: 189 = 194 - 5; HEAD was 185 = 190 - 5) to 1'0 and the 5 tie1 bits to 1'1
   local G="$1/gold.il" bad=0 n0=0 n1=0 name v
   [ -f "$G" ] || die "no $G to check the ties"
   while read -r name v; do

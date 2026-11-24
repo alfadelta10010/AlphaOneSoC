@@ -2,14 +2,14 @@
 # the SoC is rebooted, and boot 2 reads each of them back at its reset value. Boot 2 is told from boot 1 by BOOT_MODE
 # (0x5A, which a reboot keeps); PSRAM keeps its content, so a magic word written in boot 1 must still be there.
 #   boot 1  PLIC: priorities 1, enable word 0x2A (sources 1, 3, 5), threshold 1; UART: FIFO on (FCR 1), IER 1, MCR 0x0D;
-#           pinmux pin 6 = PWM0 (code 4); PWM0: enalways | zerocmp | sticky, cmp0 4000 (ip set, source 5 pending);
-#           audio EN; gamepad ie = 1 and a 12-bit frame from the bench (cue 1: chg set, source 3 pending, and 3
+#           pinmux pin 6 = PWM0 (code 4); PWM0: enalways, scale 15, cmp0 0 (ip[0] set at once and held for 2^31 clocks; the PWM has no interrupt, so source 5 never pends);
+#           gamepad ie = 1 and a 12-bit frame from the bench (cue 1: chg set, source 3 pending, and 3
 #           characters into the RX FIFO, source 1 pending); GPIO IN_IE = 0xFF and pin 7 toggled at cue 1 (IN_IP[7],
 #           source 4 pending); watchdog EN | RMOD (top 15); CACHE_CTL.EN = 1 with a
 #           routine run from PSRAM (a filled line); one pending source claimed and not completed; a THR byte (0xFF)
 #           in flight; then the reboot store.
 #   boot 2  PLIC pending / enable / threshold / claim 0 and MEIP clear; UART IER 0, IIR 1 (no FIFO bits, nothing
-#           pending), MCR 2, LSR 0x60 (RX FIFO empty); PINMUX 0; PWM CFG 0; AUDIO CTRL 0; GPSTAT 0; GPIO IN_IP 0 (pin 7 still high: no phantom edge) and IN_IE 0; WDT CR and STAT 0;
+#           pending), MCR 2, LSR 0x60 (RX FIFO empty); PINMUX 0; PWM CFG 0; GPSTAT 0; GPIO IN_IP 0 (pin 7 still high: no phantom edge) and IN_IE 0; WDT CR and STAT 0;
 #           CACHE_CTL bit 1 reads 1 and the upper bits 0 (EN itself is checked by the bench at cue 2: 0 unless +CACHE_EN); the magic word in PSRAM; cue 2: the bench checks the pins are the
 #           default map (uo_out = 0x39).
 # Failure codes: 0x1nn boot 1, 0x2nn boot 2.
@@ -56,13 +56,10 @@ boot1:
     li   t0, 4 << 24
     li   t1, PINMUX
     sw   t0, 0(t1)                   # pin 6 = PWM0
-    li   t0, 4000
+    li   t0, 0
     sw   t0, PWM_CMP0(s0)
-    li   t0, 0x1300
+    li   t0, 0x100F
     sw   t0, PWM_CFG(s0)
-    li   s3, AUDIO
-    li   t0, 1
-    sw   t0, AU_CTRL(s3)
     li   t0, G_PADSTAT
     li   t1, GPIO
     add  t1, t1, t0
@@ -99,13 +96,13 @@ boot1:
     li   t0, PLIC + PL_PEND
     lw   t0, 0(t0)
     andi t0, t0, 0x3A
-    CHECK t0, 0x3A, 0x105            # UART, gamepad, GPIO input change and PWM0 pending
+    CHECK t0, 0x1A, 0x105            # UART, gamepad and GPIO input change pending; PWM0 (source 5) never pends
     lw   t0, 4(a4)                   # claim, not completed
     CHECK t0, 1, 0x106
     li   t0, PLIC + PL_PEND
     lw   t0, 0(t0)
     andi t0, t0, 0x38
-    CHECK t0, 0x38, 0x107
+    CHECK t0, 0x18, 0x107
     lw   t0, PWM_CFG(s0)
     srli t0, t0, 28
     andi t0, t0, 1
@@ -159,9 +156,6 @@ boot2:
     CHECK t0, 0, 0x20C
     lw   t0, PWM_CFG(s0)
     CHECK t0, 0, 0x20D
-    li   s3, AUDIO
-    lw   t0, AU_CTRL(s3)
-    CHECK t0, 0, 0x20E
     li   t1, GPIO
     lw   t0, G_PADSTAT(t1)
     CHECK t0, 0, 0x20F

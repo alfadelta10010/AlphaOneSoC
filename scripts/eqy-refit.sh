@@ -10,7 +10,7 @@
 # which stops after the EQY setup. It
 #   1. prints the netlist md5;
 #   2. runs the read, lemma and fsminv stages (flop accounting by tb/eqy/accounting.py,
-#      the constant bits (HEAD: 190), the one-hot invariant of the four recoded FSMs);
+#      the constant bits (slim-down: 194), the one-hot invariant of the four recoded FSMs);
 #   3. runs the setup of the prove stage and prints the partition count;
 #   4. writes WORK/refit.patch: NL_MD5 in run.sh, the EXPECT tables of accounting.py and
 #      matchreport.py, and the partition count of verdict.py.
@@ -18,8 +18,8 @@
 # accounting shows a flop that nothing explains, an unmatched flop, a changed constant set or a
 # changed recoded FSM (new FSMs need an enc/dec table in fsmcut.v and tie lists by a person).
 # The partition count is read from EXPECT_PARTITIONS in tb/eqy/verdict.py (a count mismatch is an
-# EQY FAIL there, so a refit is how a changed count is accepted). The constant counts (HEAD: 190
-# tied bits = 184 CSR + gpio out_r[1], [3] + PLIC pend/insvc of sources 7, 8 (source 4 is live since WO-69); 0 unused; FSM
+# EQY FAIL there, so a refit is how a changed count is accepted). The constant counts (slim-down: 194
+# tied bits = 184 CSR + gpio out_r[1], [3] + PLIC pend/insvc of sources 5-8 (source 4 is live since WO-69); 0 unused; FSM
 # bits 11/22; 11 renames; 3 + 3 memory read-address bits) are the "what the last re-baseline
 # established" values: they are read from tb/eqy/accounting.py EXPECT and tb/eqy/matchreport.py, so
 # a refit is automatic only while those do not change; any other count goes MANUAL (a person looks:

@@ -1,16 +1,16 @@
 // RTL lemma for the equivalence check (tb/eqy/run.sh, stage lemma).
 //
-// Synthesis removed 190 flops that hold a constant once the chip has been
+// Synthesis removed 194 flops that hold a constant once the chip has been
 // reset (184 CSR bits: the WARL-hardwired bits of mstatus, mie, mtvec, mepc,
 // mcounteren, mcountinhibit, misa, pmpcfg0, the pipeline's trap_cause and
 // trap_pc; gpio out_r[1] and [3], which live in spi's pin flops; and the PLIC's
-// pend and insvc bits of sources 7 and 8, whose inputs are tied 0 (pwm irq[3:2],
-// which pwm.v drives 0 because comparators 2 and 3 are not built; source 4 is the GPIO
+// pend and insvc bits of sources 5-8, whose inputs are tied 0 (the PWM has no
+// interrupt: alphaone_soc.v ties PLIC sources 5-8 to 0; source 4 is the GPIO
 // input-change irq since WO-69, so its pend and insvc are live and not listed), and
 // re-encoded four FSMs one-hot, leaving the unlisted codes out. This file
 // proves, on the RTL and from any state, that both are sound:
 //
-//   L1  once a reset has been applied, every one of the 190 bits equals its
+//   L1  once a reset has been applied, every one of the 194 bits equals its
 //       reset value, whatever the pins do afterwards
 //   L2  once a reset has been applied, exwb_memSize is never 3, muldiv's st
 //       is never 6 or 7, qspi's state is never 7, and spi's st is never 3
@@ -18,7 +18,7 @@
 // The masks and values come from the generated consts.vh (run.sh): the mask
 // is the list of removed bits that tb/eqy/accounting.py found, the value is
 // what the RTL's own reset gives those bits (read off a solver trace), so
-// none of the 190 is typed here. pend and insvc are declared [NSRC:1]; their
+// none of the 194 is typed here. pend and insvc are declared [NSRC:1]; their
 // ports here are [8:0] (position = index - 1), and lemma_gen.py makes their
 // masks by position. The design's internal nets are brought out
 // as ports by yosys's `expose` (hierarchical references are not supported),

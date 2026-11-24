@@ -53,14 +53,14 @@ UNIT = {
     "soc_bus.v": [], "alphaone_soc.v": [],
     "uart.v": ["test-uart"], "gpio.v": ["test-gpio", "test-spi"], "spi.v": ["test-spi"],
     "syscon.v": ["test-syscon"],
-    "plic.v": ["test-plic"], "gamepad.v": ["test-gamepad"], "pwm.v": ["test-pwm"], "audio.v": ["test-audio"], "pinmux.v": ["test-pinmux"],
+    "plic.v": ["test-plic"], "gamepad.v": ["test-gamepad"], "pwm.v": ["test-pwm"], "pinmux.v": ["test-pinmux"],
     "tt_um_alfadelta10010_alphaone_soc.v": [],
     "cache.v": ["test-cache"],
 }
 # Optional unit benches added later; used when the Makefile has the target.
 UNIT_EXTRA = {"pmp.v": ["test-pmp"], "clint.v": ["test-clint"]}
 SOC_FILES = {"plic.v", "mem_ctrl.v", "qspi_ctrl.v", "soc_bus.v", "alphaone_soc.v", "uart.v",
-             "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v", "pwm.v", "audio.v", "cache.v"}
+             "gpio.v", "spi.v", "tt_um_alfadelta10010_alphaone_soc.v", "syscon.v", "pwm.v", "cache.v"}
 
 # formal: run.sh's inner limits are 1800 s (yosys) and PDR_TIMEOUT + 600 = 1800 s (sby, pdr
 # harnesses of the mutation lists); the outer limit is inner max + 600 so a slow proof ends
@@ -78,7 +78,7 @@ FORMAL = {"csr.v": ["csr"],
           "fyracore.v": ["core_hold", "core_req", "core_req_cov", "core_fetch", "core_df"],
           "regFile.v": ["core_hold"],
           "syscon.v": ["syscon_comb", "syscon_gate"],
-          "plic.v": ["plic", "bus"], "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "audio.v": ["audio"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
+          "plic.v": ["plic", "bus"], "gamepad.v": ["gamepad"], "pwm.v": ["pwm"], "pinmux.v": ["pinmux"], "alphaone_soc.v": ["soc_rst_sync"],
           "spi.v": ["spi_core", "spi_dc", "spi_bb", "spi_bb1", "spi_cover"],
           "gpio.v": ["spi_bus", "spi_bb", "spi_bb1", "spi_f12", "bus"],
           "mem_ctrl.v": MEM, "qspi_ctrl.v": MEM + ["qspi_strap", "qspi_burst_eq"],

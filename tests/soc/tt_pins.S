@@ -4,7 +4,7 @@
 #
 #  1. GPIO OUT. Each of out_vals goes to OUT, then an 'o' leaves on TX. The
 #     testbench reads uo_out[6:5] and uo_out[3:0] as each 'o' arrives (OUT bits 6:5 and
-#     3:0: bit 4 is the UART's TX, bit 7 has no pin by default, uo_out[7] is the audio
+#     3:0: bit 4 is the UART's TX, bit 7 has no pin by default, uo_out[7] is PWM1
 #     output and must stay low).
 #  2. GPIO IN and UART RX. After each 'i' the testbench puts a pattern on
 #     ui_in and sends a byte. The program waits for it, reads IN, and sends

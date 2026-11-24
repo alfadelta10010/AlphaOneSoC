@@ -1,6 +1,7 @@
-# Pinmux feature selection (0x1002_0020): codes 0 DEFAULT, 1 GPIO OUT[i], 2 RTS#, 3 AUDIO, 4-7 PWM0-3.
-#   1  read-back: every code 0..7 on every pin (word code * 0x11111111) reads back as written
-#      (bit 4i+3 reads 0); reset value 0.
+# Pinmux feature selection (0x1002_0020): code 0 DEFAULT everywhere, pin 5 code 2 RTS#, pin 6 code 4 PWM0; pin 7 is PWM1 (no code).
+#   1  read-back / WARL: every code 0..7 on every pin (word code * 0x11111111). Only pin 5 code 2 (RTS#) and pin 6 code 4
+#      (PWM0) are legal (pin 7 is PWM1 always, no code); every other code stores 0 and reads 0. Expected read-back
+#      0x00200000 for code 2, 0x04000000 for 4, 0 otherwise (bit 4i+3 reads 0); reset value 0.
 #   2  RTS# on uo_out[5] (code 2, giving up the SD CS#), the RP2350 model's flow control on (the bench
 #      does this for pinmux, CTS = uo_out[5]), interrupts off: cue 1 = the bench pastes 64 characters
 #      (pattern 0x20 + (7n + 3) mod 95). First the program reads nothing for 24 character times: the
@@ -8,10 +9,10 @@
 #      checks pin 5 high and 7..10 characters sent). Then the program drains, slowly (3 character times between
 #      pops): the model resumes, 64 in order, none lost, OE 0, no character sent against CTS.
 #   3  back to the default: pin 5 = GPIO OUT bit 5 (SD CS#) again; cue 2 with OUT bit 5 low then high.
-#   4  GPIO on pin 4 (UART TX gives way: OUT bit 4 drives the pin, reset high) and pin 7 (OUT bit 7, reset 1):
-#      cue 3 with both low, cue 4 both high, cue 5 pinmux back to 0.
-#   5  PWM0 on pin 7 (code 4, cfg = enalways, cmp0 0xBFFF), cue 6 for the bench to see the 25 % duty, cue 7
-#      after the pinmux is 0 again (pin 7 = AUDIO, EN off: low).
+#   4  illegal codes leave the pins alone: pin 4 = 2, pin 5 = 4, pin 6 = 2, pin 7 = 4 read back 0; cue 3: UART TX
+#      (uo_out[4]) idle high and PWM1 (uo_out[7]) low, as in the default map; then pinmux 0 again, cue 4.
+#   5  PWM1 on pin 7 (fixed, cmp1 0xBFFF, cfg = enalways), cue 6 for the bench to see the 25 % duty (cmp0 stays
+#      0xFFFF: PWM0 would be silent), cue 7 after the PWM is off and cmp1 is back at 0xFFFF (pin 7 low).
 #include "periph4.h"
     .section .text.init
     .globl _start
@@ -28,7 +29,14 @@ _start:
     mul  t1, t1, t2
     sw   t1, 0(s1)
     lw   t0, 0(s1)
-    CHECKR t0, t1, 0x02
+    li   t4, 0
+    li   t5, 2
+    bne  t2, t5, 4f
+    li   t4, 0x00200000
+4:  li   t5, 4
+    bne  t2, t5, 5f
+    li   t4, 0x04000000
+5:  CHECKR t0, t4, 0x02
     addi t2, t2, 1
     bne  t2, t3, 1b
     sw   zero, 0(s1)
@@ -85,29 +93,25 @@ _start:
     ori  t0, t0, 0x20
     sw   t0, G_OUT(s2)
     DELAY 400
-    # GPIO on pins 4 and 7
-    li   t0, (1 << 16) | (1 << 28)
+    # illegal codes: pin 4 = 2, pin 5 = 4, pin 6 = 2, pin 7 = 4 all store 0
+    li   t0, (2 << 16) | (4 << 20) | (2 << 24) | (4 << 28)
     sw   t0, 0(s1)
-    lw   t0, G_OUT(s2)
-    CHECK t0, 0xB9, 0x08
-    li   t0, 0x29                 # bits 4 and 7 low
-    sw   t0, G_OUT(s2)
-    CUE 3, 400
-    li   t0, 0xB9
-    sw   t0, G_OUT(s2)
-    CUE 4, 400
+    lw   t0, 0(s1)
+    CHECK t0, 0, 0x08
+    CUE 3, 400                    # bench: uo[4] high (UART TX idle), uo[7] low (PWM1 idle)
     sw   zero, 0(s1)
-    CUE 5, 400                    # TX idle high again, pin 7 audio low
-    # PWM0 on pin 7
+    CUE 4, 400
+    # PWM1 on pin 7
     li   s6, PWM
     li   t0, 0xBFFF
-    sw   t0, PWM_CMP0(s6)
-    li   t0, 4 << 28
-    sw   t0, 0(s1)
+    sw   t0, PWM_CMP0+4(s6)
     li   t0, 0x1000
     sw   t0, PWM_CFG(s6)
     CUE 6, 3 << 16
     sw   zero, PWM_CFG(s6)
+    li   t0, 0xFFFF
+    sw   t0, PWM_CMP0+4(s6)
+    sw   zero, PWM_COUNT(s6)
     sw   zero, 0(s1)
     CUE 7, 400
     j    test_pass

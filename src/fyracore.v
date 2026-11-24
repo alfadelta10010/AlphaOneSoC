@@ -52,7 +52,7 @@ module fyracore #(
     parameter [31:0] PMA_RAM_TOP  = 32'h80FF_FFFF,
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // CLINT
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
-    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon, PWM/audio
+    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon, PWM
     parameter [31:0] PMA_IO1_TOP  = 32'h1003_FFFF,
     parameter [31:0] PMA_IO2_BASE = 32'h0C00_0000,  // PLIC (4 MB: priorities, pending, enables, context 0 at +0x200000)
     parameter [31:0] PMA_IO2_TOP  = 32'h0C3F_FFFF

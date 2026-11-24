@@ -22,17 +22,23 @@ Exit status 1 if a count differs from the table of the work order.
 """
 import collections, json, re, sys
 
+# slim-down, by analysis (verify at the next EQY, no netlist here): pinmux codes[23:0] -> alt5/alt6/alt7: 24 flops become 3 (21 fewer gold, direct and gate flops); the constant set is unchanged
+#   -> direct=1906 gate=1942 gold=2121 removed=cand=190, tie0 = cand - 5, tie1 = 5.
+# slim-down, by analysis (verify at the next EQY, no netlist here): pwm sticky and enoneshot removed (2 flops fewer in gold, direct and gate); PLIC pend/insvc of sources 5 and 6 (PWM irq[1:0]) are now tied 0 and become constants (+4 constant bits: direct and gate -4, removed and cand +4)
+#   -> direct=1900 gate=1936 gold=2119 removed=cand=194, tie0 = cand - 5, tie1 = 5.
+# slim-down, by analysis (verify at the next EQY, no netlist here): audio block removed (per 12 + c 12 + oct 3 + audio_o + en + pre 11 = 40 flops) and pinmux alt7 removed (1): 41 fewer gold, direct and gate flops; the constant set is unchanged
+#   -> direct=1859 gate=1895 gold=2078 removed=cand=194, tie0 = cand - 5, tie1 = 5.
 # WO-73 re-baseline for HEAD (WO-69 drives PLIC source 4 from the GPIO input-change irq, so
 # pend[4] and insvc[4] are live flops, no longer constants): cand = 184 CSR + gpio out_r[1], [3]
-# + PLIC pend/insvc of the tied-0 sources 7, 8 = 190; a netlist from the HEAD RTL has the two
+# + PLIC pend/insvc of the tied-0 sources 7, 8 = 190 (HEAD); a netlist from the HEAD RTL has the two
 # flops, so direct = 1927, gate = 1963, removed = 190 (the gate refit must show these; gold
 # unchanged at 2142 unless the RTL gained flops). tie0 = NCAND - 5 = 185, tie1 = 5.
 # Before that, 4x4 (hd netlist 757ba9e9, RTL 1f2a473): 1925 direct = 1861 named flops + the 64 bits of
 # uart rx_mem (gold memory_map words rx_mem[k][b] = the netlist's rx_mem[k][b]); cand = 184 CSR
 # + gpio out_r[1], [3] + PLIC pend/insvc of the tied-0 sources 4, 7, 8; unused = 0 (the pinmux
 # reads gpio out_r[7:4] now); memaddr = rx_mem's read-address register, 3 bits on each side.
-EXPECT = dict(direct=1927, rename=11, recode_gold=11, recode_gate=22, removed=190,
-              gold=2142, gate=1963, cand=190, unused=0, memaddr_gold=3, memaddr_gate=3, live_gone=0)
+EXPECT = dict(direct=1859, rename=11, recode_gold=11, recode_gate=22, removed=194,
+              gold=2078, gate=1895, cand=194, unused=0, memaddr_gold=3, memaddr_gate=3, live_gone=0)
 RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, 6),
           "soc.qspi.state": (4, 10), "soc.gpio_inst.spi_inst.st": (2, 3)}
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
