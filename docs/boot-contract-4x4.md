@@ -12,8 +12,11 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
 
 1. **`mtvec`.** Set it to a handler in flash or PSRAM before anything can trap. It has no reset
    (unspecified, Priv 3.4), so a trap before it is written vectors to an arbitrary address.
-   The pmpaddr0-3 CSRs have no reset either: write each one before using it, including as the lower
-   bound of a TOR entry (a TOR entry i matches against pmpaddr(i-1) whatever pmpcfg(i-1) says).
+   **Every unreset CSR:** mtvec, mscratch, mepc, mtval and pmpaddr0-3 power up unknown (X in
+   simulation). Write each one before reading it. In particular the trap idiom `csrrw sp, mscratch, sp`
+   must not run before mscratch has been written (it would swap in an unknown stack pointer), and a
+   pmpaddr must be written before use, including as the lower bound of a TOR entry (a TOR entry i
+   matches against pmpaddr(i-1) whatever pmpcfg(i-1) says).
    PMP grain is 4 KiB and NA4 is not selectable (`docs/FyraCore_CPU_Reference.md`, 7.7).
 2. **UART divisor and early output** (section 4). The divisor resets to 34 (114,890 baud at
    62.5 MHz). Write it first if the clock is anything else.
@@ -45,7 +48,7 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
      the no-stream strap, also disables bursts) and only if the core clock is at least **15 MHz**; the
      loader sets it only from the DT `clock-frequency`. A PSRAM line burst holds CE# low for at most
      101 clocks (worst case with rd_late = 1; measured 97 with rd_late = 0; the bound is
-     bounded-checked (BMC 250 cycles from reset) against 104, not proved; 1.6 us at 62.5 MHz); the
+     proved against 104 by k-induction, harness `mem_tcem_burst`, WO-72; 1.6 us at 62.5 MHz); the
      APS6404L allows 8 us (tCEM, standard grade), which fixes the floor at 12.6 MHz, rounded up to
      15 MHz. Below that leave PBURST at 0 (the reset value; the pins are then unchanged).
 8. **Watchdog.** If the DDR sweep passed it left the watchdog armed with TOP 1 (about 2 to 3 ms) and
