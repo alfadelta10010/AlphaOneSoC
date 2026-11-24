@@ -9,7 +9,7 @@
 | ISA | RV32IMAC + Zicsr + Zicntr + Zifencei |
 | Pipeline | 3 stages: IF / EX / WB |
 | Privilege Modes | M (Machine) + U (User) |
-| Memory Protection | PMP, 4 entries (OFF / TOR / NA4 / NAPOT), plus a fixed PMA map |
+| Memory Protection | PMP, 4 entries (OFF / TOR / NAPOT), 4 KiB grain, plus a fixed PMA map |
 | Interrupts | Timer, Software (CLINT), External (one input pin) |
 | Memory interface | Separate fetch and data ports, request/ready handshake |
 | Primary Goal | Boot NOMMU Linux with area as #1 priority |
@@ -137,7 +137,7 @@ wire [31:0] mret_target = csr_mepc;
 | `rf_top.v` | `rf_top` | Simulation model of Sylvain Munaut's 32x32 2R1W sky130 register-file macro (`macro/rf_top/`: GDS, LEF, liberty, provenance); an empty blackbox under `SYNTHESIS`. Starts at 0, or at X with `+RF_X`; with `+RF_COLLIDE_X` a read of the word written on the same edge returns X. |
 | `compressed_decoder.v` | `compressed_decoder` | RV32C expansion. Its legal/illegal verdict matches the RV32IMAC rules on all 49,152 16-bit encodings. |
 | `csr.v` | `csr` | M-mode CSR file: trap entry, MRET, counters, PMP registers, interrupt enable/pending, the `*_legal` write values and the post-write value `wval` (section 2.3). |
-| `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NA4/NAPOT, compared in the 34-bit physical address space. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |
+| `pmp.v` | `pmp` | PMP checker, 4 entries, OFF/TOR/NAPOT, 4 KiB grain, compared on the 20/21-bit page address. One instance, time-shared between the fetch (X) and data (R/W/RW) checks. |
 | `clint.v` | `clint` | SiFive-compatible CLINT: mtime, mtimecmp, msip. Instantiated by the SoC top (or the memory model in simulation), not by the core. |
 | `alphaone_soc.v` | `alphaone_soc` | SoC top: core, bus fabric, memory controller, QSPI engine, CLINT, UART, GPIO, syscon. Boots from flash (0x2000_0000). |
 | `soc_bus.v` | `soc_bus` | Bus fabric: the core's own request/ready fanned out by a stateless address decode, with a read-data/ready mux. No registers. |
@@ -247,13 +247,13 @@ CSR address bits `[9:8]` encode the minimum privilege; bits `[11:10] = 11` mark 
 ```
 Bit  [7]    L  — Lock (applies to M-mode too; entry immutable until reset)
 Bits [6:5]  reserved, read 0
-Bits [4:3]  A  — 00 OFF, 01 TOR, 10 NA4, 11 NAPOT (all legal at G=0)
+Bits [4:3]  A  — 00 OFF, 01 TOR, 11 NAPOT. NA4 (10) is not selectable at G=10 and a write of it is stored as NAPOT (as Spike does)
 Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 ```
 
 **Matching:**
-- On RV32, pmpaddr holds PA[33:2]. All compares are on word addresses `{2'b00, addr[31:2]}` against the full 32-bit pmpaddr, so region bounds above 4 GB behave correctly.
-- TOR: `pmpaddr[i-1] <= waddr < pmpaddr[i]` (entry 0 lower bound 0). NA4: `waddr == pmpaddr`. NAPOT: `((waddr ^ pa) & ~(pa ^ (pa+1))) == 0`, so only the bits above the trailing ones and their terminating zero are compared; pmpaddr = all ones covers everything.
+- **Grain G = 10 (4 KiB)** and **PA[33:32] not implemented** (Priv 3.7.1: "the PMP grain is 2^(G+2) bytes"; "not all physical address bits may be implemented, and so the pmpaddr registers are WARL"). Of a pmpaddr only bits [29:9] are stored; bits [31:30] read 0; with A = NAPOT bits [8:0] read all ones (G-2:0), with A = OFF/TOR bits [9:0] read 0 (G-1:0); bit 9 is the NAPOT terminating bit and reads 0 in OFF/TOR (the stored value is kept, as in Spike). Software that needs regions smaller than 4 KiB cannot have them: **Zephyr userspace needs `CONFIG_PMP_GRANULARITY=4096`**; Spike needs `--pmpgranularity=4096`; the DT says `riscv,pmpgranularity = <4096>`.
+- pmp.v compares the page address `addr[31:12]` against the read value of pmpaddr: TOR `pmpaddr[i-1][29:10] <= page < pmpaddr[i][29:10]` (entry 0 lower bound 0; the lower bound's low bits are ignored whatever its mode), NAPOT `((addr[31:11] ^ p) & ~(p ^ (p+1))) == 0` with `p = pmpaddr[29:9]`, so only the bits above the trailing ones and their terminating zero are compared; pmpaddr = 0x3FFF_FFFF covers the whole 32-bit space. Regions above 4 GB cannot be written.
 - Entry 0 has highest priority. No match: M allowed, U denied. L=1 applies the permissions to M-mode too. Entry i with TOR+L also locks pmpaddr[i-1].
 - Reset: all entries OFF (Spike resets permissive; see the riscv-dv notes).
 
