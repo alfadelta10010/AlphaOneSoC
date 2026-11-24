@@ -252,7 +252,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 ```
 
 **Matching:**
-- **Grain G = 10 (4 KiB)** and **PA[33:32] not implemented** (Priv 3.7.1: "the PMP grain is 2^(G+2) bytes"; "not all physical address bits may be implemented, and so the pmpaddr registers are WARL"). Of a pmpaddr only bits [29:9] are stored; bits [31:30] read 0; with A = NAPOT bits [8:0] read all ones (G-2:0), with A = OFF/TOR bits [9:0] read 0 (G-1:0); bit 9 is the NAPOT terminating bit and reads 0 in OFF/TOR (the stored value is kept, as in Spike). Software that needs regions smaller than 4 KiB cannot have them: **Zephyr userspace needs `CONFIG_PMP_GRANULARITY=4096`**; Spike needs `--pmpgranularity=4096`; the DT says `riscv,pmpgranularity = <4096>`.
+- **Grain G = 10 (4 KiB)** and **PA[33:32] not implemented** (Priv 3.7.1: "the PMP grain is 2^(G+2) bytes"; "not all physical address bits may be implemented, and so the pmpaddr registers are WARL"). Of a pmpaddr only bits [29:9] are stored; bits [31:30] read 0; with A = NAPOT bits [8:0] read all ones (G-2:0), with A = OFF/TOR bits [9:0] read 0 (G-1:0); bit 9 is the NAPOT terminating bit and reads 0 in OFF/TOR (the stored value is kept, as in Spike). Software that needs regions smaller than 4 KiB cannot have them, and a sub-grain NAPOT or NA4 request becomes a NAPOT region of at least 4 KiB sized by the trailing ones of the address (a locked 4-byte NA4 guard at the top of PSRAM becomes a locked 32 MiB no-access region and wedges the core). PMP users must use granularity 4096 and never NA4: **every Zephyr build with `CONFIG_RISCV_PMP` needs `CONFIG_PMP_GRANULARITY=4096`** (z_riscv_pmp_init installs locked ROM, null-pointer and stack-guard entries), not only userspace builds; Spike needs `--pmpgranularity=4096`; the DT says `riscv,pmpgranularity = <4096>`.
 - pmp.v compares the page address `addr[31:12]` against the read value of pmpaddr: TOR `pmpaddr[i-1][29:10] <= page < pmpaddr[i][29:10]` (entry 0 lower bound 0; the lower bound's low bits are ignored whatever its mode), NAPOT `((addr[31:11] ^ p) & ~(p ^ (p+1))) == 0` with `p = pmpaddr[29:9]`, so only the bits above the trailing ones and their terminating zero are compared; pmpaddr = 0x3FFF_FFFF covers the whole 32-bit space. Regions above 4 GB cannot be written.
 - Entry 0 has highest priority. No match: M allowed, U denied. L=1 applies the permissions to M-mode too. Entry i with TOR+L also locks pmpaddr[i-1].
 - Reset: all entries OFF (Spike resets permissive; see the riscv-dv notes).
@@ -329,7 +329,7 @@ Counter auto-increment and CSR writes share one `always` block per counter (neve
 | Address | Name | Description |
 |---|---|---|
 | 0x3A0 | pmpcfg0 | 4 config bytes, each locked by its own L bit |
-| 0x3B0-0x3B3 | pmpaddr0-3 | Locked by own L bit or entry i+1's TOR lock. No reset (the A fields reset to OFF, so an unwritten pmpaddr matches nothing) |
+| 0x3B0-0x3B3 | pmpaddr0-3 | Locked by own L bit or entry i+1's TOR lock. No reset (the A fields reset to OFF, so an unwritten pmpaddr(i) matches nothing through entry i; but it is still the lower bound of a TOR entry i+1 irrespective of pmpcfg(i), so write it before using TOR in entry i+1) |
 | 0x3A1-0x3A3 | pmpcfg1-3 | Read 0, writes ignored |
 | 0x3B4-0x3BF | pmpaddr4-15 | Read 0, writes ignored |
 
