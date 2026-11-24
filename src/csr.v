@@ -86,7 +86,12 @@ module csr #(
 
     // PMP registers
     reg [31:0] pmpcfg0;                         // 0x3A0: 4 packed 8-bit config bytes
-    reg [31:0] pmpaddr0, pmpaddr1, pmpaddr2, pmpaddr3; // 0x3B0-0x3B3
+    // PMP grain G = 10 (4 KiB, Priv §3.7.1), PA[33:32] not implemented: of a
+    // pmpaddr only bits [29:9] are stored. Bits [31:30] are read-only zero;
+    // [8:0] read 1 when the entry is NAPOT and 0 otherwise; bit 9 is the
+    // NAPOT terminating bit (it reads 0 in OFF/TOR); [9:0] never take part
+    // in a TOR compare. See pmpaddr_vis below.
+    reg [29:9] pmpaddr0, pmpaddr1, pmpaddr2, pmpaddr3; // 0x3B0-0x3B3
 
     // Performance counters
     reg [63:0] mcycle;
@@ -94,10 +99,23 @@ module csr #(
 
     assign mtvec_out    = mtvec;
     assign pmpcfg0_out  = pmpcfg0;
-    assign pmpaddr0_out = pmpaddr0;
-    assign pmpaddr1_out = pmpaddr1;
-    assign pmpaddr2_out = pmpaddr2;
-    assign pmpaddr3_out = pmpaddr3;
+    // What a pmpaddr reads as (Priv §3.7.1.1 for G >= 2): with A = NAPOT
+    // (A[1]; NA4 is not selectable and is stored as NAPOT) bits [G-2:0] =
+    // [8:0] read all ones; with A = OFF/TOR bits [G-1:0] = [9:0] read zero.
+    // The checker takes this value, so it matches on what software reads.
+    function [31:0] pmpaddr_vis;
+        input [29:9] st;
+        input        napot;
+        pmpaddr_vis = napot ? {2'b00, st, 9'h1FF} : {2'b00, st[29:10], 10'b0};
+    endfunction
+    wire [31:0] pmpaddr0_vis = pmpaddr_vis(pmpaddr0, pmpcfg0[4]);
+    wire [31:0] pmpaddr1_vis = pmpaddr_vis(pmpaddr1, pmpcfg0[12]);
+    wire [31:0] pmpaddr2_vis = pmpaddr_vis(pmpaddr2, pmpcfg0[20]);
+    wire [31:0] pmpaddr3_vis = pmpaddr_vis(pmpaddr3, pmpcfg0[28]);
+    assign pmpaddr0_out = pmpaddr0_vis;
+    assign pmpaddr1_out = pmpaddr1_vis;
+    assign pmpaddr2_out = pmpaddr2_vis;
+    assign pmpaddr3_out = pmpaddr3_vis;
 
     // TOR locking: entry i with A=TOR and L=1 also locks pmpaddr[i-1]
     wire tor_lock_addr0 = pmpcfg0[7]  || (pmpcfg0[12:11] == 2'b01 && pmpcfg0[15]);
@@ -204,11 +222,13 @@ module csr #(
     wire [31:0] mepc_eff = {mepc[31:2], (misa_c ? mepc[1] : 1'b0), 1'b0};
     assign mepc_out      = mepc_eff;
 
-    // A pmpcfg byte as written, made legal: L, A, X and R as given, bits
-    // [6:5] zero, and W only alongside R.
+    // A pmpcfg byte as written, made legal: L, X and R as given, bits [6:5]
+    // zero, W only alongside R, and A = NA4 (2'b10) stored as NAPOT: with
+    // G >= 1 "NA4 is not selectable" (Priv §3.7.1), and a write of it is
+    // legalised the way Spike does.
     function [7:0] pmpcfg_legal;
         input [7:0] b;
-        pmpcfg_legal = {b[7], 2'b00, b[4:2], b[1] & b[0], b[0]};
+        pmpcfg_legal = {b[7], 2'b00, b[4], b[4] | b[3], b[2], b[1] & b[0], b[0]};
     endfunction
 
     // ===== Legal values =========================================================
@@ -224,8 +244,8 @@ module csr #(
     wire [31:0] mcounteren_legal    = csr_new & 32'h0000_0007;  // CY/TM/IR
     wire [31:0] mcountinhibit_legal = csr_new & 32'h0000_0005;  // TM reserved
     // pmpcfg0: a locked byte keeps its value; otherwise bits [6:5] are
-    // reserved and read 0. A = 2'b10 (NA4) is legal at G=0 and pmp.v
-    // implements it, so it is stored as written. R/W/X form a collective
+    // reserved and read 0. A = 2'b10 (NA4) is not selectable at G=10 and is
+    // stored as NAPOT (pmpcfg_legal). R/W/X form a collective
     // WARL field in which R=0,W=1 is reserved (Priv §3.7.1): W is legalised
     // to 0 when R is 0, as Spike does.
     wire [31:0] pmpcfg0_legal = {pmpcfg0[31] ? pmpcfg0[31:24] : pmpcfg_legal(csr_new[31:24]),
@@ -234,10 +254,10 @@ module csr #(
                                  pmpcfg0[7]  ? pmpcfg0[7:0]   : pmpcfg_legal(csr_new[7:0])};
     // pmpaddr[i]: locked by its own L bit, or by entry i+1 when that entry is
     // TOR and locked.
-    wire [31:0] pmpaddr0_legal = tor_lock_addr0 ? pmpaddr0 : csr_new;
-    wire [31:0] pmpaddr1_legal = tor_lock_addr1 ? pmpaddr1 : csr_new;
-    wire [31:0] pmpaddr2_legal = tor_lock_addr2 ? pmpaddr2 : csr_new;
-    wire [31:0] pmpaddr3_legal = tor_lock_addr3 ? pmpaddr3 : csr_new;
+    wire [29:9] pmpaddr0_legal = tor_lock_addr0 ? pmpaddr0 : csr_new[29:9];
+    wire [29:9] pmpaddr1_legal = tor_lock_addr1 ? pmpaddr1 : csr_new[29:9];
+    wire [29:9] pmpaddr2_legal = tor_lock_addr2 ? pmpaddr2 : csr_new[29:9];
+    wire [29:9] pmpaddr3_legal = tor_lock_addr3 ? pmpaddr3 : csr_new[29:9];
 
     // ===== Post-write value ======================================================
     // What a read of waddr returns once this cycle's write has committed
@@ -245,6 +265,10 @@ module csr #(
     // fyracore exports it only to the testbench, which logs it as the
     // written value; synthesis drops it. Only meaningful while a write is in
     // WB.
+    // A pmpaddr write logs the value the register reads back as, the way
+    // Spike's commit log does (a write ignored by a lock is not logged by
+    // the testbench). The grain bits [8:0] are not stored, so a written
+    // NAPOT value is logged with them as ones.
     reg [31:0] wval;
     always @(*) begin
         case (waddr)
@@ -262,10 +286,10 @@ module csr #(
             12'h343: wval = csr_new;                         // mtval
             12'h344: wval = mip_live;                        // mip: no writable bits
             12'h3A0: wval = pmpcfg0_legal;
-            12'h3B0: wval = pmpaddr0_legal;
-            12'h3B1: wval = pmpaddr1_legal;
-            12'h3B2: wval = pmpaddr2_legal;
-            12'h3B3: wval = pmpaddr3_legal;
+            12'h3B0: wval = pmpaddr_vis(pmpaddr0_legal, pmpcfg0[4]);
+            12'h3B1: wval = pmpaddr_vis(pmpaddr1_legal, pmpcfg0[12]);
+            12'h3B2: wval = pmpaddr_vis(pmpaddr2_legal, pmpcfg0[20]);
+            12'h3B3: wval = pmpaddr_vis(pmpaddr3_legal, pmpcfg0[28]);
             // Counters: the written half takes the value outright.
             12'hB00, 12'hB80, 12'hB02, 12'hB82: wval = csr_new;
             // Everything else that can be written without trapping reads 0
@@ -330,10 +354,10 @@ module csr #(
             12'h306: rdata = mcounteren;
             // PMP configuration and addresses
             12'h3A0: rdata = pmpcfg0;
-            12'h3B0: rdata = pmpaddr0;
-            12'h3B1: rdata = pmpaddr1;
-            12'h3B2: rdata = pmpaddr2;
-            12'h3B3: rdata = pmpaddr3;
+            12'h3B0: rdata = pmpaddr0_vis;
+            12'h3B1: rdata = pmpaddr1_vis;
+            12'h3B2: rdata = pmpaddr2_vis;
+            12'h3B3: rdata = pmpaddr3_vis;
             // Machine Trap Handling
             12'h340: rdata = mscratch;
             12'h341: rdata = mepc_eff;
@@ -380,10 +404,10 @@ module csr #(
             mcountinhibit<= 32'b0;
             misa_reg     <= MISA_RESET;
             pmpcfg0      <= 32'b0;
-            pmpaddr0     <= 32'b0;
-            pmpaddr1     <= 32'b0;
-            pmpaddr2     <= 32'b0;
-            pmpaddr3     <= 32'b0;
+            pmpaddr0     <= 21'b0;
+            pmpaddr1     <= 21'b0;
+            pmpaddr2     <= 21'b0;
+            pmpaddr3     <= 21'b0;
         end else begin
             // ---- 1. Commit the WB-stage CSR write ----------------------
             // This runs BEFORE the trap/MRET transform below, because the csrw
