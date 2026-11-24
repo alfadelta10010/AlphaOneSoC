@@ -198,7 +198,7 @@ sim() { # sim <name> <plusargs...>
   local image=+INIT_FILE="$OUT/$n.hex"
   is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
   $RUNSIM "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
-      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC +CSR_X "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
 }
 
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both
