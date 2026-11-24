@@ -288,7 +288,7 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 | 0x300 | mstatus | MIE[3], MPIE[7], MPP[12:11], MPRV[17], TW[21] | MPP is legalised to U unless written 11. Resets to 0. |
 | 0x310 | mstatush | none | Reads 0 (little-endian only) |
 | 0x304 | mie | MSIE[3], MTIE[7], MEIE[11] | |
-| 0x305 | mtvec | [31:2] | Direct mode only. Resets to 0, as on Spike; 0 is unmapped on this SoC, so a trap before software writes mtvec -- erased flash (0xFFFFFFFF) at the reset vector, say -- becomes a silent cause-1 loop at 0 that rewrites mepc, mcause and mtval each time. Boot code sets mtvec first. |
+| 0x305 | mtvec | [31:2] | Direct mode only. **No reset** (Priv 3.4: only mstatus.MIE/MPRV, mcause and the PMP A/L fields have a reset value; "all other hart state is unspecified"). A trap taken before software writes mtvec vectors to an unspecified address. Boot code sets mtvec first (boot contract rule 1). |
 | 0x306 | mcounteren | CY[0], TM[1], IR[2] | |
 | 0x30A / 0x31A | menvcfg / menvcfgh | none | Read 0 (FIOM read-only zero without S-mode) |
 | 0x320 | mcountinhibit | CY[0], IR[2] | TM reads 0 |
@@ -298,10 +298,10 @@ Bits [2:0]  R/W/X — R=0,W=1 is reserved and is written as W=0 (WARL)
 
 | Address | Name | Description |
 |---|---|---|
-| 0x340 | mscratch | Scratch |
-| 0x341 | mepc | Bit 0 always 0; bit 1 stored but reads 0 while misa.C = 0 |
+| 0x340 | mscratch | Scratch. No reset: powers up unspecified |
+| 0x341 | mepc | Bit 0 always 0; bit 1 stored but reads 0 while misa.C = 0. No reset |
 | 0x342 | mcause | Trap cause. Stored as the Interrupt bit and a 4-bit Exception Code (Priv 3.1.15: the code is WLRL, "only guaranteed to hold supported exception codes"); every cause the core raises is below 16 (exceptions 0-8 and 11, interrupts 3, 7, 11). Reads `{int, 27'b0, code[3:0]}`; a write keeps bit 31 and bits [3:0] and bits [30:4] read 0 (a code of 16 or more reads back modulo 16). |
-| 0x343 | mtval | Faulting address, faulting instruction encoding, or 0 |
+| 0x343 | mtval | Faulting address, faulting instruction encoding, or 0. No reset |
 | 0x344 | mip | MSIP[3], MTIP[7], MEIP[11] are the interrupt wires; nothing is writable. MTIP comes registered from the CLINT: after a store moves mtimecmp, it keeps its old value for two clocks, which is the next two instructions when the fetch is fast (section 8.4) |
 
 ### 7.5 Counters
@@ -329,7 +329,7 @@ Counter auto-increment and CSR writes share one `always` block per counter (neve
 | Address | Name | Description |
 |---|---|---|
 | 0x3A0 | pmpcfg0 | 4 config bytes, each locked by its own L bit |
-| 0x3B0-0x3B3 | pmpaddr0-3 | Locked by own L bit or entry i+1's TOR lock |
+| 0x3B0-0x3B3 | pmpaddr0-3 | Locked by own L bit or entry i+1's TOR lock. No reset (the A fields reset to OFF, so an unwritten pmpaddr matches nothing) |
 | 0x3A1-0x3A3 | pmpcfg1-3 | Read 0, writes ignored |
 | 0x3B4-0x3BF | pmpaddr4-15 | Read 0, writes ignored |
 

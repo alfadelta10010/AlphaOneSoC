@@ -1,5 +1,5 @@
 /* Reset vector of the flash loader. The SoC boots here (0x2000_0000) and
- * nothing is initialised: registers x1-x31 have no reset, mtvec is 0. This
+ * nothing is initialised: registers x1-x31 and mtvec have no reset. This
  * is boot contract rule 1 (mtvec before anything can trap); the rest is in
  * loader.c. */
     .section .text.init
