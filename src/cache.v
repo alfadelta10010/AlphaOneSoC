@@ -1,8 +1,8 @@
-// Instruction cache: 256 B, direct-mapped, 16 B lines, fetch path only (WO-62 K4, 256 B WO-77).
+// Instruction cache: 256 B, direct-mapped, 8 lines of 32 B in two 16 B sectors, fetch path only (WO-62 K4, 256 B WO-77, 8 x 32 B WO-cache832).
 //
 // Sits between the core's fetch port and mem_ctrl's fetch port. The data path
 // is not touched; the cache only watches it: a store that completes on the
-// data port invalidates the line it falls in (no update, loads are ignored).
+// data port invalidates the 16 B sector it falls in (no update, loads are ignored).
 //
 //   core -- f_* --> [ cache ] -- m_* --> mem_ctrl i_*       d_* = snoop only
 //
@@ -20,13 +20,18 @@
 //                   hit is pending (a request that does not hit then goes through).
 // `active` shows which of the two the fetch path is in.
 //
-// Geometry. Key = {addr[31], addr[23:0]} (flash / PSRAM and the chip offset;
-// the PMA windows decide the rest): offset 4 bits, index 4 bits (addr[7:4]), tag 17 bits
-// ({addr[31], addr[23:8]}). Tags and valid bits are flops (16 x 17 + 16); the data is TWO rf_top macros
-// (each 32 x 32 = 8 lines x 4 words): data_mem holds lines 0-7 (index[3] = addr[7] = 0), data_hi lines 8-15
-// (index[3] = 1); the word address inside a macro is addr[6:2]. Both read ports of both macros are driven
-// with the same addresses and a 2:1 per port picks the data (port A by index[3] of A, port B by index[3] of
-// B = A + 1, so a straddle across line 7 -> 8 or 15 -> 0 reads each word from its own macro).
+// Geometry (WO-cache832). Key = {addr[31], addr[23:0]} (flash / PSRAM and the chip offset; the PMA windows decide
+// the rest). 8 lines of 32 B, each two 16 B sectors: line index addr[7:5], sector addr[4], word addr[3:2]; tag 17
+// bits ({addr[31], addr[23:8]}), one per line. The sector number s = addr[7:4] = {line, half} (kidx, fill_idx) is
+// what WO-77's 16 B lines were: valid bits are per sector (16), a miss fills one sector (four words), so fills,
+// m_addr, PSRAM bursts and the macro addressing are those of a 16 x 16 B cache. A sector hits iff its line's tag
+// matches and its valid bit (or fill_here) is set; a fill that changes its line's tag clears the other sector's
+// valid bit (it held the old tag's data), a fill under the same tag keeps it. Tags 8 x 17 + valid 16 flops (WO-77
+// had 16 x 17 + 16). The data is TWO rf_top macros (each 32 x 32 = 8 sectors x 4 words): data_mem holds sectors
+// 0-7 = lines 0-3 (addr[7] = 0), data_hi sectors 8-15 = lines 4-7 (addr[7] = 1); the word address inside a macro
+// is addr[6:2]. Both read ports of both macros are driven with the same addresses and a 2:1 per port picks the
+// data (port A by addr[7] of A, port B by addr[7] of B = A + 1, so a straddle across sector 7 -> 8 (line 3 -> 4)
+// or 15 -> 0 (line 7 -> line 0 of the next 256 B) reads each word from its own macro).
 //
 // Read/write collisions. A macro read that meets a write of the same word on the same edge has no timing
 // (rf_top: the write-through data is never used, +RF_COLLIDE_X turns it into X); the stored word is still written. A fill word
@@ -34,43 +39,43 @@
 // every one of them is dropped:
 //   1. Port A of the selected macro: the fill writes word fcnt while a lookup of word fcnt of the fill line misses
 //      (a word is looked up as a hit only after it was written, kword < fcnt, see fill_here).
-//   2. Port B of the selected macro: the fill of line L writes word fcnt while an aligned fetch of word fcnt-1 of L
+//   2. Port B of the selected macro: the fill of sector L writes word fcnt while an aligned fetch of word fcnt-1 of L
 //      hits through fill_here; port B (address A + 1 = the word being written) reads X, and f_rdata ignores it
 //      because pc1 = 0 selects ra_data. The kword < fcnt rule plays no part here.
 //   3. Either port of the macro that is NOT selected: both macros get the same read addresses, so a fill of
-//      line i + 8 (or i) collides with a hit on line i (or i + 8) at the same word; the f_addr[7] / nxt[5] select drops it.
+//      sector i + 8 (or i) collides with a hit on sector i (or i + 8) at the same word; the f_addr[7] / nxt[5] select drops it.
 // tb/formal/cache_props.sv asserts that on every hit cycle neither the port A data (always) nor the port B data
 // (when pc1) that f_rdata uses came from a same-word write, and covers cases 2 and 3.
 //
 // A fetch wants the 4 bytes from the halfword-aligned pc. At f_addr[1] = 0
 // that is one word; at f_addr[1] = 1 it is the upper half of word A and the
-// lower half of word B = A + 1 (the next line when A is the last word of
-// its line). Port A of the macro always reads A, port B always reads B (both
+// lower half of word B = A + 1 (the next sector when A is the last word of
+// its sector). Port A of the macro always reads A, port B always reads B (both
 // addresses come straight from f_addr), the tag lookup is one per cycle:
 //
 //   hit, aligned    cycle 0 lookup of A, cycle 1 ready (f_ready is a flop, the
 //                   data comes from the macro)                    2 clocks
 //   hit, straddle   cycle 0 lookup of A, cycle 1 lookup of B,
 //                   cycle 2 ready                                 3 clocks
-//   miss            the line is filled as four aligned 4-byte reads in line
+//   miss            the sector is filled as four aligned 4-byte reads in
 //                   order through m_*, each word written to the macro as it
 //                   arrives. The lookup repeats every cycle; a word hits as
 //                   soon as it has been written (early restart: ready two
 //                   clocks after the word arrives, and the next word of the
-//                   same line hits the same way). A request that finds its
-//                   word or line unavailable waits; a miss on another line
+//                   same sector hits the same way). A request that finds its
+//                   word or sector unavailable waits; a miss on another sector
 //                   waits for the running fill to end (one fill at a time).
 //
 // Coherence. A store that completes on the data port (d_we && d_ready)
-// clears the valid bit of its line if the tags match; if that line is being
+// clears the valid bit of its sector if its line's tag matches; if that sector is being
 // filled the fill is marked dead (it stops after the word in flight, its words are
 // not used, valid is not set). The lookup in that cycle is skipped (the shared tag mux and
 // comparator serve the store) and a straddling fetch starts again at A.
 // fencei_flush clears every valid bit (and kills a running fill); with the
 // snoop it adds nothing a single hart needs, it is belt and braces.
 //
-// PSRAM line burst (pburst = CACHE_CTL.PBURST): a fill of a line in PSRAM may keep CE# low for its four words
-// (m_burst). tCEM (8 us) needs a core clock >= 12.6 MHz for that: set PBURST only at >= 15 MHz, and only with
+// PSRAM line burst (pburst = CACHE_CTL.PBURST): a sector fill in PSRAM may keep CE# low for its four words
+// (16 B, the QSPI engine's own limit, so the tCEM bound is that of WO-68/WO-72) (m_burst). tCEM (8 us) needs a core clock >= 12.6 MHz for that: set PBURST only at >= 15 MHz, and only with
 // QSPI_CFG.STREAM set (the engine ignores m_burst otherwise).
 //
 // Fill addresses are the real addresses the core would have fetched: {addr[31], addr[30:24] rebuilt, tag, index,
@@ -108,7 +113,7 @@ module cache (
     reg         hit_q;        // a hit was found last cycle: f_ready now
     reg         b_ph;         // a straddling fetch: A hit, B is looked up now
     reg  [15:0] valid;
-    reg  [271:0] tags;        // 16 x 17, line i at [17*i +: 17]
+    reg  [135:0] tags;        // 8 x 17, one per 32 B line l = addr[7:5], at [17*l +: 17]
 
     reg         fill_active;
     reg         dead;         // a store hit the line being filled
@@ -129,7 +134,8 @@ module cache (
     wire [16:0] ktag  = snoop ? {d_addr[31], d_addr[23:8]} :
                         b_ph  ? {f_addr[31], nxt[21:6]} : {f_addr[31], f_addr[23:8]};
 
-    wire        tmatch    = (tags[17*kidx +: 17] == ktag);
+    wire [2:0]  kline     = kidx[3:1];                  // the line of sector kidx (tags are per line)
+    wire        tmatch    = (tags[17*kline +: 17] == ktag);
     // The word of the line being filled is usable once it has been written.
     wire        fill_here = fill_active && !dead && (kidx == fill_idx) && (kword < fcnt);
     wire        hit       = tmatch && (valid[kidx] || fill_here);
@@ -162,7 +168,8 @@ module cache (
                 fcnt        <= 2'd0;
                 dead        <= 1'b0;
                 valid[kidx] <= 1'b0;
-                tags[17*kidx +: 17] <= ktag;
+                if (!tmatch) valid[{kline, ~kidx[0]}] <= 1'b0;   // a new tag: the other sector held the old tag's data
+                tags[17*kline +: 17] <= ktag;
             end
             if (word_in) begin
                 fcnt <= fcnt + 2'd1;
@@ -191,7 +198,7 @@ module cache (
 
     // ---- data macro ---------------------------------------------------
     wire [31:0] ra_lo, rb_lo, ra_hi, rb_hi;
-    rf_top data_mem (                       // lines 0-7  (index[3] = 0)
+    rf_top data_mem (                       // sectors 0-7 = lines 0-3 (addr[7] = 0)
         .w_data  (m_rdata),
         .w_addr  ({fill_idx[2:0], fcnt}),
         .w_ena   (word_in && !fill_idx[3]),
@@ -201,7 +208,7 @@ module cache (
         .rb_data (rb_lo),
         .clk     (clk)
     );
-    rf_top data_hi (                        // lines 8-15 (index[3] = 1)
+    rf_top data_hi (                        // sectors 8-15 = lines 4-7 (addr[7] = 1)
         .w_data  (m_rdata),
         .w_addr  ({fill_idx[2:0], fcnt}),
         .w_ena   (word_in && fill_idx[3]),
