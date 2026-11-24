@@ -292,6 +292,12 @@ module mem_props (
         end
         if (x_t_bst || x_pstrm) assert (i_burst_ever);                                          // H10 (MT1c)
     end
+`ifndef BURST_FREE
+    // H15 (mem_tcem, MODE sind): the qualifier is tied low (assume above, unconditional), so no burst was ever asked for;
+    // with H10 that rules out pstrm and t_bst, and H0 bounds a PSRAM run by one single read (MT1, MT1t). Not armed-gated:
+    // i_burst_ever has no reset and holds 0 from the initial state on.
+    always @(*) assert (!i_burst_ever);
+`endif
 `endif
 `endif
 
