@@ -94,7 +94,11 @@ module lemma_props (
     wire ok_plic_insvc    = !armed || ((plic_insvc    & `LM_soc_plic_inst_insvc)            == `LV_soc_plic_inst_insvc);
     wire ok_spi_st        = !armed || (spi_st != 2'b11);                       // L2
     wire ok_memSize       = !armed || (exwb_memSize != 2'b11);                 // L2
+`ifdef MULDIV5   // PX-6 removed S_SH (3'd5): codes 5, 6 and 7 are never reached
+    wire ok_st            = !armed || (muldiv_st != 3'b101 && muldiv_st != 3'b110 && muldiv_st != 3'b111);   // L2
+`else
     wire ok_st            = !armed || (muldiv_st != 3'b110 && muldiv_st != 3'b111);   // L2
+`endif
     wire ok_state         = !armed || (qspi_state <= 4'd9);                // L2
     // Supporting invariant (H1): the pc is halfword-aligned. mepc[0] and
     // trap_pc[0] load from it, and induction cannot see that without it.

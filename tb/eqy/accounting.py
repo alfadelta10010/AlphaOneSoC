@@ -39,7 +39,9 @@ import collections, json, re, sys
 # reads gpio out_r[7:4] now); memaddr = rx_mem's read-address register, 3 bits on each side.
 EXPECT = dict(direct=1859, rename=11, recode_gold=11, recode_gate=22, removed=194,
               gold=2078, gate=1895, cand=194, unused=0, memaddr_gold=3, memaddr_gate=3, live_gone=0)
-RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, 6),
+# EXPECT recode_gate counts muldiv's one-hot at 6 bits (A0); PX trees have 5 (MULDIV_N from run.sh)
+MULDIV_N = int(__import__("os").environ.get("MULDIV_N", "6")); EXPECT["recode_gate"] += MULDIV_N - 6
+RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, MULDIV_N),
           "soc.qspi.state": (4, 10), "soc.gpio_inst.spi_inst.st": (2, 3)}
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
 # gold bit -> gate Q net, for a rename that no alias of the gold bit shows. In

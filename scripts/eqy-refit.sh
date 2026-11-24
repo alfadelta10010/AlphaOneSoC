@@ -48,7 +48,8 @@ sed -i '/^  say "prove: \$(tail -1/a\  [ -n "${SETUP_ONLY:-}" ] \&\& { echo "EQY
 PCX=$(sed -n 's/^EXPECT_PARTITIONS = \([0-9]*\).*/\1/p' "$R/tb/eqy/verdict.py"); [ -n "$PCX" ] || { echo "eqy-refit.sh: EXPECT_PARTITIONS not found in tb/eqy/verdict.py" >&2; exit 2; }
 accx() { sed -n "/^EXPECT = dict(/,/)/p" "$R/tb/eqy/accounting.py" | tr -d '\n ' | grep -o "$1=[0-9]*" | head -1 | cut -d= -f2; }
 X_TIED=$(sed -n 's/^EXPECT = dict(.*tied=\([0-9]*\).*/\1/p' "$R/tb/eqy/matchreport.py"); X_UNUSED=$(sed -n 's/^EXPECT = dict(.*unused=\([0-9]*\).*/\1/p' "$R/tb/eqy/matchreport.py")
-X_RG=$(accx recode_gold); X_RT=$(accx recode_gate); X_REN=$(accx rename); X_MG=$(accx memaddr_gold); X_MT=$(accx memaddr_gate)
+# EXPECT recode_gate counts a 6-state muldiv (A0); PX trees have 5 (PX-6 removed S_SH), counted from the RTL as in run.sh
+X_RG=$(accx recode_gold); X_RT=$(accx recode_gate); X_RT=$((X_RT + $(grep -oE "\bS_[A-Z0-9]+ *= *3.d[0-9]" "$R/src/muldiv.v" | wc -l) - 6)); X_REN=$(accx rename); X_MG=$(accx memaddr_gold); X_MT=$(accx memaddr_gate)
 [ "$(accx cand)" = "$X_TIED" ] && [ "$(accx unused)" = "$X_UNUSED" ] || { echo "eqy-refit.sh: accounting.py EXPECT cand/unused ($(accx cand)/$(accx unused)) and matchreport.py tied/unused ($X_TIED/$X_UNUSED) disagree" >&2; exit 2; }
 for v in "$X_TIED" "$X_UNUSED" "$X_RG" "$X_RT" "$X_REN" "$X_MG" "$X_MT"; do [ -n "$v" ] || { echo "eqy-refit.sh: could not read an expected count from tb/eqy (tied=$X_TIED unused=$X_UNUSED recode=$X_RG/$X_RT rename=$X_REN)" >&2; exit 2; }; done
 echo "expected: partitions $PCX tied $X_TIED unused $X_UNUSED recode $X_RG/$X_RT rename $X_REN memaddr $X_MG/$X_MT"

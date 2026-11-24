@@ -26,6 +26,29 @@ assert n_ren >= 1, 'no macro instance found in the netlist'
 s, n_cell = re.subn(r' \(CELL\n  \(CELLTYPE "rf_top"\)\n.*?\n \)\n', '', s, flags=re.S)
 assert n_cell >= 1, 'no rf_top CELL block in the SDF'
 print(f'{n_ren} macro instance(s) renamed, {n_cell} rf_top CELL block(s) dropped')
+if '\\' in s:   # escaped instance names (SYNTH_AUTONAME netlists): rename each to a legal identifier in both files,
+    # since Icarus's SDF reader cannot resolve escaped names. Netlists without them (e.g. hd-r) skip this block.
+    used = set(re.findall(r'^ (?:sky130_\w+|rf_top) (\S+)\s*\(', t, re.M))
+    emap = {}
+    def _legal(p):
+        b = 'e_' + re.sub(r'\W', '_', p); n, i = b, 0
+        while n in used: i += 1; n = f'{b}_{i}'
+        used.add(n); return n
+    def _ren(m):
+        p = m.group(2)[1:]
+        assert p not in emap, ('duplicate instance', p)
+        emap[p] = _legal(p)
+        return f' {m.group(1)} {emap[p]}{m.group(3)}'
+    t = re.sub(r'^ (sky130_\w+|rf_top) (\\\S+)(\s*\()', _ren, t, flags=re.M)
+    _unesc = lambda x: re.sub(r'\\(.)', r'\1', x)
+    def _sdf(m):
+        tok = m.group(0); u = _unesc(tok)
+        if u in emap: return emap[u]
+        i = max((k for k, c in enumerate(tok) if c == '.' and tok[k - 1] != '\\'), default=-1)
+        if i > 0 and _unesc(tok[:i]) in emap: return emap[_unesc(tok[:i])] + tok[i:]
+        return tok                                 # unknown: left escaped, the assert below stops the run
+    s = re.sub(r'(?:[\w$.]|\\.)*\\.(?:[\w$.]|\\.)*', _sdf, s)
+    print(f'{len(emap)} escaped instance name(s) renamed')
 assert '\\' not in s
 
 ic = {}

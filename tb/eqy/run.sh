@@ -55,6 +55,15 @@ TOP=tt_um_alfadelta10010_alphaone_soc
 SRCS=$("$ROOT/scripts/wrapper-srcs.sh" "$ROOT") || exit 2   # the Makefile's WRAPPER_SRC = the harden's VERILOG_FILES
 # FSM registers that synthesis recoded one-hot (kept as buses in gold and gate).
 FSMS="soc.cpu.exwb_memSize soc.cpu.muldiv_inst.st soc.qspi.state soc.gpio_inst.spi_inst.st"
+# muldiv's FSM: 6 states on A0 (S_SH), 5 since PX-6 (26a8939: shifts left the M unit). Counted from the RTL;
+# 5 selects the MULDIV5 tables (fsmcut*.v, fsm_inv_props.sv, lemma_props.sv; fsmcut.py and accounting.py read MULDIV_N).
+MULDIV_N=$(grep -oE "\bS_[A-Z0-9]+ *= *3.d[0-9]" "$ROOT/src/muldiv.v" | wc -l)
+case "$MULDIV_N" in
+  6) MDEF=""; MDINIT="6'b000001"; MDL2="not 6 or 7";;
+  5) MDEF="-DMULDIV5"; MDINIT="5'b00001"; MDL2="not 5, 6 or 7";;
+  *) echo "src/muldiv.v has $MULDIV_N states (want 5 or 6): update the muldiv FSM tables" >&2; exit 2;;
+esac
+export MULDIV_N
 # The constant-bit count the lemma expects: accounting.py's EXPECT cand (one place, rewritten by a refit).
 NCAND=$(sed -n '/^EXPECT = dict(/,/)/p' "$HERE/accounting.py" | tr -d '\n ' | grep -o 'cand=[0-9]*' | cut -d= -f2)
 # The harden whose copy of src/ and resolved.json the read stage compares against (skipped if absent).
@@ -193,7 +202,7 @@ gate_fsm_buses() {         # \name[0..n-1] scalar flop nets joined into a bus \n
     echo "connect -set \\$name ${list#,}"
   done <<EOF
 soc.cpu.exwb_memSize 3
-soc.cpu.muldiv_inst.st 6
+soc.cpu.muldiv_inst.st $MULDIV_N
 soc.qspi.state 10
 soc.gpio_inst.spi_inst.st 3
 EOF
@@ -243,7 +252,7 @@ EOF
   # the proof
   cat > "$L/prove.ys" <<EOF
 read_rtlil $L/exposed.il
-read_verilog -sv -formal -I$L $HERE/lemma_props.sv
+read_verilog -sv -formal${MDEF:+ $MDEF} -I$L $HERE/lemma_props.sv
 hierarchy -top lemma_props
 proc
 async2sync
@@ -262,7 +271,7 @@ EOF
     {
       echo "PROVED k-induction length ${len:-?}, ${dt}s: all $NCAND constant bits (accounting.py EXPECT cand) equal their reset value once reset (L1)"
       [ "${len:-1}" -gt 1 ] && echo "NOTE: induction length ${len} > 1: the step is from any state; the base case covers only the zero power-up of the no-reset flops (if_kbuf, spi cc/bc), which EQY starts free on both sides"
-      echo "PROVED the same run: exwb_memSize != 3, muldiv st not 6 or 7, qspi state > 9, spi st != 3 once reset (L2, 4 FSMs)"
+      echo "PROVED the same run: exwb_memSize != 3, muldiv st $MDL2, qspi state > 9, spi st != 3 once reset (L2, 4 FSMs)"
       echo
       echo "bit  value  (consts.txt)"
       sed 's/^/PROVED /' "$L/consts.txt"
@@ -300,7 +309,7 @@ write_gold_final() {       # $1 = dir, $2 = consts file
 
 fsm_init_gate() {          # the netlist's FSM buses start at the one-hot image of state 0 (fsminv base case)
   echo "setattr -set init 3'b001 w:soc.cpu.exwb_memSize"
-  echo "setattr -set init 6'b000001 w:soc.cpu.muldiv_inst.st"
+  echo "setattr -set init $MDINIT w:soc.cpu.muldiv_inst.st"
   echo "setattr -set init 10'b0000000001 w:soc.qspi.state"
   echo "setattr -set init 3'b001 w:soc.gpio_inst.spi_inst.st"
 }
@@ -319,7 +328,7 @@ cut_design() {
   [ "$nq" = "$wq" ] && [ "$npin" = 1 ] || die "cut: $side patch has $nq Q edits (want $wq) and $npin pin edits (want 1)"
   cat > "$D/${side}_cut.ys" <<EOF
 read_rtlil $D/${side}_cut.il
-read_verilog -sv $vf
+read_verilog -sv${MDEF:+ $MDEF} $vf
 hierarchy -top $TOP
 flatten
 hierarchy -top $TOP
@@ -391,7 +400,7 @@ stage_fsminv() {
   yos fsminv/expose.log fsminv/expose.ys || die "fsminv: expose failed (see $F/expose.log)"
   cat > "$F/inv.ys" <<EOF
 read_rtlil $F/gate_exposed.il
-read_verilog -sv -formal $HERE/fsm_inv_props.sv
+read_verilog -sv -formal${MDEF:+ $MDEF} $HERE/fsm_inv_props.sv
 hierarchy -top fsm_inv_props
 proc
 async2sync
@@ -407,7 +416,7 @@ EOF
   ( cd "$B" && dk timeout 600 yosys -ql fsminv/neg.log fsminv/neg.ys ) > /dev/null 2>&1
   local len; len=$(grep -oE "Trying induction with length [0-9]+" "$F/inv.log" | tail -1 | grep -oE "[0-9]+$")
   if grep -q "Induction step proven: SUCCESS" "$F/inv.log" && grep -q "model found: FAIL" "$F/neg.log"; then
-    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of the 4 FSMs soc.cpu.exwb_memSize (3), muldiv_inst.st (6), qspi.state (10), spi_inst.st (3) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
+    echo "PROVED induction length ${len:-?}, $((SECONDS - t0))s: each of the 4 FSMs soc.cpu.exwb_memSize (3), muldiv_inst.st ($MULDIV_N), qspi.state (10), spi_inst.st (3) of the netlist is one-hot in every state reachable from its one-hot reset code (I_gate); NEG control (the FSMs stay in reset) FAILs as required" > "$F/fsminv.txt"
     say "fsminv: PROVED (k=${len:-?}), NEG FAIL"; return 0
   fi
   echo "FAILED: see $F/inv.log and $F/neg.log" > "$F/fsminv.txt"

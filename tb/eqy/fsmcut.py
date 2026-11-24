@@ -10,11 +10,11 @@ Both sides: the rf_top macro's w_ena pin gets its own net (kept $pos), so
 no reader other than the macro sees the pin's cut; so do the I-cache data
 macro's w_ena and rb_addr pins (soc.icache.pin_w_ena, pin_rb_addr; data_hi: pin_hi_*).
 Every edit is asserted to hit exactly one line."""
-import re, sys
+import os, re, sys
 side, src, dst = sys.argv[1:4]
 TOP = "tt_um_alfadelta10010_alphaone_soc"
 FSMS = [("soc.cpu.exwb_memSize", 2, 3, "memsize", "soc.cpu.fsmcut_exwb_memSize"),
-        ("soc.cpu.muldiv_inst.st", 3, 6, "muldiv", "soc.cpu.muldiv_inst.fsmcut_st"),
+        ("soc.cpu.muldiv_inst.st", 3, int(os.environ.get("MULDIV_N", "6")), "muldiv", "soc.cpu.muldiv_inst.fsmcut_st"),
         ("soc.qspi.state", 4, 10, "qspi", "soc.qspi.fsmcut_state"),
         ("soc.gpio_inst.spi_inst.st", 2, 3, "spi", "soc.gpio_inst.spi_inst.fsmcut_st")]
 text = open(src).read()
