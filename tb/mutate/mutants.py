@@ -734,4 +734,8 @@ m("C13", "cache.v", ".w_ena   (word_in && fill_idx[3]),", ".w_ena   (word_in),",
 m("C14", "cache.v", "ra_data = f_addr[7] ?", "ra_data = f_addr[6] ?", "port A macro select from addr[6]")
 m("C15", "cache.v", "rb_data = nxt[5]    ?", "rb_data = f_addr[7] ?", "port B macro select from A's index[3]: cross-macro straddle wrong")
 m("C16", "cache.v", ": f_addr[7:4];", ": {1'b0, f_addr[6:4]};", "lookup index drops index[3]: lines 8-15 alias 0-7")
+m("C17", "cache.v", "if (!tmatch) valid[{kline, ~kidx[0]}] <= 1'b0;", "/* C17 */", "sibling sector not dropped on a tag change (stale old-tag data)")
+m("C18", "cache.v", "wire [2:0]  kline     = kidx[3:1];", "wire [2:0]  kline     = kidx[2:0];", "tags indexed by the sector's low bits: sectors s and s + 8 alias")
+m("C19", "cache.v", "if (!tmatch) valid[{kline, ~kidx[0]}]", "if (1'b1) valid[{kline, ~kidx[0]}]", "sibling dropped on every fill (perf only; killed by tb_cache's keep check)")
+m("C20", "cache.v", "tags[17*kline +: 17] <= ktag;", "tags[17*kidx[2:0] +: 17] <= ktag;", "tag written at the wrong line")
 # C05 (FENCE.I flush ignored) is EQUIVALENT: the store snoop already invalidates every line a single hart can change.

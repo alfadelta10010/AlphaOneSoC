@@ -10,12 +10,12 @@
 #   3  self-modifying code with EN = 1: copy a 3-word routine to PSRAM (0x8000_1000), run it (it fills a line), rewrite
 #      word 0 (li a0, 2), FENCE.I, run it: the new code, not the cached one (2). Rewrite word 1 (addi a0, a0, 10), FENCE.I,
 #      run: 12. A store snoops the line, FENCE.I flushes everything; the program needs only the second.
-#   5  PBURST: a 64-nop routine in PSRAM (0x8000_2000, 16 lines), run cold with EN = 1, PBURST = 0 and then 1 (EN 0 -> 1
+#   5  PBURST: a 64-nop routine in PSRAM (0x8000_2000, 16 sectors), run cold with EN = 1, PBURST = 0 and then 1 (EN 0 -> 1
 #      starts cold, FENCE.I flushes). The burst run must take fewer cycles (0x40); both counts go to the mailbox
 #      (MB_VALUE = PBURST 1, MB_VALUE2 = PBURST 0) and the bench prints them.
 #   4  EN = 0 again: the same routine rewritten (li a0, 7) and run gives 17, the timed loop still runs.
 #   6  capacity (WO-77): a 64-instruction loop of exactly 256 bytes (.balign 256, all 32-bit), 50 iterations timed with
-#      the cache off and then on. All 16 lines hit after the first iteration on a 256 B cache (every line would conflict
+#      the cache off and then on. All 8 lines (16 sectors) hit after the first iteration on a 256 B cache (every line would conflict
 #      on 128 B; that was the size before WO-77), so on < off / 2 (0x50). Skipped under a +CACHE_EN force, as phase 2.
 #   7  cross-macro straddles (WO-77): in a .balign 256 block a 32-bit addi at +0x7E (word 31 in data_mem, word 0 in data_hi)
 #      and another at +0xFE (data_hi -> data_mem, index 15 -> 0); the block is called twice (fill, then hit), a0 counts

@@ -1,5 +1,5 @@
-/* Track B adversarial review (2026-11-22): the 256 B instruction cache (WO-77: 16 lines, index addr[7:4],
- * lines 0-7 in data_mem, 8-15 in data_hi) and the core's fetch hold (WO-76) under stores, FENCE.I and
+/* Track B adversarial review (2026-11-22): the 256 B instruction cache (WO-77, 8 x 32 B lines in 16 B sectors since
+ * WO-cache832, sector addr[7:4], sectors 0-7 in data_mem, 8-15 in data_hi) and the core's fetch hold (WO-76) under stores, FENCE.I and
  * CACHE_CTL writes that land while a line of either macro is being filled. tb/tb_adv.v; build -DCMODE=0/1/2
  * (cache off, EN, EN+PBURST): the signature must be the same in all three.
  *
@@ -7,11 +7,11 @@
  * 15->0); docs/pins-and-peripherals.md 12 (stores, AMOs and SCs invalidate their line, no flush needed;
  * FENCE.I flushes; EN 1->0 and 0->1 at any time); RISC-V Zifencei.
  *
- * Part A, aliasing and capacity. 32 one-line functions: P line j (j = 0..15) at PA + 16 j adds j + 1 to a0,
- * Q line j at PA + 0x100 + 16 j (same index, other tag) adds (j + 1) << 5. NCALL calls to random cells
- * (LFSR): a0 must equal the independently computed sum after every call (fail 0x11). Lines j and j + 8 have
+ * Part A, aliasing and capacity. 32 one-sector functions: P sector j (j = 0..15) at PA + 16 j adds j + 1 to a0,
+ * Q sector j at PA + 0x100 + 16 j (same index, other tag) adds (j + 1) << 5. NCALL calls to random cells
+ * (LFSR): a0 must equal the independently computed sum after every call (fail 0x11). Sectors j and j + 8 have
  * the same tag, so a cache that drops index[3] returns the other macro's line. Then (cache on only) the
- * capacity check: 8 sweeps over P lines 3..15 from a caller that sits in lines 0-2 (.balign 256), timed with
+ * capacity check: 8 sweeps over P sectors 3..15 from a caller that sits in sectors 0-2 (.balign 256), timed with
  * mcycle, cache on vs. EN = 0; on 256 B every call hits, on 128 B lines j and j + 8 evict each other:
  * EXPECTED 3 t_on < t_off (fail 0x61, value t_on, value2 t_off).
  *
@@ -247,7 +247,7 @@ trap:
     ADV_FAIL_BODY
 
 #if CMODE != 0
-/* a2 sweeps over PA lines 3..15; this code (44 B) lives in cache lines 0-2 */
+/* a2 sweeps over PA sectors 3..15; this code (44 B) lives in cache sectors 0-2 */
     .balign 256
 tsweep:
     .option push
