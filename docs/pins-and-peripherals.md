@@ -57,7 +57,9 @@ every project pin: `ui_in[0..7]` = GPIO17–24, `uio[0..7]` = GPIO25–32,
 **Pinmux.** Each `uo_out` pin has a default function (the table above) and
 may take its one alternate function by a code in the PINMUX register
 (section 11). Only pins 5 and 6 have one: pin 5 UART RTS# (code 2), pin 6 PWM0
-(code 4). Pin 7 is always PWM1 (no code). Every other code on every pin is not legal: the
+(code 4). **Pin 6 is the OLED's RES# and VCCEN (the 14 V boost-converter enable): code 4
+hands it to PWM0, which toggles RES# and VCCEN, resetting the panel and switching its boost supply
+with the PWM. Use code 4 only with the OLED absent or deliberately powered down.** Pin 7 is always PWM1 (no code). Every other code on every pin is not legal: the
 write stores 0 (the default function) and reads back 0 (WARL). RTS# exists only as such a
 feature: the default map gives `uo_out[5]` to SD CS#, so flow control
 means RTS# on pin 5 and no SD card.
@@ -762,7 +764,7 @@ bit `4i+3` reads 0 (so it can be `pinctrl-single` with 4-bit fields).
 |---|---|---|
 | 0-4 | 0 | the default of the map above (no alternate function) |
 | 5 | 0, 2 | 0 = SD CS# (GPIO OUT bit 5); 2 = UART RTS# |
-| 6 | 0, 4 | 0 = OLED RES# / VCCEN (GPIO OUT bit 6); 4 = PWM0 |
+| 6 | 0, 4 | 0 = OLED RES# / VCCEN (GPIO OUT bit 6); 4 = PWM0 (**toggles the OLED's RES# and VCCEN boost enable**) |
 | 7 | 0 | PWM1 always: the tone output, no code (every code reads 0) |
 
 The register is write-any-read-legal (WARL): a write of any code that is not
