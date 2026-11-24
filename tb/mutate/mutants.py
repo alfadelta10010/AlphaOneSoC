@@ -191,7 +191,7 @@ m("RG05", "regFile.v", "assign r1 = hit1 ? byp : m1;", "assign r1 = m1;", "port 
 
 # ── csr.v ────────────────────────────────────────────────────────────────
 m("CS01", "csr.v", "wire [31:0] mie_legal     = csr_new & 32'h0000_0888;", "wire [31:0] mie_legal     = csr_new & 32'h0000_088A;", "mie.SSIE writable")
-m("CS02", "csr.v", "wire [31:0] mtvec_legal   = {csr_new[31:2], 2'b00};", "wire [31:0] mtvec_legal   = {csr_new[31:1], 1'b0};", "mtvec bit 1 stored")
+m("CS02", "csr.v", "wire [31:0] mtvec = {mtvec_r, 2'b00};", "wire [31:0] mtvec = {mtvec_r, mtvec_r[2], 1'b0};", "mtvec bit 1 reads bit 2 (direct mode only: [1:0] must read 0)")
 m("CS03", "csr.v", "wire [31:0] mcountinhibit_legal = csr_new & 32'h0000_0005;", "wire [31:0] mcountinhibit_legal = csr_new & 32'h0000_0007;", "mcountinhibit.TM writable")
 m("CS04", "csr.v", "pmpcfg_legal = {b[7], 2'b00, b[4], b[4] | b[3], b[2], b[1] & b[0], b[0]};", "pmpcfg_legal = {b[7], 2'b00, b[4], b[4] | b[3], b[2], b[1], b[0]};", "pmpcfg R=0,W=1 stored")
 m("CS05", "csr.v", "pmpcfg0[15] ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),", "1'b0 ? pmpcfg0[15:8]  : pmpcfg_legal(csr_new[15:8]),", "pmpcfg entry 1 lock ignored")
