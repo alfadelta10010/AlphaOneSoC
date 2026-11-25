@@ -51,7 +51,8 @@ The QSPI pins are released while reset is high, so an external master can progra
   157 of 157 partitions) and runs the riscv-tests and the RISC-V arch tests through its pins,
   with signatures matching Spike (`scripts/gl/`).
 - **Physical design:** hardens in a **3x4** TinyTapeout tile slot (12 tiles) with the
-  register-file macro, at a 16 ns clock target (`clock_hz` 62.5 MHz in the submission).
+  register-file macro, at a 19.00 ns clock target (`clock_hz` 52.63 MHz in the submission; recalibrated from 62.5 MHz,
+  `docs/boot-contract-4x4.md` section 4).
   Hardening, precheck and gate-level tests are run from the separate TinyTapeout submission
   repository (`sky26d`), not from this repository.
 - **Not done:** booting Linux. The ISA, privileged and boot-contract work is aimed at it,
