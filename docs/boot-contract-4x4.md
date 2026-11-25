@@ -1,8 +1,8 @@
 # AlphaOneSoC 4x4: boot contract
 
 What the flash loader must do before it hands the hart to a NOMMU Linux kernel (or any OS that
-reads a device tree), what it may choose, and which constants move together if the board runs a
-lower clock than 62.5 MHz. No Linux driver does any of the items in section 1: they are loader
+reads a device tree), what it may choose, and which constants move together with the clock. The clock is **52.63 MHz** (recalibrated from 62.5 MHz;
+`localFiles/wo-4x4/freq/FREQ-RECAL.md`). No Linux driver does any of the items in section 1: they are loader
 material. The device tree is `docs/alphaone-4x4.dts` (board) and `docs/devicetree-4x4.dtsi` (SoC).
 
 ## 1. The loader's duties, in order
@@ -18,8 +18,8 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
    pmpaddr must be written before use, including as the lower bound of a TOR entry (a TOR entry i
    matches against pmpaddr(i-1) whatever pmpcfg(i-1) says).
    PMP grain is 4 KiB and NA4 is not selectable (`docs/FyraCore_CPU_Reference.md`, 7.7).
-2. **UART divisor and early output** (section 4). The divisor resets to 34 (114,890 baud at
-   62.5 MHz). Write it first if the clock is anything else.
+2. **UART divisor and early output** (section 4). The divisor resets to 34 (a silicon constant sized for 62.5 MHz:
+   96,749 baud at 52.63 MHz, -16.0 % from 115200, unusable). Write **29** (113,430 baud, -1.54 %) before the first character.
 3. **`SPICTL.EN = 1`** (GPIO `+0x0C`, bit 0). `spi-oc-tiny` never writes it. With EN = 0 the engine
    runs but MOSI and SCK stay on OUT bits 1 and 3 (`src/spi.v`: every pin update is `if (en)`), so
    SD and OLED transfers, including the SD init of step 4, fail silently. Set it only with every
@@ -48,12 +48,12 @@ with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap
      the no-stream strap, also disables bursts) and only if the core clock is at least **15 MHz**; the
      loader sets it only from the DT `clock-frequency`. A PSRAM line burst holds CE# low for at most
      101 clocks (worst case with rd_late = 1; measured 97 with rd_late = 0; the bound is
-     proved against 104 by k-induction, harness `mem_tcem_burst`, WO-72; 1.6 us at 62.5 MHz); the
+     proved against 104 by k-induction, harness `mem_tcem_burst`, WO-72; 1.92 us at 52.63 MHz); the
      APS6404L allows 8 us (tCEM, standard grade), which fixes the floor at 12.6 MHz, rounded up to
      15 MHz. Below that leave PBURST at 0 (the reset value; the pins are then unchanged).
 8. **Watchdog.** If the DDR sweep passed it left the watchdog armed with TOP 1 (about 2 to 3 ms) and
    it cannot be disabled. Before the jump write `WDT_TORR` with a long TOP (the write kicks): TOP 15
-   is 34 s at 62.5 MHz, and Linux's `dw_wdt` then takes over (build with
+   is 41 s at 52.63 MHz, and Linux's `dw_wdt` then takes over (build with
    `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`). A loader that never armed it can leave it off.
 9. **Hand-over state:** `a0 = 0` (hartid), `a1` = the DTB's physical address, `mstatus.MIE = 0`,
    `mie = 0`, **`mcounteren = 0x7`** (it resets to 0, so U-mode `rdcycle`/`rdtime`/`rdinstret` trap as illegal
@@ -70,7 +70,7 @@ section 3 on each boot (or reads BOOT_MODE first, as the reference routine does)
 | DT item | Value | Must agree with |
 |---|---|---|
 | `memory@80000000` | 16 MB | the PSRAM window in the core's PMA; the loader's copy |
-| `clk_core`, `uart0`, `spi0` `clock-frequency`; `timebase-frequency` | 62,500,000 | the real core clock (section 4) |
+| `clk_core`, `uart0`, `spi0` `clock-frequency`; `timebase-frequency` | 52,631,579 | the real core clock (section 4) |
 | `chosen` `stdout-path`, `bootargs` | `serial0:115200n8`, earlycon | the UART divisor (section 4) |
 | CLINT `reg` | `0x0200_0000` + 64 KB | `fyracore` IO0 window |
 | PLIC `riscv,ndev` | 9 | `src/plic.v` NSRC |
@@ -94,22 +94,22 @@ the `rd_late` strap (`ui_in[0]`) and the no-stream strap (`ui_in[2]`), both samp
 
 ## 4. Clock-dependent constants
 
-Everything below is written for 62.5 MHz. If the board runs at *f* (the fallback for a thin setup
-margin), change all of them together. The silicon constants cannot change; the DT and loader values
+Everything below is written for **52.63 MHz** (T = 19.00 ns; the 62.5 MHz values are in
+`localFiles/wo-4x4/freq/FREQ-RECAL.md`). If the board runs at another *f*, change all of them together. The silicon constants cannot change; the DT and loader values
 can.
 
-| Constant | At 62.5 MHz | At lower *f* | Where |
+| Constant | At 52.63 MHz | At another *f* | Where |
 |---|---|---|---|
-| UART divisor (`UART_DIV_RESET`, a hardwired parameter) | 34 = 114,890 baud (-0.27 %) | The reset value stays 34, so the first characters come out at *f* / 544 baud until the loader writes DLL/DLM: divisor = round(*f* / (16 x baud)). 50 MHz: 27 (115,741, +0.47 %); 25 MHz: 14 (111,607, -3.1 %, or a lower baud); 15 MHz: 8 (117,188, +1.7 %); 10 MHz: 11 at 57,600 baud (56,818, -1.4 %) | `src/uart.v`, loader, `bootargs` |
-| DT `clock-frequency` x3 (`clk_core`, `uart0`, `spi0`) | 62,500,000 | the real *f*. `clk_core` also feeds `pwm0` (period 2^(16+scale) clocks) and `dw_wdt` (timeouts) | `docs/devicetree-4x4.dtsi` |
-| `timebase-frequency` | 62,500,000 | *f* (mtime counts the core clock) | `docs/alphaone-4x4.dts` |
+| UART divisor (`UART_DIV_RESET`, a hardwired parameter) | reset 34 = 96,749 baud (-16.0 %); the loader writes **29 = 113,430 baud (-1.54 %)** | The reset value stays 34, so the first characters come out at *f* / 544 baud until the loader writes DLL/DLM: divisor = round(*f* / (16 x baud)). 50 MHz: 27 (115,741, +0.47 %); 25 MHz: 14 (111,607, -3.1 %, or a lower baud); 15 MHz: 8 (117,188, +1.7 %); 10 MHz: 11 at 57,600 baud (56,818, -1.4 %) | `src/uart.v`, loader, `bootargs` |
+| DT `clock-frequency` x3 (`clk_core`, `uart0`, `spi0`) | 52,631,579 | the real *f*. `clk_core` also feeds `pwm0` (period 2^(16+scale) clocks) and `dw_wdt` (timeouts) | `docs/devicetree-4x4.dtsi` |
+| `timebase-frequency` | 52,631,579 | *f* (mtime counts the core clock) | `docs/alphaone-4x4.dts` |
 | `earlycon` | no baud, clock from the node | with an explicit baud also give the clock in Hz (`earlycon=uart8250,mmio,0x10000000,115200,<f>`) | `bootargs` |
-| SPI BAUD: SCK = *f* / (2 (BAUD + 1)) | SD at BAUD 2 = 10.4 MHz | The driver derives BAUD = ceil(*f* / (2 x `spi-max-frequency`)) - 1. BAUD 1 is lost to the pin flop, so keep `spi-max-frequency` **below *f* / 4**: 10,416,667 at 62.5 MHz gives BAUD 2, but at 25 MHz it would give BAUD 1, so use at most 6,249,999 there (BAUD 2 = 4.17 MHz). SD init needs SCK <= 400 kHz (BAUD <= 255 up to 204 MHz, always met). The OLED needs 75 ns phases: BAUD >= ceil(*f* x 75 ns) - 1 (5 at 62.5 MHz; 1 at 25 MHz, but BAUD 1 is only unsafe for MISO, never use 0 to receive) | `spi0` node, loader |
-| Watchdog: timeout = 2^(16+TOP) clocks | TOP 15 = 34.4 s; DDR test TOP 1 = 2.1 to 3.1 ms | scales as 1/*f*: at 15 MHz TOP 15 = 143 s, TOP 1 = 8.7 to 13 ms. The driver reads the rate from `clk_core`, so a correct DT needs nothing else | `docs/soc-architecture.md` (Watchdog), loader |
-| PSRAM minimum clock, any access | 8.0 MHz (tCEM 8 us; a single read holds CE# low 64 clocks at worst) | **below 8 MHz every PSRAM access breaks tCEM and corrupts RAM silently**; add margin (use 8.3 MHz or more) | PSRAM, always (with or without PBURST) |
-| PBURST minimum clock | 15 MHz (tCEM 8 µs, at most 101 clocks per line: floor 12.6 MHz) | **below 15 MHz PBURST stays 0** | CACHE_CTL |
-| PWM1 tone: 62.5e6 / (N * 2^S + 1) Hz | N = round((62.5e6 / f - 1) / 2^S) | recompute the note table (pins-and-peripherals.md, Tones) | bare-metal software |
-| UART RX slack without RTS# | 87 µs per character at 114,890 baud | set by the baud, not the clock: unchanged once the divisor is retuned | `docs/pins-and-peripherals.md` |
+| SPI BAUD: SCK = *f* / (2 (BAUD + 1)) | SD at BAUD 2 = 8.77 MHz (`spi-max-frequency` 8771930) | The driver derives BAUD = ceil(*f* / (2 x `spi-max-frequency`)) - 1. BAUD 1 is lost to the pin flop, so keep `spi-max-frequency` **below *f* / 4**: 10,416,667 at 62.5 MHz gives BAUD 2, but at 25 MHz it would give BAUD 1, so use at most 6,249,999 there (BAUD 2 = 4.17 MHz). SD init needs SCK <= 400 kHz (BAUD <= 255 up to 204 MHz, always met). The OLED needs 75 ns phases: BAUD >= ceil(*f* x 75 ns) - 1 (5 at 62.5 MHz; 1 at 25 MHz, but BAUD 1 is only unsafe for MISO, never use 0 to receive) | `spi0` node, loader |
+| Watchdog: timeout = 2^(16+TOP) clocks | TOP 15 = 40.8 s; DDR test TOP 1 = 2.5 to 3.7 ms | scales as 1/*f*: at 15 MHz TOP 15 = 143 s, TOP 1 = 8.7 to 13 ms. The driver reads the rate from `clk_core`, so a correct DT needs nothing else | `docs/soc-architecture.md` (Watchdog), loader |
+| PSRAM minimum clock, any access | 8.0 MHz (tCEM 8 us; a single read holds CE# low 64 clocks at worst, 1.22 us at 52.63 MHz) | **below 8 MHz every PSRAM access breaks tCEM and corrupts RAM silently**; add margin (use 8.3 MHz or more) | PSRAM, always (with or without PBURST) |
+| PBURST minimum clock | 15 MHz (tCEM 8 µs, at most 101 clocks per line: floor 12.6 MHz; 1.92 µs at 52.63 MHz) | **below 15 MHz PBURST stays 0** | CACHE_CTL |
+| PWM1 tone: 52.6316e6 / (N * 2^S + 1) Hz | N = round((52.6316e6 / f - 1) / 2^S) | recompute the note table (pins-and-peripherals.md, Tones) | bare-metal software |
+| UART RX slack without RTS# | 88 µs per character at 113,430 baud | set by the baud, not the clock: unchanged once the divisor is retuned | `docs/pins-and-peripherals.md` |
 
 ## 5. Checking the device tree
 

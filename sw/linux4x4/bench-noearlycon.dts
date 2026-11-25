@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /* AlphaOneSoC 4x4: board file for a NOMMU, M-mode Linux (or any DT-driven OS).
  *
- * Includes docs/devicetree-4x4.dtsi (the SoC's peripherals, the cpu interrupt controller, the 62.5 MHz
+ * Includes docs/devicetree-4x4.dtsi (the SoC's peripherals, the cpu interrupt controller, the 52.63 MHz
  * fixed clock) and adds what that file defers: root, cpus, memory, CLINT, aliases, chosen and the SPI
  * children. The flash loader must still do the things no driver does (docs/boot-contract-4x4.md).
  *
@@ -26,7 +26,7 @@
 
 	chosen {
 		/* earlycon takes its clock from the node when stdout-path is used; the explicit form
-		 * without a baud leaves the divisor alone (114,890 baud out of reset, set by the loader). */
+		 * without a baud leaves the divisor alone (the loader's divisor 29, 113,430 baud; 34 out of reset). */
 		stdout-path = "serial0:115200n8";
 		bootargs = "console=ttyS0,115200 rootwait";
 	};
@@ -35,7 +35,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		/* mtime counts the core clock: the same number as clk_core and the UART's clock-frequency */
-		timebase-frequency = <62500000>;
+		timebase-frequency = <52631579>;
 	};
 
 	memory@80000000 {
@@ -69,11 +69,11 @@
 
 &spi0 {
 	/* oled@0 and mmc@1 are optional board children. tiny_spi rounds the divider up, so
-	 * spi-max-frequency 10416667 gives BAUD 2 (10.4 MHz at 62.5 MHz); the SD card is capped there. */
+	 * spi-max-frequency 8771930 gives BAUD 2 (8.77 MHz at 52.63 MHz); the SD card is capped there. */
 	mmc@1 {
 		compatible = "mmc-spi-slot";
 		reg = <1>;
-		spi-max-frequency = <10416667>;
+		spi-max-frequency = <8771930>;
 		voltage-ranges = <3200 3400>;
 		status = "disabled";	/* enable when the card is fitted; the loader sets SPICTL.EN first */
 	};

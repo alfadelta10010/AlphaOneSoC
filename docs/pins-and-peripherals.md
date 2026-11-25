@@ -412,13 +412,14 @@ RBR pops only on a load whose byte enable selects offset 0. The core drives
 * LCR stores only DLAB and SBC; its other bits read 0. SBC (bit 6) sends a
   break: TX is held at 0 from the next 16x tick until SBC is cleared
   (`serial8250_break_ctl`). RBR resets to 0 so Linux's start-up read cannot
-  see an X. The divisor resets to 34, 114,890 baud (-0.27% from 115200) at
-  62.5 MHz, so a program in flash can print before it sets the divisor
+  see an X. The divisor resets to 34, sized for 62.5 MHz (114,890 baud there); at the
+  52.63 MHz clock that is 96,749 baud (-16.0 %), so a program sets **29** (113,430 baud, -1.54 %)
+  before it prints
   (`alphaone_soc`'s `UART_DIV_RESET`); a divisor of 0 behaves as 1. Every
   register write waits for `ready`, so a word store that writes THR and LCR
   together while the FIFO is full writes LCR once, when THR is taken.
 
-**RX without RTS# (the default map).** At 114,890 baud a character is 87 µs.
+**RX without RTS# (the default map).** At 113,430 baud a character is 88 µs.
 The 8-deep FIFO leaves, after the trigger (4 bytes for Linux's code 2), room
 for 4 more characters plus the one being shifted in: **5 character times,
 about 435 µs, before an overrun**. Linux reaches the 8250 handler in roughly
@@ -448,10 +449,10 @@ Early console: `earlycon=uart8250,mmio,0x10000000,115200,<core clock in Hz>`,
 or `earlycon=uart8250,mmio,0x10000000` with no baud at all. The clock
 matters: given a baud and no clock, `drivers/tty/serial/earlycon.c` assumes
 `BASE_BAUD * 16` = 1.8432 MHz and `8250_early.c` programs divisor
-1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.906 Mbaud at
-62.5 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
-UART runs at whatever it holds -- 114,890 baud at 62.5 MHz straight out of reset,
-or whatever the boot loader set. A plain `earlycon` with `stdout-path` in
+1843200 / (16 × 115200) = 1, which on this chip is clk/16 (3.289 Mbaud at
+52.63 MHz). With no baud, `8250_early.c` leaves the divisor alone and the
+UART runs at whatever it holds -- 96,749 baud at 52.63 MHz straight out of reset (unusable),
+or the boot loader's 29 (113,430 baud). A plain `earlycon` with `stdout-path` in
 the device tree takes `clock-frequency` from the node and is also right.
 
 ### 3. GPIO at `0x1001_0000`
@@ -518,7 +519,7 @@ bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
 | `0x24` | TXDATA. Write: queue a byte (waits while the holding register is full). Read: that register, i.e. the byte written but not yet loaded, or after a load the byte received with the byte before. |
 | `0x28` | STATUS. Read: bit 0 TXE = engine idle and holding register empty, bit 1 TXR = holding register empty. Write: `{txren, txeen} <= wdata[1:0]`, the interrupt enables; **a STATUS write never waits**. |
 | `0x2C` | CONTROL: bit 0 CPHA, bit 1 CPOL. All four modes; resets to 3 (mode 3). |
-| `0x30` | BAUD, 8 bits, resets to `0xFF`. SCK = clk / (2 x (BAUD + 1)): 122 kHz to 31.25 MHz at 62.5 MHz. |
+| `0x30` | BAUD, 8 bits, resets to `0xFF`. SCK = clk / (2 x (BAUD + 1)): 103 kHz to 26.3158 MHz at 52.63 MHz. |
 
 * Polled loop, as the driver runs it: write TXDATA(b0); for each further
   byte write TXDATA, wait TXR, read TXDATA; at the end wait TXE and read
@@ -533,13 +534,14 @@ bit 2 and RES# = bit 6 are `dc-gpios` / `reset-gpios`).
   to back. MOSI changes only at a launch edge, from a flop, so the device gets
   BAUD + 1 clocks of setup and hold. MISO is sampled one core clock before
   the edge that ends each bit, from GPIO IN 1's first synchroniser flop.
-  The SSD1331 needs 75 ns phases: BAUD >= 5 at 62.5 MHz. The SD card is
-  capped at 10.4 MHz in the device tree (BAUD 2). **BAUD 1 is lost
+  The SSD1331 needs 75 ns phases ((BAUD + 1) T >= 75 ns): BAUD >= 3 at 52.63 MHz
+  (the driver's BAUD from `spi-max-frequency` 5208334 is 5). The SD card is
+  capped at 8.77 MHz in the device tree (BAUD 2). **BAUD 1 is lost
   to the pin flop**: MOSI and SCK both move one clock
   later, so device timing is unchanged, but the MISO sample point is
-  internal and the round trip loses one clock (16 ns). At BAUD 2 the card
-  keeps 28 / 23 / 18 ns of margin for round trips of 20 / 25 / 30 ns; at
-  BAUD 1 it goes negative. Never use BAUD 0 to receive.
+  internal and the round trip loses one clock (19.0 ns). At BAUD 2 the card
+  keeps 40 / 35 / 30 ns of margin for round trips of 20 / 25 / 30 ns (4T - 16 - R); at
+  BAUD 1 it is +2 / -3 / -8 ns (2T - 16 - R): not usable on the board. Never use BAUD 0 to receive.
 * **Modes.** The driver writes CONTROL and BAUD before every transfer with
   the mode of the last device set up, so run both devices in mode 3.
 * Device tree: `baud-width = <8>` and `clock-frequency` are both required.
@@ -705,7 +707,8 @@ PWM's shared counter. The old audio window `0x1003_0100` is the PWM again: slot 
 for 2^S clocks each and sits on N for one clock before `zerocmp` restarts it, so the **period is N * 2^S + 1 clocks**
 (measured in simulation, `tests/soc/audio.S`: for example S = 2, N = 35,511 gives 142,045 clocks). The pin is `ip[1]` =
 (s >= cmp1): high for (N - cmp1) * 2^S + 1 clocks, a square wave for cmp1 = N / 2. Pick the smallest S with N <= 65,535
-and N = round((62.5e6 / f - 1) / 2^S). Restart the counter with a PWMCOUNT write before enabling a tone, so the first edge is
+and N = round((52.6316e6 / f - 1) / 2^S) at 52.63 MHz (the note table below is the 62.5 MHz one: the clock periods are
+the same, every frequency scales by 0.8421). Restart the counter with a PWMCOUNT write before enabling a tone, so the first edge is
 exact. Note timing (the length of a note) comes from the CLINT (`mtime`): the PWM has no interrupt.
 
 **Stopping a tone.** `PWM_CFG = 0` alone only freezes the counter: `ip[1]` keeps its last value, so pin 7 can stay

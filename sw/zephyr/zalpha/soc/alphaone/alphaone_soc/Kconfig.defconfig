@@ -1,7 +1,7 @@
 if SOC_ALPHAONE_SOC
 
 config SYS_CLOCK_HW_CYCLES_PER_SEC
-	default 62500000
+	default 52631579
 
 config RISCV_SOC_INTERRUPT_INIT
 	default n

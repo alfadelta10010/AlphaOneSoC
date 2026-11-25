@@ -196,7 +196,8 @@ enters continuous-read mode) and releases the bus for the other four.
   pad round trip up to about 2 clocks. At 1 it is sampled three clocks after,
   which covers about 1 to 3 clocks, and chip select stays low one clock
   longer for the last nibble. TinyQV measured the TinyTapeout pad round trip
-  at a little over 20 ns; at 50 MHz use 0, and at 62.5 MHz (the clock the
+  at a little over 20 ns; at 50 and 55 MHz use 0 (the chip clock is 52.63 MHz:
+  `docs/qspi-ddr.md` 3.5), and at 62.5 MHz (the clock the
   3x4 harden closes at) and near 66 MHz use 1. It is a
   strap rather than a register because flash reads must work before any
   software runs, and it is sampled during reset and held, so a pin that
@@ -477,7 +478,7 @@ fails:
 5. **Execute test.** A stream framing error (the device launching half an SCK
    late) is invisible to loads, so the routine runs flash code in DDR at the
    chosen point with the watchdog armed: BOOT_MODE = `0xD8 + k`, WDT_TORR TOP 1
-   (131 072 to 196 608 clocks, about 2.1 to 3.1 ms at 62.5 MHz, written first so
+   (131 072 to 196 608 clocks, about 2.5 to 3.7 ms at 52.63 MHz, written first so
    the write kicks) and WDT_CR.EN, then QSPI_CFG DDR on at k, then a call to a
    straight-line flash routine (300+ instructions from immediates, then a short
    loop) whose checksum is compared with the SDR one. A trap during the test:
@@ -569,16 +570,16 @@ COMP_PARAMS_1 bit 6 to learn that the timeouts are the fixed powers of two.
 
 **Timeout.** TOP *t* gives 2^(16+*t*) clocks, *t* = 0..15.
 
-| TOP | 2^(16+TOP) clocks | at 62.5 MHz | at 50 MHz | TOP | at 62.5 MHz | at 50 MHz |
+| TOP | 2^(16+TOP) clocks | at 52.63 MHz | at 50 MHz | TOP | at 52.63 MHz | at 50 MHz |
 |---|---|---|---|---|---|---|
-| 0 | 65,536 | 1.05 ms | 1.31 ms | 8 | 268 ms | 336 ms |
-| 2 | 262,144 | 4.19 ms | 5.24 ms | 10 | 1.07 s | 1.34 s |
-| 4 | 1,048,576 | 16.8 ms | 21.0 ms | 12 | 4.29 s | 5.37 s |
-| 6 | 4,194,304 | 67.1 ms | 83.9 ms | 14 | 17.2 s | 21.5 s |
-| | | | | 15 | 34.4 s | 42.9 s |
+| 0 | 65,536 | 1.25 ms | 1.31 ms | 8 | 319 ms | 336 ms |
+| 2 | 262,144 | 4.98 ms | 5.24 ms | 10 | 1.28 s | 1.34 s |
+| 4 | 1,048,576 | 19.9 ms | 21.0 ms | 12 | 5.10 s | 5.37 s |
+| 6 | 4,194,304 | 79.7 ms | 83.9 ms | 14 | 20.4 s | 21.5 s |
+| | | | | 15 | 40.8 s | 42.9 s |
 
-At 62.5 MHz `dw_wdt` has `min_timeout` 1 s (TOP 10), `max_hw_heartbeat_ms`
-34,359 (TOP 15) and a default of 30 s (TOP 15); for longer timeouts the
+At 52.63 MHz `dw_wdt` has `min_timeout` 1 s (TOP 10), `max_hw_heartbeat_ms`
+40,802 (TOP 15) and a default of 30 s (TOP 15); for longer timeouts the
 watchdog core pings on the kernel's behalf.
 
 **Timebase: a tap of `mtime`.** syscon takes `wdt_tap = mtime[29:14]` from the
@@ -721,7 +722,7 @@ The watchdog node, with a fixed clock for the core clock (`dw_wdt` needs
 sysclk: sysclk {                      /* the core clock = timebase-frequency */
     compatible = "fixed-clock";
     #clock-cells = <0>;
-    clock-frequency = <62500000>;
+    clock-frequency = <52631579>;
 };
 
 watchdog@10020100 {

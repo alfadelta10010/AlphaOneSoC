@@ -14,7 +14,7 @@
 	clk_core: clock-core {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <62500000>;
+		clock-frequency = <52631579>;
 	};
 
 	cpus {
@@ -64,7 +64,7 @@
 		 * the FIFO one). Were it to push more, THR stalls the CPU up to one frame (~87 us at
 		 * 115200). The driver still writes FCR = ENABLE_FIFO | R_TRIG_10 (code 2), which this
 		 * UART maps to 4 bytes here (decision on review S2), leaving 5 characters (~435 us) of
-		 * slack before an RX overrun. For sustained input at 114,890 baud use the RTS# pinmux
+		 * slack before an RX overrun. For sustained input at 113,430 baud use the RTS# pinmux
 		 * feature (flow control), or set rx_trig_bytes to 1 (sysfs; it reads back the 16550A
 		 * table's values, not ours). */
 		uart0: serial@10000000 {
@@ -73,7 +73,7 @@
 			reg-shift = <0>;
 			reg-io-width = <1>;
 			clocks = <&clk_core>;
-			clock-frequency = <62500000>;
+			clock-frequency = <52631579>;
 			fifo-size = <8>;
 			tx-threshold = <7>;	/* tx_loadsz = 8 - 7 = 1 */
 			interrupt-parent = <&plic>;
@@ -108,18 +108,18 @@
 		/* tiny_spi at GPIO +0x20. The SPI interrupt is built but deliberately not described:
 		 * spi-oc-tiny then takes one interrupt per byte, ~1 ms each at BAUD 2, and polling is faster.
 		 * Chip selects are GPIO OUT bits: OLED CS# = 0, SD CS# = 5 (both active low). D/C is bit 2,
-		 * RES#/VCCEN bit 6. The SD card is capped at BAUD 2 (10.4 MHz); BAUD 1 is lost to the pin flop. */
+		 * RES#/VCCEN bit 6. The SD card is capped at BAUD 2 (8.77 MHz); BAUD 1 is lost to the pin flop. */
 		spi0: spi@10010020 {
 			compatible = "opencores,tiny-spi-rtlsvn2";
 			reg = <0x10010020 0x14>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-			clock-frequency = <62500000>;
+			clock-frequency = <52631579>;
 			baud-width = <8>;	/* legacy text binding (spi_oc_tiny.txt): dt-validate has no schema for it */
 			cs-gpios = <&gpo 0 1>, <&gpo 5 1>;
 
-			/* oled@0 and mmc@1 (compatible "mmc-spi-slot", spi-max-frequency <10416667>:
-			 * tiny_spi rounds the divider up, so 10416666 would give BAUD 3, 10416667 gives BAUD 2)
+			/* oled@0 and mmc@1 (compatible "mmc-spi-slot", spi-max-frequency <8771930>:
+			 * tiny_spi rounds the divider up, so 8771929 would give BAUD 3, 8771930 gives BAUD 2)
 			 * belong in the board file. */
 		};
 

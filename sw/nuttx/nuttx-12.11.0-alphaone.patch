@@ -93,8 +93,8 @@ index edc34ec1..bf745dd1 100644
  
 -#define MTIMER_FREQ 10000000
 -#define TICK_COUNT (10000000 / TICK_PER_SEC)
-+#define MTIMER_FREQ 62500000
-+#define TICK_COUNT (62500000 / TICK_PER_SEC)
++#define MTIMER_FREQ 52631579
++#define TICK_COUNT (52631579 / TICK_PER_SEC)
  
  /****************************************************************************
   * Public Functions
