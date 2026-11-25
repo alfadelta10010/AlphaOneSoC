@@ -5,7 +5,7 @@
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
-		timebase-frequency = <62500000>;
+		timebase-frequency = <52631579>;
 
 		cpu0: cpu@0 {
 			device_type = "cpu";
@@ -15,7 +15,7 @@
 			riscv,isa-base = "rv32i";
 			riscv,isa-extensions = "i", "m", "a", "c", "zicsr", "zifencei";
 			mmu-type = "riscv,none";
-			clock-frequency = <62500000>;
+			clock-frequency = <52631579>;
 
 			hlic0: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -43,7 +43,7 @@
 			compatible = "ns16550";
 			reg = <0x10000000 0x8>;
 			reg-shift = <0>;
-			clock-frequency = <62500000>;
+			clock-frequency = <52631579>;
 			current-speed = <115200>;
 			status = "okay";
 		};

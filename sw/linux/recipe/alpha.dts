@@ -31,7 +31,7 @@
 			mmu-type = "riscv,none";
 			riscv,pmpregions = <4>;
 			riscv,pmpgranularity = <4096>;
-			clock-frequency = <62500000>;
+			clock-frequency = <52631579>;
 
 			cpu0_intc: interrupt-controller {
 				#interrupt-cells = <1>;
@@ -58,7 +58,7 @@
 			reg = <0x10000000 0x100>;
 			reg-shift = <0>;
 			reg-io-width = <1>;
-@UARTIRQ@			clock-frequency = <62500000>;
+@UARTIRQ@			clock-frequency = <52631579>;
 			current-speed = <114890>;
 		};
 

@@ -25,8 +25,8 @@ FREESTANDING := -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns
 LDLIBS  := -Wl,--start-group -lc -lm -lgcc -Wl,--end-group
 COMMON  := common/crt0.S common/trap_entry.S common/trap.c common/uart.c common/exit.c common/printf.c
 
-# 114,890 baud at 62.5 MHz (common/soc.h UART_DIVISOR); the bench checks the program ends with it
-UART_DIVISOR := 34
+# 113,430 baud at 52.63 MHz (common/soc.h UART_DIVISOR); the bench checks the program ends with it
+UART_DIVISOR := 29
 BENCH_OPT ?= -O2
 CM_ITER   ?= 1
 

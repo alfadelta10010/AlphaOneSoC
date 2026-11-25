@@ -1,12 +1,19 @@
 /* An SD card in SPI mode on the SPI controller (src/gpio.v), polled.
  * Follows the boot contract (docs/ROADMAP.md 9.1 rules 4 and 5): EN is set with
  * every CS# high (both the card's and the OLED's), at least 74 clocks go out with CS# high
- * before CMD0, and the card is first clocked at BAUD 0xFF (122 kHz at 62.5 MHz; the spec allows 400 kHz
+ * before CMD0, and the card is first clocked at BAUD SD_INIT_BAUD (255: 103 kHz at 52.63 MHz; the spec allows 100 to 400 kHz
  * during identification). Blocks are 512 bytes; an SDHC card is addressed by block
  * number (32 bits: SDHC and SDXC cards up to 2 TB), a standard-capacity one by byte (at most 2 GB: a block
  * number from 0x800000 up would wrap the 32-bit byte address, so sd_read and sd_write refuse it). CRC is off in SPI mode except for CMD0
  * and CMD8. */
 #include "soc.h"
+
+/* SCK = CLK_HZ / (2 (BAUD + 1)). Identification: the largest BAUD whose SCK
+ * is still >= 100 kHz (the spec allows 100 to 400 kHz), capped at the register's 255. Data: BAUD 2, as the device tree caps
+ * the card (docs/pins-and-peripherals.md 3: BAUD 1 loses a clock of MISO margin to the pin flop,
+ * 2T - 16 ns - R (T = 19.0 ns), which is not positive for the board's ~20-25 ns round trip). */
+#define SD_INIT_BAUD    ((CLK_HZ / 200000u - 1u) > 255u ? 255u : (CLK_HZ / 200000u - 1u))
+#define SD_DATA_BAUD    2u
 
 int sd_sdhc;
 uint32_t sd_blocks;                     /* the card's size in blocks from its CSD (version 2 only); 0 = not known */
@@ -80,7 +87,7 @@ int sd_init(void)
     uint32_t ocr = 0;
     uint8_t r;
 
-    SPI(GPIO_BAUD) = 0xFF;
+    SPI(GPIO_BAUD) = SD_INIT_BAUD;
     SPI(GPIO_OUT) |= GPIO_SD_CS | GPIO_OLED_CS;     /* rule 4: EN only with every CS# high */
     SPI(GPIO_CONTROL) = 3;                           /* mode 3: SCK idles high, as the card wants */
     SPI(GPIO_SPICTL) = 1;
@@ -152,11 +159,11 @@ int sd_init(void)
     sd_blocks = 0;
     if (sd_sdhc)
         sd_read_csd();
-    /* 10.4 MHz (the device tree's spi-max-frequency): BAUD 1 would be 15.6 MHz, but it is lost to the pin flop (the
-     * MISO sample point is inside the chip, the round trip loses a clock, 16 ns), so on a board the card's data
-     * would arrive too late; BAUD 2 keeps 28 / 23 / 18 ns of margin for round trips of 20 / 25 / 30 ns
-     * (docs/pins-and-peripherals.md 3). The bench's card has a short round trip: BAUD 1 passes there. */
-    SPI(GPIO_BAUD) = 2;
+    /* 8.77 MHz at 52.63 MHz (the device tree's spi-max-frequency): BAUD 1 would be 13.16 MHz, but it is lost to the pin flop (the
+     * MISO sample point is inside the chip, the round trip loses a clock, 19.0 ns), so on a board the card's data
+     * would arrive too late; BAUD 2 keeps 40 / 35 / 30 ns of margin for round trips of 20 / 25 / 30 ns
+     * (4T - 16 ns - R; docs/pins-and-peripherals.md 3). The bench's card has a short round trip: BAUD 1 passes there. */
+    SPI(GPIO_BAUD) = SD_DATA_BAUD;
     return 0;
 }
 

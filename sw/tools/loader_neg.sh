@@ -9,7 +9,7 @@ for v in magic erased size_big load_low load_high load_unal size_unal size_zero 
   n=$((n+1))
   want=$(python3 tools/badimage.py "$B/hello/flash.bin" "$B/hello/bad-$v.hex" "$v")
   code=${want%% *}; msg=${want#* }
-  (cd "$B/hello" && timeout 200 ${SIM:-$B/bench/sim} +FLASH_FILE="$B/hello/bad-$v.hex" +UART_DIV=34 +MAX_CYCLES=8000000 > "bad-$v.log" 2>&1)
+  (cd "$B/hello" && timeout 200 ${SIM:-$B/bench/sim} +FLASH_FILE="$B/hello/bad-$v.hex" +UART_DIV=29 +MAX_CYCLES=8000000 > "bad-$v.log" 2>&1)
   if [ "$code" = 0 ]; then
     ok=$(grep -q "SW-RESULT: PASS" "$B/hello/bad-$v.log" && grep -q "Hello, world" "$B/hello/bad-$v.log" && ! grep -q "flash in DDR\|flash stays SDR" "$B/hello/bad-$v.log" && echo y)
   else
