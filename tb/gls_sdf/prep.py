@@ -20,7 +20,8 @@ for old, new in MACROS:
     assert c <= 1, (old, c)
     if c:
         t = t.replace('\\' + old + ' ', new + ' ')
-        s = s.replace(old.replace('.', '\\.'), new)
+        # whole instance name only: an escaped SYNTH_AUTONAME name can start with the macro's name (soc\.icache\.data_hi_w_ena_...)
+        s = re.sub(re.escape(old.replace('.', '\\.')) + r'(?![\w\\\[])', new, s)
         n_ren += 1
 assert n_ren >= 1, 'no macro instance found in the netlist'
 s, n_cell = re.subn(r' \(CELL\n  \(CELLTYPE "rf_top"\)\n.*?\n \)\n', '', s, flags=re.S)
