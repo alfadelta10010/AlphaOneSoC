@@ -707,8 +707,8 @@ PWM's shared counter. The old audio window `0x1003_0100` is the PWM again: slot 
 for 2^S clocks each and sits on N for one clock before `zerocmp` restarts it, so the **period is N * 2^S + 1 clocks**
 (measured in simulation, `tests/soc/audio.S`: for example S = 2, N = 35,511 gives 142,045 clocks). The pin is `ip[1]` =
 (s >= cmp1): high for (N - cmp1) * 2^S + 1 clocks, a square wave for cmp1 = N / 2. Pick the smallest S with N <= 65,535
-and N = round((52.6316e6 / f - 1) / 2^S) at 52.63 MHz (the note table below is the 62.5 MHz one: the clock periods are
-the same, every frequency scales by 0.8421). Restart the counter with a PWMCOUNT write before enabling a tone, so the first edge is
+and N = round((52.6316e6 / f - 1) / 2^S) at 52.63 MHz (the table below; `tests/soc/audio.S` keeps the 62.5 MHz values,
+which only measure clock periods). Restart the counter with a PWMCOUNT write before enabling a tone, so the first edge is
 exact. Note timing (the length of a note) comes from the CLINT (`mtime`): the PWM has no interrupt.
 
 **Stopping a tone.** `PWM_CFG = 0` alone only freezes the counter: `ip[1]` keeps its last value, so pin 7 can stay
@@ -719,21 +719,21 @@ of reach, so the pin falls cleanly), then `PWM_CFG = 0`, then `PWM_COUNT = 0` (r
 Shared-counter limit: PWM0 uses the same counter and `cmp0`, so while a tone plays PWM0 (pin 6, if mapped) is one clock high
 once per tone period (duty is not available there; it can only follow the tone's period).
 
-The Korobeiniki notes at 62.5 MHz (equal tempered, A4 = 440 Hz; the error is below 0.02 cent):
+The Korobeiniki notes at 52.63 MHz (equal tempered, A4 = 440 Hz; the error is below 0.03 cent):
 
 | Note | S | cmp0 (N) | cmp1 | Period (clocks) | Hz |
 |---|---|---|---|---|---|
-| E2 | 4 | 47402 | 23701 | 758433 | 82.41 |
-| A2 | 4 | 35511 | 17755 | 568177 | 110.00 |
-| E4 | 2 | 47402 | 23701 | 189609 | 329.63 |
-| A4 | 2 | 35511 | 17755 | 142045 | 440.00 |
-| B4 | 1 | 63274 | 31637 | 126549 | 493.88 |
-| C5 | 1 | 59722 | 29861 | 119445 | 523.25 |
-| D5 | 1 | 53206 | 26603 | 106413 | 587.33 |
-| E5 | 1 | 47401 | 23700 | 94803 | 659.26 |
-| F5 | 1 | 44741 | 22370 | 89483 | 698.46 |
-| G5 | 1 | 39860 | 19930 | 79721 | 783.98 |
-| A5 | 1 | 35511 | 17755 | 71023 | 880.00 |
+| E2 | 4 | 39917 | 19958 | 638673 | 82.41 |
+| A2 | 3 | 59808 | 29904 | 478465 | 110.00 |
+| E4 | 2 | 39917 | 19958 | 159669 | 329.63 |
+| A4 | 1 | 59808 | 29904 | 119617 | 440.00 |
+| B4 | 1 | 53283 | 26641 | 106567 | 493.88 |
+| C5 | 1 | 50292 | 25146 | 100585 | 523.25 |
+| D5 | 1 | 44805 | 22402 | 89611 | 587.33 |
+| E5 | 1 | 39917 | 19958 | 79835 | 659.25 |
+| F5 | 1 | 37677 | 18838 | 75355 | 698.45 |
+| G5 | 1 | 33566 | 16783 | 67133 | 783.99 |
+| A5 | 0 | 59808 | 29904 | 59809 | 879.99 |
 
 The tone test (`tests/soc/audio.S`, `make test-soc-periph`, and through the pins in `test-wrapper-soc`) plays all eleven notes
 and measures each period on `uo_out[7]` within 1 clock of the table, plus the pin-6 pulses in the A4 phase.
