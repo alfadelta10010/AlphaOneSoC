@@ -14,6 +14,7 @@
 //   I6 valid[s] -> gtags[s] == tags[s/2]   (ghost gtags[s] = tag of the fill that last started on sector s, kept in the generated
 //      cache copy by cache_dbg_gen.sh): a valid sector holds data of the tag its line still has
 //   I7 fill_active -> tags[line(fill_idx)] == fill_tag;  I8 fill_active -> gtags[fill_idx] == fill_tag  (so a fill that ends sets valid on I6)
+//   I9 fill_active -> !valid[fill_idx]  (without it a stale valid sector survives a tag-mismatch fill start: I6-I8 alone do not see that)
 // Environment: as tb/formal/cache_props.sv (core holds f_req/f_addr until f_ready, f_addr[0] = 0, PMA windows; mem_ctrl
 // answers only a held request, never twice in a row, never in the cycle a store completes; the data port holds its
 // request; one reset in the first cycle).
@@ -109,6 +110,7 @@ module cache_ind_props (
             if (dbg_fill) begin
                 assert (dbg_tags[17*dbg_fill_idx[3:1] +: 17] == dbg_fill_tag);                  // I7
                 assert (dbg_gtags[17*dbg_fill_idx +: 17] == dbg_fill_tag);                      // I8
+                assert (!dbg_valid[dbg_fill_idx]);                                              // I9 (fill start clears the filled sector's valid bit)
             end
         end
         if (live) begin
