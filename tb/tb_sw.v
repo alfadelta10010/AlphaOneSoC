@@ -28,6 +28,16 @@
 //
 // Both simulators build it; Verilator needs --timing for the Pmod model's
 // delays (sw/Makefile).
+//
+// -DTB_PINS puts the TinyTapeout top (tt_um_alfadelta10010_alphaone_soc: the RTL wrapper, or the shipped
+// gate-level netlist converted by scripts/gl/gl2verilator.sh, which is the same module name) in place of
+// alphaone_soc and reaches it through its 24 pins only, wired as tb/tb_tt_um.v wires them (straps ui_in[0]
+// rd_late, ui_in[2] no-stream, UART RX ui_in[3], SD DO ui_in[1], reset on rst_n). A gate-level netlist has
+// no internal buses, so this variant has no instret, no bus request checkers and no +NO_STREAM check, and the
+// end of the run is syscon's `off` flop going high (a FINISH 0x5555 or 0x3333 store; the code itself is not
+// visible, so a PASS here is "powered off with a clean UART and SD", and the expect file's text rules carry the
+// rest). -DTB_GATE additionally reads the netlist's flop nets (\soc.syscon_inst.off, \soc.uart_inst.dll[..])
+// instead of the RTL hierarchy. sw/Makefile: make bench-pins / bench-gl, run-... BENCH=pins|gl.
 `timescale 1ns / 1ps
 
 `ifndef TCLK_NS
@@ -58,6 +68,7 @@ module tb_sw;
     tri1       sd_do;
     wire [7:0] gpio_in = {6'b000000, sd_do, 1'b0};
 
+`ifndef TB_PINS
     // The chip's own reset divisor (34); software sets the one it wants. Flash streaming
     // is on, as it is by default (the strap pin low).
     alphaone_soc soc (
@@ -66,6 +77,60 @@ module tb_sw;
         .qspi_io_out(qspi_io_out), .qspi_io_oe(qspi_io_oe), .qspi_io_in(qspi_io_in),
         .uart_rx(uart_rx_r), .uart_tx(uart_tx), .uart_rts_n(uart_rts_n),
         .gpio_in(gpio_in), .gpio_out(gpio_out));
+    wire [15:0] uart_div = {soc.uart_inst.dlm, soc.uart_inst.dll};
+`else
+    // The TT top on its pins (uio pin map as tb_tt_um: [0] CS0, [1] SD0, [2] SD1, [3] SCK, [4] SD2, [5] SD3, [6] CS1, [7] CS2).
+    wire [7:0] ui_in = {4'b0000, uart_rx_r, no_stream, sd_do, rd_late};
+    wire [7:0] uo_out, uio_out, uio_oe;
+    wire [7:0] uio_in = {1'b1, 1'b1, qspi_io_in[3], qspi_io_in[2], uio_out[3], qspi_io_in[1], qspi_io_in[0], 1'b1};
+    tt_um_alfadelta10010_alphaone_soc dut (
+        .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in), .uio_out(uio_out), .uio_oe(uio_oe),
+        .ena(1'b1), .clk(clk), .rst_n(~rst));
+    // The models see idle pin levels for the first two clock edges only: with +verilator+rand+reset+2 the wrapper's
+    // flops start at random values and the pins show them until the reset reaches them, which the Pmod / SD timing
+    // checkers (rightly, for a real pin) call a violation at t=0. From the second edge on (rst is still high for 10
+    // clocks) the pins are the chip's own reset-period pins, unmasked. tb_tt_um checks them against the spec.
+    wire pin_mask = rst && (cyc < 2);
+    assign qspi_sck    = pin_mask ? 1'b0 : uio_out[3];
+    assign qspi_cs_n   = pin_mask ? 3'b111 : {uio_out[7], uio_out[6], uio_out[0]};
+    assign qspi_ctl_oe = pin_mask ? 1'b0 : uio_oe[3];
+    assign qspi_io_out = {uio_out[5], uio_out[4], uio_out[2], uio_out[1]};
+    assign qspi_io_oe  = pin_mask ? 1'b0 : &{uio_oe[5], uio_oe[4], uio_oe[2], uio_oe[1]};
+    assign uart_tx     = pin_mask ? 1'b1 : uo_out[4];
+    assign gpio_out    = pin_mask ? 8'h39 : uo_out;
+    assign uart_rts_n  = 1'b1;
+`ifdef TB_GATE
+    // +RAND_PROBE: at t = 1 ns print some flops the design never resets (CSRs mscratch, mtval, mepc, low bits), to show a
+    // run's random power-up state differs per +verilator+seed
+    initial if ($test$plusargs("RAND_PROBE")) begin
+        #1;
+        $display("RAND-PROBE mscratch[15:0]=%h mtval[15:0]=%h mepc[15:2]=%h", {
+            dut.\soc.cpu.csr_unit.mscratch[15] , dut.\soc.cpu.csr_unit.mscratch[14] , dut.\soc.cpu.csr_unit.mscratch[13] , dut.\soc.cpu.csr_unit.mscratch[12] ,
+            dut.\soc.cpu.csr_unit.mscratch[11] , dut.\soc.cpu.csr_unit.mscratch[10] , dut.\soc.cpu.csr_unit.mscratch[9] , dut.\soc.cpu.csr_unit.mscratch[8] ,
+            dut.\soc.cpu.csr_unit.mscratch[7] , dut.\soc.cpu.csr_unit.mscratch[6] , dut.\soc.cpu.csr_unit.mscratch[5] , dut.\soc.cpu.csr_unit.mscratch[4] ,
+            dut.\soc.cpu.csr_unit.mscratch[3] , dut.\soc.cpu.csr_unit.mscratch[2] , dut.\soc.cpu.csr_unit.mscratch[1] , dut.\soc.cpu.csr_unit.mscratch[0] },
+          {
+            dut.\soc.cpu.csr_unit.mtval[15] , dut.\soc.cpu.csr_unit.mtval[14] , dut.\soc.cpu.csr_unit.mtval[13] , dut.\soc.cpu.csr_unit.mtval[12] ,
+            dut.\soc.cpu.csr_unit.mtval[11] , dut.\soc.cpu.csr_unit.mtval[10] , dut.\soc.cpu.csr_unit.mtval[9] , dut.\soc.cpu.csr_unit.mtval[8] ,
+            dut.\soc.cpu.csr_unit.mtval[7] , dut.\soc.cpu.csr_unit.mtval[6] , dut.\soc.cpu.csr_unit.mtval[5] , dut.\soc.cpu.csr_unit.mtval[4] ,
+            dut.\soc.cpu.csr_unit.mtval[3] , dut.\soc.cpu.csr_unit.mtval[2] , dut.\soc.cpu.csr_unit.mtval[1] , dut.\soc.cpu.csr_unit.mtval[0] },
+          {
+            dut.\soc.cpu.csr_mepc[15] , dut.\soc.cpu.csr_mepc[14] , dut.\soc.cpu.csr_mepc[13] , dut.\soc.cpu.csr_mepc[12] ,
+            dut.\soc.cpu.csr_mepc[11] , dut.\soc.cpu.csr_mepc[10] , dut.\soc.cpu.csr_mepc[9] , dut.\soc.cpu.csr_mepc[8] ,
+            dut.\soc.cpu.csr_mepc[7] , dut.\soc.cpu.csr_mepc[6] , dut.\soc.cpu.csr_mepc[5] , dut.\soc.cpu.csr_mepc[4] ,
+            dut.\soc.cpu.csr_mepc[3] , dut.\soc.cpu.csr_mepc[2]  });
+    end
+    wire [15:0] uart_div = {
+        dut.\soc.uart_inst.dlm[7] , dut.\soc.uart_inst.dlm[6] , dut.\soc.uart_inst.dlm[5] , dut.\soc.uart_inst.dlm[4] ,
+        dut.\soc.uart_inst.dlm[3] , dut.\soc.uart_inst.dlm[2] , dut.\soc.uart_inst.dlm[1] , dut.\soc.uart_inst.dlm[0] ,
+        dut.\soc.uart_inst.dll[7] , dut.\soc.uart_inst.dll[6] , dut.\soc.uart_inst.dll[5] , dut.\soc.uart_inst.dll[4] ,
+        dut.\soc.uart_inst.dll[3] , dut.\soc.uart_inst.dll[2] , dut.\soc.uart_inst.dll[1] , dut.\soc.uart_inst.dll[0] };
+    wire pins_off = dut.\soc.syscon_inst.off ;
+`else
+    wire [15:0] uart_div = {dut.soc.uart_inst.dlm, dut.soc.uart_inst.dll};
+    wire pins_off = dut.soc.syscon_inst.off;
+`endif
+`endif
 
     qspi_pmod_model pmod (
         .host_sck(qspi_sck), .host_cs_n(qspi_cs_n), .host_ctl_oe(qspi_ctl_oe),
@@ -92,9 +157,9 @@ module tb_sw;
     integer exp_div;
     task sd_finish;
         begin
-            if ($value$plusargs("UART_DIV=%d", exp_div) && {soc.uart_inst.dlm, soc.uart_inst.dll} != exp_div[15:0]) begin
+            if ($value$plusargs("UART_DIV=%d", exp_div) && uart_div != exp_div[15:0]) begin
                 uart_errors = uart_errors + 1;
-                $display("ERROR uart: divisor %0d at the end, want %0d", {soc.uart_inst.dlm, soc.uart_inst.dll}, exp_div);
+                $display("ERROR uart: divisor %0d at the end, want %0d", uart_div, exp_div);
             end
             if ($value$plusargs("SD_DUMP=%s", sd_name)) $writememh(sd_name, sd.disk);
             $display("SD: %0d commands, %0d blocks read, %0d written, %0d errors, %0d expected",
@@ -103,6 +168,7 @@ module tb_sw;
     endtask
 
     reg done = 1'b0;
+`ifndef TB_PINS
     req_hold_check #(.W(69), .NAME("dmem request")) chk_dmem (
         .clk(clk), .rst(rst || done || soc.rst_soc), .take(soc.dmem_req), .hold(soc.dmem_req), .done(soc.dmem_ready),
         .payload({soc.dmem_addr, soc.dmem_we, soc.dmem_be, soc.dmem_we ? soc.dmem_wdata : 32'h0}));
@@ -110,18 +176,24 @@ module tb_sw;
         .clk(clk), .rst(rst || done || soc.rst_soc), .take(soc.imem_req), .hold(soc.imem_req), .done(soc.imem_ready),
         .payload(soc.imem_addr));
 
+`endif
     // ── UART decoder: 8N1 at 16 x divisor clocks per bit ────────────────────
     integer uart_errors = 0, uart_bytes = 0;
     reg [7:0] ub;
     real      bit_ns, t_start;
     integer   k;
     reg [8*32-1:0] tail = 0;        // the last 32 characters the program sent
+    // +LINE_LOG=<file>: the clock count at the end of every UART line (one decimal number per newline), for
+    // comparing the milestones of two runs of a long console boot without touching its output
+    integer line_fd = 0;
+    reg [8*1024-1:0] line_name;
+    initial if ($value$plusargs("LINE_LOG=%s", line_name)) line_fd = $fopen(line_name, "w");
     initial begin
         #1;
         forever begin
             @(negedge uart_tx);
             if (!rst && !done) begin
-                bit_ns = 16.0 * {soc.uart_inst.dlm, soc.uart_inst.dll} * TCLK;
+                bit_ns = 16.0 * uart_div * TCLK;
                 #(bit_ns * 0.5);
                 if (uart_tx !== 1'b0) begin
                     uart_errors = uart_errors + 1;
@@ -139,6 +211,7 @@ module tb_sw;
                     uart_bytes = uart_bytes + 1;
                     $write("%c", ub);
                     tail = {tail[8*31-1:0], ub};
+                    if (ub == 8'h0a && line_fd != 0) begin $fdisplay(line_fd, "%0d", cyc); $fflush(line_fd); end
                 end
             end
         end
@@ -172,7 +245,7 @@ module tb_sw;
                 for (i = 0; i < sl; i = i + 1) begin
                     sb = sc[pos + i];
                     if ($test$plusargs("RXTRACE")) $display("TB-RX send %02x cyc %0d", sb, cyc);
-                    in_ns = 16.0 * {soc.uart_inst.dlm, soc.uart_inst.dll} * TCLK;
+                    in_ns = 16.0 * uart_div * TCLK;
                     uart_rx_r = 1'b0; #(in_ns);
                     for (kk = 0; kk < 8; kk = kk + 1) begin uart_rx_r = sb[kk]; #(in_ns); end
                     uart_rx_r = 1'b1; #(in_ns * 2.0);
@@ -186,15 +259,20 @@ module tb_sw;
     // ── Run control ─────────────────────────────────────────────────────────
     reg [63:0] max_cycles = 64'd2000000000;
     reg [63:0] instret = 64'd0;
+`ifndef TB_PINS
     always @(posedge clk) if (!rst && soc.cpu.dbg_retired) instret <= instret + 1;
+`endif
 
     // +NO_STREAM: the strap says the flash never streams, and no software step (the loader's DDR
     // sweep included) may turn it on. Checked every clock, so one trial point with STREAM set shows.
     reg ns_err = 1'b0;
+`ifndef TB_PINS
     always @(posedge clk) if (!rst && no_stream && soc.qspi_stream_en === 1'b1 && !ns_err) begin
         ns_err <= 1'b1;
         $display("ERROR stream: QSPI_CFG.STREAM set under +NO_STREAM (cycle %0d)", cyc);
     end
+
+`endif
 
     initial begin
         if ($value$plusargs("MAX_CYCLES=%d", max_cycles)) ;
@@ -205,19 +283,35 @@ module tb_sw;
         #1 rst = 1'b0;
     end
 
+`ifndef TB_PINS
     wire fin = soc.dmem_req && soc.dmem_we && soc.dmem_ready &&
                soc.dmem_addr == 32'h1002_0000 && soc.dmem_be[1:0] == 2'b11;
+    wire fin_go   = fin && (soc.dmem_wdata[15:0] == 16'h5555 || soc.dmem_wdata[15:0] == 16'h3333);
+    wire fin_pass = soc.dmem_wdata[15:0] == 16'h5555;
+    wire [15:0] fin_code = soc.dmem_wdata[31:16];
+`else
+    // pins: syscon's `off` flop (set by a FINISH 0x5555 or 0x3333 store); which of the two is not visible
+    wire fin_go   = pins_off === 1'b1;
+    wire fin_pass = 1'b1;
+    wire [15:0] fin_code = 16'd0;
+`ifndef TB_GATE
+    // RTL on the pins: the FINISH store is still visible; log it (the gate-level run cannot)
+    always @(posedge clk) if (!rst && !done && dut.soc.dmem_req && dut.soc.dmem_we && dut.soc.dmem_ready &&
+                              dut.soc.dmem_addr == 32'h1002_0000 && dut.soc.dmem_be[1:0] == 2'b11)
+        $display("FINISH-PROBE: store %h (cycle %0d)", dut.soc.dmem_wdata, cyc);
+`endif
+`endif
     always @(posedge clk) begin
         if (!rst && !done) begin
-            if (fin && (soc.dmem_wdata[15:0] == 16'h5555 || soc.dmem_wdata[15:0] == 16'h3333)) begin
+            if (fin_go) begin
                 done = 1'b1;
                 $write("\n");
                 sd_finish;
-                if (soc.dmem_wdata[15:0] == 16'h5555 && uart_errors == 0 && sd.errors == 0 && !ns_err)
+                if (fin_pass && uart_errors == 0 && sd.errors == 0 && !ns_err)
                     $display("SW-RESULT: PASS cycles=%0d instret=%0d", cyc, instret);
                 else
                     $display("SW-RESULT: FAIL code=%0d cycles=%0d instret=%0d",
-                             soc.dmem_wdata[15:0] == 16'h5555 ? (ns_err ? 126 : 0) : soc.dmem_wdata[31:16], cyc, instret);
+                             fin_pass ? (ns_err ? 126 : 0) : fin_code, cyc, instret);
                 $finish;
             end else if (cyc >= max_cycles) begin
                 done = 1'b1;
