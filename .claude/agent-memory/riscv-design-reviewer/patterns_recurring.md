@@ -109,3 +109,47 @@ PPA / area claims
   that test (WO-27 fr_misa, 2026-10-30). Check: run each new test on the UNMUTATED RTL with +RF_X +RF_COLLIDE_X.
 
 - Equivalence (yosys equiv_make) after `opt_clean -purge`: a formal-only alias (`assign fv_x = x`) can take over the net name, leaving a flop unmatched -> one "unproven" cell that is an artefact; all other proofs are conditional on it (WO-36, 2026-11-07).
+
+## 2026-11-08 (REVIEW-53)
+- Verilog expression sizing on small config fields: `wire [2:0] x = (f3 + 3'd2) >> 1` overflows in 3 bits; any
+  derived index then goes out of range (x in sim, don't-care in synthesis -> RTL/gate divergence EQY won't see).
+  Check every arithmetic on a register field at its max value.
+- Print-only sweeps (Makefile loops that echo a passing set with no expected set / exit 1) are false passes.
+- Mixed launch edges into one pin cone (negedge DDR flop muxed with posedge-combinational SDR data) need a kept
+  final mux cell; a static mux select is not a hazard guarantee after ABC restructuring.
+
+## 2026-11-20 (WO-54/55)
+- A harness that builds its expected value from a DUT-exposed combinational wire (audio level_q from `sum`) leaves that
+  function unpinned: only bounds get checked. Grep every exposed comb wire used on the RHS of an assert.
+- Linux driver header comments can contradict the driver's own arithmetic (pwm-sifive polarity, 2025). The arithmetic
+  plus the vendor RTL (sifive-blocks) is the contract; flag it in RTL comments so bench authors don't "fix" polarity.
+- One-sided legality asserts (core_req R6 "access inside a window") cannot kill "window missing/shrunk" mutants;
+  pair every map change with reachability covers (WO-46 FC88, 2026-11-20).
+- A WO's "expected values" can encode a spec error (WO-47: claim returns 0 at thr=max); the harness then proves
+  the error. Check expected-value tables against the spec text, not just the RTL against the WO.
+- Error flags that persist until a FIFO pop (not LSR read) are Linux-safe but livelock datasheet ISRs (WO-49).
+
+## 2026-11-21 (WO-51/52)
+- Assume-guarantee drift: an env assume stronger than the proved guarantee (bus harness held wdata on reads; core_hold
+  only proves it for writes; harness PMA windows narrower than the core's PMA params). Diff every assume against
+  the proof that justifies it.
+- Bench "weakening by re-pointing": a check moved from the core-visible signal (dmem_rdata at ready) to the target's
+  own wire (syscon_rdata at sel), or a "flow control held back" check replaced by "nothing sent against CTS" (passes
+  stuck-asserted). Ask what stuck-at fault each rewritten check still kills.
+- A black-box shadow of an internal flop (ph_s) is fine IF every observable is asserted against it; no hierarchical
+  ref is needed.
+
+## 2026-11-21 (final pre-lock)
+- DT written from memory, never compiled or schema-checked: "gpio-mmio" is the platform driver NAME, not an OF
+  compatible (use wd,mbl-gpio); pinctrl-single ",bits" needs ",bit-per-mux" + #pinctrl-cells 2. Always diff each
+  compatible/property against the driver's of_match table + parse code; ask for dtc + dtbs_check.
+- "No driver writes it" registers (SPICTL.EN) are loader duties: list them in the boot contract or Linux silently
+  loses the device.
+- Clock-floor drift: a feature that lengthens CE#-low (PSRAM burst) raises the min clock for tCEM; comments quoting
+  "< x us" must be re-derived from the measured clocks.
+
+## 2026-11-24 (CSR-slim)
+- Reference-model config has more than one source: Spike's --dtb CPU node (riscv,pmpgranularity / pmpregions) OVERRIDES the
+  CLI flags. A changed river-config.ini value is not proof; probe the reference through the flow's own command line
+  (pmpaddr probe) before trusting any "expected Spike divergence" label. A trace-length mismatch on a self-detecting test
+  means the two models took different branches, not a value-only label.

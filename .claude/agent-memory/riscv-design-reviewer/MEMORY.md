@@ -19,7 +19,8 @@ update after each review with confirmed decisions, findings, and recurring patte
 - Memory map (ADOPTED e98761e): PMA_ROM flash 0x20000000 16MB RX; PMA_RAM PSRAM 0x80000000 16MB RWX+LR/SC
   (CS by addr[23]); IO0 CLINT 0x02000000 64KB; IO1 UART/GPIO/syscon 0x10000000-0x1002FFFF; IO takes AMO, not LR/SC.
   Reset PC = boot_addr INPUT (caa2d10); SoC ties it to 0x20000000 — FLASH-ONLY boot (81afe82), no strap,
-  no boot ROM, PSRAM always reset at start-up. mtvec resets 0 (documented as deliberate).
+  no boot ROM, PSRAM always reset at start-up. CSR-slim (93a5e4c, 4x4 branch): mtvec/mscratch/mepc/mtval/pmpaddr0-3 have NO
+  reset; mcause = int + 4-bit code; PMP grain G=10 (4 KiB), pmpaddr[31:30] RO 0, NA4 stored as NAPOT.
   SoC BUILT (soc-fabric branch, PR #5): soc_bus stateless decode, mem_ctrl data-first + 1 KB page split,
   qspi_ctrl SCK=clk/2: PSRAM in QPI (0Bh 2+6+4 read, 38h 2+6 write, 97010f4); flash quad I/O EBh, cmd on IO0,
   M=FFh — USER DECISION (d8194db): no flash CRM/QPI, don't re-propose, don't call it "SPI mode".
@@ -58,50 +59,9 @@ update after each review with confirmed decisions, findings, and recurring patte
 - Misaligned access precise trap; interrupt mid-multicycle op; PSRAM/QSPI wait states; PMP reset state.
 - QSPI device hand-over states (see finding_pr5_mempath_review_2026-09-29.md) and the Pmod model's AC checks.
 
-## Findings log (one line each; detail in the linked file)
+## Findings log
 
-- 2026-09-05 WB-stall drops mem op (CRIT), MRET multicommit (CRIT), exc. priority (MAJ) — all fixed since.
-- 2026-09-12 branch review R1-R8 + V1-V4 — finding_branch_review_2026-09-12.md
-- 2026-09-22 rtl-fix review: muldiv livelock (CRIT), csrw+mret loss — finding_branch_review_2026-09-22.md
-- 2026-09-24 full review 7cd1eb6: muldiv regressions, garbage-forward redirect — finding_branch_review_2026-09-24.md
-- 2026-09-25 fix verification: all 09-24 fixed; pmpcfg R0W1, UNOPTFLAT — finding_branch_review_2026-09-25.md
-- 2026-09-25b 0b6eabb + Linux memory map proposal — finding_branch_review_2026-09-25b_memmap.md
-- 2026-09-26 pre-RTL SoC arch: A1-A4 Majors (all fixed later) — finding_soc_arch_review_2026-09-26.md
-- 2026-09-26 post-RTL SoC 71a8514: no CRIT/MAJ — finding_soc_rtl_review_2026-09-26.md
-- 2026-09-26 full-branch bc0baec: model blind spots, 77h wrap (m1) — finding_branch_review_2026-09-26_full.md
-- 2026-09-27 peripherals 4d04809: SPI D/C race MAJ (fixed edae17c) — finding_periph_review_2026-09-27.md
-- 2026-09-27b counters/LR/SC: cross-half read MAJ (fixed 97105f2) — finding_review_2026-09-27_counters_lrsc.md
-- 2026-09-29 PR #5 memory-path slice 4b4ed8b: no CRIT/MAJ; dual-I/O CRM hand-over, flash BUSY, model lacks tRST,
-  false-fails mixed PSRAM modes — finding_pr5_mempath_review_2026-09-29.md
-- 2026-09-29 PR #5 periph + test-claims slice 4b4ed8b: no CRIT/MAJ; suites reproduce; CLINT-we mutant escapes all
-  tests; mutation claim overstated — finding_pr5_review_2026-09-29.md
-- 2026-09-30 PR #5 fix round 3f8a69f: no CRIT/MAJ; model misses step order + QPI-exit step, BI same-cycle,
-  MTIP window upper bound (all PROVEN by mutant) — finding_pr5_fixround_review_2026-09-30.md
-- 2026-10-04 area-opt stack 2209bb0: no CRIT/MAJ, RTL correct; suites miss SRA/MULHSU/SLTU values, PMP refetch,
-  fetch-PMP vs MPRV, rs2 snoop (5 probes written) — finding_areaopt_review_2026-10-04.md
-- 2026-10-09 PPA/claims 30eacb1: tile figures ~24% low vs TT cell set (12.52 t = 101% of 6x2), NO harden
-  completes (RF self-loop hold buffers), #1b saves 0, tip slower at tt (muldiv) — finding_ppa_review_2026-10-09.md
-- 2026-10-10 TT wrapper + pins bench (uncommitted): MAJ reset needs clocks, stock TT firmware resets with clock
-  stopped (FIXED same day: async-assert reset); bench's 2nd reset mis-aimed, no-sync mutant passes (both fixed) — finding_tt_wrapper_review_2026-10-10.md
-- 2026-10-11 rf_top macro integration (0367965+wip): no CRIT/MAJ; rf_hold exact; wfi_active term has no functional test (PROVEN),
-  select bugs visible only in zero-IMEM-wait core runs; core 10.84 -> 7.07 t + 0.84 t macro — finding_rf_macro_review_2026-10-11.md
-- 2026-10-11 rf-macro FINAL 88c18f3: MAJ load-use relies on the macro's same-edge write-through (model-only; read-first mutant
-  fails SoC t_memstress); README macro at [450,45] not the precedent spot (routing wall, PDN stubs); 6x2 harden congested — same file
-- 2026-10-23 syscon PLAN (WO-20 RTL, WO-21 docs, WO-22 DW-compatible watchdog +0.057 t): rst_soc for all but syscon, 2-edge reboot, strap mux, 0.087 t;
-  mailbox +0xF04 unreachable from s11 (12-bit imm) -- finding_syscon_design_2026-10-23.md
-- 2026-10-24 SA-009 (my WO-22 miss): wdt fires in the cycle after a FINISH store (rst_soc lags rq/off one edge);
-  WO-23 gates fire with ~rst_soc, +0.0009 t; breaks mutant WD03's string -- same file
-- 2026-10-29 WO-27 fetch word reuse DESIGN (worktree fetch-reuse): 24.6-26.1% fetches saved on C, CPI ~-19%, 17 flops,
-  no tag; directed suite 0.57% hits; D1-D6 pending -- finding_fetch_reuse_wo27_2026-10-29.md
-- 2026-10-29 WO-28 SPI controller DESIGN (worktree AlphaOneSoC-spi): tiny_spi map @0x1001_0020, F12 pin flops, OUT rst 0x89;
-  15.6 MHz MISO margin 2-12 ns -> cap BAUD 2; +1,150 um2, 3x4 ~69.9% w/ fetch reuse -- finding_spi_wo28_2026-10-29.md
-- 2026-10-30 WO-27 impl review f7f956b: RTL OK; BLOCK verif: fr_misa not RF_X-clean -> false FR12/FR14 kills, +rfx leg masks all
-  survivors; core_fetch F1 32-bit clause vacuous (FR03 proves) -- finding_fetch_reuse_wo27_2026-10-29.md
-- 2026-10-30 WO-28 SPI impl review 42e2fec: RTL APPROVE, +24 flops exact, sample point probed (D<=2B); verif gap until WO-29
-  (no RX/modes 0-2/unit SPI bench; GP01-04 raise) -- finding_spi_wo28_2026-10-29.md
-
-- 2026-11-07 WO-36 RVFI port 8976278: APPROVE w/ non-blocking, port correct; zero_area stall_nofetch unproven = purge renamed
-  wfi_active->fv_wfi_active (equiv_add closes 5017/5017) -- finding_rvfi_wo36_2026-11-07.md
+- Chronological verdict log: [findings_log.md](findings_log.md). Latest: 2026-11-25 ADV-tip slice D (RTL clean; variant docs + stale freq patches MAJOR); 2026-11-24 CSR-slim adversarial (A/B/D sound; river_core DTB grain MAJOR); 2026-11-24 slim pinmux/PWM review (APPROVE w/ SF); 2026-11-24 WO-cache832 planning (S sectored recommended); 2026-11-22 Track B RTL review.
 
 ## Notes index
 
@@ -142,3 +102,24 @@ update after each review with confirmed decisions, findings, and recurring patte
 - [2026-10-29 WO-28 SPI controller](finding_spi_wo28_2026-10-29.md) — tiny_spi semantics, sample-point table, area, D1-D9
 - [2026-10-29 WO-27 fetch reuse](finding_fetch_reuse_wo27_2026-10-29.md) — kv/kbuf rule, capture enable, measured saving, gaps, PicoRV32 precedent
 - [2026-11-07 WO-36 RVFI port](finding_rvfi_wo36_2026-11-07.md) — per-shape RVFI verdicts, equiv name-alias artefact + fix, WO-37 env gaps
+- [2026-11-08 REVIEW-53 qspi stream/DDR](finding_qspi_stream_ddr_review53_2026-11-08.md) — EDh P'' trace, m1 overflow, pin-cone hazard, FC02/FC49 argument
+- [2026-11-21 WO-51/52 bus+PLIC+UART](finding_wo51_wo52_2026-11-21.md) — two-phase IO bus proof sketch, SB05 equivalence, open S1-S3
+- [2026-11-21 WO-58/61/63](finding_wo58_wo61_wo63_2026-11-21.md) — pins/F12/TT01 table, dw_wdt edge storm, 8250 fixed-type facts, tiny_spi baud rounding
+- [2026-11-20 WO-54/55 pwm+audio](finding_wo54_wo55_pwm_audio_2026-11-20.md) — pwm-sifive polarity trap, audio harness mixer unpinned
+- [2026-11-20 WO-46/47/49](finding_wo46_wo47_wo49_2026-11-20.md) — IO2 window, PLIC threshold-vs-claim spec violation, 16550A BI/RLS livelock
+- [2026-11-21 WO-62 K4 I-cache](finding_wo62_icache_k4_2026-11-21.md) — no RTL defect; SF1 flash fill addr vs M-A2, stale P_LI, BMC-only contract, no EN=1 SoC run, STA, PSRAM fill cost
+- [2026-11-21 FINAL pre-lock](finding_final_prelock_2026-11-21.md) — whole-SoC verdict, DT gpio-mmio/pinctrl probe bugs, WO-68 equiv + tCEM floor, fallbacks
+- [2026-11-21 ADV-B bus/PLIC/IRQ](finding_adv_b_bus_irq_2026-11-21.md) — 0 blk/major; IN_IP phantom w/ 2-edge TT reset, stale plic.nonvac, dw_wdt.c facts
+- [2026-11-21 ADV-C periph+pins](finding_adv_c_periph_pins_2026-11-21.md) — pinctrl-single mask must span fmask (FINAL SF2 corrected), IN_IP phantom, driver facts, D13 2b*T
+- [2026-11-21 ADV-A cache+PBURST](finding_adv_a_cache_burst_2026-11-21.md) — RTL clean; stale only at d=2 (store d_ready cycle); proof-strength + mutant gaps
+- [2026-11-22 WO-76/77 Track B plan](finding_wo76_wo77_plan_2026-11-22.md) — wasted fetches already merged; residual hold rules + DF_N trap; 256 B cache data_hi, fit risk
+- [2026-11-22 slice B mem-path perf](finding_perf_mempath_sliceB_2026-11-22.md) — cycle reference, cold-jump fill penalty B1, 7-CPI gap = model fill assumption, all DROP
+- [2026-11-22 slice A core CPI review](finding_perf_core_sliceA_2026-11-22.md) — cache-on cycle budget, shifter 5+k, M start slack, why WO-76 gave -0.95 %
+- [2026-11-22 Track B RTL review](finding_trackb_rtl_2026-11-22.md) — WO-77 256 B cache + WO-76 fetch hold clean; collision-comment gap, combined-SHA evidence, RDA check
+- [2026-11-24 WO-cache832 plan](finding_cache832_plan_2026-11-24.md) — 8x32 B: sectored S (5 RTL lines, tCEM/proofs unchanged) vs L; model/area/formal numbers
+- [2026-11-24 slim pinmux/PWM/audio](finding_slim_pinmux_pwm_2026-11-24.md) — WARL pinmux, PWM no irq, PWM1 tones: SiFive period proof, FPGA PIN break, stale docs
+- [2026-11-24 CSR-slim adversarial](finding_csrslim_adversarial_2026-11-24.md) — no-reset/4-bit mcause/G=10 sound; Spike DTB overrides --pmpgranularity (river_core at G=0)
+- [2026-11-25 tip slice C CSR/PMP](finding_adv_tip_C_csr_2026-11-25.md) — RTL unchanged+sound; Zephyr port lacks PMP_GRANULARITY, rand1 G=0 programs, +CSR_X X-optimism
+- [2026-11-25 ADV-tip slice D](finding_adv_tip_D_2026-11-25.md) — slim RTL clean at f75a734; A0-core vs tip doc/DT/sw split, freq patches stale, pwm-sifive 6.8 vs master
+- [2026-11-25 ADV-tip slice A core](finding_adv_tip_A_core_2026-11-25.md) — PX-6/7/8+a48b21f+brcmp clean; store-edge stale fetch general; ALTOPS start blind spot
+- [2026-11-25 adv tip slice B cache](finding_adv_tip_cache_2026-11-25.md) — cache832 sound (tags only written at start); B1-B4 verif gaps (BMC-only sector inv, M-A5, no RC/EQY, HM5), doc NITs
