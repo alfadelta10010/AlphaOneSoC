@@ -157,6 +157,11 @@ module tb_sw;
     real      bit_ns, t_start;
     integer   k;
     reg [8*32-1:0] tail = 0;        // the last 32 characters the program sent
+    // +LINE_LOG=<file>: the clock count at the end of every UART line (one decimal number per newline), for
+    // comparing the milestones of two runs of a long console boot without touching its output
+    integer line_fd = 0;
+    reg [8*1024-1:0] line_name;
+    initial if ($value$plusargs("LINE_LOG=%s", line_name)) line_fd = $fopen(line_name, "w");
     initial begin
         #1;
         forever begin
@@ -180,6 +185,7 @@ module tb_sw;
                     uart_bytes = uart_bytes + 1;
                     $write("%c", ub);
                     tail = {tail[8*31-1:0], ub};
+                    if (ub == 8'h0a && line_fd != 0) begin $fdisplay(line_fd, "%0d", cyc); $fflush(line_fd); end
                 end
             end
         end
