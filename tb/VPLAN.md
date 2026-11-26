@@ -487,6 +487,16 @@ Residuals:
 
 ### 4.4 Equivalence, gate level, pins, the Pmod model
 
+**4x4, 256 B (2026-11-26):** RTL `4x4-alfadelta10010` src 93a5e4c (unchanged through f216369) is equivalent
+to the 4x4 post-PnR netlist Fp190n2j (nl.v md5 c85f64690d4103139aed2b31c7fb6736, AREA 2, SYNTH_AUTONAME,
+19 ns). **EQY PASS: 254 of 254 partitions, all by sat at induction length 1.** 191 bits removed by
+synthesis (181 CSR + gpio out_r[1], [3] + PLIC pend/insvc of the tied sources 5-8) are proved constant
+and tied (186 to 0, 5 to 1); the lemma (191 bits + 4 FSM invariants) closes at k = 2; 7 of 7 mutants are
+caught. The autonamed netlist names 84 live pmpaddr/pmpcfg A[1] flops after the cpu-level
+csr_pmpaddrN wire, matched by explicit renames. The branch-compare tree's kept nodes (bcmp.l*/e*) are
+not cut points: ABC rewrites l1 = l0 | (e0 & l0') as (l0 | l0') & !gt across them, which only holds
+with the operands, so the tree is compared whole from the operand cuts (14 false fails otherwise).
+
 EQY (`tb/eqy/run.sh`): RTL `qspi-stream_alfadelta10010` at d75cb5c (84c878f before a history reorder; same RTL) is equivalent to its
 3x4 post-PnR netlist (nl.v, md5 71d75961e9e64b995d551afdec157aff, 2026-11-09). **EQY PASS:
 179 of 179 partitions, all by sat at induction length 1.** (Main a2f7285 against the
