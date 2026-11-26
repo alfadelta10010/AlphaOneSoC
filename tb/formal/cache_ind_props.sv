@@ -5,6 +5,7 @@
 //   A  !active -> every fetch signal is its pass-through source
 //   C  f_ready only with f_req; m_req is held with its address until m_ready (takeover and hand-back included)
 //   D  the cycle after reset: not active
+//   G  (WO-CF B2) m_burst -> m_req && aligned && PSRAM (M-A5)
 //   E  every m_req address is in 0x20xx_xxxx or 0x80xx_xxxx (mem_ctrl's M-A2) when the fetch addresses are
 // Invariants (asserted too, they are what makes the step inductive):
 //   I1 fill_active -> act; I2 (hit_q | b_ph) -> act; I3 !act -> no valid bit set
@@ -31,6 +32,7 @@ endmodule
 module cache_ind_props (
     input  wire        clk, rst,
     input  wire        en, flush,
+    input  wire        pburst,
     input  wire        f_req,
     input  wire [31:0] f_addr,
     input  wire        m_ready,
@@ -42,7 +44,8 @@ module cache_ind_props (
     wire [31:0] f_rdata, m_addr;
     wire        f_ready, m_req, active;
     wire        dbg_act, dbg_hit_q, dbg_b_ph, dbg_fill, dbg_valid_any;
-    cache dut (.clk(clk), .rst(rst), .en(en), .fencei_flush(flush),
+    wire        m_burst;
+    cache dut (.clk(clk), .rst(rst), .en(en), .pburst(pburst), .fencei_flush(flush), .m_burst(m_burst),
                .f_req(f_req), .f_addr(f_addr), .f_rdata(f_rdata), .f_ready(f_ready),
                .m_req(m_req), .m_addr(m_addr), .m_rdata(m_rdata), .m_ready(m_ready),
                .d_req(d_req), .d_we(d_we), .d_addr(d_addr), .d_ready(d_ready), .active(active),
@@ -83,6 +86,7 @@ module cache_ind_props (
         if (live && m_req_q && !m_ready_q) assert (m_req && m_addr == m_addr_q);     // C
         if (armed && !armed_q) assert (!active);                                      // D
         if (armed && m_req) assert (m_addr[31:24] == 8'h20 || m_addr[31:24] == 8'h80); // E
+        if (armed && m_burst) assert (m_req && m_addr[1:0] == 2'b00 && m_addr[31]);   // M-A5 (WO-CF B2): the cache's half of mem_props.sv's burst assumption, PBURST free
         if (armed) begin
             assert (!dbg_fill || dbg_act);                                            // I1
             assert (!(dbg_hit_q || dbg_b_ph) || dbg_act);                             // I2

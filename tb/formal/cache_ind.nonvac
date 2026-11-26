@@ -13,3 +13,7 @@ sed cache.v s@assign f_ready = act ? hit_q : m_ready;@assign f_ready = act ? (hi
 sed cache.v s@            act         <= 1'b0;@            act         <= 1'b1;@
 # valid bits survive the hand-back (not cold): the !act -> valid = 0 invariant breaks
 sed cache.v /on the way out/{n;s@valid <= 16'd0;@valid <= valid;@}
+# WO-CF B2: M-A5, m_burst on a flash fill (window 0x20: m_addr[31] = 0)
+sed cache.v s@fill_active \&\& !dead \&\& fill_tag\[16\] \&\& pburst@fill_active \&\& !dead \&\& pburst@
+# m_burst without a running fill (no m_req)
+sed cache.v s@assign m_burst = act \&\& fill_active \&\& !dead \&\& fill_tag\[16\] \&\& pburst;@assign m_burst = act \&\& !dead \&\& fill_tag[16] \&\& pburst;@
