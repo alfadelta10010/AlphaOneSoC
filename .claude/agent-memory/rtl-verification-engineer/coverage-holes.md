@@ -52,3 +52,14 @@
 
 - 2026-11-07 VC-10: qspi_pmod_model does not hold-check a host IO output-enable drop (end of write, read
   turnaround); measured 10 ns at RTL, unmeasured at SDF. Edit proposed in vc10/REVIEW.md. Untested, not unreachable.
+- 2026-11-09 tb_uart: "BI still set (no LSR read) while a new frame/break is in flight" is random-only.
+  Ad-hoc mutant MBI2 (bi cleared at the next start-bit detection) survives seeds 1-2, killed at seed 3.
+  Needs a directed test (break, pop w/o LSR, 2nd break with RBR empty and full, reads around the window).
+- 2026-11-22 WO-75: adv_reboot boot 2 (reset as a cache fill closes) no longer cued -- covered only by timing
+  (c1/c2 land just after the fill). Foreground progress under an interrupt storm deliberately untested (no spec
+  promise); cache-on starvation threshold ~260 clk retrigger for adv_irq's layout.
+- 2026-11-22: uart_linux phase 5 now accepts IIR 0xC4 or 0xCC (as Linux); CTI timing at SoC level is not
+  pinned there (unit-level tb_uart scoreboard predicts the 640-tick timeout exactly). Added 0x144/0x145 checks.
+- 2026-11-22 PX-1: mem_pw/mem_arb run without BURST_FREE (assume !i_burst): MP3 (no fill word passes a pending
+  posted store) is unproven with the PSRAM line burst (cache on + PBURST); only SoC sims cover it.
+  cache_props B in pass-through is a tautology modulo A (reads the stand-in back); cache-off ordering lives in MP3.

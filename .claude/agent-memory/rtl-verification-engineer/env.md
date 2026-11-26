@@ -148,3 +148,59 @@
 - QUIRK: Makefile QSPI_RUNS words carry literal quotes ("+A +B"); `for a in $QR` in bash mangles them.
   Use `eval "set -- $QR"` or run via make. $test$plusargs prefix-matches (+FLASH_CRM" still matches).
 - Probe dir ~/regr/vc/review43 (m/<param>/ model copies, b/<param>/ builds).
+- tb_uart: ~40 s per seed on the sandbox (iverilog, vvp -N), nice 10. Trace/patch/mutant scratch in
+  ~/regr/qs/uart-seed1 (run.sh, mut.py with UA03/UA07/MBI1/MBI2).
+- tb_uart: random op 12/13 (divisor-keeping stores) restart brg mid-frame; any model window tied to ticks must move with it (dr_lo, oe_lo, bi_lo, fr_hi_to). Restart = brg<=0 -> tick next cycle (only ever early).
+- EQY 4x4 re-baseline (2026-11-21, sandbox ~/acc/eqy4x4: tree = git archive HEAD c0743e4, src == 1f2a473
+  + hd's loop-renamed plic.v, hc/ = q4x4-hd src + resolved.json, nl/ = hd nl 757ba9e9; drv.sh/launch.sh
+  run tb/eqy/run.sh under the thermal watchdog, HARDEN_DIR=$A/hc). run.sh needs the deferred patch
+  (localFiles/wo-4x4/deferred/EQY.txt): memory -nomap; memory_map in gold_common AND the lemma's
+  expose.ys (sat cannot import $mem), NCAND from accounting.py EXPECT cand, tie0 = NCAND-5, HARDEN_DIR.
+  Gotchas: yosys sat cannot import $_DFF_PN1_ (async2sync first) nor rf_top black boxes (delete t:rf_top);
+  sat -prove takes one signal per arg (no {a b c}); lemma_gen positions = index - offset for [N:1] regs
+  (plic pend/insvc), read from exposed.il. Timings on a load-30 box: read 33 s, lemma 37 s (k=2),
+  fsminv 75 s, prove setup ~4 min (242 partitions).
+- 2026-11-21 sandbox batch rule: every heavy command via `~/regr/slot.sh [--big] cmd` (one slot = one core, -j1),
+  waits for MemAvailable > 2.5 GB; status ~/regr/slot-status.sh. Never wait/poll INSIDE a slot (queue outside it).
+  pgrep -f patterns match your own ssh `bash -c` line: use the [x]yz bracket trick before kill.
+- WO-70 bench: tb/tb_adv.v + localFiles/wo-4x4/wo70/run_adv.sh (build / run <name> <prog> "<-D flags>" [plusargs]).
+  adv_smc CMODE=0 NITER=1000 needs > 40M cycles (~25 min) -- pass +MAX_CYCLES=150000000 or NITER=200.
+  WO-71 (2026-11-21): that note is doubtful -- the WO-70 run had reached its end loop (pc = j . after FINISH);
+  NITER=20 CMODE=0 PASSES (1.15M cycles, 84 s, ~14k cycles/s) incl. C3 straddle fault. A1 = NITER=1000-only,
+  mailbox stores after SIG1 vanish (s11 suspect), OPEN. Probe = second iverilog top (-s tb_adv -s probe),
+  localFiles/wo-4x4/wo71/probe.v; queued chain ~/acc/wo71/chain1.sh (log chain1.log).
+  ssh + slot.sh: a local `timeout` killing ssh leaves the remote waiter alive; launch long chains with
+  setsid nohup slot.sh ... > log on the sandbox and poll the log.
+- EQY 4x4 closed 2026-11-21 (flow f0ca0b2, hd nl 757ba9e9): EQY PASS 251/251, sat k=1 for every partition.
+  The first run's 23 FAILs + 30 length-4 OPENs had one cause: EQY cuts every net wired to a black box's
+  input pin for ALL its readers; the cache macro's rb_addr = nxt = f_addr[6:2]+1 is shared by synthesis
+  with the core's pc+4 (and f_addr[2] = ~nxt[0]), so traces showed nxt[0] == pc[2]. Fix: fsmcut.py
+  pin nets via kept $pos (soc.icache.pin_w_ena / pin_rb_addr) + nomatch nxt/word_in/pin_*. Any NEW
+  black-box macro needs the same for its combinational pins. Triage recipe for pdr FAILs:
+  yosys-witness aiw2yw engine_0/trace.aiw model/design_aiger.ywa t.yw; yosys "read_rtlil
+  model/design_prep.il; sim -r t.yw -scope miter -vcd t.vcd" (scripts ~/acc/eqy4x4/tri/). eqy.rc=1 from
+  the final summary make (/opt/hostmake/make missing) is harmless. Sandbox: heavy jobs via
+  ~/regr/slot.sh --big (children inherit the lock). Mutants NOT yet run on this netlist.
+- WO-75 (2026-11-22): tb_adv runs reboot/ctl/irq/smc all PASS on 9e385c0 (~/acc/wo75, drv75.sh ~13 min serial).
+  QSPI_LATE (+RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12) needs +CLK_HALF_PS=5000 in tb_adv (as tb_syscon_soc).
+  FyraCore retires an instruction only when IF delivers the next one (EX hands over on the next fetch), so an
+  interrupt pending before that is taken on the not-yet-retired instruction (mepc = it). Phase-3 probe template:
+  localFiles/wo-4x4/wo75/probe75.v + p3sum.py (per-service W1C/complete/mret/trap timing).
+  ssh launch quirk: `cd X && cmd && setsid nohup ... &` backgrounds the whole && list and holds ssh open;
+  put the setsid line on its own after `;`.
+- 2026-11-22 WO-77 triage uart_linux 0x140 (IIR 0xCC): passive observer as a 2nd iverilog top
+  (`-s tb_soc_periph -s uart_trace`, hierarchical refs into soc.uart_inst: rx_push/rd_rbr/iid/cti_cnt/rx_n),
+  build+trace kit on sandbox ~/acc/wo77tri/{build.sh,uart_trace.v}. Verdict: test expectation (11 chars vs
+  trigger 4: the tail below trigger needs CTI unless drains catch arrivals; 128 B passed by a ~45-clock margin).
+- 2026-11-22 sby trace triage: tiny VCD dumper in scratchpad bin/vcd.py (args: vcd, =suffix names). sbmc "FAILED within
+  N steps" is the BMC depth, not the CEX step: read `failed assertion ... step k` in sby logfile.txt.
+  Sandbox formal steps: copy of ~/dev/memctrl/fjob.sh (steps h:/nv:/qspi) in ~/dev/memtri; launch with
+  `timeout 30 ssh -n ... '(SLOT_PRIO=2 SLOT_MEM=2 setsid nohup ~/regr/slot.sh ... > log 2>&1 < /dev/null &)'`
+  (without the subshell + -n the ssh call hangs until the job ends).
+- 2026-11-24 formal triage kit (sandbox ~/dev/ftri): a scratch sidecar `zz_ftri.conf` (sorted after mem.conf) copies a
+  harness under a new name with a longer PDR_TIMEOUT (cp_h SRC DST T) -- no edit of committed confs. Cover reachability
+  fast: turn each cover into `assert(!cond)` in a renamed props copy and run pdr (FAIL = reachable + witness depth,
+  PASS = provably unreachable); smtbmc covers at 300+ multiclock steps take minutes per step.
+  Miter fact: yosys opt_merge merges the two copies' flops whose D/clk are identical (e.g. cap_n <= io_in), so those
+  start equal even with free init. run.sh's sby kill = PDR_TIMEOUT (default 1200) + 600 for EVERY sby mode (sbmc too):
+  "ERROR no sby status" with "Keyboard interrupt or external termination" in the log = time box.
