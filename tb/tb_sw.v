@@ -85,13 +85,16 @@ module tb_sw;
     tt_um_alfadelta10010_alphaone_soc dut (
         .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in), .uio_out(uio_out), .uio_oe(uio_oe),
         .ena(1'b1), .clk(clk), .rst_n(~rst));
-    assign qspi_sck    = uio_out[3];
-    assign qspi_cs_n   = {uio_out[7], uio_out[6], uio_out[0]};
-    assign qspi_ctl_oe = uio_oe[3];
+    // The models see idle pin levels while rst is high: with +verilator+rand+reset+2 the wrapper's flops start at
+    // random values and the pins show them until the first clock edge, which the Pmod / SD timing checkers
+    // (rightly, for a real pin) call a violation at t=0. tb_tt_um checks the pins in reset itself.
+    assign qspi_sck    = rst ? 1'b0 : uio_out[3];
+    assign qspi_cs_n   = rst ? 3'b111 : {uio_out[7], uio_out[6], uio_out[0]};
+    assign qspi_ctl_oe = rst ? 1'b0 : uio_oe[3];
     assign qspi_io_out = {uio_out[5], uio_out[4], uio_out[2], uio_out[1]};
-    assign qspi_io_oe  = &{uio_oe[5], uio_oe[4], uio_oe[2], uio_oe[1]};
-    assign uart_tx     = uo_out[4];
-    assign gpio_out    = uo_out;
+    assign qspi_io_oe  = rst ? 1'b0 : &{uio_oe[5], uio_oe[4], uio_oe[2], uio_oe[1]};
+    assign uart_tx     = rst ? 1'b1 : uo_out[4];
+    assign gpio_out    = rst ? 8'h39 : uo_out;
     assign uart_rts_n  = 1'b1;
 `ifdef TB_GATE
     wire [15:0] uart_div = {
