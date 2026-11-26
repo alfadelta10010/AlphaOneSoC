@@ -26,6 +26,17 @@
 # interrupt.
 # Handler: t0-t4, s-registers 1, 3-7, 10, a1-a3; main code keeps off them while interrupts are on.
 #include "periph4.h"
+/* -DMB_UART: each cue also goes out as a UART frame (no wait: the program's own waits follow), so the pins bench
+ * (tb/tb_tt_um.v +TEST=soc +PROG=plic_uart) can act on it. Without it the syscon store alone, as before. */
+#ifdef MB_UART
+.macro PEV n
+    EVENT_NW \n
+.endm
+#else
+.macro PEV n
+    EVENT \n
+.endm
+#endif
 #define PL_PRIO   0x04
 #define ECHO_BUF  0x80000100
 
@@ -80,19 +91,19 @@ _start:
     csrsi mstatus, 8             # MIE
 
     # ---- three bursts, flow control off ----
-    EVENT 1
+    PEV 1
     li   a5, 5
     jal  ra, wait_rx
-    EVENT 2
+    PEV 2
     li   a5, 21
     jal  ra, wait_rx
-    EVENT 3
+    PEV 3
     li   a5, 61
     jal  ra, wait_rx
 
     # ---- echo through the THRE interrupt ----
     li   s8, 1
-    EVENT 4
+    PEV 4
     li   a5, 69
     jal  ra, wait_rx
     li   a6, 20000               # the echo drains: buffer empty and the shifter idle
@@ -108,7 +119,7 @@ _start:
 4:  li   s8, 0
 
     # ---- a break ----
-    EVENT 5
+    PEV 5
     li   a6, 20000
 5:  bnez s7, 6f
     addi a6, a6, -1
@@ -120,7 +131,7 @@ _start:
     # ---- masked: priority 0 ----
     sw   zero, PL_PRIO(s2)
     mv   s9, s3
-    EVENT 6
+    PEV 6
     DELAY 3000
     CHECKR s3, s9, 0x20          # no interrupt
     lw   t0, 4(a4)               # nothing pending
@@ -135,7 +146,7 @@ _start:
     add  t2, t2, s2
     sw   zero, 0(t2)
     mv   s9, s3
-    EVENT 7
+    PEV 7
     DELAY 3000
     CHECKR s3, s9, 0x30
     lw   t0, 4(a4)
@@ -147,7 +158,7 @@ _start:
 
     # ---- the Linux EOI path, polled (interrupts off) ----
     csrci mstatus, 8
-    EVENT 8
+    PEV 8
     li   a6, 400000
 17: csrr t5, mip
     srli t5, t5, 11
