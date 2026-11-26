@@ -64,7 +64,7 @@ run_one() { # name hex args
   if [ -n "${BASE:-}" ] && [ -s "$BASE/$name.verdict" ]; then
     c=$(awk '{print $2}' "$BASE/$name.verdict"); [[ $c =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] && mc=$(( c * 2 + 50000 ))
   fi
-  ( cd "$OUT" && timeout -k 10 $WALL $VVP -n sim +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
+  ( cd "$OUT" && timeout --foreground -k 10 $WALL $VVP -n sim +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
   if grep -q '^PASS tb_tt_um' "$OUT/$name.log" && ! grep -qE '^(FAIL|ERROR)' "$OUT/$name.log"; then v=PASS
   elif grep -q '^TIMEOUT' "$OUT/$name.log"; then v=TIMEOUT; else v=FAIL; fi
   c=$(grep -oE '[0-9]+ cycles\)$|stuck at cycle [0-9]+|\(cycle [0-9]+\)' "$OUT/$name.log" | grep -oE '[0-9]+' | tail -1)
