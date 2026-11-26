@@ -40,6 +40,7 @@ module tb_sw;
     reg clk = 1'b0;
     reg rst = 1'b1;
     always #(TCLK / 2.0) clk = ~clk;
+    initial $display("TB_SW: TCLK_NS=%0.3f", TCLK);   // every run log records its bench clock
     reg [63:0] cyc = 64'd0;            // 64 bits: a run of more than 2^31 clocks (34 s of chip time) is legal
     always @(posedge clk) cyc <= cyc + 1;
 
