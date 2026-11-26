@@ -374,7 +374,7 @@ BENCH_SRCS := $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/t
 bench-pins: $(BUILD)/bench-pins/sim
 $(BUILD)/bench-pins/sim: $(RTL) $(ROOT)/src/tt_um_alfadelta10010_alphaone_soc.v $(BENCH_SRCS)
 	@mkdir -p $(dir $@)
-	$(VERILATOR) --binary --timing -j $(or $(VLJ),4) -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -DTB_PINS \
+	$(VERILATOR) --binary --timing -j $(or $(VLJ),4) -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -DTCLK_NS=$(CHIP_TCLK_NS) -DTB_PINS \
 	    --top-module tb_sw -Mdir $(BUILD)/bench-pins/obj -o ../sim \
 	    $(RTL) $(ROOT)/src/tt_um_alfadelta10010_alphaone_soc.v $(BENCH_SRCS) \
 	    > $(BUILD)/bench-pins/build.log 2>&1 || { tail -30 $(BUILD)/bench-pins/build.log; exit 1; }
@@ -386,7 +386,7 @@ $(BUILD)/gl-model/gate.v: $(NETLIST) $(ROOT)/scripts/gl/gl2verilator.sh
 endif
 $(BUILD)/bench-gl/sim: $(GL_MODEL) $(ROOT)/src/rf_top.v $(BENCH_SRCS)
 	@mkdir -p $(dir $@)
-	$(VERILATOR) --binary --timing -j $(or $(VLJ),4) -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -Wno-PINMISSING -DTB_PINS -DTB_GATE \
+	$(VERILATOR) --binary --timing -j $(or $(VLJ),4) -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -Wno-PINMISSING -DTCLK_NS=$(CHIP_TCLK_NS) -DTB_PINS -DTB_GATE \
 	    --top-module tb_sw -Mdir $(BUILD)/bench-gl/obj -o ../sim \
 	    $(GL_MODEL) $(ROOT)/src/rf_top.v $(BENCH_SRCS) \
 	    > $(BUILD)/bench-gl/build.log 2>&1 || { tail -30 $(BUILD)/bench-gl/build.log; exit 1; }
