@@ -18,5 +18,12 @@ metadata:
 - Drop C costs no runtime here: every fetch is a full 4-byte QSPI read (~60 clk) anyway.
 - U-mode must stay: M-mode Linux decides user-vs-kernel return from MPP.
 
+- Priv (current, local docs/RISCV-spec.html): PMP "Implementations may implement zero, 16, or 64
+  PMP entries ... All PMP CSR fields are WARL and may be read-only zero" (so 4 usable = 16 with
+  12 RO-0); mcountinhibit may be absent (acts as 0); mcounteren must exist with U-mode but all
+  fields may be RO-0; mtvec may be read-only; mcause Exception Code is WLRL; reset: only
+  MIE/MPRV, mcause, PMP A/L specified, "All other hart state is UNSPECIFIED".
+- Linux of_serial "ns16550a" sets UPF_FIXED_TYPE, so autoconfig (SCR/IER/loopback tests) never runs.
+
 **How to apply:** label any trade touching these as spec-legal-but-diverges-from-Spike
 where relevant; see [[area-optimizations-measured]].
