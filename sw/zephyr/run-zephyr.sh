@@ -33,7 +33,7 @@ build() {  # build <name> <app dir> [cmake args]
 }
 
 sim() {  # sim <name> : run, cap MAXC cycles
-  ( cd $W/b/$1 && nice -n 19 stdbuf -oL $SIM +FLASH_FILE=flash.hex +UART_DIV=34 +MAX_CYCLES=$MAXC > $LOGS/$1.run.log 2>&1 )
+  ( cd $W/b/$1 && nice -n 19 stdbuf -oL $SIM +FLASH_FILE=flash.hex +UART_DIV=29 +MAX_CYCLES=$MAXC > $LOGS/$1.run.log 2>&1 )
 }
 
 verdict() {  # verdict <name> <pattern that must appear> : prints a result line
