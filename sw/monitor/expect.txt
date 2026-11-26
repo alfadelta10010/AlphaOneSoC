@@ -52,7 +52,7 @@
 + 30a 
 + scan done
 # peripherals
-+ 10000000 DLL              22
++ 10000000 DLL              1d
 + 10000001 DLM              00
 + 0200bff8 mtime lo
 + 1002000c CHIP_ID          41315301
