@@ -466,7 +466,7 @@ test-wrapper: $(BUILD_DIR)
 	@mkdir -p $(WRAPPER_DIR)
 	@$(IVERILOG) -g2012 -o $(WRAPPER_DIR)/sim -s tb_tt_um $(WRAPPER_SRC) \
 		$(TB_DIR)/qspi_pmod_model.v $(TB_DIR)/rp2350_uart_model.v $(TB_DIR)/ssd1331_model.v \
-		$(TB_DIR)/keypad_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_tt_um.v
+		$(TB_DIR)/keypad_model.v $(TB_DIR)/gamepad_model.v $(TB_DIR)/pin_meter.v $(TB_DIR)/tb_tt_um.v
 	@cd $(WRAPPER_DIR) && \
 		$(TOOLCHAIN)gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
 			-T $(CURDIR)/$(TESTS_DIR)/soc/link.ld -I$(CURDIR)/$(TESTS_DIR)/soc \
@@ -490,7 +490,7 @@ test-wrapper: $(BUILD_DIR)
 			if grep -qE '^(FAIL|ERROR|TIMEOUT)' tt_reboot.$$n.log || ! grep -q '^PASS' tt_reboot.$$n.log; then exit 1; fi; \
 		done
 
-# The 20 mailbox programs of tests/soc through the pins (tb_tt_um.v
+# The mailbox programs of tests/soc through the pins (tb_tt_um.v
 # +TEST=soc +PROG=<name>), on the RTL: scripts/gl/build_isa.sh PARTS=D builds
 # them with -DMB_UART and each one's divisor, run_gl.sh runs the two lists. The
 # same lists run on the hardened netlist on the sandbox; this is the baseline,
@@ -501,7 +501,7 @@ test-wrapper: $(BUILD_DIR)
 test-wrapper-soc:
 	@echo "=== The mailbox programs through the TinyTapeout pins (RTL) ==="
 	@bash scripts/gl/build_isa.sh PARTS=D OUT=$(BUILD_DIR)/wrapper_soc TOOLCHAIN=$(TOOLCHAIN)
-	@t=$$(date +%Y%m%d-%H%M%S); for l in D10:10.0 D20:20.0; do \
+	@t=$$(date +%Y%m%d-%H%M%S); for l in D:19.0; do \
 		k=$${l%%:*}; d=$(BUILD_DIR)/wrapper_soc/rtl-$$k.$$t; L=$(BUILD_DIR)/wrapper_soc/list.$$k; \
 		echo "$$k: $$d"; \
 		bash scripts/gl/run_gl.sh RTL=1 IVERILOG=$(IVERILOG) VVP=$(VVP) LIST=$$L \

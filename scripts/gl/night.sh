@@ -1,14 +1,17 @@
 #!/bin/bash
 # One unattended gate-level night, resumable (a done.<stage> marker per stage):
-#   1 rtl-*  the RTL baseline through the same bench, parts A B C
-#   2 gl-*   the pnl netlist, parts A B C, MAX_CYCLES from the baseline
-#   3 mut-*  non-vacuity: a mutated netlist must fail a program of the short list
+#   1 rtl-*  the RTL baseline through the same bench, parts A B C (TCLK 19 ns, the 4x4 chip's clock)
+#   2 mut-*  non-vacuity: a mutated netlist must fail a program of the short list
 #            (the stage ends rc=1 and STATUS says so when every program passes)
+#   3 gl-*   the pnl netlist, parts A D B C in that order, MAX_CYCLES from the baseline; each program of D must
+#            take exactly the RTL's cycles (run_gl.sh)
 #   night.sh D=<run dir> NETLIST=<pnl> BUILD=<build_isa OUT> [JOBS=auto] [PARTS="A B C"]
-# PARTS=D is the mailbox programs through the pins (WO-26): rtl-D10, rtl-D20 (the
-# RTL baseline, a 10 ns and a 20 ns clock), gl-D10, gl-D20, then mut-D, a stuck
-# SPI MOSI (found by tracing uo_out[1], mutate_netlist.py) that only these programs can see. Each has its own
-# done.<stage> marker and its own directory under D.
+# PARTS=D is the mailbox programs through the pins (WO-26, refreshed for 4x4 in WO-GLN): rtl-D (the
+# RTL baseline, a 19 ns clock), gl-D, then mut-D: stuck-at-0 flops that only these programs
+# can see (SPI MOSI, a PLIC enable, a gamepad data bit, a PWM compare bit), each run on the program that must catch it.
+# Each stage has its own done.<stage> marker and its own directory under D.
+# CACHE_EN=1 (environment) forces the instruction cache on in every run, RTL baseline and netlist alike.
+# TCLK is 19.0 (52.63 MHz) for every part.
 # STATUS has a timestamped line per event; D/RUN_DONE is the last file written.
 # The caller starts the thermal watchdog on D (see the launch command in the report).
 for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; esac; done
@@ -27,8 +30,6 @@ stage() { # name command...
 caught() { # dir: some program of a mutant run must FAIL or TIMEOUT (a hang is a detection too)
   grep -qsE '^(FAIL|TIMEOUT)' "$1"/*.verdict || { st "$(basename "$1"): every program passed: the mutant was not caught"; return 1; }
 }
-rtl() { bash $S/run_gl.sh RTL=1 LIST=$BUILD/list.$1 OUT=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
-gl()  { bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.$1 OUT=$D/gl BASE=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
 cat $BUILD/list.A $BUILD/list.B $BUILD/list.C > $BUILD/list.all 2>/dev/null
 { md5sum $NETLIST; ls -l $NETLIST; spike --help 2>&1 | head -1; iverilog -V 2>&1 | head -1; } > "$D/env.txt" 2>&1
 # the Spike reference signatures of part C are part of the build (run_gl.sh refuses a list line whose
@@ -39,35 +40,49 @@ if has C; then
     [ -s "$r" ] || { st "no refs: $r missing or empty"; exit 1; }
   done
 fi
+TC=${TCLK:-19.0}
+rtl() { bash $S/run_gl.sh RTL=1 LIST=$BUILD/list.$1 TCLK=$TC OUT=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
+gl()  { bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.$1 TCLK=$TC OUT=$D/gl BASE=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
 for p in A B C; do has $p && stage rtl-$p rtl $p; done
-for p in A B C; do has $p && stage gl-$p gl $p; done
 SHORT='^(rv32mi-csr-p|rv32mi-mcsr-p|rv32ui-add-p|rv32ui-addi-p|add-01|tt_pins\.0)$'
 if has A || has B || has C; then
 for k in csr alu; do
   mut() {
     python3 $S/mutate_netlist.py $NETLIST $D/mut-$k.v --kind $k > $D/mut-$k.txt 2>&1 || return
-    bash $S/run_gl.sh NETLIST=$D/mut-$k.v LIST=$BUILD/list.all OUT=$D/mut-$k BASE=$D/rtl JOBS=$JOBS ONLY="$SHORT" > /dev/null 2>&1
+    bash $S/run_gl.sh NETLIST=$D/mut-$k.v LIST=$BUILD/list.all TCLK=$TC OUT=$D/mut-$k BASE=$D/rtl JOBS=$JOBS ONLY="$SHORT" > /dev/null 2>&1
     caught $D/mut-$k
   }
   stage mut-$k mut
 done
 fi
 if has D; then
-  tclk() { case $1 in D20) echo 20.0;; *) echo 10.0;; esac; }
+  tclk() { echo $TC; }
   rtld() { bash $S/run_gl.sh RTL=1 LIST=$BUILD/list.$1 TCLK=$(tclk $1) OUT=$D/rtl-$1 JOBS=$JOBS > /dev/null 2>&1; }
   gld()  { bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.$1 TCLK=$(tclk $1) OUT=$D/gl-$1 BASE=$D/rtl-$1 JOBS=$JOBS > /dev/null 2>&1; }
-  # the mutant: the SPI MOSI flop's D tied low. Part D's oled_spi and periph_access
-  # (20 ns) must FAIL; part A's tt_pins.0 (10 ns) FAILs too (WO-40: OUT=02 wants uo_out[1]).
-  mutd() {
-    python3 $S/mutate_netlist.py $NETLIST $D/mut-spi.v --kind spi > $D/mut-spi.txt 2>&1 || return
-    bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$BUILD/list.D20 TCLK=20.0 OUT=$D/mut-D20 BASE=$D/rtl-D20 JOBS=$JOBS ONLY='^(oled_spi|periph_access)$' > /dev/null 2>&1
-    # (part A's list is empty under PARTS=D: build tt_pins for it)
-    [ -s $D/build-A/list.A ] || bash $S/build_isa.sh PARTS=A OUT=$D/build-A > /dev/null 2>&1
-    bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$D/build-A/list.A OUT=$D/mut-A10 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
-    caught $D/mut-D20 && caught $D/mut-A10
+  # one mutant: stuck-at-0 on a flop's D, the program(s) that must FAIL or TIMEOUT (a mutated netlist that passes is a hole)
+  #   mutd <name> <list> <ONLY regex> <mutate_netlist.py args...>
+  mutd1() {
+    local n=$1 l=$2 only=$3; shift 3
+    python3 $S/mutate_netlist.py $NETLIST $D/mut-$n.v "$@" > $D/mut-$n.txt 2>&1 || { st "mut-$n: the mutation failed: $(tail -1 $D/mut-$n.txt)"; return 1; }
+    bash $S/run_gl.sh NETLIST=$D/mut-$n.v LIST=$BUILD/list.$l TCLK=$(tclk $l) OUT=$D/mut-$n BASE=$D/rtl-$l JOBS=$JOBS ONLY="$only" > /dev/null 2>&1
+    caught $D/mut-$n
   }
-  for l in D10 D20; do stage rtl-$l rtld $l; done
-  for l in D10 D20; do stage gl-$l gld $l; done
+  mutd() {
+    local rc=0
+    # the SPI MOSI flop (WO-40: part A's tt_pins.0 wants uo_out[1] too; part A is built here when PARTS has no A)
+    mutd1 spi D '^(oled_spi|periph_access)$' --kind spi || rc=1
+    [ -s $BUILD/list.A ] || { bash $S/build_isa.sh PARTS=A OUT=$D/build-A > /dev/null 2>&1; }
+    LA=$BUILD/list.A; [ -s $LA ] || LA=$D/build-A/list.A
+    bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$LA TCLK=$TC OUT=$D/mut-A19 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
+    caught $D/mut-A19 || rc=1
+    mutd1 plic D '^plic_uart$' --kind net --q '\soc.plic_inst.en[1]' || rc=1          # the UART's PLIC enable
+    mutd1 pad D '^gamepad$' --kind net --q '\soc.gamepad_inst.d[0]' || rc=1           # a gamepad data bit (0x123 has bit 0)
+    mutd1 pwm D '^pwm_linux$' --kind net --q '\soc.pwm_inst.cmp0[14]' || rc=1         # a PWM compare bit (periods 0x4001 / 0x10000)
+    return $rc
+  }
+  stage rtl-D rtld D
   stage mut-D mutd
 fi
+# the gate-level stages last, the short ones first (the mutants above only need the RTL baselines)
+for p in A D B C; do has $p || continue; if [ $p = D ]; then stage gl-D gld D; else stage gl-$p gl $p; fi; done
 st "all stages done"; touch "$D/RUN_DONE"

@@ -53,7 +53,7 @@ else
 fi
 if [ ! -e "$OUT/done.compile" ]; then
   log "compile ($DEFS)"
-  $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
+  $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/gamepad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
     || { log "COMPILE FAILED"; exit 1; }
   touch "$OUT/done.compile"; log "compiled"
 fi
