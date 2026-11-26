@@ -55,7 +55,7 @@ delete t:\$scopeinfo
 select -assert-none t:sky130_fd_sc_hd__* t:*__fill_* t:*__decap_* %u t:*__tapvpwrvgnd_* %u t:*__diode_* %u %d
 delete t:sky130_fd_sc_hd__*
 opt_clean
-check
+check -assert
 tee -o $OUT/stat.txt stat
 write_verilog -noattr $OUT/gate.v
 Y
@@ -69,7 +69,16 @@ rep "flops: netlist $nff_in, model $nff_out; latches in model $nlat_out; rf_top:
 [ "$nrf_in" = "${nrf_out:-0}" ] || bad "rf_top count differs"
 grep -qE '^ *\\?sky130_fd_sc_hd__[a-z0-9_]+ ' "$OUT/gate.v" && bad "gate.v still instantiates a sky130 cell"
 grep -qE '^ *(wor|wand|tri)' "$OUT/gate.v" && bad "wired nets in gate.v"
-grep -iE 'warning|multiple drivers|undriven|loop' "$OUT/yosys.log" | sort | uniq -c | head -20 | tee -a "$REP"
+# yosys warnings (undriven, multiple drivers, combinational loops, anything else) fail the conversion except the lines
+# of the whitelist (one fixed string per line; unused macro outputs only), which are listed in the report
+WL=${WHITELIST:-$R/scripts/gl/gl2verilator.whitelist}
+grep -iE '^warning|multiple drivers|undriven|logic loop|found logic loop' "$OUT/yosys.log" | sort | uniq -c > "$OUT/warnings.txt"
+if [ -s "$OUT/warnings.txt" ]; then
+  while read -r n w; do
+    if [ -s "$WL" ] && grep -qFf <(grep -v '^#' "$WL" | grep .) <<< "$w"; then rep "whitelisted yosys warning x$n: $w"; else bad "yosys warning x$n: $w"; fi
+  done < "$OUT/warnings.txt"
+fi
+rep "yosys warnings: $(wc -l < "$OUT/warnings.txt") distinct, $(grep -v "^#" "$WL" 2>/dev/null | grep -c .) whitelist entries"
 rep "model: $(wc -l < "$OUT/gate.v") lines, md5 $(md5sum < "$OUT/gate.v" | cut -c1-32)"
 [ $fail = 0 ] && rep "RESULT: conversion checks passed" || rep "RESULT: conversion checks FAILED"
 exit $fail

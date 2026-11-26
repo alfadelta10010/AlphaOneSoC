@@ -38,6 +38,8 @@ for c in cells:
     ports = [p.strip() for p in m.group(1).split(",")]
     ins = re.findall(r"^\s*input\s+(?:\[[^\]]*\]\s*)?(\w+);", conv, re.S | re.M)
     outs = re.findall(r"^\s*output\s+(?:\[[^\]]*\]\s*)?(\w+);", conv, re.M)
+    if len(ins) + len(outs) != len(ports):          # a port the regexes missed would float: X == X passes
+        print(f"FAIL {c}: ports {ports}: parsed {len(ins)} inputs + {len(outs)} outputs"); bad += 1; continue
     seq = "CLK" in ins or "GATE" in ins or "GATE_N" in ins or "CLK_N" in ins
     tb = ["`timescale 1ns/1ps", "module t;", "  integer i, err = 0, n = 0;"]
     for p in ins: tb.append(f"  reg {p};")
@@ -45,7 +47,9 @@ for c in cells:
     pm = lambda s: ", ".join([f".{p}({p})" for p in ins] + [f".{p}({p}_{s})" for p in outs])
     tb.append(f"  {c} g ({pm('g')});")
     tb.append(f"  conv_{c} cv ({pm('c')});")
-    chk = "  task chk; begin n = n + 1; " + " ".join(
+    # a flop's compare only counts once the PDK model has left X (Q is X until the first clock / reset)
+    cnt = f"if ({outs[0]}_g !== 1'bx) n = n + 1;" if seq else "n = n + 1;"
+    chk = f"  task chk; begin {cnt} " + " ".join(
         f"if ({p}_g !== {p}_c" + (f" && {p}_g !== 1'bx" if seq else "") + f") begin err = err + 1; if (err < 5) $display(\"MISMATCH {c} {p}: pdk=%b conv=%b t=%0t\", {p}_g, {p}_c, $time); end"
         for p in outs) + " end endtask"
     tb.append(chk)
@@ -85,6 +89,10 @@ for c in cells:
     r = subprocess.run([vvp, "-n", f"{out}/{c}.vvp"], capture_output=True, text=True)
     last = [l for l in r.stdout.splitlines() if l.startswith(("CELL", "MISMATCH"))]
     res = [l for l in last if l.startswith("CELL")]
+    if res and seq:
+        nv = int(re.search(r"vectors=(\d+)", res[0]).group(1))
+        if nv < 3000:
+            print(f"FAIL {c}: only {nv} non-X compares (need 3000)"); bad += 1; continue
     if not res or "errors=0" not in res[0]:
         print(f"FAIL {c}: " + " | ".join(last[:4])); bad += 1
     else:

@@ -1,0 +1,2 @@
+# yosys warnings accepted by gl2verilator.sh, one fixed string per line (a warning containing the line passes).
+# Empty on purpose: the shipped netlist converts with no warning. Add an entry only for unused macro outputs, with the reason.
