@@ -4,7 +4,7 @@
 # tests (part C), relinked for the SoC.
 #
 #   build_isa.sh SUITES=<river_core conf dir, with test_list.yaml> OUT=<dir>
-#                [TOOLCHAIN=riscv64-unknown-elf-] [PARTS="A B C D"]
+#                [TOOLCHAIN=riscv64-unknown-elf-] [PARTS="A B C D"] [BOOT_CLEAR_MSCRATCH=1]
 #
 # Writes under OUT: elf/<name>.elf, hex/<name>.hex (flash image at 0), and the
 # lists list.A, list.B, list.C, list.D of `name|hex|plusargs` lines
@@ -24,6 +24,7 @@ mkdir -p "$OUT/elf" "$OUT/hex" "$OUT/inc"; OUT=$(cd "$OUT" && pwd)
 CC=${TOOLCHAIN}gcc; OC=${TOOLCHAIN}objcopy; NM=${TOOLCHAIN}nm
 printf '#include "%s/riscv_test_soc.h"\n' "$ISA" > "$OUT/inc/riscv_test.h"
 FLAGS="-march=rv32imac_zicsr_zifencei -mabi=ilp32 -static -std=gnu99 -O2 -mcmodel=medany -fvisibility=hidden -nostdlib -nostartfiles"
+[ "${BOOT_CLEAR_MSCRATCH:-0}" = 1 ] && FLAGS="$FLAGS -DBOOT_CLEAR_MSCRATCH"   # parts B and C: boot_flash.S zeroes mscratch (no reset on the 4x4 chip)
 hexof() { # elf hex ram?
   local secs="-j .text.init -j .text -j .rodata -j .data"
   [ "$3" = 1 ] && secs="-j .text.boot -j .text_ram -j .rodata -j .data"
