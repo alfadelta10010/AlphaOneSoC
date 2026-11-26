@@ -125,7 +125,7 @@ $(BUILD)/monitor/in.hex: $(MON_SCRIPT) tools/mkscript.py $(BUILD)/monitor/monito
 .PHONY: run-monitor-scan
 run-monitor-scan:
 	$(MAKE) run-monitor MON_SCRIPT=monitor/script-scan.txt monitor_EXPECT=monitor/expect-scan.txt
-	python3 tools/csr_scan_check.py $(BUILD)/monitor/run.log
+	python3 tools/csr_scan_check.py $(BUILD)/monitor/$(RUNLOG)
 $(eval $(call PAYLOAD,monitor))
 
 # Rung 4: FatFs on the SD card. ff.c reads ffconf.h from its own directory, so the sources
@@ -150,7 +150,7 @@ fatfs_SDARG  := $(if $(filter sdsc,$(SD)),+SD_SDSC,$(if $(filter v1,$(SD)),+SD_V
 fatfs_RUNDEP := $(BUILD)/fatfs/disk-$(DISK).hex
 fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG) \
                  $(if $(filter fat32,$(DISK)),+SD_SPARSE +SD_BLKS=70000)
-fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex $(if $(filter fat32,$(DISK)),--fat32) && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
+fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex $(if $(filter fat32,$(DISK)),--fat32) && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/$(RUNLOG)
 $(BUILD)/fatfs/disk-%.hex: tools/mkdisk.sh tools/img2hex.py
 	@mkdir -p $(dir $@)
 	./tools/mkdisk.sh $(BUILD)/fatfs/disk-$*.img $@ $*
@@ -198,7 +198,7 @@ dhrystone_SRC    := $(DH)/dhrystone_main.c $(DH)/dhrystone.c
 dhrystone_CFLAGS := $(BENCH_OPT) -w -Wno-error=implicit-int -Wno-error=implicit-function-declaration \
                     -Wno-error=int-conversion -Wno-error=incompatible-pointer-types -I$(DH) -Idhrystone/port \
                     -Wl,--allow-multiple-definition   # printf.c supplies the debug_printf the vendored file stubs out
-dhrystone_CHECK  := python3 tools/dhry_check.py $(BUILD)/dhrystone/run.log
+dhrystone_CHECK  := python3 tools/dhry_check.py $(BUILD)/dhrystone/$(RUNLOG)
 $(eval $(call PAYLOAD,dhrystone))
 
 # Embench-IoT: one payload per benchmark, built the way the suite's sconstruct
