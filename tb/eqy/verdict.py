@@ -19,7 +19,7 @@
 """
 import glob, json, os, re, sys
 
-EXPECT_PARTITIONS = 251   # rewritten by scripts/eqy-refit.sh after a harden (4x4 hd 757ba9e9: 251 with the cache macro pin nets)
+EXPECT_PARTITIONS = 254   # rewritten by scripts/eqy-refit.sh after a harden (4x4 hd 757ba9e9: 251 with the cache macro pin nets)
 
 
 def statuses(eqydir, only=None):

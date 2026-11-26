@@ -37,8 +37,14 @@ import collections, json, re, sys
 # uart rx_mem (gold memory_map words rx_mem[k][b] = the netlist's rx_mem[k][b]); cand = 184 CSR
 # + gpio out_r[1], [3] + PLIC pend/insvc of the tied-0 sources 4, 7, 8; unused = 0 (the pinmux
 # reads gpio out_r[7:4] now); memaddr = rx_mem's read-address register, 3 bits on each side.
-EXPECT = dict(direct=1859, rename=11, recode_gold=11, recode_gate=22, removed=194,
-              gold=2078, gate=1895, cand=194, unused=0, memaddr_gold=3, memaddr_gate=3, live_gone=0)
+# Measured (EQY refit on 256 B Fp190n2j, src 93a5e4c): slim RTL stores mtvec [31:2] and mepc [31:1]
+# with no reset (3 constant bits fewer), csr/uart slim and the analysis above leave 2047 gold and
+# 1866 gate flops; 84 pmpaddr/pmpcfg bits are renames (EXPLICIT_RENAME): rename = 12 + 84.
+#   -> direct=1746 rename=96 gate=1866 gold=2047 removed=cand=191, tie0 = cand - 5, tie1 = 5 (misa).
+#   cand = 181 CSR (mie 29, pmpcfg0 8, mcounteren 29, mcountinhibit 30, misa 31, mstatus 26,
+#   trap_cause 27, trap_pc 1) + gpio out_r[1], [3] + PLIC pend/insvc of the tied-0 sources 5-8 (8).
+EXPECT = dict(direct=1746, rename=96, recode_gold=11, recode_gate=22, removed=191,
+              gold=2047, gate=1866, cand=191, unused=0, memaddr_gold=3, memaddr_gate=3, live_gone=0)
 # EXPECT recode_gate counts muldiv's one-hot at 6 bits (A0); PX trees have 5 (MULDIV_N from run.sh)
 MULDIV_N = int(__import__("os").environ.get("MULDIV_N", "6")); EXPECT["recode_gate"] += MULDIV_N - 6
 RECODE = {"soc.cpu.exwb_memSize": (2, 3), "soc.cpu.muldiv_inst.st": (3, MULDIV_N),
@@ -48,6 +54,16 @@ INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
 # the RTL if_pc_next[0] = (pc + 2 or 4)[0] = pc[0], a combinational copy of the
 # pc[0] flop; synthesis folded the two nets and kept the name if_pc_next[0].
 EXPLICIT_RENAME = {"soc.cpu.imem_addr[0]": "soc.cpu.if_pc_next[0]"}
+
+# The 256 B AREA 2 netlists (Fp190n2j, SYNTH_AUTONAME) name the pmpaddr flops after the cpu-level
+# wire csr_pmpaddrN = pmpaddrN_vis: bits [29:10] are st[29:10] in both arms of pmpaddr_vis, and
+# bit 0 is napot = pmpcfg0[8N+4] (A[1], stored by pmpcfg_legal). The gold read does not fold
+# that mux, so no gold alias shows the gate's name; without these the 84 live, writable bits
+# would count as removed constants. A netlist that keeps the csr_unit names matches directly.
+for _n in range(4):
+    for _k in range(10, 30):
+        EXPLICIT_RENAME[f"soc.cpu.csr_unit.pmpaddr{_n}[{_k}]"] = f"soc.cpu.csr_pmpaddr{_n}[{_k}]"
+    EXPLICIT_RENAME[f"soc.cpu.csr_pmpcfg0[{8 * _n + 4}]"] = f"soc.cpu.csr_pmpaddr{_n}[0]"
 # gold flop bits with no fan-out that synthesis removed (3x4: gpio out_r[4], [5]; in 4x4 the pinmux
 # reads them, so they are direct matches and the set is empty)
 UNUSED = set()
@@ -150,7 +166,7 @@ def main():
              f"  recoded FSM bits, gold    {got['recode_gold']:5d}  (expect {EXPECT['recode_gold']})",
              f"  recoded FSM bits, gate    {got['recode_gate']:5d}  (expect {EXPECT['recode_gate']})",
              f"  removed by synthesis      {got['removed']:5d}  (expect {EXPECT['removed']})",
-             f"    constant bits (CSR + gpio out_r[1], [3] + PLIC pend/insvc 7, 8) {len(cand):5d}  (expect {EXPECT['cand']})",
+             f"    constant bits (CSR + gpio out_r[1], [3] + PLIC pend/insvc 5-8) {len(cand):5d}  (expect {EXPECT['cand']})",
              f"    live in the RTL, no flop in this netlist {len(live_gone):5d}  (expect {EXPECT['live_gone']}): {live_gone}",
              f"    unused gpio bits        {len(unused):5d}  (expect {EXPECT['unused']})",
              f"  memory read-address register, gold {got['memaddr_gold']:5d}  (expect {EXPECT['memaddr_gold']}): {sorted(memaddr_gold)}",

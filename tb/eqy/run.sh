@@ -13,8 +13,8 @@
 #
 #   read     md5 of the netlist and the Liberty file; gold and gate read; the
 #            flop accounting (accounting.py) against the work order's table
-#   lemma    on the RTL: the removed bits (accounting.py EXPECT cand: 184 CSR + gpio out_r[1], [3] + PLIC
-#            pend/insvc of the tied-0 sources 7, 8) are constant after reset and
+#   lemma    on the RTL: the removed bits (accounting.py EXPECT cand: 181 CSR + gpio out_r[1], [3] + PLIC
+#            pend/insvc of the tied-0 sources 5-8) are constant after reset and
 #            the recoded FSMs never hold an unlisted code (lemma_props.sv,
 #            yosys sat -tempinduct); writes consts.txt, the ties of the gold
 #   fsminv   on the netlist: the four one-hot FSMs always hold exactly one set bit
@@ -47,7 +47,7 @@ for a in "$@"; do
   esac
 done
 [ -n "$NETLIST" ] || { echo "NETLIST=<path> is required" >&2; exit 2; }
-NL_MD5=757ba9e991e1b2fc5ff36d75ae4f50a7
+NL_MD5=c85f64690d4103139aed2b31c7fb6736
 # The version of the PDK the harden used (not what $PDK_ROOT/sky130A points to).
 LIB="$PDK_ROOT/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
 TOP=tt_um_alfadelta10010_alphaone_soc

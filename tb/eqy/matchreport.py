@@ -23,7 +23,7 @@ Exit status 1 if the counts differ from the work order's table.
 """
 import collections, json, re, sys
 
-EXPECT = dict(direct=1859, rename=11, recode=11, tied=194, unused=0, memaddr=3, UNMATCHED=0)
+EXPECT = dict(direct=1746, rename=96, recode=11, tied=191, unused=0, memaddr=3, UNMATCHED=0)
 RECODE = {"soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state",
           "soc.gpio_inst.spi_inst.st"}
 UNUSED = set()
@@ -31,6 +31,16 @@ MEMRD_GOLD = re.compile(r"^\$\\?(soc\.uart_inst\.rx_mem)\$rdreg\[\d+\]\$q(\[\d+\
 
 INTERNAL = re.compile(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$")
 EXPLICIT_RENAME = {"soc.cpu.imem_addr[0]": "soc.cpu.if_pc_next[0]"}
+
+# Same rule as accounting.py. The 256 B AREA 2 netlists (Fp190n2j, SYNTH_AUTONAME) name the pmpaddr flops after the cpu-level
+# wire csr_pmpaddrN = pmpaddrN_vis: bits [29:10] are st[29:10] in both arms of pmpaddr_vis, and
+# bit 0 is napot = pmpcfg0[8N+4] (A[1], stored by pmpcfg_legal). The gold read does not fold
+# that mux, so no gold alias shows the gate's name; without these the 84 live, writable bits
+# would count as removed constants. A netlist that keeps the csr_unit names matches directly.
+for _n in range(4):
+    for _k in range(10, 30):
+        EXPLICIT_RENAME[f"soc.cpu.csr_unit.pmpaddr{_n}[{_k}]"] = f"soc.cpu.csr_pmpaddr{_n}[{_k}]"
+    EXPLICIT_RENAME[f"soc.cpu.csr_pmpcfg0[{8 * _n + 4}]"] = f"soc.cpu.csr_pmpaddr{_n}[0]"
 
 
 def netnames(m):

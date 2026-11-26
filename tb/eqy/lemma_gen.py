@@ -56,6 +56,12 @@ for r in sorted(regs):
     mid = r.replace(".", "_")
     vh.append(f"`define LM_{mid} 32'h{mask:08x}")
     vh.append(f"`define LV_{mid} 32'h{val:08x}")
+# soundness: every register with removed bits must be checked by lemma_props.sv,
+# or its bits would be tied in gold without a proof
+props = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lemma_props.sv")).read()
+for r in sorted(regs):
+    if "`LM_" + r.replace(".", "_") + ")" not in props:
+        sys.exit(f"{r} has removed bits but lemma_props.sv does not check it")
 open(sys.argv[3] + "/consts.vh", "w").write("\n".join(vh) + "\n")
 open(sys.argv[3] + "/consts.txt", "w").write("\n".join(txt) + "\n")
 print(f"{len(txt)} constant bits in {len(regs)} registers")
