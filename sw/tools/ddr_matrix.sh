@@ -6,7 +6,7 @@
 # extra skew on the SCK and IO paths (+QSPI_SCK_DLY_PS, +QSPI_IO_DLY_PS) it boots the ddr payload and
 # has ddr_check.py compare the loader's choice with the rule and check the flash read-back. The
 # combinations the bench cannot boot at all (SDR itself cannot read the flash, so the loader never prints) are counted and listed, not failed:
-# they are outside the SDR timing the bench's Pmod model supports at 62.5 MHz. Negative delays are not used: the bench cannot schedule them.
+# they are outside the SDR timing the bench's Pmod model supports at the bench clock (CHIP_TCLK_NS, 19 ns; the golden file is that clock's). Negative delays are not used: the bench cannot schedule them.
 cd "$(dirname "$0")/.." || exit 1
 B=$(cd ../build/sw && pwd)
 JOBS=${1:-4}
