@@ -13,3 +13,5 @@ sed cache.v s@\.w_ena   (word_in \&\& fill_idx\[3\])@.w_ena   (word_in)@
 sed cache.v 182s@valid\[kidx\] <= 1'b0;@@
 # sibling sector fill under a new tag does not drop the sibling (B1 copy S1)
 sed cache.v s@if (!tmatch) valid\[{kline, ~kidx\[0\]}\] <= 1'b0;@@
+# MSIB (4x4-reviewer): the store snoop clears the SIBLING sector's valid bit instead of its own
+sed cache.v 182s@valid\[kidx\] <= 1'b0;@valid[{kidx[3:1], ~kidx[0]}] <= 1'b0;@

@@ -7,6 +7,12 @@
 // and every read is free data), so the storage side is checked end to end through the real write enables and addresses:
 //   D1 valid[sector(tb)] && tags[line(tb)] == tag(tb) -> the macro cell of tb holds sb (macro tb[7], word tb[6:2], byte tb[1:0])
 //   D2 a live (not dead) fill of sector(tb) under tag(tb): every word already written (tb[3:2] < fcnt) holds sb in the cell
+// ENVIRONMENT ASSUMPTION (named): the fetch stand-in returns the ghost sb (a store's new value) from the very cycle the store's
+// d_ready is seen, and a store never completes in a cycle a fetch word arrives. That is sound only because mem_ctrl never posts
+// stores: d_ready = q_done after the last nibble (src/mem_ctrl.v:199, reviewer-proved by trace). If posted stores are ever added
+// this proof's environment becomes unsound and must be redone.
+// The tracked byte tb is a free input frozen after the first cycle and the induction step starts from an arbitrary state with it
+// free, so the result holds for EVERY byte; keeping only the cell cw = tb[6:2] is exact for D1/D2 because reads are free data.
 // D2 is what lets the fill end set valid (and what early restart relies on); a dead fill never sets valid. NOT covered here:
 // the READ side (port A/B addressing, the 2:1 macro select, the straddle merge): reads are free data in this model, so that
 // stays with `cache` (BMC property B), tb_cache and the nonvac copies.
