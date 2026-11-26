@@ -28,6 +28,8 @@ COMMON  := common/crt0.S common/trap_entry.S common/trap.c common/uart.c common/
 # 113,430 baud at 52.63 MHz (common/soc.h UART_DIVISOR); the bench checks the program ends with it
 UART_DIVISOR := 29
 BENCH_OPT ?= -O2
+# The bench clock: the chip's 19 ns (52.63 MHz); the Pmod model's ns timing and the DDR window follow it.
+CHIP_TCLK_NS ?= 19.0
 CM_ITER   ?= 1
 
 RTL := $(addprefix $(ROOT)/src/,alu branchCtrl clint compressed_decoder controller csr decoder fyracore \
@@ -350,12 +352,12 @@ SIMRUN ?= $(BUILD)/bench/sim
 bench-icarus: $(BUILD)/bench/tb_sw.vvp
 $(BUILD)/bench/tb_sw.vvp: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
 	@mkdir -p $(dir $@)
-	iverilog -g2012 -o $@ -s tb_sw $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v \
+	iverilog -g2012 -DTCLK_NS=$(CHIP_TCLK_NS) -o $@ -s tb_sw $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v \
 	    $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v
 bench: $(BUILD)/bench/sim
 $(BUILD)/bench/sim: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
 	@mkdir -p $(dir $@)
-	$(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD \
+	$(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -DTCLK_NS=$(CHIP_TCLK_NS) \
 	    --top-module tb_sw -Mdir $(BUILD)/bench/obj -o ../sim \
 	    $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v \
 	    > $(BUILD)/bench/build.log 2>&1 || { tail -30 $(BUILD)/bench/build.log; exit 1; }

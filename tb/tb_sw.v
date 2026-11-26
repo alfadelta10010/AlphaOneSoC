@@ -31,7 +31,7 @@
 `timescale 1ns / 1ps
 
 `ifndef TCLK_NS
-`define TCLK_NS 16.0                     // 62.5 MHz, the chip clock (ROADMAP section 0)
+`define TCLK_NS 19.0                     // 52.63 MHz, the chip clock (sw/Makefile CHIP_TCLK_NS)
 `endif
 
 module tb_sw;
