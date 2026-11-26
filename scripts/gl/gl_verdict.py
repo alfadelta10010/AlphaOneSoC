@@ -17,7 +17,10 @@ def load(p):
     return open(p, errors="replace").read().replace("\r", "").split("\n")
 
 def body(lines):
-    return [l for l in lines if not l.startswith(("FINISH-PROBE", "- ", "qspi_pmod_model:", "%")) and "walltime" not in l]
+    # only the informational lines are dropped; the Pmod model's ERROR lines (its violations $fatal, tb/qspi_pmod_model.v task fail)
+    # and the SD model's error count stay in the compare
+    info = ("qspi_pmod_model: setup/hold", "qspi_pmod_model: min margins", "qspi_pmod_model: flash reads")
+    return [l for l in lines if not l.startswith(("FINISH-PROBE", "- ", "%", "RAND-PROBE") + info) and "walltime" not in l]
 
 gl, rtl = load(sys.argv[1]), load(sys.argv[2])
 bad = []
