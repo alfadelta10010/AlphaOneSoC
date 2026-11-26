@@ -1,0 +1,17 @@
+# WO-CF step 3: broken copies of src/cache.v; the data-coherence harness cache_data must FAIL each.
+# MUT9: the fill-start clear of the filled sector's valid bit is deleted (line-anchored: line 182 has the same text)
+sed cache.v 170s@valid\[kidx\] <= 1'b0;@@
+# HM5: a store that hits the sector being filled marks the fill dead only for data_mem sectors; data_hi keeps filling and sets valid on stale words
+sed cache.v s@if (fill_active \&\& fill_idx == kidx)@if (fill_active \&\& fill_idx == kidx \&\& !kidx[3])@
+# a dead fill still sets valid (S-dead)
+sed cache.v s@valid\[fill_idx\] <= !dead;@valid[fill_idx] <= 1'b1;@
+# data path: the macro write address has the wrong word index (both macros)
+sed cache.v s@\.w_addr  ({fill_idx\[2:0\], fcnt}),@.w_addr  ({fill_idx[2:0], fcnt + 2'd1}),@
+# data path: data_hi is written by every fill word too (a fill of a data_mem sector overwrites data_hi)
+sed cache.v s@\.w_ena   (word_in \&\& fill_idx\[3\])@.w_ena   (word_in)@
+# the store snoop does not clear the valid bit of its sector (it still kills a running fill)
+sed cache.v 182s@valid\[kidx\] <= 1'b0;@@
+# sibling sector fill under a new tag does not drop the sibling (B1 copy S1)
+sed cache.v s@if (!tmatch) valid\[{kline, ~kidx\[0\]}\] <= 1'b0;@@
+# MSIB (4x4-reviewer): the store snoop clears the SIBLING sector's valid bit instead of its own
+sed cache.v 182s@valid\[kidx\] <= 1'b0;@valid[{kidx[3:1], ~kidx[0]}] <= 1'b0;@

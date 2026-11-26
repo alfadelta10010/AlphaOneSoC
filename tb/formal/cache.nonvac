@@ -35,3 +35,5 @@ sed cache.v s@(kword < fcnt)@(kword < fcnt || (b_ph \&\& kword == fcnt))@
 sed cache.v s@if (!tmatch) valid\[{kline, ~kidx\[0\]}\] <= 1'b0;@@
 # S2: tags read and written with the sector's low bits (lines alias: sectors s and s + 8 share a tag)
 sed cache.v s@wire \[2:0\]  kline     = kidx\[3:1\];@wire [2:0]  kline     = kidx[2:0];@
+# WO-CF B4 (HM5 of tests/soc/adv_mkmut.py): a store that hits the sector being filled marks the fill dead only for data_mem sectors (index[3] = 0); the data_hi fill stays alive and sets valid on stale words. Property B kills it at step 7 (seconds); tb_cache kills it too (143 errors).
+sed cache.v s@if (fill_active \&\& fill_idx == kidx)@if (fill_active \&\& fill_idx == kidx \&\& !kidx[3])@
