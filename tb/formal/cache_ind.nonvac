@@ -13,6 +13,14 @@ sed cache.v s@assign f_ready = act ? hit_q : m_ready;@assign f_ready = act ? (hi
 sed cache.v s@            act         <= 1'b0;@            act         <= 1'b1;@
 # valid bits survive the hand-back (not cold): the !act -> valid = 0 invariant breaks
 sed cache.v /on the way out/{n;s@valid <= 16'd0;@valid <= valid;@}
+# WO-CF B1: sector-tag invariant (I6-I8). The sibling sector survives a tag change (stale data of the old tag stays valid)
+sed cache.v s@if (!tmatch) valid\[{kline, ~kidx\[0\]}\] <= 1'b0;@@
+# the sibling is dropped only when the even sector starts the fill (a three-fill sequence: needs the induction to see it)
+sed cache.v s@if (!tmatch) valid\[{kline, ~kidx\[0\]}\] <= 1'b0;@if (!tmatch \&\& !kidx[0]) valid[{kline, ~kidx[0]}] <= 1'b0;@
+# a store to another tag of the same index rewrites the line's tag without dropping the sectors (a snoop-side tag refresh)
+sed cache.v s@^            if (snoop \&\& tmatch) begin@            if (snoop) tags[17*kline +: 17] <= ktag;\n&@
+# the new tag is not written when the sibling sector is still valid (the running fill's line keeps the old tag)
+sed cache.v s@^                tags\[17\*kline +: 17\] <= ktag;@                if (!valid[{kline, ~kidx[0]}]) tags[17*kline +: 17] <= ktag;@
 # WO-CF B2: M-A5, m_burst on a flash fill (window 0x20: m_addr[31] = 0)
 sed cache.v s@fill_active \&\& !dead \&\& fill_tag\[16\] \&\& pburst@fill_active \&\& !dead \&\& pburst@
 # m_burst without a running fill (no m_req)
