@@ -85,18 +85,40 @@ module tb_sw;
     tt_um_alfadelta10010_alphaone_soc dut (
         .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in), .uio_out(uio_out), .uio_oe(uio_oe),
         .ena(1'b1), .clk(clk), .rst_n(~rst));
-    // The models see idle pin levels while rst is high: with +verilator+rand+reset+2 the wrapper's flops start at
-    // random values and the pins show them until the first clock edge, which the Pmod / SD timing checkers
-    // (rightly, for a real pin) call a violation at t=0. tb_tt_um checks the pins in reset itself.
-    assign qspi_sck    = rst ? 1'b0 : uio_out[3];
-    assign qspi_cs_n   = rst ? 3'b111 : {uio_out[7], uio_out[6], uio_out[0]};
-    assign qspi_ctl_oe = rst ? 1'b0 : uio_oe[3];
+    // The models see idle pin levels for the first two clock edges only: with +verilator+rand+reset+2 the wrapper's
+    // flops start at random values and the pins show them until the reset reaches them, which the Pmod / SD timing
+    // checkers (rightly, for a real pin) call a violation at t=0. From the second edge on (rst is still high for 10
+    // clocks) the pins are the chip's own reset-period pins, unmasked. tb_tt_um checks them against the spec.
+    wire pin_mask = rst && (cyc < 2);
+    assign qspi_sck    = pin_mask ? 1'b0 : uio_out[3];
+    assign qspi_cs_n   = pin_mask ? 3'b111 : {uio_out[7], uio_out[6], uio_out[0]};
+    assign qspi_ctl_oe = pin_mask ? 1'b0 : uio_oe[3];
     assign qspi_io_out = {uio_out[5], uio_out[4], uio_out[2], uio_out[1]};
-    assign qspi_io_oe  = rst ? 1'b0 : &{uio_oe[5], uio_oe[4], uio_oe[2], uio_oe[1]};
-    assign uart_tx     = rst ? 1'b1 : uo_out[4];
-    assign gpio_out    = rst ? 8'h39 : uo_out;
+    assign qspi_io_oe  = pin_mask ? 1'b0 : &{uio_oe[5], uio_oe[4], uio_oe[2], uio_oe[1]};
+    assign uart_tx     = pin_mask ? 1'b1 : uo_out[4];
+    assign gpio_out    = pin_mask ? 8'h39 : uo_out;
     assign uart_rts_n  = 1'b1;
 `ifdef TB_GATE
+    // +RAND_PROBE: at t = 1 ns print some flops the design never resets (CSRs mscratch, mtval, mepc, low bits), to show a
+    // run's random power-up state differs per +verilator+seed
+    initial if ($test$plusargs("RAND_PROBE")) begin
+        #1;
+        $display("RAND-PROBE mscratch[15:0]=%h mtval[15:0]=%h mepc[15:2]=%h", {
+            dut.\soc.cpu.csr_unit.mscratch[15] , dut.\soc.cpu.csr_unit.mscratch[14] , dut.\soc.cpu.csr_unit.mscratch[13] , dut.\soc.cpu.csr_unit.mscratch[12] ,
+            dut.\soc.cpu.csr_unit.mscratch[11] , dut.\soc.cpu.csr_unit.mscratch[10] , dut.\soc.cpu.csr_unit.mscratch[9] , dut.\soc.cpu.csr_unit.mscratch[8] ,
+            dut.\soc.cpu.csr_unit.mscratch[7] , dut.\soc.cpu.csr_unit.mscratch[6] , dut.\soc.cpu.csr_unit.mscratch[5] , dut.\soc.cpu.csr_unit.mscratch[4] ,
+            dut.\soc.cpu.csr_unit.mscratch[3] , dut.\soc.cpu.csr_unit.mscratch[2] , dut.\soc.cpu.csr_unit.mscratch[1] , dut.\soc.cpu.csr_unit.mscratch[0] },
+          {
+            dut.\soc.cpu.csr_unit.mtval[15] , dut.\soc.cpu.csr_unit.mtval[14] , dut.\soc.cpu.csr_unit.mtval[13] , dut.\soc.cpu.csr_unit.mtval[12] ,
+            dut.\soc.cpu.csr_unit.mtval[11] , dut.\soc.cpu.csr_unit.mtval[10] , dut.\soc.cpu.csr_unit.mtval[9] , dut.\soc.cpu.csr_unit.mtval[8] ,
+            dut.\soc.cpu.csr_unit.mtval[7] , dut.\soc.cpu.csr_unit.mtval[6] , dut.\soc.cpu.csr_unit.mtval[5] , dut.\soc.cpu.csr_unit.mtval[4] ,
+            dut.\soc.cpu.csr_unit.mtval[3] , dut.\soc.cpu.csr_unit.mtval[2] , dut.\soc.cpu.csr_unit.mtval[1] , dut.\soc.cpu.csr_unit.mtval[0] },
+          {
+            dut.\soc.cpu.csr_mepc[15] , dut.\soc.cpu.csr_mepc[14] , dut.\soc.cpu.csr_mepc[13] , dut.\soc.cpu.csr_mepc[12] ,
+            dut.\soc.cpu.csr_mepc[11] , dut.\soc.cpu.csr_mepc[10] , dut.\soc.cpu.csr_mepc[9] , dut.\soc.cpu.csr_mepc[8] ,
+            dut.\soc.cpu.csr_mepc[7] , dut.\soc.cpu.csr_mepc[6] , dut.\soc.cpu.csr_mepc[5] , dut.\soc.cpu.csr_mepc[4] ,
+            dut.\soc.cpu.csr_mepc[3] , dut.\soc.cpu.csr_mepc[2]  });
+    end
     wire [15:0] uart_div = {
         dut.\soc.uart_inst.dlm[7] , dut.\soc.uart_inst.dlm[6] , dut.\soc.uart_inst.dlm[5] , dut.\soc.uart_inst.dlm[4] ,
         dut.\soc.uart_inst.dlm[3] , dut.\soc.uart_inst.dlm[2] , dut.\soc.uart_inst.dlm[1] , dut.\soc.uart_inst.dlm[0] ,
