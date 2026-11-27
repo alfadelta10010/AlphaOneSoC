@@ -4,14 +4,13 @@
 # tests (part C), relinked for the SoC.
 #
 #   build_isa.sh SUITES=<river_core conf dir, with test_list.yaml> OUT=<dir>
-#                [TOOLCHAIN=riscv64-unknown-elf-] [PARTS="A B C D"]
+#                [TOOLCHAIN=riscv64-unknown-elf-] [PARTS="A B C D"] [BOOT_CLEAR_MSCRATCH=0 to opt out]
 #
 # Writes under OUT: elf/<name>.elf, hex/<name>.hex (flash image at 0), and the
-# lists list.A, list.B, list.C, list.D10, list.D20 of `name|hex|plusargs` lines
-# (run_gl.sh LIST=). Part D is the 20 mailbox programs of tests/soc built with
-# -DMB_UART (they report over the UART as well) and the chip's divisor 34; the
-# three that drive the SSD1331 (D20) run with a 20 ns clock, the rest (D10)
-# with 10 ns: run_gl.sh TCLK=.
+# lists list.A, list.B, list.C, list.D of `name|hex|plusargs` lines
+# (run_gl.sh LIST=). Part D is the mailbox programs of tests/soc built with
+# -DMB_UART (they report over the UART as well) and the chip's reset divisor 34,
+# run at the chip's 19 ns clock (52.63 MHz): run_gl.sh TCLK=19.0. The table is below.
 # Nothing from the suites is copied; they are read from SUITES' yaml paths.
 # Tests that write code (rv32ui fence_i, arch Fencei) are linked to run from PSRAM
 # (tests/isa/link_soc_ram.ld). The 3 arch tests with the smallest signature also
@@ -25,44 +24,75 @@ mkdir -p "$OUT/elf" "$OUT/hex" "$OUT/inc"; OUT=$(cd "$OUT" && pwd)
 CC=${TOOLCHAIN}gcc; OC=${TOOLCHAIN}objcopy; NM=${TOOLCHAIN}nm
 printf '#include "%s/riscv_test_soc.h"\n' "$ISA" > "$OUT/inc/riscv_test.h"
 FLAGS="-march=rv32imac_zicsr_zifencei -mabi=ilp32 -static -std=gnu99 -O2 -mcmodel=medany -fvisibility=hidden -nostdlib -nostartfiles"
+[ "${BOOT_CLEAR_MSCRATCH:-1}" = 1 ] && FLAGS="$FLAGS -DBOOT_CLEAR_MSCRATCH"   # parts B and C: boot_flash.S zeroes mscratch (no reset on the 4x4 chip)
 hexof() { # elf hex ram?
   local secs="-j .text.init -j .text -j .rodata -j .data"
   [ "$3" = 1 ] && secs="-j .text.boot -j .text_ram -j .rodata -j .data"
   $OC -O verilog $secs --change-addresses=-0x20000000 "$1" "$2"
 }
-: > "$OUT/list.A"; : > "$OUT/list.B"; : > "$OUT/list.C"; : > "$OUT/list.D10"; : > "$OUT/list.D20"
+: > "$OUT/list.A"; : > "$OUT/list.B"; : > "$OUT/list.C"; : > "$OUT/list.D"
 case " $PARTS " in *" D "*)
-  # program MB_DIV image (T10: 10 ns clock, T20: 20 ns): the table of WO-26
-  late='+RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'
-  while read -r t div img; do
+  # The mailbox programs of tests/soc through the pins (tb_tt_um.v +TEST=soc +PROG=<name>), the table of WO-26 as
+  # refreshed for the 4x4 chip (WO-GLN). One line per run: label|program|MB_DIV|cflags|plusargs.
+  # All at the chip clock, 19 ns (run_gl.sh TCLK=19.0). The old 10 / 20 ns split is gone: the 20 ns clock was there for
+  # the three SSD1331 programs (oled_spi, irq_stall, periph_access), and they PASS on the RTL at 19 ns (WO-GLN).
+  # QSPI delays of the late runs are scaled by 19/10 from the 10 ns bench's (+QSPI_DELAY=25 +QSPI_HOLD=12 -> 47, 23): the
+  # same position in the SCK period.
+  # ddr_flash@n / ddr_sweep@FLAG as the Makefile's SYSCON_SOC_RUNS (ddr_flash points at 19 ns: capture at 9.5 (n + 1) ns).
+  # gpio_irq is built with -DIP_CLEAR_FIRST: it W1Cs IN_IP before its first check (the pins bench's two-clock power-up reset
+  # leaves phantom IN_IP bits, a documented property of the unreset input synchroniser).
+  # Not here, with the reason: adv_* (their cues are raw syscon-mailbox writes read by tb_adv.v's own checks; nothing
+  # of them reaches the pins as a UART frame), syscon_cfg (not a program of the pins bench: needs the SoC's strap
+  # forcing in tb_syscon_soc), sd_init / spi_mixed / sd_reboot (the SD card bench: tb_soc_periph with sd_spi_model; at the
+  # pins only sd_init has a row and needs -DTT_SD, 10-100 M cycles: too long for a gate-level run), uart_hello's variants.
+  # ddr_sweep lines carry +QSPI_EYE_RANDOM: the sweep tries DDR_CAPs outside the data eye on purpose; without it the Pmod model drives X there,
+  # which RTL survives (a compare on X just fails that cap) but the gate-level core does not (X spreads into the control logic, 11-26 night).
+  # With it the off-eye nibble is random data, and the RTL cycle counts are unchanged (WO-GLN-2).
+  late='+RD_LATE +QSPI_DELAY=47 +QSPI_HOLD=23'
+  while IFS='|' read -r label t div cf pa; do
+    [ -n "$label" ] || continue
     df="-DMB_UART -DUART_DIV_RESET=34"; [ "$div" != - ] && df="$df -DMB_DIV=$div"
-    $CC $FLAGS $df -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/$t.S -o "$OUT/elf/$t.elf" || exit 1
-    $OC -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 "$OUT/elf/$t.elf" "$OUT/hex/$t.hex"
-    if [ "$t" = syscon_strap ]; then
-      echo "$t.0|$t|+TEST=soc +PROG=$t" >> "$OUT/list.D$img"; echo "$t.1|$t|+TEST=soc +PROG=$t $late" >> "$OUT/list.D$img"
-    else echo "$t|$t|+TEST=soc +PROG=$t" >> "$OUT/list.D$img"; fi
+    $CC $FLAGS $df $cf -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/$t.S -o "$OUT/elf/$label.elf" || exit 1
+    $OC -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 "$OUT/elf/$label.elf" "$OUT/hex/$label.hex"
+    pa=${pa//@LATE@/$late}
+    echo "$label|$label|+TEST=soc +PROG=$t${pa:+ $pa}" >> "$OUT/list.D"
   done <<'EOT'
-uart_hello - 10
-uart_echo 4 10
-uart_linux - 10
-oled_spi 1 20
-keypad 1 10
-irq_stall 4 20
-periph_access - 20
-clint_decode 1 10
-syscon_regs 1 10
-syscon_reboot - 10
-syscon_strap 1 10
-syscon_fail 1 10
-syscon_wdt 1 10
-syscon_wdt_split 1 10
-syscon_poweroff 1 10
-syscon_pinreset 1 10
-sd_cs 1 10
-pinmux 1 10
-reboot_dirty 1 10
-audio 1 10
-pwm_linux 1 10
+uart_hello|uart_hello|-||
+uart_echo|uart_echo|4||
+uart_linux|uart_linux|-||
+oled_spi|oled_spi|1||
+keypad|keypad|1||
+irq_stall|irq_stall|4||
+periph_access|periph_access|-||
+clint_decode|clint_decode|1||
+syscon_regs|syscon_regs|1||
+syscon_reboot|syscon_reboot|-||
+syscon_strap.0|syscon_strap|1||
+syscon_strap.1|syscon_strap|1||@LATE@
+syscon_fail|syscon_fail|1||
+syscon_wdt|syscon_wdt|1||
+syscon_wdt_split|syscon_wdt_split|1||
+syscon_poweroff|syscon_poweroff|1||
+syscon_pinreset|syscon_pinreset|1||
+sd_cs|sd_cs|1||
+pinmux|pinmux|1||
+reboot_dirty|reboot_dirty|1||
+pwm_linux|pwm_linux|1||
+pwm_timer|pwm_timer|1||
+cache_ctl|cache_ctl|1||
+gpio_irq|gpio_irq|1|-DIP_CLEAR_FIRST|
+plic_uart|plic_uart|4||
+gamepad|gamepad|1||
+ddr_flash.0|ddr_flash|1|-DDDR_PT=0|
+ddr_flash.1|ddr_flash|1|-DDDR_PT=1|+QSPI_DELAY=12 +QSPI_HOLD=6
+ddr_flash.2|ddr_flash|1|-DDDR_PT=2|+QSPI_DELAY=22 +QSPI_HOLD=12
+ddr_sweep.k2a|ddr_sweep|1||+QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2 +QSPI_EYE_RANDOM
+ddr_sweep.k2b|ddr_sweep|1||+QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=2 +QSPI_EYE_RANDOM
+ddr_sweep.k3|ddr_sweep|1||+QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3 +QSPI_EYE_RANDOM
+ddr_sweep.k4|ddr_sweep|1||+RD_LATE +QSPI_DELAY=42 +QSPI_HOLD=36 +WANT_K=4 +QSPI_EYE_RANDOM
+ddr_sweep.off_launch1|ddr_sweep|1||+DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1 +QSPI_EYE_RANDOM
+ddr_sweep.off_launch2|ddr_sweep|1||+DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1 +QSPI_EYE_RANDOM
+ddr_sweep.off_window|ddr_sweep|1||+QSPI_DELAY=22 +QSPI_HOLD=6 +WANT_K=-1 +QSPI_EYE_RANDOM
 EOT
   ;;
 esac
@@ -71,15 +101,14 @@ case " $PARTS " in *" A "*)
     $CC $FLAGS -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/$t.S -o "$OUT/elf/$t.elf" || exit 1
     $OC -O verilog -j .text.init -j .text -j .rodata --change-addresses=-0x20000000 "$OUT/elf/$t.elf" "$OUT/hex/$t.hex"
   done
-  # test-wrapper's runs: QSPI_LATE is +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12.
-  # tt_pins.1 runs at QSPI_DELAY=18 here: 19 leaves only 1 ns of the 20 ns SCK period at
-  # the 10 ns bench clock and the 2-cell pad-to-flop path is 2 ns at UNIT_DELAY=#1 (WO-40:
-  # PASS at 18 and 17 on fin-3x4). The 19 ns case stays covered at RTL by test-qspi's
-  # +QSPI_DELAY=19 run and test-wrapper's runs.
-  { echo 'tt_pins.0|tt_pins|'; echo 'tt_pins.1|tt_pins|+QSPI_DELAY=18'
-    echo 'tt_pins.2|tt_pins|+RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'
+  # Part A runs at the chip's 19 ns clock (night.sh TCLK=19.0); the 10 ns bench's QSPI delays are scaled by 1.9
+  # (QSPI_LATE +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12 -> 47, 23: the same place in the SCK period).
+  # tt_pins.1 runs just under one SCK period: 19 at 10 ns left 1 ns of the 20 ns period and the 2-cell pad-to-flop
+  # path is 2 ns at UNIT_DELAY=#1 (WO-40: PASS at 18 and 17 on fin-3x4), so 18 there; 36 of the 38 ns here, the same 2 ns.
+  { echo 'tt_pins.0|tt_pins|'; echo 'tt_pins.1|tt_pins|+QSPI_DELAY=36'
+    echo 'tt_pins.2|tt_pins|+RD_LATE +QSPI_DELAY=47 +QSPI_HOLD=23'
     echo 'tt_reboot.0|tt_reboot|+TEST=reboot'
-    echo 'tt_reboot.1|tt_reboot|+TEST=reboot +RD_LATE +QSPI_DELAY=25 +QSPI_HOLD=12'; } > "$OUT/list.A";;
+    echo 'tt_reboot.1|tt_reboot|+TEST=reboot +RD_LATE +QSPI_DELAY=47 +QSPI_HOLD=23'; } > "$OUT/list.A";;
 esac
 case " $PARTS " in *" B "*|*" C "*) : "${SUITES:?SUITES=<dir with test_list.yaml> for parts B and C}";; esac
 : > "$OUT/tests.tsv"
@@ -121,4 +150,4 @@ sort -n $SIZES | head -3 | while read -r sz n ram rest; do
   b=$($NM "$OUT/elf/$n.uart.elf" | awk '$3=="begin_signature"{print $1}'); e=$($NM "$OUT/elf/$n.uart.elf" | awk '$3=="end_signature"{print $1}')
   echo "$n.uart|$n.uart|+TEST=sig +SIG_UART +SIG_BEGIN=$b +SIG_END=$e +SIG_REF=$OUT/ref/$n.uart.sig +SIG_OUT=@RUN@/$n.uart.sig" >> "$OUT/list.C"
 done
-echo "built: A=$(wc -l < $OUT/list.A) B=$(wc -l < $OUT/list.B) C=$(wc -l < $OUT/list.C) (C counts the .uart builds) D10=$(wc -l < $OUT/list.D10) D20=$(wc -l < $OUT/list.D20)"
+echo "built: A=$(wc -l < $OUT/list.A) B=$(wc -l < $OUT/list.B) C=$(wc -l < $OUT/list.C) (C counts the .uart builds) D=$(wc -l < $OUT/list.D)"

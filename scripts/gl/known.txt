@@ -1,1 +1,1 @@
-rv32ui-ma_data-p ma_data (river_core conf known failure)
+rv32ui-ma_data-p FAIL ma_data (river_core conf known failure)

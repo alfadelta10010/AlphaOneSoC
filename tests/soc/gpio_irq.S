@@ -20,6 +20,13 @@ _start:
     MB_INIT
     li   s0, GPIO
     PLIC_SETUP (1 << SRC_GPIO)
+#ifdef IP_CLEAR_FIRST
+    # The pins bench (tb_tt_um) gives the chip the demo board's two-clock power-up reset: the input synchroniser is
+    # never reset, so IN_IP can show phantom bits on the first read (docs/pins-and-peripherals.md, IN_IP). The
+    # documented recipe: clear IN_IP (W1C) first. Everything after it is checked as before.
+    li   t0, 0xFF
+    sw   t0, G_IP(s0)
+#endif
     lw   t0, G_IP(s0)
     CHECK t0, 0, 0x01
     lw   t0, G_IE(s0)

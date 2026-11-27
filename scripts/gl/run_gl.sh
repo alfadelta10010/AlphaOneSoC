@@ -64,10 +64,10 @@ if [ ! -e "$OUT/done.compile" ]; then
   if [ -n "$VL" ]; then
     ${VERILATOR:-verilator} --binary --timing -j ${VLJ:-2} -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -Wno-PINMISSING \
         --top-module tb_tt_um -Mdir "$OUT/obj" -o ../sim -I"$R/src" $DEFS $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v \
-        $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
+        $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/gamepad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
       || { log "COMPILE FAILED"; exit 1; }
   else
-    $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
+    $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/gamepad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
       || { log "COMPILE FAILED"; exit 1; }
   fi
   touch "$OUT/done.compile"; log "compiled"
@@ -80,7 +80,7 @@ run_one() { # name hex args
   if [ -n "${BASE:-}" ] && [ -s "$BASE/$name.verdict" ]; then
     c=$(awk '{print $2}' "$BASE/$name.verdict"); [[ $c =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] && mc=$(( c * 2 + 50000 ))
   fi
-  ( cd "$OUT" && timeout -k 10 $WALL $SIMCMD +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
+  ( cd "$OUT" && timeout --foreground -k 10 $WALL $SIMCMD +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
   if grep -q '^PASS tb_tt_um' "$OUT/$name.log" && ! grep -qE '^(FAIL|ERROR)' "$OUT/$name.log"; then v=PASS
   elif grep -q '^TIMEOUT' "$OUT/$name.log"; then v=TIMEOUT; else v=FAIL; fi
   c=$(grep -oE '[0-9]+ cycles\)$|stuck at cycle [0-9]+|\(cycle [0-9]+\)' "$OUT/$name.log" | grep -oE '[0-9]+' | tail -1)
@@ -94,11 +94,11 @@ run_one() { # name hex args
       v=FAIL; echo "FAIL cycle count: gate level ${c:-0}, RTL $rc" >> "$OUT/$name.log"; log "CYCLES $name rtl $rc gl ${c:-0} MISMATCH"
     else log "CYCLES $name rtl $rc gl ${c:-0} match"; fi
   fi
-  [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" '$1==n{$1="";print}' "$KNOWN")
+  [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" -v v="$v" '$1==n && $2==v{$1="";$2="";print}' "$KNOWN")
   echo "$v ${c:-0} cycles $((SECONDS - s)) s${lab:+ known:$lab}" > "$OUT/$name.verdict"
   log "$name $(cat "$OUT/$name.verdict")"
 }
-KNOWN=${KNOWN:-$R/scripts/gl/known.txt}
+KNOWN=${KNOWN:-$R/scripts/gl/known.txt}   # lines: <program> <PASS|FAIL|TIMEOUT> <label>: the label excuses that outcome only
 log "start $(basename "$LIST") jobs=$JOBS"
 while IFS='|' read -r name hex args; do
   [ -n "$name" ] || continue

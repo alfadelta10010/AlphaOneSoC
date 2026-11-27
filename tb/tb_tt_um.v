@@ -179,7 +179,12 @@ module tb_tt_um;
     wire [3:0] kp_row;
     reg        sd_fit = 1'b0;                    // +SD (and -DTT_SD): an SD card on CS# uo_out[5], SCK [3], MOSI [1], DO ui_in[1]
     wire       sd_do_in1;
-    wire [7:0] ui_in = {kp_fit ? kp_row : tb_in[7:4], uart_rx, ns_hold ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
+    // The gamepad Pmod (LATCH / CLOCK / DATA on ui_in[4] / [5] / [6]) for +PROG=gamepad (tb/gamepad_model.v, as tb_soc_periph)
+    wire       gp_latch, gp_clock, gp_data;
+    gamepad_model gpad (.latch(gp_latch), .clock(gp_clock), .data(gp_data));
+    reg        gp_on = 1'b0;
+    wire [3:0] hi_in = kp_fit ? kp_row : gp_on ? {tb_in[7], gp_data, gp_clock, gp_latch} : tb_in[7:4];
+    wire [7:0] ui_in = {hi_in, uart_rx, ns_hold ? no_stream : tb_in[2], sd_fit ? sd_do_in1 : tb_in[1], strap_on ? strap : tb_in[0]};
     wire [7:0] uo_out, uio_out, uio_oe;
     wire [7:0] uio_pin;
 `ifdef USE_POWER_PINS
@@ -460,6 +465,11 @@ module tb_tt_um;
     localparam integer ID_reboot_dirty = 24; // tests/soc/reboot_dirty.S (SF4): a reboot with the 4x4 blocks dirty
     localparam integer ID_audio = 22;
     localparam integer ID_pwm_linux = 23;
+    localparam integer ID_cache_ctl = 25;    // 4x4 blocks through the pins: tests/soc/cache_ctl.S, gpio_irq.S, plic_uart.S, gamepad.S, pwm_timer.S
+    localparam integer ID_gpio_irq = 26;
+    localparam integer ID_plic_uart = 27;
+    localparam integer ID_gamepad = 28;
+    localparam integer ID_pwm_timer = 29;
     localparam integer ID_sd_init = 17;      // with -DTT_SD, +SD, a 16 ns clock (WO-29)
     integer pid = 0;
     integer s_want_k = 0, s_exp_wdt = 0;
@@ -490,6 +500,11 @@ module tb_tt_um;
             if (p == "reboot_dirty") prog_id = ID_reboot_dirty;
             if (p == "audio") prog_id = ID_audio;
             if (p == "pwm_linux") prog_id = ID_pwm_linux;
+            if (p == "cache_ctl") prog_id = ID_cache_ctl;
+            if (p == "gpio_irq") prog_id = ID_gpio_irq;
+            if (p == "plic_uart") prog_id = ID_plic_uart;
+            if (p == "gamepad") prog_id = ID_gamepad;
+            if (p == "pwm_timer") prog_id = ID_pwm_timer;
         end
     endfunction
     // ── +TEST=soc +PROG=<name>: the mailbox programs of tests/soc ───────────
@@ -635,6 +650,12 @@ module tb_tt_um;
             rp.send_byte(8'h20 + ((pidx * 7 + 3) % 95)); pidx = pidx + 1;
         end
     endtask
+    // plic_uart cue 5: a break on RX, 12 bit times, with the line otherwise idle
+    integer brk_go = 0;
+    always @(brk_go) if (brk_go != 0) begin
+        while (rp.tx_pending() != 0) @(posedge clk);
+        rp.rx = 1'b0; #(12.0 * rp.bit_ns); rp.rx = 1'b1;
+    end
 
     task automatic soc_setup;
         integer k;
@@ -764,6 +785,22 @@ module tb_tt_um;
                 ID_pwm_linux: begin
                     s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
                 end
+                ID_cache_ctl: s_div = 1;     // no cues, no UART text: the program's own CHECKs and its FINISH
+                ID_pwm_timer: s_div = 1;
+                ID_gpio_irq: begin
+                    // one edge of one pin per cue: 1 pin 7 rises, 2 pin 2 rises, 3 pin 0 rises, 4 pin 4 rises, 5 pin 2 falls
+                    s_div = 1; s_n_ev = 5; for (k = 0; k < 5; k = k + 1) s_ev[k] = k + 1;
+                end
+                ID_plic_uart: begin
+                    // the pattern byte n is 0x20 + (7n + 3) mod 95; the program echoes bytes 61..68 through the THRE interrupt
+                    s_div = 4; s_n_ev = 8; for (k = 0; k < 8; k = k + 1) s_ev[k] = k + 1;
+                    for (k = 61; k < 69; k = k + 1) s_want = $sformatf("%s%c", s_want, 8'h20 + ((k * 7 + 3) % 95));
+                    s_n_val = 2;
+                end
+                ID_gamepad: begin
+                    s_div = 1; s_n_ev = 4; for (k = 0; k < 4; k = k + 1) s_ev[k] = k + 1;
+                    gp_on = 1'b1; gpad.present0 = 1'b0; gpad.present1 = 1'b0; gpad.pad0 = 12'h0; gpad.pad1 = 12'h0; gpad.enable = 1'b1;
+                end
                 ID_ddr_sweep: begin
                     // the boot-time DDR sweep: its UART text is the verdict (the last line against +WANT_K), the VALUE
                     // stores are plain mailbox writes
@@ -806,6 +843,29 @@ module tb_tt_um;
                     end
                 end
                 ID_keypad: if (code == 1 && s_ev_i < 28) keys = kp_sets[s_ev_i];
+                ID_gpio_irq: case (code)
+                    1: tb_in[7] = 1'b1;
+                    2: tb_in[2] = 1'b1;
+                    3: begin strap_on = 1'b0; tb_in[0] = 1'b1; end    // ui_in[0] is the strap until now (0 either way)
+                    4: tb_in[4] = 1'b1;
+                    5: tb_in[2] = 1'b0;
+                    default: ;
+                endcase
+                ID_gamepad: case (code)
+                    1: begin gpad.present0 = 1'b1; gpad.pad0 = 12'h123; end
+                    2: begin gpad.present1 = 1'b1; gpad.pad1 = 12'h456; end   // pad 1 is not kept: nothing changes
+                    3: gpad.present0 = 1'b0;
+                    4: begin gpad.present1 = 1'b0; gpad.present0 = 1'b1; gpad.pad0 = 12'h0AA; end
+                    default: ;
+                endcase
+                ID_plic_uart: begin
+                    // flow control off; bursts of 5, 16, 40 (cues 1-3), 8 for the echo (4), a break (5), one character (6-8)
+                    rp.set_flow(1'b0);
+                    if (code >= 1 && code <= 3) send_pat(code == 1 ? 5 : code == 2 ? 16 : 40);
+                    if (code == 4) send_pat(8);
+                    if (code == 5) brk_go = brk_go + 1;
+                    if (code >= 6 && code <= 8) send_pat(1);
+                end
                 ID_irq_stall: rp.send_byte("a" + s_ev_i);
                 ID_periph_access: begin
                     if (code == 'h10) rp.send_byte(s_last_val[7:0]);
@@ -1072,7 +1132,9 @@ module tb_tt_um;
                 ID_syscon_wdt_split: begin
                     $display("NOTE syscon_wdt_split: %0d windows, %0d on a split fetch (a PSRAM A read began at 0x3FE and the fire came between its halves), %0d on PSRAM B (data)",
                              sw_n, sw_split, sw_data);
-                    if (sw_split < 1) fail("syscon_wdt_split: no fire between the halves of a split fetch");
+                    // with +CACHE_EN every instruction fetch is an aligned word fill, so no fetch has two halves to split
+                    // (tb_syscon_soc.v does the same); the data-transaction check below stays on in both modes
+                    if (sw_split < 1 && !cache_en_arg) fail("syscon_wdt_split: no fire between the halves of a split fetch");
                     if (sw_data < 1) fail("syscon_wdt_split: no fire on a data transaction");
                 end
                 ID_syscon_poweroff:

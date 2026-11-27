@@ -125,7 +125,7 @@ run_one() { # variant corner
   $IVERILOG -g2012 -gspecify -I "$R/src" -o sim.vvp -s tb_tt_um $top -DGL_TEST -DUSE_POWER_PINS -DSIM \
     -DTCLK_NS=$T -DIN_DLY_NS=$IN_DLY -DRST_CHK_NS=$RST_CHK -DSDF_FILE=\"$d/cells.sdf\" \
     "$WORK/models/primitives.v" "$WORK/models/sky130_fd_sc_hd.v" "$G/rf_top_timing.v" pnl.v \
-    "$R/tb/qspi_pmod_model.v" "$R/tb/rp2350_uart_model.v" "$R/tb/ssd1331_model.v" "$R/tb/keypad_model.v" "$R/tb/pin_meter.v" "$R/tb/tb_tt_um.v" $mon_v > compile.log 2>&1 \
+    "$R/tb/qspi_pmod_model.v" "$R/tb/rp2350_uart_model.v" "$R/tb/ssd1331_model.v" "$R/tb/keypad_model.v" "$R/tb/gamepad_model.v" "$R/tb/pin_meter.v" "$R/tb/tb_tt_um.v" $mon_v > compile.log 2>&1 \
     || { echo "$v $c COMPILE-FAILED" >> "$SUM"; rm -f pnl.v cells.sdf sim.vvp; touch done; return; }
   rm -f pnl.v
   [ "${CACHE_EN:-0}" = 1 ] && vargs="$vargs +CACHE_EN"

@@ -41,4 +41,10 @@ _boot_start:
 
 4:  la      sp, _stack_top
     csrw    mtvec, zero
+#ifdef BOOT_CLEAR_MSCRATCH
+    /* mscratch has no reset on the 4x4 chip (CSR slim), like mtvec above. The riscof trap prologue saves its old
+     * value to PSRAM; with this the saved word is defined (0, as in Spike) and the pins bench's X check stays quiet.
+     * Off by default: the stock boot shows the X on the pins (scripts/gl/build_isa.sh BOOT_CLEAR_MSCRATCH=1). */
+    csrw    mscratch, zero
+#endif
     j       _start
