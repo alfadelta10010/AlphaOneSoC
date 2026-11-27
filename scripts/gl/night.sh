@@ -54,6 +54,7 @@ evid() { # mutant evidence: md5 of both netlists and the number of changed lines
   local n=$1 c; c=$(diff $NETLIST $D/$n.v | grep -c '^>')
   { md5sum $NETLIST $D/$n.v; echo "changed lines: $c"; } >> $D/$n.txt
   st "$n: mutant $(md5sum < $D/$n.v | cut -c1-12) vs pnl $(md5sum < $NETLIST | cut -c1-12), $c changed line(s): $(head -1 $D/$n.txt | cut -c1-150)"
+  [ "$c" = 1 ] || { st "$n: VOID mutant ($c changed lines, want exactly 1): no mutant simulated"; return 1; }
 }
 cat $BUILD/list.A $BUILD/list.B $BUILD/list.C > $BUILD/list.all 2>/dev/null
 { md5sum $NETLIST; ls -l $NETLIST; spike --help 2>&1 | head -1; iverilog -V 2>&1 | head -1; } > "$D/env.txt" 2>&1
@@ -74,7 +75,7 @@ if has A || has B || has C; then
 for k in csr alu; do
   mut() {
     python3 $S/mutate_netlist.py $NETLIST $D/mut-$k.v --kind $k > $D/mut-$k.txt 2>&1 || { st "mut-$k: COULD NOT MUTATE (no mutant simulated): $(tail -1 $D/mut-$k.txt)"; return 2; }
-    evid mut-$k
+    evid mut-$k || return 2
     bash $S/run_gl.sh NETLIST=$D/mut-$k.v LIST=$BUILD/list.all TCLK=$TC OUT=$D/mut-$k BASE=$D/rtl JOBS=$JOBS ONLY="$SHORT" > /dev/null 2>&1
     caught $D/mut-$k
   }
@@ -90,21 +91,26 @@ if has D; then
   mutd1() {
     local n=$1 l=$2 only=$3; shift 3
     python3 $S/mutate_netlist.py $NETLIST $D/mut-$n.v "$@" > $D/mut-$n.txt 2>&1 || { st "mut-$n: COULD NOT MUTATE (no mutant simulated): $(tail -1 $D/mut-$n.txt)"; return 2; }
-    evid mut-$n
+    evid mut-$n || return 2
     bash $S/run_gl.sh NETLIST=$D/mut-$n.v LIST=$BUILD/list.$l TCLK=$(tclk $l) OUT=$D/mut-$n BASE=$D/rtl-$l JOBS=$JOBS ONLY="$only" > /dev/null 2>&1
     caught $D/mut-$n
   }
   mutd() {
-    local rc=0
+    local rc=0 r
+    worst() { [ "$1" -gt "$rc" ] && rc=$1; }     # the worst rc of the mutants (2 = void or not made, 1 = not caught)
     # the SPI MOSI flop (WO-40: part A's tt_pins.0 wants uo_out[1] too; part A is built here when PARTS has no A)
-    mutd1 spi D '^(oled_spi|periph_access)$' --kind spi || rc=$?
-    [ -s $BUILD/list.A ] || { bash $S/build_isa.sh PARTS=A OUT=$D/build-A > /dev/null 2>&1; }
-    LA=$BUILD/list.A; [ -s $LA ] || LA=$D/build-A/list.A
-    bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$LA TCLK=$TC OUT=$D/mut-A19 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
-    caught $D/mut-A19 || rc=1
-    mutd1 plic D '^plic_uart$' --kind net --q '\soc.plic_inst.en[1]' || rc=$?          # the UART's PLIC enable
-    mutd1 pad D '^gamepad$' --kind net --q '\soc.gamepad_inst.d[0]' || rc=$?           # a gamepad data bit (0x123 has bit 0)
-    mutd1 pwm D '^pwm_linux$' --kind net --q '\soc.pwm_inst.cmp0[14]' || rc=$?         # a PWM compare bit (periods 0x4001 / 0x10000)
+    rm -f $D/mut-spi.v                             # never run mut-A19 on a stale mutant of an earlier attempt
+    mutd1 spi D '^(oled_spi|periph_access)$' --kind spi; r=$?; worst $r
+    if [ $r -eq 0 ] || [ $r -eq 1 ]; then
+      [ -s $BUILD/list.A ] || { bash $S/build_isa.sh PARTS=A OUT=$D/build-A > /dev/null 2>&1; }
+      LA=$BUILD/list.A; [ -s $LA ] || LA=$D/build-A/list.A
+      st "mut-A19: the mutant of mut-spi ($(md5sum < $D/mut-spi.v | cut -c1-12)) on tt_pins.0"
+      bash $S/run_gl.sh NETLIST=$D/mut-spi.v LIST=$LA TCLK=$TC OUT=$D/mut-A19 JOBS=$JOBS ONLY='^tt_pins\.0$' > /dev/null 2>&1
+      caught $D/mut-A19 || worst 1
+    else st "mut-A19: not run, mut-spi was not made"; fi
+    mutd1 plic D '^plic_uart$' --kind net --q '\soc.plic_inst.en[1]'; worst $?          # the UART's PLIC enable
+    mutd1 pad D '^gamepad$' --kind net --q '\soc.gamepad_inst.d[0]'; worst $?           # a gamepad data bit (0x123 has bit 0)
+    mutd1 pwm D '^pwm_linux$' --kind net --q '\soc.pwm_inst.cmp0[14]'; worst $?         # a PWM compare bit (periods 0x4001 / 0x10000)
     return $rc
   }
   CHK="$D/rtl-D $BUILD/list.D" stage rtl-D rtld D
