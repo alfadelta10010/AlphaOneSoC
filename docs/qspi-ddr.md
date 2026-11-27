@@ -304,7 +304,8 @@ The SoC runs (`ddr_sweep` in `SYSCON_SOC_RUNS`) expect DDR_CAP 11 -> 2, 17 -> 2,
 
 SDR reads: `rd_late` = 0 captures 2T = 38.0 ns after the launching edge and reads round trips up to about
 31.5 ns (25.5 at 62.5 MHz); `rd_late` = 1 captures at 3T = 57.0 ns and needs R of about 18.0 ns or more
-for hold. With TinyQV's measured pad round trip of a little over 20 ns both straps read at 52.63 MHz. `rd_late` = 0 has the larger margin (10.5 ns of setup at R = 21 against 3.0 ns of hold for `rd_late` = 1), so
+for hold (the next nibble launches at 2T, so R plus the flash's output hold must exceed T = 19 ns; the SDF GLS of the
+shipped netlist at T = 19, min_ff, fails with a Pmod model hold of 18 ns and passes with 19 and 21 ns, WO-SDF19). With TinyQV's measured pad round trip of a little over 20 ns both straps read at 52.63 MHz. `rd_late` = 0 has the larger margin (10.5 ns of setup at R = 21 against 3.0 ns of hold for `rd_late` = 1), so
 the board default is **`ui_in[0]` low** at 52.63 MHz, with high as the fallback if flash reads fail.
 
 ## 4. Capture points and the registers
