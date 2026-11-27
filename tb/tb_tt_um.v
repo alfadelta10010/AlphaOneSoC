@@ -1127,7 +1127,9 @@ module tb_tt_um;
                 ID_syscon_wdt_split: begin
                     $display("NOTE syscon_wdt_split: %0d windows, %0d on a split fetch (a PSRAM A read began at 0x3FE and the fire came between its halves), %0d on PSRAM B (data)",
                              sw_n, sw_split, sw_data);
-                    if (sw_split < 1) fail("syscon_wdt_split: no fire between the halves of a split fetch");
+                    // with +CACHE_EN every instruction fetch is an aligned word fill, so no fetch has two halves to split
+                    // (tb_syscon_soc.v does the same); the data-transaction check below stays on in both modes
+                    if (sw_split < 1 && !cache_en_arg) fail("syscon_wdt_split: no fire between the halves of a split fetch");
                     if (sw_data < 1) fail("syscon_wdt_split: no fire on a data transaction");
                 end
                 ID_syscon_poweroff:
