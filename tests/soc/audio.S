@@ -2,7 +2,9 @@
 # cmp0 = N, cmp1 = N/2. The period is N * 2^S + 1 clocks (s counts 0..N-1 for 2^S clocks each and sits on N for one clock
 # before zerocmp restarts it), the pin is ip[1] = s >= cmp1 (square, 50 %). Pin 7 is PWM1 by construction (no pinmux code);
 # pin 6 is mapped to PWM0 (code 4): during a tone PWM0 shares the counter, so pin 6 pulses once per period (ip[0] = s >= cmp0,
-# one clock). The Korobeiniki notes (equal tempered, A4 = 440 Hz at 62.5 MHz), the smallest S with cmp0 <= 65535:
+# one clock). The Korobeiniki notes (equal tempered, A4 = 440 Hz at 62.5 MHz), the smallest S with cmp0 <= 65535.
+# The test keeps these 62.5 MHz values on purpose: the bench measures periods in clocks, so the check does not depend on
+# the clock. The chip runs at 52.63 MHz; its note table is in docs/pins-and-peripherals.md.
 #   note S   cmp0   cmp1   period (clocks)    note S   cmp0   cmp1   period
 #   E2   4  47402  23701   758433      D5   1  53206  26603   106413
 #   A2   4  35511  17755   568177      E5   1  47401  23700    94803
