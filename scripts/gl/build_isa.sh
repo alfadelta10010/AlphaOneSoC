@@ -45,6 +45,9 @@ case " $PARTS " in *" D "*)
   # of them reaches the pins as a UART frame), syscon_cfg (not a program of the pins bench: needs the SoC's strap
   # forcing in tb_syscon_soc), sd_init / spi_mixed / sd_reboot (the SD card bench: tb_soc_periph with sd_spi_model; at the
   # pins only sd_init has a row and needs -DTT_SD, 10-100 M cycles: too long for a gate-level run), uart_hello's variants.
+  # ddr_sweep lines carry +QSPI_EYE_RANDOM: the sweep tries DDR_CAPs outside the data eye on purpose; without it the Pmod model drives X there,
+  # which RTL survives (a compare on X just fails that cap) but the gate-level core does not (X spreads into the control logic, 11-26 night).
+  # With it the off-eye nibble is random data, and the RTL cycle counts are unchanged (WO-GLN-2).
   late='+RD_LATE +QSPI_DELAY=47 +QSPI_HOLD=23'
   while IFS='|' read -r label t div cf pa; do
     [ -n "$label" ] || continue
@@ -83,13 +86,13 @@ gamepad|gamepad|1||
 ddr_flash.0|ddr_flash|1|-DDDR_PT=0|
 ddr_flash.1|ddr_flash|1|-DDDR_PT=1|+QSPI_DELAY=12 +QSPI_HOLD=6
 ddr_flash.2|ddr_flash|1|-DDDR_PT=2|+QSPI_DELAY=22 +QSPI_HOLD=12
-ddr_sweep.k2a|ddr_sweep|1||+QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2
-ddr_sweep.k2b|ddr_sweep|1||+QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=2
-ddr_sweep.k3|ddr_sweep|1||+QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3
-ddr_sweep.k4|ddr_sweep|1||+RD_LATE +QSPI_DELAY=42 +QSPI_HOLD=36 +WANT_K=4
-ddr_sweep.off_launch1|ddr_sweep|1||+DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1
-ddr_sweep.off_launch2|ddr_sweep|1||+DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1
-ddr_sweep.off_window|ddr_sweep|1||+QSPI_DELAY=22 +QSPI_HOLD=6 +WANT_K=-1
+ddr_sweep.k2a|ddr_sweep|1||+QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=2 +QSPI_EYE_RANDOM
+ddr_sweep.k2b|ddr_sweep|1||+QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=2 +QSPI_EYE_RANDOM
+ddr_sweep.k3|ddr_sweep|1||+QSPI_DELAY=30 +QSPI_HOLD=24 +WANT_K=3 +QSPI_EYE_RANDOM
+ddr_sweep.k4|ddr_sweep|1||+RD_LATE +QSPI_DELAY=42 +QSPI_HOLD=36 +WANT_K=4 +QSPI_EYE_RANDOM
+ddr_sweep.off_launch1|ddr_sweep|1||+DTR_LAUNCH=1 +QSPI_DELAY=18 +QSPI_HOLD=12 +WANT_K=-1 +QSPI_EYE_RANDOM
+ddr_sweep.off_launch2|ddr_sweep|1||+DTR_LAUNCH=1 +QSPI_DELAY=24 +QSPI_HOLD=18 +WANT_K=-1 +QSPI_EYE_RANDOM
+ddr_sweep.off_window|ddr_sweep|1||+QSPI_DELAY=22 +QSPI_HOLD=6 +WANT_K=-1 +QSPI_EYE_RANDOM
 EOT
   ;;
 esac
