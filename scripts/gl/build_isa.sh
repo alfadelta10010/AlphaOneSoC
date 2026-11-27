@@ -74,7 +74,6 @@ syscon_pinreset|syscon_pinreset|1||
 sd_cs|sd_cs|1||
 pinmux|pinmux|1||
 reboot_dirty|reboot_dirty|1||
-audio|audio|1||
 pwm_linux|pwm_linux|1||
 pwm_timer|pwm_timer|1||
 cache_ctl|cache_ctl|1||
