@@ -78,11 +78,11 @@ run_one() { # name hex args
       v=FAIL; echo "FAIL cycle count: gate level ${c:-0}, RTL $rc" >> "$OUT/$name.log"; log "CYCLES $name rtl $rc gl ${c:-0} MISMATCH"
     else log "CYCLES $name rtl $rc gl ${c:-0} match"; fi
   fi
-  [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" '$1==n{$1="";print}' "$KNOWN")
+  [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" -v v="$v" '$1==n && $2==v{$1="";$2="";print}' "$KNOWN")
   echo "$v ${c:-0} cycles $((SECONDS - s)) s${lab:+ known:$lab}" > "$OUT/$name.verdict"
   log "$name $(cat "$OUT/$name.verdict")"
 }
-KNOWN=${KNOWN:-$R/scripts/gl/known.txt}
+KNOWN=${KNOWN:-$R/scripts/gl/known.txt}   # lines: <program> <PASS|FAIL|TIMEOUT> <label>: the label excuses that outcome only
 log "start $(basename "$LIST") jobs=$JOBS"
 while IFS='|' read -r name hex args; do
   [ -n "$name" ] || continue
