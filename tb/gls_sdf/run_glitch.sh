@@ -153,7 +153,7 @@ rm -f "$SUM.new"
 for v in $VARIANTS; do for c in $(corners_of "$v"); do
   while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
   log "start $v $c"
-  nice -n 10 bash -c "$(declare -f full run_one); G=$G; R=$R; WORK=$WORK; SUM=$SUM; NL=$NL; NLDIR=$NLDIR; HEX=$HEX; IVERILOG=$IVERILOG; VVP=$VVP; T=$T; IN_DLY=$IN_DLY; RST_CHK=$RST_CHK; CLK_HALF_PS=$CLK_HALF_PS; TMO=$TMO; DDR_TMO=$DDR_TMO; run_one $v $c" &
+  nice -n 10 bash -c "$(declare -f full run_one); G=$G; R=$R; WORK=$WORK; SUM=$SUM; NL=$NL; NLDIR=$NLDIR; HEX=$HEX; IVERILOG=$IVERILOG; VVP=$VVP; T=$T; IN_DLY=$IN_DLY; RST_CHK=$RST_CHK; CLK_HALF_PS=$CLK_HALF_PS; TMO=$TMO; DDR_TMO=$DDR_TMO; DDR_DELAY=$DDR_DELAY; DDR_HOLD=$DDR_HOLD; run_one $v $c" &
 done; done
 wait
 
