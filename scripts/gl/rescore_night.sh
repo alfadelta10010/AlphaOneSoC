@@ -4,7 +4,7 @@
 # The one exemption, for the 2026-11-26 cache-off night of the 4x4 pnl only: the 16 part-C programs of MSCRATCH_X below FAILed
 # because mscratch has no reset, the riscof trap prologue spills it (csrrw s0,mscratch,t1; sw s0,..) and the PSRAM write puts the X on SD0..SD3.
 # A FAIL is excused only if ALL hold: its name is one of the 16; the ELF has no `csrw mscratch,zero` (built without BOOT_CLEAR_MSCRATCH);
-# every FAIL line of the log is "uio_out[n] is driven with an X"; those lines span at most 12 cycles (the spill store); the log
+# every FAIL line of the log is "uio_out[n] is driven with an X"; the total is exactly 64 errors (fail() prints only the first 40); the printed lines span at most 12 cycles (the spill store); the log
 # says "NOTE signature: N words match" (signature == Spike). Any other X, or any other failure, still fails the stage.
 for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; esac; done
 : "${D:?}"; : "${BUILD:?}"; ELF=${ELF:-$BUILD/elf}
@@ -17,6 +17,7 @@ spill_x() { # name dir: 0 if the FAIL of this program is the mscratch spill
   case "$MSCRATCH_X" in *" $n "*) ;; *) return 1;; esac
   ! "${TOOLCHAIN:-riscv64-unknown-elf-}objdump" -d "$ELF/$n.elf" 2>/dev/null | grep -q 'csrw[[:space:]]*mscratch,zero' || return 1
   grep -q '^NOTE signature: [0-9]* words match' "$log" || return 1
+  grep -q '^FAIL tb_tt_um: 64 errors$' "$log" || return 1     # the night's total: the 40 printed lines + 24 more, all of the same class
   [ -z "$(grep '^FAIL' "$log" | grep -v -E '^FAIL uio_out\[[0-9]\] is driven with an X \(cycle [0-9]+\)$|^FAIL tb_tt_um: [0-9]+ errors$')" ] || return 1
   grep -oE '^FAIL uio_out\[[0-9]\] is driven with an X \(cycle [0-9]+\)' "$log" | grep -oE '[0-9]+\)$' | tr -d ')' | sort -n | awk 'NR==1{a=$1} {b=$1} END{exit !(b-a<=12)}'
 }
