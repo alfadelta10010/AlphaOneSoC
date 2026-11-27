@@ -1,5 +1,6 @@
 #!/bin/bash
 # run_glitch.sh WORK=<dir> [CORNERS="nom_tt ..."] [VARIANTS="D D2 N2 N1"] [JOBS=1]   (WO-34, VC-8, closes TT01)
+#               [NLDIR=<harden>/runs/wokwi/final NLMD5=<pnl md5>] [T=<ns>] [IN_DLY=<ns>] [RST_CHK=<ns>] [TMO=<s>]
 #
 # tb/tb_tt_um.v, unchanged, on the SDF-annotated fin-3x4 pnl netlist (Icarus 12, -gspecify) with
 # tb/gls_sdf/glitch_mon.v as a second top. Run on the sandbox, plain processes (no docker).
@@ -8,6 +9,12 @@
 #   D2  D + 2.0 ns on the SoC-side input of every pin gate             3 corners   expected: monitor PASS, bench PASS
 #   N2  D2 + TT01 (the `run` flop's D tied to 1)                       3 corners   expected: monitor FAIL in events 1 and 3
 #   N1  D + TT01 only                                                  9 corners   either outcome: the TT01 verdict
+#   DDR  ddr_sweep (DDR capture sweep from flash) at T, strap rd_late = 0     3 corners   expected: bench PASS
+#   DDR1 the same with +RD_LATE (strap rd_late = 1)                          3 corners   the strap's verdict
+#
+# Every run's sim.log starts with the bench's SDF-RUN line (TCLK_NS, the clock half period the bench resolved,
+# IN_DLY_NS, RST_CHK_NS, rd_late, cache_en, QSPI_DELAY, QSPI_HOLD); the summary quotes it and step 6 checks it against
+# T, IN_DLY, RST_CHK, the variant and (DDR, DDR1) DDR_DELAY and DDR_HOLD. An SDF WARNING fails the run.
 #
 # CORNERS (short: nom_tt, max_ss, min_ff, ... = {min,nom,max} x {ff,tt,ss}) overrides every variant's list.
 # Per run one line: <variant> <corner> monitor [..] bench [..] sdf-warn <n> d_oe3 <ns> wall <s>; last line WO34 PASS|FAIL.
@@ -21,15 +28,25 @@ for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; esac; done
 R=$(cd "$(dirname "$0")/../.." && pwd); G=$R/tb/gls_sdf
 VARIANTS=${VARIANTS:-"D D2 N2 N1"}; JOBS=${JOBS:-1}
 PDKV=8afc8346a57fe1ab7934ba5a6056ea8b43078e71
-# qsd-84c878f: the harden of d75cb5c, named by that commit's hash before a history reorder (same RTL)
-NLDIR=/home/mempool/tt/projects/qsd-84c878f/runs/wokwi/final
+# The netlist and its pnl md5. Default: the 4x4 256 B ship harden Fp190n2j (CLOCK_PERIOD 19.0), so a bare run
+# reproduces its sign-off; NLDIR= and NLMD5= pick another harden (the 3x4's qsd-84c878f: 5b2270d55facb1be258577bbae2f6d6e
+# with T=16).
+NLDIR=${NLDIR:-/home/mempool/tt/projects/q4x4-gAsFp190n2j/runs/wokwi/final}
 NL=$NLDIR/pnl/tt_um_alfadelta10010_alphaone_soc.pnl.v
-NLMD5=5b2270d55facb1be258577bbae2f6d6e
+NLMD5=${NLMD5:-e73d7adcd1a5eb0ae25f8771c416d843}
 CELLS=${PDK_ROOT:-/home/mempool/tt/pdk}/ciel/sky130/versions/$PDKV/sky130A/libs.ref/sky130_fd_sc_hd/verilog
 REFM=$HOME/regr/rfm/gls-sdf/gls_model_timing
 export PATH=/home/mempool/tools/rv64-gcc-elf/bin:$PATH
 IVERILOG=/usr/bin/iverilog; VVP=/usr/bin/vvp
-T=16; IN_DLY=3.2; RST_CHK=8
+# T: the bench clock period (ns) of EVERY run, DDR included (its +CLK_HALF_PS is T * 500 ps: tb_tt_um honours the
+# plusarg over TCLK_NS, so it must follow T). IN_DLY: the inputs' delay after a clock edge, by default the SDC's input
+# delay 0.2 * T. RST_CHK: the reset-to-pins check (ns). TMO / DDR_TMO: per-run wall guards (s; a shared box needs more).
+T=${T:-19}; IN_DLY=${IN_DLY:-$(awk -v t="$T" 'BEGIN{printf "%g", 0.2 * t}')}; RST_CHK=${RST_CHK:-8}
+CLK_HALF_PS=$(awk -v t="$T" 'BEGIN{printf "%d", t * 500 + 0.5}')
+TMO=${TMO:-1200}; DDR_TMO=${DDR_TMO:-21600}
+# DDR_DELAY / DDR_HOLD: the Pmod model's +QSPI_DELAY / +QSPI_HOLD (ns) for DDR and DDR1 (see the DDR case below).
+DDR_DELAY=${DDR_DELAY:-24}; DDR_HOLD=${DDR_HOLD:-19}
+echo "bench clock T=$T ns (DDR +CLK_HALF_PS=$CLK_HALF_PS, QSPI_DELAY=$DDR_DELAY QSPI_HOLD=$DDR_HOLD), IN_DLY=$IN_DLY ns, RST_CHK=$RST_CHK ns"
 mkdir -p "$WORK"; WORK=$(cd "$WORK" && pwd); mkdir -p "$WORK/runs" "$WORK/models"
 SUM=$WORK/summary.txt; FAILS=""
 log() { echo "$(date -Is) $*" >> "$WORK/STATUS"; }
@@ -40,7 +57,7 @@ full() { case $1 in
   min_ss) echo min_ss_100C_1v60;; nom_ss) echo nom_ss_100C_1v60;; max_ss) echo max_ss_100C_1v60;;
   *) echo "$1";; esac; }
 ALL9="nom_tt max_ss min_ff min_tt max_tt nom_ss min_ss nom_ff max_ff"; THREE="nom_tt max_ss min_ff"
-corners_of() { if [ -n "${CORNERS:-}" ]; then echo "$CORNERS"; else case $1 in D|N1) echo "$ALL9";; DDR) echo "max_ss nom_tt min_ff";; *) echo "$THREE";; esac; fi; }
+corners_of() { if [ -n "${CORNERS:-}" ]; then echo "$CORNERS"; else case $1 in D|N1) echo "$ALL9";; DDR|DDR1) echo "max_ss nom_tt min_ff";; *) echo "$THREE";; esac; fi; }
 
 # 1. the netlist
 m=$(md5sum "$NL" | awk '{print $1}'); echo "netlist md5 $m $NL"
@@ -69,7 +86,7 @@ if [ ! -s "$WORK/tt_pins.hex" ]; then
     || { echo "WO34 FAIL tt_pins build"; exit 1; }
 fi
 HEX=$WORK/tt_pins.hex
-# DDR: ddr_sweep (the boot-time capture sweep, run from flash) through the pins at the chip's 62.5 MHz
+# DDR: ddr_sweep (the boot-time capture sweep, run from flash) through the pins at the bench clock T
 if [ ! -s "$WORK/ddr_sweep.hex" ]; then
   ( cd "$WORK" && riscv64-unknown-elf-gcc -march=rv32imac_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles -DMB_UART -DMB_DIV=1 \
       -T $R/tests/soc/link.ld -I$R/tests/soc $R/tests/soc/ddr_sweep.S -o ddr_sweep.elf && \
@@ -79,7 +96,7 @@ fi
 
 # 4. one run
 run_one() { # variant corner
-  local v=$1 c=$2 cf d s0 w line top="-s glitch_mon" mon_v="$G/glitch_mon.v" vargs="+FLASH_FILE=$HEX +RF_X +RF_COLLIDE_X" tmo=1200
+  local v=$1 c=$2 cf d s0 w line top="-s glitch_mon" mon_v="$G/glitch_mon.v" vargs="+FLASH_FILE=$HEX +RF_X +RF_COLLIDE_X" tmo=$TMO
   cf=$(full "$c"); d=$WORK/runs/${v}_$c; mkdir -p "$d"; cd "$d" || return
   [ -e done ] && return
   s0=$(date +%s)
@@ -90,8 +107,15 @@ run_one() { # variant corner
   : > edit.log
   case $v in
     D)  mv pnl0.v pnl.v;;
-    DDR) mv pnl0.v pnl.v; top=""; mon_v=""; tmo=21600     # no glitch monitor: the pins are quiet by construction, the bench judges
-         vargs="+FLASH_FILE=$WORK/ddr_sweep.hex +RF_X +RF_COLLIDE_X +TEST=soc +PROG=ddr_sweep +CLK_HALF_PS=8000 +QSPI_EYE_RANDOM +QSPI_DELAY=${DDR_DELAY:-24} +QSPI_HOLD=${DDR_HOLD:-18} +WANT_K=-2 +MAX_CYCLES=3000000";;
+    DDR|DDR1) mv pnl0.v pnl.v; top=""; mon_v=""; tmo=$DDR_TMO     # no glitch monitor: the pins are quiet by construction, the bench judges
+         # DDR_HOLD models the board's R_min + tCLQX: physical, so it is NOT derived from T (that would pass rd_late = 1
+         # by construction). One board has HOLD <= DELAY - 4.5 (W25Q128JV-DTR: tCLQV <= 6, tCLQX >= 1.5 ns), so with
+         # DDR_DELAY 24 the hold is at most 19.5. rd_late = 1 captures at 3T and the next nibble launches at 2T, so it
+         # needs DDR_HOLD >= T (docs/qspi-ddr.md): default 19 = T, i.e. R_min >= 17.5 ns, about 2.5 ns below TinyQV's
+         # measured ~20 ns round trip. 18 was a T = 16 value: the 11-27 SDF GLS of Fp190n2j at T = 19, DDR1 min_ff,
+         # FAILs at 18 (X from the first EBh read) and PASSes at 19 (and at 21, a non-physical pair with DELAY 24).
+         vargs="+FLASH_FILE=$WORK/ddr_sweep.hex +RF_X +RF_COLLIDE_X +TEST=soc +PROG=ddr_sweep +CLK_HALF_PS=$CLK_HALF_PS +QSPI_EYE_RANDOM +QSPI_DELAY=$DDR_DELAY +QSPI_HOLD=$DDR_HOLD +WANT_K=-2 +MAX_CYCLES=3000000"
+         if [ $v = DDR1 ]; then vargs="$vargs +RD_LATE"; fi;;
     D2) python3 "$G/edit_netlist.py" pnl0.v pnl.v --pin-delay 2.0 > edit.log 2>&1;;
     N2) python3 "$G/edit_netlist.py" pnl0.v pnl.v --tt01 --pin-delay 2.0 > edit.log 2>&1;;
     N1) python3 "$G/edit_netlist.py" pnl0.v pnl.v --tt01 > edit.log 2>&1;;
@@ -105,18 +129,21 @@ run_one() { # variant corner
     || { echo "$v $c COMPILE-FAILED" >> "$SUM"; rm -f pnl.v cells.sdf sim.vvp; touch done; return; }
   rm -f pnl.v
   [ "${CACHE_EN:-0}" = 1 ] && vargs="$vargs +CACHE_EN"
-  timeout -s KILL $tmo $VVP -n sim.vvp $vargs > sim.log 2>&1
+  # --foreground: timeout stays in the caller's process group (by default it makes its own), so a kill of the
+  # run's group (~/regr/slot.sh's memory guard) also kills the sim instead of orphaning it to write on.
+  timeout --foreground -s KILL $tmo $VVP -n sim.vvp $vargs > sim.log 2>&1
   rm -f sim.vvp cells.sdf
-  local mon bench warn d1
+  local mon bench warn d1 cfg
+  cfg=$(grep -m1 '^SDF-RUN ' sim.log | cut -d' ' -f2-)
   mon=$(grep -E '^GLITCH-MON (PASS|FAIL)' sim.log | tail -1)
   bench=$(grep -hE '^(PASS|FAIL|ERROR|TIMEOUT)' sim.log | head -1)
   warn=$(grep -c 'SDF WARNING' sim.log)
   d1=$(grep -E '^GLITCH-MON event 1 ' sim.log | sed -n 's/.*d_oe3=\([-0-9.]*\):.*/\1/p')
-  if [ "$v" = DDR ]; then
-    line="$v $c bench [$bench] $(grep -m1 'NOTE ddr_sweep UART' sim.log) dtr [$(grep -m1 'DTR min margins' sim.log)] sdf-warn $warn wall $(( $(date +%s) - s0 ))"
+  if [ "$v" = DDR ] || [ "$v" = DDR1 ]; then
+    line="$v $c bench [$bench] $(grep -m1 'NOTE ddr_sweep UART' sim.log) dtr [$(grep -m1 'DTR min margins' sim.log)] sdf-warn $warn cfg [$cfg] wall $(( $(date +%s) - s0 ))"
     echo "$line" >> "$SUM"; echo "$line"; touch done; return
   fi
-  line="$v $c monitor [$mon] bench [$bench] sdf-warn $warn d_oe3 ${d1:-none} wall $(( $(date +%s) - s0 ))"
+  line="$v $c monitor [$mon] bench [$bench] sdf-warn $warn d_oe3 ${d1:-none} cfg [$cfg] wall $(( $(date +%s) - s0 ))"
   echo "$line" >> "$SUM"; echo "$line"
   touch done
 }
@@ -126,7 +153,7 @@ rm -f "$SUM.new"
 for v in $VARIANTS; do for c in $(corners_of "$v"); do
   while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
   log "start $v $c"
-  nice -n 10 bash -c "$(declare -f full run_one); G=$G; R=$R; WORK=$WORK; SUM=$SUM; NL=$NL; NLDIR=$NLDIR; HEX=$HEX; IVERILOG=$IVERILOG; VVP=$VVP; T=$T; IN_DLY=$IN_DLY; RST_CHK=$RST_CHK; run_one $v $c" &
+  nice -n 10 bash -c "$(declare -f full run_one); G=$G; R=$R; WORK=$WORK; SUM=$SUM; NL=$NL; NLDIR=$NLDIR; HEX=$HEX; IVERILOG=$IVERILOG; VVP=$VVP; T=$T; IN_DLY=$IN_DLY; RST_CHK=$RST_CHK; CLK_HALF_PS=$CLK_HALF_PS; TMO=$TMO; DDR_TMO=$DDR_TMO; run_one $v $c" &
 done; done
 wait
 
@@ -134,6 +161,7 @@ wait
 ev() { # log k field
   grep -E "^GLITCH-MON event $2 " "$1" | head -1 | sed -n "s/.*$3=\([-0-9.]*\).*/\1/p"; }
 evverdict() { grep -E "^GLITCH-MON event $2 " "$1" | head -1 | grep -oE '(PASS|FAIL)$'; }
+hv() { sed -n "s/.* $2=\([^ ]*\).*/\1/p" <<< "$1"; }   # SDF-RUN line, field
 nviol() { # log k : violation lines (M0/M1/M2) printed before event k's summary line
   awk -v k="$2" '/^  M[0-9]/{n++} /^GLITCH-MON event /{ if ($3==k) {print n+0; exit} n=0 }' "$1"; }
 declare -A DOE
@@ -143,11 +171,23 @@ for v in $VARIANTS; do for c in $(corners_of "$v"); do
   grep -q 'Unable to open' "$L" && fail "$v $c Unable to open"
   grep -q 'SDF ERROR' "$L" && fail "$v $c SDF ERROR"
   grep -q 'INTERCONNECTs' "$d/prep.log" || fail "$v $c prep.log has no INTERCONNECT count"
-  [ "$(grep -c 'SDF WARNING' "$L")" -ge 0 ] || true
+  w=$(grep -c 'SDF WARNING' "$L"); [ "$w" = 0 ] || fail "$v $c $w SDF WARNING lines"
+  hdr=$(grep -m1 '^SDF-RUN ' "$L")
+  if [ -z "$hdr" ]; then fail "$v $c no SDF-RUN line"
+  else
+    awk -v a="$(hv "$hdr" TCLK_NS)" -v h="$(hv "$hdr" clk_half_ns)" -v i="$(hv "$hdr" IN_DLY_NS)" -v r="$(hv "$hdr" RST_CHK_NS)" \
+        -v t="$T" -v j="$IN_DLY" -v s="$RST_CHK" 'function ok(x, y) { return x - y < 1e-6 && y - x < 1e-6 }
+        BEGIN { exit !(a != "" && ok(a, t) && ok(h, t / 2) && ok(i, j) && ok(r, s)) }' \
+      || fail "$v $c run timing [$hdr] is not T=$T (half $(awk -v t="$T" 'BEGIN{print t/2}')) IN_DLY=$IN_DLY RST_CHK=$RST_CHK"
+    [ "$(hv "$hdr" rd_late)" = "$([ "$v" = DDR1 ] && echo 1 || echo 0)" ] || fail "$v $c rd_late $(hv "$hdr" rd_late) in [$hdr]"
+    [ "$(hv "$hdr" cache_en)" = "${CACHE_EN:-0}" ] || fail "$v $c cache_en $(hv "$hdr" cache_en), CACHE_EN=${CACHE_EN:-0}"
+    case $v in DDR|DDR1) [ "$(hv "$hdr" QSPI_DELAY)" = "$DDR_DELAY" ] && [ "$(hv "$hdr" QSPI_HOLD)" = "$DDR_HOLD" ] \
+      || fail "$v $c Pmod timing [$hdr] is not QSPI_DELAY=$DDR_DELAY QSPI_HOLD=$DDR_HOLD";; esac
+  fi
   tr=$(sed -n 's/.*(\([0-9.]*\):\([0-9.]*\):\([0-9.]*\)).*/\1 \2 \3/p' "$d/iopath.txt" | awk '{print ($1==$2 && $2==$3) ? "equal" : "DIFFER"}')
   [ "$tr" = equal ] || fail "$v $c IOPATH triplet not equal"
   case $v in
-    DDR)
+    DDR|DDR1)
       grep -q '^PASS tb_tt_um soc ddr_sweep' "$L" || fail "$v $c bench not PASS"
       grep -q 'DTR min margins' "$L" || fail "$v $c no DTR margin line"
       grep -q 'NOTE soc ddr_sweep' "$L" || fail "$v $c no ddr_sweep NOTE";;

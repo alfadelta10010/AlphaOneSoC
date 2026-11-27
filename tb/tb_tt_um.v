@@ -260,6 +260,11 @@ module tb_tt_um;
 
 `ifdef SDF_FILE
     initial $sdf_annotate(`SDF_FILE, dut);
+    // The run's timing as this bench resolved it (WO-SDF19): tb/gls_sdf/run_glitch.sh quotes and checks this line,
+    // not its own settings. #1: after the plusargs are read at time 0.
+    initial #1 $display("SDF-RUN TCLK_NS=%0g clk_half_ns=%0g tclk_run=%0g IN_DLY_NS=%0g RST_CHK_NS=%0g rd_late=%0d cache_en=%0d QSPI_DELAY=%0d QSPI_HOLD=%0d",
+                        TCLK, tclk_half, tclk_run, 1.0 * `IN_DLY_NS, 1.0 * `RST_CHK_NS, rd_late,
+                        $test$plusargs("CACHE_EN") ? 1 : 0, pmod.delay_ns, pmod.hold_ns);
 `endif
 
     integer errors = 0;
