@@ -26,19 +26,25 @@ stage() { # name command...
   local n=$1 rc; shift
   [ -e "$D/done.$n" ] && return
   st "stage $n start"; "$@"; rc=$?
-  # CHK="<run dir> [<baseline dir>]": a stage whose run left a verdict that is not PASS, not labelled known
-  # (known.txt) and not the same non-PASS as its baseline ends non-zero, whatever the run script returned
+  # CHK="<run dir> <list>": a stage whose run left a program without log or PASS line, a TIMEOUT, or a FAIL that
+  # known.txt does not label, ends non-zero, whatever the run script returned
   if [ $rc -eq 0 ] && [ -n "${CHK:-}" ]; then notpass $CHK || rc=1; fi
   st "stage $n end rc=$rc"; touch "$D/done.$n"
 }
-notpass() { # dir [baseline dir]
-  local f n v bad=0
-  for f in "$1"/*.verdict; do
-    n=$(basename "$f" .verdict); v=$(cat "$f")
-    case $v in PASS*|*" known:"*) continue;; esac
-    [ -n "${2:-}" ] && [ "$(cut -d' ' -f1,2 "$2/$n.verdict" 2>/dev/null)" = "$(echo "$v" | cut -d' ' -f1,2)" ] && continue
-    st "$n: $v (not PASS, not known, not the baseline's own result)"; bad=1
-  done
+notpass() { # run dir, list file: every program of the list needs a non-empty log and a verdict; a PASS needs its PASS line in the log;
+  # TIMEOUT, and FAIL without a known.txt label (verdict ' known:'), are not accepted. Names the offenders in STATUS, returns 1 if any.
+  local d=$1 l=$2 n v bad=0
+  while IFS='|' read -r n _; do
+    [ -n "$n" ] || continue
+    [ -s "$d/$n.log" ] || { st "$n: log empty or missing in $d"; bad=1; continue; }
+    [ -s "$d/$n.verdict" ] || { st "$n: no verdict in $d"; bad=1; continue; }
+    v=$(cat "$d/$n.verdict")
+    case $v in
+      PASS*) grep -q '^PASS tb_tt_um' "$d/$n.log" || { st "$n: verdict PASS but no PASS line in the log"; bad=1; } ;;
+      *" known:"*) ;;
+      *) st "$n: $v (not PASS and not labelled in known.txt)"; bad=1 ;;
+    esac
+  done < "$l"
   return $bad
 }
 caught() { # dir: some program of a mutant run must FAIL or TIMEOUT (a hang is a detection too)
@@ -62,8 +68,7 @@ fi
 TC=${TCLK:-19.0}
 rtl() { bash $S/run_gl.sh RTL=1 LIST=$BUILD/list.$1 TCLK=$TC OUT=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
 gl()  { bash $S/run_gl.sh NETLIST=$NETLIST LIST=$BUILD/list.$1 TCLK=$TC OUT=$D/gl BASE=$D/rtl JOBS=$JOBS > /dev/null 2>&1; }
-for p in A B; do has $p && CHK=$D/rtl stage rtl-$p rtl $p; done
-has C && stage rtl-C rtl C     # part C has known-identical RTL/gate failures (trap programs): only the gate stage compares
+for p in A B C; do has $p && CHK="$D/rtl $BUILD/list.$p" stage rtl-$p rtl $p; done
 SHORT='^(rv32mi-csr-p|rv32mi-mcsr-p|rv32ui-add-p|rv32ui-addi-p|add-01|tt_pins\.0)$'
 if has A || has B || has C; then
 for k in csr alu; do
@@ -102,9 +107,9 @@ if has D; then
     mutd1 pwm D '^pwm_linux$' --kind net --q '\soc.pwm_inst.cmp0[14]' || rc=$?         # a PWM compare bit (periods 0x4001 / 0x10000)
     return $rc
   }
-  CHK=$D/rtl-D stage rtl-D rtld D
+  CHK="$D/rtl-D $BUILD/list.D" stage rtl-D rtld D
   stage mut-D mutd
 fi
 # the gate-level stages last, the short ones first (the mutants above only need the RTL baselines)
-for p in A D B C; do has $p || continue; if [ $p = D ]; then CHK="$D/gl-D $D/rtl-D" stage gl-D gld D; else CHK="$D/gl $D/rtl" stage gl-$p gl $p; fi; done
+for p in A D B C; do has $p || continue; if [ $p = D ]; then CHK="$D/gl-D $BUILD/list.D" stage gl-D gld D; else CHK="$D/gl $BUILD/list.$p" stage gl-$p gl $p; fi; done
 st "all stages done"; touch "$D/RUN_DONE"
