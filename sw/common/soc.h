@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-#define CLK_HZ          62500000u   /* the core clock; mtime counts it (ROADMAP 9.1 rule 7) */
+#define CLK_HZ          52631579u   /* the core clock (52.63 MHz); mtime counts it (ROADMAP 9.1 rule 7) */
 
 #define FLASH_BASE      0x20000000u
 #define PSRAM_BASE      0x80000000u
@@ -47,18 +47,19 @@ struct image_hdr {
 #define UART_LSR_DR     0x01
 #define UART_LSR_THRE   0x20
 #define UART_LSR_TEMT   0x40
-/* Boot contract rule 2: 114,890 baud at 62.5 MHz (115,200 - 0.27%). */
-#define UART_DIVISOR    34
+/* Boot contract rule 2: 113,430 baud at 52.63 MHz (115,200 -1.54%). The silicon resets to 34
+ * (sized for 62.5 MHz), so every program writes this before its first character. */
+#define UART_DIVISOR    29
 
 /* GPIO and the SPI controller behind it (src/gpio.v) */
-#define GPIO_OUT        0x00          /* bit 0 OLED CS#, 1 MOSI, 3 SCK, 7 SD CS#; resets to 0x89 */
+#define GPIO_OUT        0x00          /* bit 0 OLED CS#, 1 MOSI, 3 SCK, 5 SD CS# (4x4); resets to 0xB9 */
 #define GPIO_SPICTL     0x0C          /* bit 0 EN: the SPI engine owns MOSI and SCK */
 #define GPIO_RXDATA     0x20
 #define GPIO_TXDATA     0x24
 #define GPIO_STATUS     0x28          /* bit 0 TXE: idle and nothing held */
 #define GPIO_CONTROL    0x2C          /* resets to 3: mode 3, as an SD card wants */
 #define GPIO_BAUD       0x30          /* SCK = clk / (2 x (BAUD + 1)) */
-#define GPIO_SD_CS      0x80
+#define GPIO_SD_CS      0x20     /* 4x4 RTL: OUT bit 5 (bit 7 on main) */
 #define GPIO_OLED_CS    0x01
 
 /* syscon */

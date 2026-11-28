@@ -1,0 +1,12 @@
+# zerocmp reset one cycle late (needs strict >) -> P2
+sed pwm.v s/wire        zr   = zerocmp \& ge\[0\];/wire        zr   = zerocmp \& (s > cmp0);/
+# ip from > instead of >= -> P3
+sed pwm.v s/wire \[1:0\]  ge  = {s >= cmp1, s >= cmp0};/wire [1:0]  ge  = {s > cmp1, s > cmp0};/
+# tick ignores scale -> P1
+sed pwm.v s/wire        tick = en \& ((pre \& m) == m);/wire        tick = en;/
+# a sticky ip creeps back in -> P3
+sed pwm.v s/else ip <= ge;/else ip <= ge | ip;/
+# enalways stored from bit 13 (one-shot position) -> P4
+sed pwm.v s/enalways <= wdata\[12\];/enalways <= wdata[13];/
+# cfg bit 13 reads enalways instead of 0 -> P5
+sed pwm.v s/2'b0, 1'b0, enalways, 2'b0, zerocmp, 1'b0, 4'b0, scale}/2'b0, enalways, enalways, 2'b0, zerocmp, 1'b0, 4'b0, scale}/

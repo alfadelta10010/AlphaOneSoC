@@ -84,6 +84,8 @@
 #                   Icarus; same testbench, same references (artifacts go to
 #                   ./out/vl, ./out/vl/soc). Two-state: the X checks below are
 #                   refused (an error) or not made; Icarus is their reference.
+# SOC_TCLK_NS=<ns> builds the soc sim with that clock period (default 10 ns; the chip's is
+# the Makefile's CHIP_TCLK_NS) and scales the +RD_LATE runs' device delays with it (sim()).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/../.."
@@ -107,7 +109,7 @@ fi
 [ $SOC = 1 ] && OUT="$OUT/soc"
 mkdir -p "$OUT"
 SPIKE_MEM="--hartids=0 --log-commits --priv=mu --isa=rv32imac_zicntr
-            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4"
+            -m0x20000000:0x1000000,0x80000000:0x1000000 --pmpregions=4 --pmpgranularity=4096"
 SPIKE_ARGS="$SPIKE_MEM --pc=0x80000000"
 TOHOST=80001000
 # A test that needs a linker script of its own ships <name>.ld.
@@ -117,8 +119,8 @@ CORE_SRC=("$SRC"/{alu,branchCtrl,clint,compressed_decoder,controller,csr,decoder
 build() {
   local files defs=""
   if [ $SOC = 1 ]; then
-    defs="-DSOC_TB"
-    files=("${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,soc_bus,uart,gpio,spi,syscon,alphaone_soc}.v
+    defs="-DSOC_TB${SOC_TCLK_NS:+ -DTB_TCLK_NS=$SOC_TCLK_NS}"
+    files=("${CORE_SRC[@]}" "$SRC"/{qspi_ctrl,mem_ctrl,cache,soc_bus,plic,uart,gamepad,pwm,pinmux,gpio,spi,syscon,alphaone_soc}.v
            "$ROOT"/tb/qspi_pmod_model.v "$ROOT"/tb/req_hold_check.v "$ROOT"/tb/tb_rivercore.v)
   else
     files=("${CORE_SRC[@]}" "$ROOT"/tb/memory_model.v "$ROOT"/tb/tb_rivercore.v)
@@ -179,10 +181,24 @@ MAXC=400000
 RUNSIM=vvp; [ "$SIMULATOR" = verilator ] && RUNSIM=
 sim() { # sim <name> <plusargs...>
   local n=$1; shift
+  # MANIFEST's +RD_LATE runs model a device for the 10 ns bench clock (+QSPI_DELAY=25 +QSPI_HOLD=12:
+  # past rd_late = 0's 2T - 1, hold longer than T). With SOC_TCLK_NS the pair scales with the clock
+  # (2.5 T and 1.2 T), so the run still needs rd_late = 1 and rd_late = 1 still reads it.
+  if [ -n "${SOC_TCLK_NS:-}" ] && [[ " $* " == *" +RD_LATE "* ]]; then
+    local a out=()
+    for a in "$@"; do
+      case $a in
+        +QSPI_DELAY=25) out+=("+QSPI_DELAY=$(awk -v t="$SOC_TCLK_NS" 'BEGIN { printf "%d", 2.5 * t }')");;
+        +QSPI_HOLD=12)  out+=("+QSPI_HOLD=$(awk -v t="$SOC_TCLK_NS" 'BEGIN { printf "%d", 1.2 * t }')");;
+        *) out+=("$a");;
+      esac
+    done
+    set -- "${out[@]}"
+  fi
   local image=+INIT_FILE="$OUT/$n.hex"
   is_flash "$n" && image="+FLASH_FILE=$OUT/$n.hex"
   $RUNSIM "$OUT/sim" $image +DUMP_FILE="$OUT/$n.dut" \
-      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
+      +TOHOST_ADDR=$TOHOST +MAX_CYCLES=$MAXC +CSR_X "$@" ${RUN_PLUSARGS:-} >"$OUT/$n.sim.log" 2>&1
 }
 
 # Spike pads single-digit register names to width 3 ("x8  0x..."), so both

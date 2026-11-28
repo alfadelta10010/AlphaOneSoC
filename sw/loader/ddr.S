@@ -16,7 +16,7 @@
  *      "stay in SDR",
  *   5. back in flash, in DDR: the routine again, the block against the PSRAM copy, the routine
  *      once more; any difference restores SDR and writes BOOT_MODE 0xDF. The watchdog is then
- *      set to TOP 15 (2^31 to 1.5 * 2^31 clocks, 34 s at 62.5 MHz) and kicked: the payload
+ *      set to TOP 15 (2^31 to 1.5 * 2^31 clocks, 41 s at 52.63 MHz) and kicked: the payload
  *      services it from there (IMAGE_F_DDR).
  * Returns a0 = k + 1 when DDR is on (QSPI_CFG stays {k, DDR, STREAM}, BOOT_MODE stays 0xD8 + k),
  * 0 for SDR, with bit c of the byte above it set for each capture point c that passed the sweep;

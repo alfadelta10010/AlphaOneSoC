@@ -35,6 +35,7 @@ module spi (
     input  wire       wr_baud,    // BAUD
     input  wire       wr_en,      // a write of SPICTL that sets EN = 1
     input  wire       wr_out,     // OUT: wdata[3] and wdata[1] reach the pins when en = 0
+    input  wire       wr_st,      // STATUS: wdata[1:0] = IRQ enables {TXR, TXE}
     // Register reads
     output wire [7:0] rxdata,     // sr
     output wire [7:0] txdata,     // bb
@@ -44,7 +45,8 @@ module spi (
     output wire [7:0] baud_o,
     // Pins
     output wire       p_mosi,
-    output wire       p_sck
+    output wire       p_sck,
+    output wire       irq         // (txr & txren) | (txe & txeen), level
 );
 
     localparam [1:0] IDLE = 2'd0, A = 2'd1, B = 2'd2;
@@ -57,6 +59,7 @@ module spi (
     reg       cpol, cpha;
     reg [7:0] baud;
     reg       mosi_r, sck_r;
+    reg       txren, txeen;
 
     wire a_lvl   = cpol ^ cpha;
     wire cc_end  = (cc == 8'd0);
@@ -70,6 +73,7 @@ module spi (
     assign baud_o  = baud;
     assign p_mosi  = mosi_r;
     assign p_sck   = sck_r;
+    assign irq     = (txr && txren) || (txe && txeen);
 
     always @(posedge clk) begin
         if (rst) begin
@@ -82,6 +86,8 @@ module spi (
             baud   <= 8'hFF;
             mosi_r <= 1'b0;
             sck_r  <= 1'b1;
+            txren  <= 1'b0;
+            txeen  <= 1'b0;
         end else begin
             // ---- register writes (gpio has already made them wait as needed)
             if (wr_ctl) begin
@@ -90,6 +96,7 @@ module spi (
                 if (en) sck_r <= wdata[1];
             end
             if (wr_baud) baud <= wdata;
+            if (wr_st) begin txren <= wdata[1]; txeen <= wdata[0]; end
             if (wr_en) sck_r <= cpol;
             if (wr_out && !en) begin
                 sck_r  <= wdata[3];

@@ -22,9 +22,9 @@
  * clocks and takes the byte), and Ctrl-C only works while the program keeps MIE = 1.
  *
  * Watchdog: a monitor built with DDR=1 (flagged for the loader's DDR sweep) runs with the watchdog armed at
- * TOP 15, a reset after 34 s without a kick (and the loader then marks DDR failed). The monitor kicks it in
+ * TOP 15, a reset after 41 s without a kick (and the loader then marks DDR failed). The monitor kicks it in
  * uart_putc, uart_getc, a dump's loop and every gb tick. A program run with g has the CPU to itself and
- * must kick it (store 0x76 to syscon + 0x10C) at least every 34 s, or use gb. */
+ * must kick it (store 0x76 to syscon + 0x10C) at least every 41 s, or use gb. */
 #include <stdio.h>
 #include <string.h>
 #include "soc.h"
@@ -34,7 +34,7 @@ struct frame {
     uint32_t mepc, mstatus, mcause, mtval;
 };
 
-#define TICK       625000u          /* clocks between Ctrl-C checks: 10 ms at 62.5 MHz */
+#define TICK       (CLK_HZ / 100u)  /* clocks between Ctrl-C checks: 10 ms */
 #define MIE_MTIE   0x80u
 #define ST_MPIE    0x80u
 #define ST_MPP_M   0x1800u

@@ -102,7 +102,8 @@ module rvfi_wrapper (
 		.PMA_ROM_BASE (32'hFFFF_FFFF), .PMA_ROM_TOP (32'h0000_0000),
 		.PMA_RAM_BASE (32'h0000_0000), .PMA_RAM_TOP (32'hFFFF_FFFF),
 		.PMA_IO0_BASE (32'hFFFF_FFFF), .PMA_IO0_TOP (32'h0000_0000),
-		.PMA_IO1_BASE (32'hFFFF_FFFF), .PMA_IO1_TOP (32'h0000_0000)
+		.PMA_IO1_BASE (32'hFFFF_FFFF), .PMA_IO1_TOP (32'h0000_0000),
+		.PMA_IO2_BASE (32'hFFFF_FFFF), .PMA_IO2_TOP (32'h0000_0000)
 	) uut (
 		.clk          (clock),
 		.rst          (reset),

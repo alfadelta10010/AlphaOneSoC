@@ -1,19 +1,19 @@
 /* FreeRTOS on AlphaOneSoC (docs/ROADMAP.md 9.2, rung 5): the upstream RISC-V port
  * (portable/GCC/RISC-V, the RV32I_CLINT_no_extensions chip file), M-mode only, the CLINT's
  * mtime as the tick source. The tick comes from mtime, which counts core clocks, so the
- * clock goes in here as it is documented (62.5 MHz, ROADMAP section 0). */
+ * clock goes in here as it is documented (52.63 MHz, docs/boot-contract-4x4.md section 4). */
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
 #include <stdint.h>
 
-#define configCPU_CLOCK_HZ                   62500000UL
+#define configCPU_CLOCK_HZ                   52631579UL
 #define configMTIME_BASE_ADDRESS             0x0200BFF8UL
 #define configMTIMECMP_BASE_ADDRESS          0x02004000UL
 
 /* 100 Hz: the tick interrupt is a few hundred instructions at about 40 clocks each from
  * PSRAM (the hook is reached after about 6,000 clocks, see freertos_test.c), so a 1 kHz
- * tick, 62,500 clocks apart, would take well over a tenth of the CPU. */
+ * tick, 52,631 clocks apart, would take well over a tenth of the CPU. */
 #define configTICK_RATE_HZ                   100
 #define configUSE_PREEMPTION                 1
 #define configUSE_TIME_SLICING               1

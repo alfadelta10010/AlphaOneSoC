@@ -51,17 +51,17 @@ module tb_qspi_stress;
     reg         d_we = 0;
     wire [31:0] d_rdata;
     wire        d_ready;
-    wire        q_start, q_we, q_idle, q_done;
+    wire        q_start, q_we, q_idle, q_done, q_burst;
     wire [1:0]  q_cs, q_nbytes_m1;
     wire [23:0] q_addr;
     wire [31:0] q_wdata, q_rdata;
 
     mem_ctrl memc (.clk(clk), .rst(rst),
-        .i_req(i_req), .i_addr(i_addr), .i_rdata(i_rdata), .i_ready(i_ready),
+        .i_req(i_req), .i_addr(i_addr), .i_burst(1'b0), .i_rdata(i_rdata), .i_ready(i_ready),
         .d_req(d_req), .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_we(d_we),
         .d_rdata(d_rdata), .d_ready(d_ready),
         .q_start(q_start), .q_cs(q_cs), .q_addr(q_addr), .q_we(q_we),
-        .q_nbytes_m1(q_nbytes_m1), .q_wdata(q_wdata),
+        .q_nbytes_m1(q_nbytes_m1), .q_wdata(q_wdata), .q_burst(q_burst),
         .q_idle(q_idle), .q_done(q_done), .q_rdata(q_rdata));
 
     wire       sck, ctl_oe, io_oe;
@@ -89,7 +89,7 @@ module tb_qspi_stress;
         if ($value$plusargs("DDR_CAP=%d", cap_v)) ;
     end
     qspi_ctrl qspi (.clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en),
-        .ddr(ddr_v), .ddr_cap(cap_v),
+        .ddr(ddr_v), .ddr_cap(cap_v), .burst(q_burst),
         .start(q_start), .cs_sel(q_cs), .addr(q_addr), .we(q_we),
         .nbytes_m1(q_nbytes_m1), .wdata(q_wdata),
         .idle(q_idle), .done(q_done), .rdata(q_rdata),

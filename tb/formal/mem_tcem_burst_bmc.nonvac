@@ -1,0 +1,6 @@
+# a burst never ends at the line's last word -> a PSRAM CS run beyond LPB (MT1b)
+sed qspi_ctrl.v s/ \&\& addr\[3:2\] != 2'd3;/;/
+# an idle burst is not closed when nobody asks for the next word -> CS stays low (MT1b)
+sed qspi_ctrl.v s/(!stream_en || mode_chg || pstrm)/(!stream_en || mode_chg)/
+# one word longer: a single read of a line's last word may open a burst into the next line (5 words, MT1b; WO-72)
+sed qspi_ctrl.v s/ \&\& addr\[3:2\] != 2'd3;/ \&\& (addr[3:2] != 2'd3 || !pstrm);/

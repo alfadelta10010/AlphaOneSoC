@@ -12,7 +12,7 @@
 //     memUnsigned, wbSel (00 ALU, 01 memory, 10 link, 11 CSR -- controller.v
 //     ports), aluSrc1 (0 rs1, 1 pc) and aluSrc2 (0 imm, 1 rs2), aluOp (the
 //     ALU codes alu.v documents: ADD 00000, SUB 01000, SLT 00010, SLTU 00011,
-//     XOR 00100, OR 00110, AND 00111; the shifts muldiv.v and fyracore take,
+//     XOR 00100, OR 00110, AND 00111; the shifts alu.v takes,
 //     SLL 00001, SRL 00101, SRA 01101; M ops {10, funct3}, muldiv.v's op
 //     table), doBranch/doJump, csrOp (01 RW, 10 RS, 11 RC) and csrSrc (1 for
 //     the immediate forms), amoOp = funct5, and the is* flags, which must be
@@ -33,9 +33,9 @@ module tb_controller;
     wire       isAmo, isLR, isSC, isEcall, isEbreak, isMret, isFence, isFenceI, illegal;
     wire       isMulDiv;
     wire [4:0] amoOp;
-    // As fyracore derives them: a shift runs in muldiv like an M instruction.
-    wire       is_shift = !aluOp[4] && (aluOp[1:0] == 2'b01);
-    wire       is_iter  = isMulDiv || is_shift;
+    // As fyracore derives it: only an M instruction is iterative (the shifts
+    // are single-cycle in the ALU).
+    wire       is_iter  = isMulDiv;
 
     controller uut(
         .opcode(opcode), .funct3(funct3), .funct7(funct7),

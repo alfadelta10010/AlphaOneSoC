@@ -1,0 +1,4 @@
+# FC88: PLIC window not mapped
+cat FC88
+# IO1 top reverted to 0x1002_FFFF
+sed fyracore.v s/PMA_IO1_TOP  = 32'h1003_FFFF/PMA_IO1_TOP  = 32'h1002_FFFF/

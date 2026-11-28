@@ -7,17 +7,29 @@
 //   0x2000_0000  flash   16 MB  read, execute        QSPI CS0
 //   0x8000_0000  PSRAM   16 MB  read, write, execute QSPI CS1 (A) / CS2 (B)
 //   0x0200_0000  CLINT   64 KB
+//   0x0C00_0000  PLIC    4 MB, 9 sources (src/plic.v): 1 UART, 2 SPI, 3 gamepad, 4 GPIO input change
+//                        (level, gpio.v IN_IE/IN_IP), 5-8 PWM (interrupts removed, tied 0), 9 watchdog
 //   0x1000_0000  UART    16550 subset, byte registers (src/uart.v)
 //   0x1001_0000  GPIO    OUT / IN / SPICTL, SPI controller at +0x20 (src/gpio.v, src/spi.v)
 //   0x1002_0000  syscon  reboot, power-off, reset cause, boot mode, chip ID,
-//                        straps, watchdog at +0x100 (src/syscon.v)
+//                        straps, watchdog at +0x100 (src/syscon.v); the pinmux
+//                        at 0x1002_0020 (src/pinmux.v) is carved out of it
+//   0x1003_0000  PWM     SiFive pwm0 layout, comparators 0-1 built (2-3 read 0xFFFF), no interrupts (src/pwm.v)
+//   0x1002_0024  CACHE_CTL  [0] EN, [1] reads 1, [2] PBURST (PSRAM line fills in one CE# period; needs
+//                        QSPI_CFG.STREAM and a core clock >= 15 MHz, tCEM 8 us); carved out of syscon in
+//                        soc_bus, the flops are in this file; the cache is 256 B with two data macros (src/cache.v)
+//   The GPIO window's +0x10 / +0x14 (every 64-byte alias) is the gamepad receiver
+//   (GAMEPAD, GPSTAT, src/gamepad.v); the carves are decoded in soc_bus.
 //
-// Chip pins (docs/pins-and-peripherals.md): the UART's TX and RTS# are
-// uo_out[4] and [5], and RX is ui_in[3]; gpio_out drives the other six
-// uo_out pins (gpio_out[5:4] are always 0 -- those pins are the UART's),
-// and gpio_in reads all eight ui_in pins, RX and the rd_late strap
-// included. The TinyTapeout top level
-// (src/tt_um_alfadelta10010_alphaone_soc.v) maps these to the pins.
+// Chip pins (docs/pins-and-peripherals.md): every uo_out pin is one flop of the
+// pinmux (`uo`), after the mux of its default function and the features
+// software can select (pin 5 RTS#, pin 6 PWM0, pin 7 PWM1). Defaults: [0] OLED CS#
+// = OUT[0], [1] MOSI = OUT[1], [2] D/C = OUT[2], [3] SCK = OUT[3], [4] UART TX,
+// [5] SD CS# = OUT[5] (or RTS#), [6] RES#/VCCEN = OUT[6] (or PWM0), [7] PWM1 (fixed: tones, no alternative). RX is ui_in[3], the
+// gamepad's LATCH / CLOCK / DATA are ui_in[4] / [5] / [6], and gpio_in reads all
+// eight ui_in pins, RX and the rd_late strap included. uart_tx, uart_rts_n and
+// gpio_out are the pre-mux signals, kept as taps for the benches. The TinyTapeout
+// top level (src/tt_um_alfadelta10010_alphaone_soc.v) maps `uo` to the pins.
 //
 // qspi_rd_late is a strap for the QSPI read-sampling point: 0 samples two
 // clocks after the device's launching edge, 1 three (see qspi_ctrl.v). Pick
@@ -50,7 +62,9 @@ module alphaone_soc #(
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
     parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,
-    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF,
+    parameter [31:0] PMA_IO1_TOP  = 32'h1003_FFFF,
+    parameter [31:0] PMA_IO2_BASE = 32'h0C00_0000,  // PLIC, 4 MB
+    parameter [31:0] PMA_IO2_TOP  = 32'h0C3F_FFFF,
     // UART divisor out of reset: 34 = 114,890 baud at the documented 62.5 MHz clock
     parameter [15:0] UART_DIV_RESET = 16'd34
 )(
@@ -71,7 +85,9 @@ module alphaone_soc #(
     output wire       uart_rts_n,
     // GPIO (out[1] / out[3] are MOSI / SCK while the SPI controller is on)
     input  wire [7:0] gpio_in,
-    output wire [7:0] gpio_out
+    output wire [7:0] gpio_out,
+    // uart_tx, uart_rts_n and gpio_out above are pre-mux taps; the pins are
+    output wire [7:0] uo
 );
 
     // ── Core ────────────────────────────────────────────────────────────────
@@ -81,7 +97,8 @@ module alphaone_soc #(
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire [3:0]  dmem_be;
     wire        dmem_req, dmem_we, dmem_ready;
-    wire        timer_irq, sw_irq;
+    wire        timer_irq, sw_irq, meip;
+    wire        core_fencei;
     wire [63:0] mtime;
 
     fyracore #(
@@ -89,7 +106,9 @@ module alphaone_soc #(
         .PMA_IO0_BASE(PMA_IO0_BASE),
         .PMA_IO0_TOP (PMA_IO0_TOP),
         .PMA_IO1_BASE(PMA_IO1_BASE),
-        .PMA_IO1_TOP (PMA_IO1_TOP)
+        .PMA_IO1_TOP (PMA_IO1_TOP),
+        .PMA_IO2_BASE(PMA_IO2_BASE),
+        .PMA_IO2_TOP (PMA_IO2_TOP)
     ) cpu (
         .clk         (clk),
         .rst         (rst_soc),
@@ -106,10 +125,10 @@ module alphaone_soc #(
         .dmem_rdata  (dmem_rdata),
         .dmem_ready  (dmem_ready),
         .timer_irq   (timer_irq),
-        .external_irq(1'b0),           // no PLIC
+        .external_irq(meip),
         .sw_irq      (sw_irq),
         .mtime_in    (mtime),
-        .fencei_flush(),               // nothing caches instructions
+        .fencei_flush(core_fencei),
         .dbg_pc      (),
         .dbg_retired (),
         .dbg_instr   (),
@@ -128,7 +147,23 @@ module alphaone_soc #(
     wire [2:0]  qspi_ddr_cap;
     wire [31:0] syscon_rdata;
 
+    wire        plic_sel, uart_irq, gpio_spi_irq, gpio_in_irq;
+    wire [7:0]  gpio_in_sync;
+    wire [31:0] plic_rdata;
+    wire        gamepad_sel, pinmux_sel, pwm_sel, gamepad_irq;
+    wire        cache_sel, cache_active;
+    wire [31:0] cache_rdata;
+    wire        c_req, c_ready;          // mem_ctrl's fetch port (behind the cache)
+    wire [31:0] c_addr, c_rdata;
+    reg         cache_en;                // CACHE_CTL.EN, reset 0 by rst_soc
+    reg         cache_pburst;            // CACHE_CTL.PBURST, reset 0 by rst_soc
+    wire        c_burst, q_burst;        // PSRAM line burst qualifier: cache -> mem_ctrl -> qspi_ctrl
+    wire [31:0] gamepad_rdata, pinmux_rdata, pwm_rdata;
+    wire [1:0]  pwm_o;
+
     soc_bus bus (
+        .clk         (clk),
+        .rst         (rst_soc),
         .d_req       (dmem_req),
         .d_addr      (dmem_addr),
         .d_rdata     (dmem_rdata),
@@ -138,6 +173,8 @@ module alphaone_soc #(
         .mem_ready   (mem_d_ready),
         .clint_sel   (clint_sel),
         .clint_rdata (clint_rdata),
+        .plic_sel    (plic_sel),
+        .plic_rdata  (plic_rdata),
         .uart_sel    (uart_sel),
         .uart_rdata  (uart_rdata),
         .uart_ready  (uart_ready),
@@ -145,8 +182,18 @@ module alphaone_soc #(
         .gpio_rdata  (gpio_rdata),
         .gpio_ready  (gpio_ready),
         .syscon_sel  (syscon_sel),
-        .syscon_rdata(syscon_rdata)
+        .syscon_rdata(syscon_rdata),
+        .gamepad_sel (gamepad_sel),
+        .gamepad_rdata(gamepad_rdata),
+        .pinmux_sel  (pinmux_sel),
+        .pinmux_rdata(pinmux_rdata),
+        .pwm_sel     (pwm_sel),
+        .pwm_rdata   (pwm_rdata),
+        .cache_sel   (cache_sel),
+        .cache_rdata (cache_rdata)
     );
+
+    wire        wdt_irq;
 
     // ── syscon ──────────────────────────────────────────────────────────────
     syscon syscon_inst (
@@ -165,7 +212,8 @@ module alphaone_soc #(
         .qspi_stream_en(qspi_stream_en),
         .qspi_ddr     (qspi_ddr),
         .qspi_ddr_cap (qspi_ddr_cap),
-        .wdt_tap      (mtime[29:14])
+        .wdt_tap      (mtime[29:14]),
+        .wdt_irq      (wdt_irq)
     );
 
     // ── Memory controller + QSPI engine ─────────────────────────────────────
@@ -174,13 +222,50 @@ module alphaone_soc #(
     wire [23:0] q_addr;
     wire [31:0] q_wdata, q_rdata;
 
+    // CACHE_CTL (0x1002_0024): [0] EN (rw, reset 0), [1] reads 1 (a cache is built),
+    // [2] PBURST (rw, reset 0): PSRAM line fills may use one chip select period per line (needs EN).
+    // Writing EN 0 -> 1 starts cold.
+    always @(posedge clk) begin
+        if (rst_soc) begin
+            cache_en     <= 1'b0;
+            cache_pburst <= 1'b0;
+        end else if (cache_sel && dmem_we && dmem_be[0]) begin
+            cache_en     <= dmem_wdata[0];
+            cache_pburst <= dmem_wdata[2];
+        end
+    end
+    assign cache_rdata = {29'd0, cache_pburst, 1'b1, cache_en};
+
+    cache icache (
+        .clk          (clk),
+        .rst          (rst_soc),
+        .en           (cache_en),
+        .fencei_flush (core_fencei),
+        .f_req        (imem_req),
+        .f_addr       (imem_addr),
+        .f_rdata      (imem_rdata),
+        .f_ready      (imem_ready),
+        .m_req        (c_req),
+        .m_addr       (c_addr),
+        .m_burst      (c_burst),
+        .pburst       (cache_pburst),
+        .m_rdata      (c_rdata),
+        .m_ready      (c_ready),
+        .d_req        (mem_d_req),
+        .d_we         (dmem_we),
+        .d_addr       (dmem_addr),
+        .d_ready      (mem_d_ready),
+        .active       (cache_active)
+    );
+
     mem_ctrl memc (
         .clk        (clk),
         .rst        (rst_soc),
-        .i_req      (imem_req),
-        .i_addr     (imem_addr),
-        .i_rdata    (imem_rdata),
-        .i_ready    (imem_ready),
+        .i_req      (c_req),
+        .i_addr     (c_addr),
+        .i_burst    (c_burst),
+        .i_rdata    (c_rdata),
+        .i_ready    (c_ready),
         .d_req      (mem_d_req),
         .d_addr     (dmem_addr),
         .d_wdata    (dmem_wdata),
@@ -194,6 +279,7 @@ module alphaone_soc #(
         .q_we       (q_we),
         .q_nbytes_m1(q_nbytes_m1),
         .q_wdata    (q_wdata),
+        .q_burst    (q_burst),
         .q_idle     (q_idle),
         .q_done     (q_done),
         .q_rdata    (q_rdata)
@@ -206,6 +292,7 @@ module alphaone_soc #(
         .stream_en(qspi_stream_en),
         .ddr      (qspi_ddr),
         .ddr_cap  (qspi_ddr_cap),
+        .burst    (q_burst),
         .start    (q_start),
         .cs_sel   (q_cs),
         .addr     (q_addr),
@@ -237,6 +324,25 @@ module alphaone_soc #(
         .mtime_out(mtime)
     );
 
+    // ── PLIC ────────────────────────────────────────────────────────────────
+    plic #(.NSRC(9)) plic_inst (
+        .clk  (clk),
+        .rst  (rst_soc),
+        .sel  (plic_sel),
+        .we   (dmem_we),
+        .be   (dmem_be),
+        .addr (dmem_addr[21:2]),
+        .wdata(dmem_wdata),
+        .rdata(plic_rdata),
+        .src  ({wdt_irq,       // 9 watchdog (WO-61)
+                4'b0,          // 8..5 PWM (interrupts removed, tied 0)
+                gpio_in_irq,   // 4 GPIO input change (gpio.v IN_IE / IN_IP)
+                gamepad_irq,   // 3
+                gpio_spi_irq,  // 2
+                uart_irq}),    // 1
+        .meip (meip)
+    );
+
     // ── UART ────────────────────────────────────────────────────────────────
     uart #(
         .DIV_RESET(UART_DIV_RESET)
@@ -250,6 +356,7 @@ module alphaone_soc #(
         .wdata(dmem_wdata),
         .rdata(uart_rdata),
         .ready(uart_ready),
+        .irq  (uart_irq),
         .rx   (uart_rx),
         .tx   (uart_tx),
         .rts_n(uart_rts_n)
@@ -267,7 +374,54 @@ module alphaone_soc #(
         .rdata(gpio_rdata),
         .ready(gpio_ready),
         .in   (gpio_in),
-        .out  (gpio_out)
+        .out  (gpio_out),
+        .in_sync(gpio_in_sync),     // for the gamepad receiver
+        .spi_irq(gpio_spi_irq),
+        .in_irq (gpio_in_irq)
+    );
+
+    // ── Gamepad receiver (GPIO slot +0x10 / +0x14) ─────────────────────────
+    gamepad gamepad_inst (
+        .clk    (clk),
+        .rst    (rst_soc),
+        .sel    (gamepad_sel),
+        .we     (dmem_we),
+        .be     (dmem_be),
+        .addr2  (dmem_addr[2]),
+        .wdata  (dmem_wdata),
+        .rdata  (gamepad_rdata),
+        .latch_s(gpio_in_sync[4]),
+        .pclk_s (gpio_in_sync[5]),
+        .data_s (gpio_in_sync[6]),
+        .irq    (gamepad_irq)
+    );
+
+    // ── PWM (0x1003_0000, the whole IO slot 3) ──────────────────────────
+    pwm pwm_inst (
+        .clk   (clk),
+        .rst   (rst_soc),
+        .sel   (pwm_sel),
+        .we    (dmem_we),
+        .be    (dmem_be),
+        .addr  (dmem_addr[5:2]),
+        .wdata (dmem_wdata),
+        .rdata (pwm_rdata),
+        .pwm_o (pwm_o)
+    );
+
+    // ── Pinmux (0x1002_0020): the uo_out pin flops ─────────────────────────
+    pinmux pinmux_inst (
+        .clk  (clk),
+        .rst  (rst_soc),
+        .sel  (pinmux_sel),
+        .we   (dmem_we),
+        .be   (dmem_be),
+        .wdata(dmem_wdata),
+        .rdata(pinmux_rdata),
+        .dflt ({gpio_out[6], gpio_out[5], uart_tx, gpio_out[3:0]}),
+        .rts_n(uart_rts_n),
+        .pwm  (pwm_o),
+        .uo   (uo)
     );
 
 endmodule

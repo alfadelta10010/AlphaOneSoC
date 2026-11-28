@@ -11,6 +11,19 @@ module fsmcut_gate_memsize(input [2:0] oh, output [1:0] q, output [2:0] dec);
   wire [1:0] c = (q == 2'd3) ? 2'd0 : q;
   assign dec = {c == 2'b01, c == 2'b10, c == 2'b00};
 endmodule
+`ifdef MULDIV5
+// PX-6 (26a8939) removed S_SH: 5 states. Table from the A0-core synthesis log (Fcauto4 06-yosys-synthesis.log
+// 2791-2797: 000 100 010 001 011 -> one-hot bits 0..4); codes 5-7 (L2: never reached) clamp to 0.
+module fsmcut_gold_muldiv(input [2:0] q, output [2:0] y);
+  assign y = (q > 3'd4) ? 3'd0 : q;
+endmodule
+module fsmcut_gate_muldiv(input [4:0] oh, output [2:0] q, output [4:0] dec);
+  assign q = (oh[1] ? 3'b100 : 3'b000) | (oh[2] ? 3'b010 : 3'b000) | (oh[3] ? 3'b001 : 3'b000)
+           | (oh[4] ? 3'b011 : 3'b000);
+  wire [2:0] c = (q > 3'd4) ? 3'd0 : q;
+  assign dec = {c == 3'b011, c == 3'b001, c == 3'b010, c == 3'b100, c == 3'b000};
+endmodule
+`else
 module fsmcut_gold_muldiv(input [2:0] q, output [2:0] y);
   assign y = (q == 3'd6 || q == 3'd7) ? 3'd0 : q;
 endmodule
@@ -20,6 +33,7 @@ module fsmcut_gate_muldiv(input [5:0] oh, output [2:0] q, output [5:0] dec);
   wire [2:0] c = (q == 3'd6 || q == 3'd7) ? 3'd0 : q;
   assign dec = {c == 3'b011, c == 3'b101, c == 3'b001, c == 3'b010, c == 3'b100, c == 3'b000};
 endmodule
+`endif
 module fsmcut_gold_qspi(input [3:0] q, output [3:0] y);
   assign y = (q > 4'd9) ? 4'd0 : q;
 endmodule

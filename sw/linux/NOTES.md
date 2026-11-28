@@ -12,7 +12,7 @@ kernel.config, busybox.built.config. The build tree br/ is 7.5 GB.
 - HZ=30 via a new Kconfig choice HZ_30 (recipe/patches/0003-Add-HZ_30-timer-frequency.patch). Buildroot: RVM+RVA+RVC, -Os, no LTO, no host QEMU.
 - At boot: "14084K/16320K available" (bench log; the memory node is 0x00ff0000 bytes).
 - Command line (in the DTB): `rw console=ttyS0,115200 earlycon=uart8250,mmio,0x10000000 loglevel=7`. No baud on earlycon (it would reprogram
-  the divisor from a 1.8 MHz default clock); console 115200 with clock-frequency 62.5 MHz rounds to divisor 34, the reset value.
+  the divisor from a 1.8 MHz default clock); console 115200 with clock-frequency 52.63 MHz rounds to divisor 29, the loader's value (34 is the reset value, sized for 62.5 MHz).
 - initramfs: busybox init; inittab mounts /proc and /sys, runs /etc/init.d/rcS (uname -a, cat /proc/cpuinfo, echo ok), then `-/bin/sh` (hush).
   `poweroff` goes through syscon-poweroff (0x5555).
 
@@ -23,7 +23,7 @@ ignores) and the 8250 driver is polled, so input is limited to one character per
 
 ## Device tree (recipe/alpha.dts is the template, build.sh writes deliver/alpha.dts; spike.dts differs as listed)
 memory 0x80000000 size 0x00ff0000 (loader limit); cpu riscv,isa rv32imac_zicsr_zifencei, mmu-type riscv,none, riscv,pmpregions 4;
-timebase 62.5 MHz; riscv,clint0 @0x02000000 (interrupts-extended 3, 7); ns16550a @0x10000000 reg-shift 0, reg-io-width 1, no interrupts;
+timebase 52.63 MHz; riscv,clint0 @0x02000000 (interrupts-extended 3, 7); ns16550a @0x10000000 reg-shift 0, reg-io-width 1, no interrupts;
 syscon @0x10020000 + syscon-poweroff 0x5555 + syscon-reboot 0x7777. GPIO/SPI/SD are not described.
 Spike variant: timebase 14535 Hz (Spike's mtime ticks once per 100 instructions; 14535 gives a 30 Hz jiffy the same number of
 instructions as the SoC at 43 clocks/instruction), a PLIC node + uart `interrupts` (Spike builds its ns16550 only with a PLIC), no mmu-type,

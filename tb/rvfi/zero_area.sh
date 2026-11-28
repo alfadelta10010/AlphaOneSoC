@@ -14,7 +14,7 @@ command -v yosys >/dev/null || source ~/tools/oss-cad-suite/environment
 W=${ZA_DIR:-$ROOT/build/za}; rm -rf "$W"; mkdir -p "$W/a"
 if [ -n "${ZA_BASE_SRC:-}" ]; then mkdir -p "$W/a/src"; cp "$ZA_BASE_SRC"/*.v "$W/a/src/"   # tree without .git: BASE src given
 else git -C "$ROOT" archive "$BASE" src | tar -x -C "$W/a"; fi
-SRCS="tt_um_alfadelta10010_alphaone_soc.v alphaone_soc.v fyracore.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v muldiv.v pmp.v regFile.v signExt.v qspi_ctrl.v mem_ctrl.v soc_bus.v uart.v gpio.v spi.v syscon.v"
+SRCS=$("$ROOT/scripts/wrapper-srcs.sh" "$ROOT" | tr ' ' '\n' | grep -vx rf_top.v | tr '\n' ' ')   # rf_plain.v replaces rf_top.v
 cat > "$W/rf_plain.v" <<'V'
 module rf_top(input wire [31:0] w_data, input wire [4:0] w_addr, input wire w_ena,
   input wire [4:0] ra_addr, input wire [4:0] rb_addr, output reg [31:0] ra_data, output reg [31:0] rb_data, input wire clk);

@@ -9,6 +9,6 @@ set -eu
 W=${1:-${LINUX_WORK:-$HOME/linux-work}}; D=$W/deliver; HERE=$(cd "$(dirname "$0")" && pwd)
 python3 $HERE/../nuttx/tools/mkscript_slow.py $HERE/session.txt $D/in.hex
 cd $D
-stdbuf -oL nice -n 19 $W/build/sw/bench/sim +FLASH_FILE=$D/flash-linux.hex +UART_DIV=34 +UART_IN=$D/in.hex \
+stdbuf -oL nice -n 19 $W/build/sw/bench/sim +FLASH_FILE=$D/flash-linux.hex +UART_DIV=29 +UART_IN=$D/in.hex \
     +MAX_CYCLES=${MAXC:-6000000000} > $D/bench-boot.log 2>&1 || true
 grep -q "^SW-RESULT: PASS" $D/bench-boot.log && echo "linux: PASS" || { echo "linux: FAIL"; exit 1; }

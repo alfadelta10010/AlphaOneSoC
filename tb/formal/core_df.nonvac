@@ -1,1 +1,2 @@
 def -DDF_N=1   # one data access per fetch allowed: the counter counts, two accesses fail it
+cat FH05   # a held word under a data access in WB lets the data-per-fetch count reach 5

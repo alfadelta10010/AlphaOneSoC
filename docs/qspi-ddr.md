@@ -25,7 +25,8 @@ with the real part (tier 2: LISA rev 3 on an Arty A7, 2026-10-25, `RESPIN.md:140
 (tier 3). A claim says its tier; none of the DDR numbers below is tier 1, because no silicon has run
 `EDh` yet.
 
-Clock: clk = 62.5 MHz, T = 16.0 ns, SCK = clk / 2 = 31.25 MHz. "Rise n / fall n" are the SCK edges of
+Clock: the budget below was written at clk = 62.5 MHz, T = 16.0 ns, SCK = clk / 2 = 31.25 MHz; the chip now runs at
+52.63 MHz (T = 19.00 ns, SCK 26.3158 MHz), where every window below is wider (section 3.5). "Rise n / fall n" are the SCK edges of
 SCK cycle n as numbered in Figure 27a (cycle 0 carries the first command bit). d is the clk duty
 cycle (fraction high); TT gives no guarantee on it.
 
@@ -61,11 +62,11 @@ duty cutoff about d = 0.39, host-to-device 6.83 / 6.00 / 5.17 ns at d = 0.50 / 0
   23 for 4 bytes, 25 for 6 bytes (the open at `addr[1] = 1`, 1.4).
 - **SCK frequency:** the DTR limit is 66 MHz at 3.0 to 3.6 V [DS 9.6] and applies to the whole
   instruction, command clocks included (the Pmod model checks it from rise 0, `tb_pmod_dtr` F12). We run
-  31.25 MHz (tier 3; LISA ran 25 MHz, tier 2).
+  26.3158 MHz at the 52.63 MHz chip clock (31.25 MHz at 62.5; tier 3; LISA ran 25 MHz, tier 2).
 - **SCK high and low** must each be at least 45 % of the minimum period [DS 9.6 note 1]. Ours are
   16.0 ns each, at any clk duty (3.4).
 - **Output toggle rate:** in DDR the address nibbles and the returned data change every T, the same
-  rate as SCK (31.25 MHz): about 5 % under TT's roughly 33 MHz rating [TT] [AUDIT 3.3].
+  rate as SCK (26.3158 MHz at 52.63 MHz, 31.25 MHz at 62.5): about 20 % (5 % at 62.5 MHz) under TT's roughly 33 MHz rating [TT] [AUDIT 3.3].
 
 ### 1.2 Streaming (CS0 held, SCK paused low)
 
@@ -138,7 +139,7 @@ duty cutoff about d = 0.39, host-to-device 6.83 / 6.00 / 5.17 ns at d = 0.50 / 0
 
 | Symbol | Meaning | Value | Status |
 |---|---|---|---|
-| fC (DTR, 3.0-3.6 V) | SCK for DTR instructions | at most 66 MHz | 31.25 MHz meets it |
+| fC (DTR, 3.0-3.6 V) | SCK for DTR instructions | at most 66 MHz | 26.3158 MHz meets it (31.25 MHz at 62.5) |
 | tCLH, tCLL | SCK high / low | at least 45 % of Pc | 16.0 ns meets it |
 | tSLCH / tCHSH | CS active setup to / hold after SCK rise | 3 / 3 ns | at least 1.5 T meets it |
 | tCHSL / tSHCH | CS not-active hold / setup re SCK rise | 3 / 3 ns | met |
@@ -285,6 +286,27 @@ nibble half an SCK late) the streamed suite passes at no capture point, for ever
 - The demo board's clock at 62.5 MHz: whether it is an integer divider of its PLL or a fractional one
   (alternating periods) and what duty it has is open (section 6). A fractional divider would hurt
   the core's own STA, not only DDR.
+
+### 3.5 At 52.63 MHz
+
+The chip clock is 52.63 MHz (T = 19.00 ns, SCK 26.3158 MHz; `CHIP_HALF_PS` 9500 in the Makefile). Nothing in the
+RTL changes: the capture points are still c = DDR_CAP + 1 half clocks, now 9.50 ns apart, and the window of 3.3
+is W = T - 4.5 - Delta = 12.50 ns at Delta = 2 (11.5 - Delta at 62.5 MHz), so the guaranteed margin at the worst R,
+(W - T/2) / 2 = +1.50 ns, is wider than the +0.75 ns at 62.5 MHz. Passing c by the window rule
+(R + 7 <= c T/2 < R + 1 + T; `tb/qspi_ddr_sweep.sh` checks the same rule at `CLK_HALF_PS=9500`):
+
+| R (ns) | 8 | 11 | 14 | 17 | 20 | 23 | 26 | 29 | 32 |
+|---|---|---|---|---|---|---|---|---|---|
+| passing c | 2 | 2 3 | 3 | 3 | 3 4 | 4 | 4 | 4 5 | 5 |
+
+The SoC runs (`ddr_sweep` in `SYSCON_SOC_RUNS`) expect DDR_CAP 11 -> 2, 17 -> 2, 23 -> 3, 35 (RD_LATE) -> 4. The reset DDR_CAP 2 (c = 3,
+28.5 ns) is only a reset value: the loader always writes DDR_CAP with DDR (section 4).
+
+SDR reads: `rd_late` = 0 captures 2T = 38.0 ns after the launching edge and reads round trips up to about
+31.5 ns (25.5 at 62.5 MHz); `rd_late` = 1 captures at 3T = 57.0 ns and needs R of about 18.0 ns or more
+for hold (the next nibble launches at 2T, so R plus the flash's output hold must exceed T = 19 ns; the SDF GLS of the
+shipped netlist at T = 19, min_ff, fails with a Pmod model hold of 18 ns and passes with 19 and 21 ns, WO-SDF19). With TinyQV's measured pad round trip of a little over 20 ns both straps read at 52.63 MHz. `rd_late` = 0 has the larger margin (10.5 ns of setup at R = 21 against 3.0 ns of hold for `rd_late` = 1), so
+the board default is **`ui_in[0]` low** at 52.63 MHz, with high as the fallback if flash reads fail.
 
 ## 4. Capture points and the registers
 

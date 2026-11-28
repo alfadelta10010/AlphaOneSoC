@@ -10,7 +10,7 @@
 //   R1 imem_addr[0] = 0            R2 imem_addr in ROM or RAM
 //   R3 dmem_addr[1:0] = 0          R4 dmem_be is a legal byte/half/word lane set
 //   R5 store data replicated across the lanes in use
-//   R6 dmem_addr in ROM, RAM, IO0 or IO1     R7 no store to ROM
+//   R6 dmem_addr in ROM, RAM, IO0, IO1 or IO2   R7 no store to ROM
 module core_req_props (
     input  wire        clk, rst_in,
     input  wire [31:0] boot_addr,
@@ -43,7 +43,8 @@ module core_req_props (
     wire d_rom = in_win(dmem_addr, 32'h2000_0000, 32'h20FF_FFFF);
     wire d_ram = in_win(dmem_addr, 32'h8000_0000, 32'h80FF_FFFF);
     wire d_io0 = in_win(dmem_addr, 32'h0200_0000, 32'h0200_FFFF);
-    wire d_io1 = in_win(dmem_addr, 32'h1000_0000, 32'h1002_FFFF);
+    wire d_io1 = in_win(dmem_addr, 32'h1000_0000, 32'h1003_FFFF);
+    wire d_io2 = in_win(dmem_addr, 32'h0C00_0000, 32'h0C3F_FFFF);
 
     always @(*) begin
         if (chk) begin
@@ -56,7 +57,7 @@ module core_req_props (
                 assert (dmem_be == 4'b0001 || dmem_be == 4'b0010 || dmem_be == 4'b0100 ||
                         dmem_be == 4'b1000 || dmem_be == 4'b0011 || dmem_be == 4'b1100 ||
                         dmem_be == 4'b1111);                                // R4
-                assert (d_rom || d_ram || d_io0 || d_io1);                  // R6
+                assert (d_rom || d_ram || d_io0 || d_io1 || d_io2);                // R6
                 if (dmem_we) begin
                     if (dmem_be == 4'b0011 || dmem_be == 4'b1100)           // R5
                         assert (dmem_wdata[31:16] == dmem_wdata[15:0]);
@@ -69,4 +70,13 @@ module core_req_props (
             end
         end
     end
+`ifdef SBY_COVER
+    // the open side of the map is reachable (WO-46 review S1): pins the PMA defaults
+    always @(*) if (chk) begin
+        cover (dmem_req && d_io2 && !dmem_we);              // a load reaches the PLIC window
+        cover (dmem_req && d_io2 && dmem_we);               // a store does
+        cover (dmem_req && dmem_addr == 32'h0C3F_FFFC);     // its top word
+        cover (dmem_req && dmem_addr[31:16] == 16'h1003);   // the new IO1 slot (PWM)
+    end
+`endif
 endmodule

@@ -57,8 +57,10 @@ a_loop:
     sw   t0, 0(s3)               # mtimecmp = now + delay
     li   t1, 'A'
     li   t2, 'B'
-    sb   t1, THR(s0)
-    sb   t2, THR(s0)             # held while 'A' is on the line
+    sb   t1, THR(s0)             # the shifter takes the first at once; THRE (THR empty) is polled so the
+    WAIT_LSR s0, LSR_THRE        # second never waits; THR takes it and the third is held until the
+    sb   t2, THR(s0)             # shifter finishes a character
+    sb   t1, THR(s0)             # held (THR full)
 a_after:
     nop
 1:  blt  s5, s8, 1b              # the interrupt, sooner or later
@@ -131,10 +133,12 @@ c_loop:
     add  t0, t0, s6
     sw   t0, 0(s3)
     li   t1, 'P'
+    sb   t1, THR(s0)             # 'P' into the shifter; THRE polled, then 'P' into THR (no wait)
+    WAIT_LSR s0, LSR_THRE
     sb   t1, THR(s0)
     EVENT 5                      # the testbench counts pops and THR loads from here
     li   t0, 0x5A
-    amoswap.w t3, t0, (s0)       # read pops RBR; write (THR = 0x5A) held while 'P' goes
+    amoswap.w t3, t0, (s0)       # read pops RBR; write (THR = 0x5A) held while THR is full
 c_after:
     EVENT 6                      # ... to here: one of each
     andi t3, t3, 0xFF

@@ -129,6 +129,31 @@
 // without this section. Reset clears `strm` with everything else; the start-up
 // sequence never streams.
 //
+// PSRAM line burst. A PSRAM read may also leave chip select low, SCK low and the bus released,
+// but only for the next word of one 16-byte line and only when the requester says so (`burst`,
+// sampled with the request: the instruction cache's fill words, src/cache.v). The PSRAM, like
+// the flash, holds the next nibble on its pins while SCK is paused, and its tCEM (8 us,
+// docs/qspi-memories.md 4.1) is the only limit on how long chip select may stay low
+// (4.4: "Minimum clock for tCEM"; there is no minimum SCK rate or pause limit besides it).
+// Hard limits, all inside this module and independent of the requester:
+//   * a PSRAM stream opens only after an aligned 4-byte read with `burst` and addr[3:2] != 3,
+//     so it never leaves its 16-byte line (no 1 KB page crossing) and holds at most 4 words:
+//     the word at addr[3:2] = 3 ends with chip select high as any PSRAM read does;
+//   * it continues only for a PSRAM read of the same chip at the next word with `burst`;
+//   * chip select rises at once when a cycle with the engine idle has no request
+//     (`start` low), or on any other request (a data access, a write, a flash read,
+//     another address or chip, `burst` low), or stream_en falling. Chip select is
+//     therefore low for at most one 16-byte line: 20 + 3 * 8 SCK, about 97 clocks (101 with rd_late,
+//     the worst case found by formal; tb/formal/mem_props.sv LPB = 104 is PROVED unbounded by
+//     k-induction, harness mem_tcem_burst, WO-72).
+// tCEM (8 us, CE# low limit) therefore needs a core clock of at least 12.6 MHz with bursts (8.0 MHz without:
+// a single read is 64 clocks at worst): use PBURST (CACHE_CTL[2]) only at a core clock >= 15 MHz. A burst also
+// needs QSPI_CFG.STREAM (stream_en) set: with it clear the engine never opens a PSRAM stream.
+// Evidence: pausing SCK with CE# low between sequential PSRAM data reads is what TinyQV (ttsky25a) does on this
+// Pmod and PSRAM (silicon-proven by analogy; this engine's own burst is simulation and formal only).
+// With `burst` tied low no PSRAM stream ever opens and every pin behaves as before
+// this section (proved by tb/formal/qspi_burst_eq).
+//
 // DDR. With `ddr` set (QSPI_CFG.DDR) every flash read is an EDh DTR read
 // (W25Q128JV-DTR 8.2.14, docs/qspi-memories.md; the wire protocol is derived
 // in docs/qspi-ddr.md):
@@ -204,6 +229,7 @@ module qspi_ctrl (
     input  wire        stream_en,  // 1 = flash reads may keep chip select low for the next one
     input  wire        ddr,        // 1 = flash reads are EDh DTR reads (QSPI_CFG.DDR)
     input  wire [2:0]  ddr_cap,    // DDR capture point: half clocks after the launching edge, minus 1
+    input  wire        burst,      // with a PSRAM read request: it is a word of a cache line fill (may keep CE# low)
     // Transaction request, held by the requester until done
     input  wire        start,
     input  wire [1:0]  cs_sel,     // 0 = flash (CS0), 1 = PSRAM A (CS1), 2 = PSRAM B (CS2); taken at the start
@@ -243,7 +269,9 @@ module qspi_ctrl (
     reg        again;   // start-up step 4: second 8 clocks of its 16
     reg        t_we;    // the transaction in flight: its `we`...
     reg        t_psram; // ...and whether its chip is a PSRAM
-    reg        strm;    // a stream is open: CS0 low, SCK low, bus released
+    reg        strm;    // a stream is open: CS low, SCK low, bus released
+    reg        pstrm;   // ...and it is a PSRAM line burst (CS1/CS2 low), not the flash's
+    reg        t_bst;   // the request in flight came with `burst`
     reg [23:1] p;       // halfword address of the next byte the stream delivers (a 24-bit
                         // address's bits 23:1; no reset: read only while strm)
     reg        t_top;   // this transfer is a 2-byte top-up of the stream
@@ -351,6 +379,12 @@ module qspi_ctrl (
     wire [23:1] a_hw = addr[23:1];
     wire hit_cont = (a_hw == p);
     wire hit_top  = (a_hw == p - 23'd1);
+    // A PSRAM read that may leave a line burst open: aligned word, not the line's last
+    wire pstreamable = t_psram && !t_we && t_bst && stream_en && !init && nbytes_m1 == 2'd3 &&
+                       addr[1:0] == 2'd0 && addr[3:2] != 2'd3;
+    // S_CHK of a PSRAM burst: the next word of the line, same chip (cs_n still shows the open
+    // stream's chip, cs_sel is the new request's), with `burst` again
+    wire pcont_ok    = t_bst && stream_en && nbytes_m1 == 2'd3 && hit_cont && (cs_n == ~sel_now);
 
     // DDR: the dq stage that shifts a captured nibble in, the marks still in
     // flight (stages before it), a mode change of an open stream, the held
@@ -381,6 +415,8 @@ module qspi_ctrl (
             dq     <= 4'b0;
             again  <= 1'b0;
             strm   <= 1'b0;
+            pstrm  <= 1'b0;
+            t_bst  <= 1'b0;
         end else begin
             ctl_oe <= 1'b1;
             dq <= {dq[2:0], launch};
@@ -401,6 +437,7 @@ module qspi_ctrl (
                     t_psram <= start_psram;
                     t_sel   <= sel_now;
                     t_top   <= 1'b0;
+                    t_bst   <= burst;
                     t_ddr   <= ddr && !we && cs_sel == 2'd0 && !init;
                     t_cap   <= ddr_cap;
                 end else if (!init && strm && start) begin
@@ -410,22 +447,24 @@ module qspi_ctrl (
                     t_psram <= start_psram;
                     t_sel   <= sel_now;
                     t_top   <= 1'b0;
-                    if (start_psram || we) begin
+                    t_bst   <= burst;
+                    if (pstrm ? !(start_psram && !we && burst && stream_en && cs_n == ~sel_now)
+                              : (start_psram || we)) begin
                         state <= S_CLOSE;
                         cnt   <= 3'd1;
                         cs_n  <= 3'b111;
                         strm  <= 1'b0;
                     end else
                         state <= S_CHK;
-                end else if (!init && strm && (!stream_en || mode_chg)) begin
-                    state <= S_CLOSE;       // nobody waiting: just close
+                end else if (!init && strm && (!stream_en || mode_chg || pstrm)) begin
+                    state <= S_CLOSE;       // nobody waiting: just close (a PSRAM burst never waits)
                     cnt   <= 3'd0;
                     cs_n  <= 3'b111;
                     strm  <= 1'b0;
                 end else if (init)
                     cnt <= cnt + 3'd1;
                 S_CHK: begin
-                    if (streamable && !mode_chg && (hit_cont || hit_top)) begin
+                    if (pstrm ? pcont_ok : (streamable && !mode_chg && (hit_cont || hit_top))) begin
                         state <= S_DATA;
                         cnt   <= t_ddr ? (hit_cont ? 3'd3 : 3'd1) : 3'd7;
                         t_top <= !hit_cont;
@@ -500,13 +539,14 @@ module qspi_ctrl (
                                 end
                                 default: begin  // S_DATA
                                     io_oe <= 1'b0;
-                                    strm  <= streamable;    // leave the stream open
+                                    strm  <= streamable || pstreamable;    // leave the stream open
+                                    pstrm <= pstreamable;
                                     p     <= a_hw + 23'd2;
                                     if (t_ddr ? dq_pend : (late && !t_we))
                                         state <= S_TAIL;
                                     else begin
                                         state <= S_END;
-                                        if (!streamable)
+                                        if (!streamable && !pstreamable)
                                             cs_n <= 3'b111;
                                     end
                                 end

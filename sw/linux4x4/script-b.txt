@@ -1,0 +1,6 @@
+/ # 	echo typed-ok
+/ # 	cat /proc/tty/driver/serial
+/ # 	ls /sys/bus/platform/drivers/*/
+/ # 	dmesg | grep -iE "err|fail|warn"
+/ # 	cat /proc/interrupts
+/ # 	poweroff

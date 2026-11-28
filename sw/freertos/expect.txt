@@ -1,4 +1,4 @@
-+ FreeRTOS V11.1.0, tick 100 Hz = 625000 clocks
++ FreeRTOS V11.1.0, tick 100 Hz = 526315 clocks
 + tick: vTaskDelay(10) took
 + preempt: order aHb
 + yield:

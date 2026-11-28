@@ -42,7 +42,9 @@
 .endm
 # one register offset with each of its alias bits (5-7, 9-15) set
 .macro ALIASES off
+    .if (((\off | 0x0020) != 0x20) && ((\off | 0x0020) != 0x24))   # 0x1002_0020 is the pinmux (WO-58), 0x1002_0024 CACHE_CTL (WO-62): carved out of syscon
     SWZF (\off | 0x0020)
+    .endif
     SWZF (\off | 0x0040)
     SWZF (\off | 0x0080)
     SWZF (\off | 0x0200)
@@ -147,7 +149,7 @@ _start:
     RD   0x04, 0x1, 0x313
 
     # ---- 5. unimplemented words (SYS-002), with RESET_CAUSE still 0x1 ----
-    SWZF 0x20
+    # 0x20 is the pinmux (WO-58 carve), not an unimplemented syscon word: tests/soc/pinmux.S covers it
     SWZF 0x3C
     SWZF 0x40
     SWZF 0x7FC

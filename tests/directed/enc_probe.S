@@ -4,6 +4,7 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw mscratch, zero         # mscratch has no reset: write it before the first read
   li   a1, 0                  # the amoadd probe's address (x-regs are not reset)
   la   t0, handler
   csrw mtvec, t0

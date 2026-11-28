@@ -1,0 +1,15 @@
+# claim picks the highest id -> P1
+sed plic.v s/for (j = NSRC; j >= 1; j = j - 1) if (cand\[j\]) cid = j;/for (j = 1; j <= NSRC; j = j + 1) if (cand[j]) cid = j;/
+# complete ignores en -> P4
+sed plic.v s/if (compl \&\& wdata == i \&\& en\[i\]) insvc/if (compl \&\& wdata == i) insvc/
+# gateway ignores insvc -> P7/P2
+sed plic.v s/if (src\[i\] \&\& !insvc\[i\]) pend/if (src[i]) pend/
+# threshold not applied -> P3
+sed plic.v s/wire \[NSRC:1\] elig = cand \& {NSRC{!thr}};/wire [NSRC:1] elig = cand;/
+# claim honours the threshold again -> P1
+sed plic.v s/wire \[NSRC:1\] cand = pend \& en \& prio; /wire [NSRC:1] cand = pend \& en \& prio \& {NSRC{!thr}}; /
+# priority 0 does not mask the source: the claimable set ignores prio
+sed plic.v s/wire \[NSRC:1\] cand = pend \& en \& prio; /wire [NSRC:1] cand = pend \& en; /
+# claim register returns id 1 when nothing is pending (cid default 1, so the claim fires with no candidate) -> P1/P7
+# (dropping `cid != 0` from claim is an equivalent mutant: no id matches cid == 0, so it cannot FAIL)
+sed plic.v s/cid = 5'd0;/cid = 5'd1;/

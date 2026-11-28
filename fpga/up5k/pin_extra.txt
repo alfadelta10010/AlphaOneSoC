@@ -1,0 +1,4 @@
+# Other pin files the checks read (not synthesised): the core whose ports fyracore_picorv32.v must match, and the sim models.
+src/fyracore.v
+tb/qspi_pmod_model.v
+tb/rp2350_uart_model.v

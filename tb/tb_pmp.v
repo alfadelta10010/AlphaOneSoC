@@ -2,18 +2,23 @@
 // pmp (src/pmp.v) against Privileged spec 3.7.1 and
 // docs/FyraCore_CPU_Reference.md 6.3 (REQ-PMP-001, REQ-PMP-002):
 //
-//   * matching on the 34-bit physical address, pmpaddr holding PA[33:2]:
-//     OFF; TOR, pmpaddr[i-1] <= a < pmpaddr[i], with 0 below entry 0; NA4,
-//     the one word; NAPOT, the naturally aligned 2^(t+3)-byte region of a
-//     pmpaddr with t trailing ones (all ones: everything). The model counts
-//     the trailing ones and compares the bits above them;
+//   * the core's PMP grain is 4 KiB (G = 10) and PA[33:32] are not
+//     implemented, so a pmpaddr as csr.v reads back has bits [31:30] zero,
+//     bits [9:0] zero for OFF/TOR and bits [8:0] one for NAPOT (NA4 is not
+//     selectable; csr.v stores it as NAPOT). The bench draws pmpaddr values
+//     in that form and the model matches on the 34-bit physical address,
+//     pmpaddr holding PA[33:2]: OFF; TOR, pmpaddr[i-1] <= a < pmpaddr[i],
+//     with 0 below entry 0 and the lower bound's grain bits ignored;
+//     NAPOT, the naturally aligned 2^(t+3)-byte region of a pmpaddr with t
+//     trailing ones (all ones: everything). The model counts the trailing
+//     ones and compares the bits above them;
 //   * the lowest-numbered matching entry decides; with no match M is allowed
 //     and U refused; an unlocked entry binds U only, a locked one M as well;
 //     an access needs every permission it asks for (R, W, R+W for an AMO, X).
 // Configurations are drawn the way pmpcfg can hold them (csr.v's WARL: no
 // R=0,W=1, bits 6:5 zero). Addresses are biased to region edges -- the
 // word below, at, and above every bound -- and regions are drawn small,
-// large, overlapping, above 4 GB and all-ones. Seeded (+SEED=, +N=). Prints
+// large, overlapping and all-ones. Seeded (+SEED=, +N=). Prints
 // PASS/FAIL with the number of checks and fails if a case was never hit.
 module tb_pmp;
     reg  [31:0] cfg, pa0, pa1, pa2, pa3, addr;
@@ -25,8 +30,8 @@ module tb_pmp;
 
     integer checks = 0, fails = 0, seed = 1, n = 400000, i;
     integer seed0 = 1;
-    integer cv_mode [0:3];      // matches decided by OFF/TOR/NA4/NAPOT
-    integer cv_nomatch_u = 0, cv_nomatch_m = 0, cv_lock_m = 0, cv_prio = 0, cv_hi4g = 0, cv_all = 0;
+    integer cv_mode [0:3];      // matches decided by OFF/TOR/(NA4: never)/NAPOT
+    integer cv_nomatch_u = 0, cv_nomatch_m = 0, cv_lock_m = 0, cv_prio = 0, cv_all = 0;
 
     function [31:0] paddr(input integer k);
         case (k) 0: paddr = pa0; 1: paddr = pa1; 2: paddr = pa2; default: paddr = pa3; endcase
@@ -54,11 +59,11 @@ module tb_pmp;
             for (k = 3; k >= 0; k = k - 1) begin
                 c  = cfg[8*k +: 8];
                 hi = {2'b00, paddr(k)};
-                lo = (k == 0) ? 34'd0 : {2'b00, paddr(k - 1)};
+                lo = (k == 0) ? 34'd0 : {2'b00, paddr(k - 1) & ~32'h3FF};   // grain bits ignored
                 case (c[4:3])
                     2'b00: m = 0;
                     2'b01: m = (wa >= lo) && (wa < hi);
-                    2'b10: m = (wa == hi);
+                    2'b10: m = 0;               // NA4: not storable at G = 10
                     2'b11: m = napot(paddr(k), wa);
                 endcase
                 if (m) begin e_entry = k; e_matches = e_matches + 1; end
@@ -72,18 +77,23 @@ module tb_pmp;
     endtask
 
     function [7:0] legal_cfg(input [7:0] b);
-        legal_cfg = {b[7], 2'b00, b[4:2], b[1] & b[0], b[0]};
+        legal_cfg = {b[7], 2'b00, b[4], b[4] | b[3], b[2], b[1] & b[0], b[0]};
     endfunction
     function [31:0] rnd_paddr(input integer dummy);
         case ($unsigned($random(seed)) % 8)
             0: rnd_paddr = 32'h2000_0000 + ($random(seed) & 32'h3FF);          // 0x8000_0000 >> 2 region
             1: rnd_paddr = 32'h0800_0000 + ($random(seed) & 32'hFFFF);         // flash >> 2
-            2: rnd_paddr = 32'h4000_0000 | $random(seed);                      // above 4 GB
+            2: rnd_paddr = 32'h3FFF_F000 | ($random(seed) & 32'h3FF);          // top of the 32-bit space
             3: rnd_paddr = (32'h2000_0000 | (($random(seed) & 32'hFFF) << 4)) | ((32'h1 << ($unsigned($random(seed)) % 12)) - 1); // NAPOT-shaped
-            4: rnd_paddr = 32'hFFFF_FFFF;
+            4: rnd_paddr = 32'h3FFF_FFFF;
             5: rnd_paddr = 32'h0;
             default: rnd_paddr = $random(seed);
         endcase
+    endfunction
+    // The value csr.v reads back for pmpaddr k: PA[33:32] zero, grain bits
+    // per mode.
+    function [31:0] vis(input [31:0] raw, input napot);
+        vis = napot ? ((raw & 32'h3FFF_FFFF) | 32'h1FF) : (raw & 32'h3FFF_FC00);
     endfunction
     // An address near one of the bounds the configuration has: the words
     // around each pmpaddr (a TOR bound or an NA4 word), or around either end
@@ -118,11 +128,12 @@ module tb_pmp;
                        legal_cfg($random(seed)), legal_cfg($random(seed))};
                 if ($unsigned($random(seed)) % 2) cfg = cfg & ~32'h8080_8080;   // mostly unlocked
                 pa0 = rnd_paddr(0); pa1 = rnd_paddr(0); pa2 = rnd_paddr(0); pa3 = rnd_paddr(0);
-                // ordered TOR bounds half of the time
+                // ordered TOR bounds half of the time (in 4 KiB steps)
                 if ($unsigned($random(seed)) % 2) begin
-                    pa1 = pa0 + ($random(seed) & 32'hFF); pa2 = pa1 + ($random(seed) & 32'hFF);
-                    pa3 = pa2 + ($random(seed) & 32'hFFFF);
+                    pa1 = pa0 + (($random(seed) & 32'h3) << 10); pa2 = pa1 + (($random(seed) & 32'h3) << 10);
+                    pa3 = pa2 + (($random(seed) & 32'hFF) << 10);
                 end
+                pa0 = vis(pa0, cfg[4]); pa1 = vis(pa1, cfg[12]); pa2 = vis(pa2, cfg[20]); pa3 = vis(pa3, cfg[28]);
             end
             addr = rnd_addr(0);
             case ($unsigned($random(seed)) % 4)
@@ -142,15 +153,14 @@ module tb_pmp;
                 cv_mode[cfg[8*e_entry+3 +: 2]] = cv_mode[cfg[8*e_entry+3 +: 2]] + 1;
                 if (e_matches > 1) cv_prio = cv_prio + 1;
                 if (priv && cfg[8*e_entry+7]) cv_lock_m = cv_lock_m + 1;
-                if (paddr(e_entry) >= 32'h4000_0000) cv_hi4g = cv_hi4g + 1;
-                if (cfg[8*e_entry+3 +: 2] == 2'b11 && paddr(e_entry) == 32'hFFFF_FFFF) cv_all = cv_all + 1;
+                if (cfg[8*e_entry+3 +: 2] == 2'b11 && paddr(e_entry) == 32'h3FFF_FFFF) cv_all = cv_all + 1;
             end else if (priv) cv_nomatch_m = cv_nomatch_m + 1;
             else cv_nomatch_u = cv_nomatch_u + 1;
         end
-        $display("decided by TOR %0d, NA4 %0d, NAPOT %0d (all-ones %0d), several matching %0d, locked in M %0d, bound above 4 GB %0d, no match M %0d / U %0d",
-                 cv_mode[1], cv_mode[2], cv_mode[3], cv_all, cv_prio, cv_lock_m, cv_hi4g, cv_nomatch_m, cv_nomatch_u);
-        if (cv_mode[1] == 0 || cv_mode[2] == 0 || cv_mode[3] == 0 || cv_all == 0 || cv_prio == 0 ||
-            cv_lock_m == 0 || cv_hi4g == 0 || cv_nomatch_m == 0 || cv_nomatch_u == 0) begin
+        $display("decided by TOR %0d, NA4 %0d (must be 0), NAPOT %0d (all-ones %0d), several matching %0d, locked in M %0d, no match M %0d / U %0d",
+                 cv_mode[1], cv_mode[2], cv_mode[3], cv_all, cv_prio, cv_lock_m, cv_nomatch_m, cv_nomatch_u);
+        if (cv_mode[1] == 0 || cv_mode[2] != 0 || cv_mode[3] == 0 || cv_all == 0 || cv_prio == 0 ||
+            cv_lock_m == 0 || cv_nomatch_m == 0 || cv_nomatch_u == 0) begin
             fails = fails + 1;
             $display("FAIL coverage: a matching case was never reached");
         end

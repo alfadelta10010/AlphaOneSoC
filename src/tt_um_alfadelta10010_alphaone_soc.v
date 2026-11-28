@@ -9,11 +9,17 @@
 //                  off after reset (QSPI_CFG.STREAM = 0); 0 (the board's default)
 //                  = on
 //   ui_in[3]       UART RX
-//   uo_out[3:0]  GPIO OUT 3:0 ([1] / [3] are MOSI / SCK while the SPI
-//                controller is on, both straight from flops)
-//   uo_out[4]    UART TX
-//   uo_out[5]    UART RTS#
-//   uo_out[7:6]  GPIO OUT 7:6 ([7] is the SD card's CS#, high at reset)
+//   ui_in[6:4]     the gamepad Pmod's DATA, CLOCK, LATCH (also GPIO IN 6:4)
+//   uo_out[7:0]  the pinmux's pin flops (src/pinmux.v). Defaults (code 0):
+//   uo_out[0]      OLED CS# = GPIO OUT 0
+//   uo_out[1]      MOSI = GPIO OUT 1 or the SPI controller
+//   uo_out[2]      D/C = GPIO OUT 2
+//   uo_out[3]      SCK = GPIO OUT 3 or the SPI controller
+//   uo_out[4]      UART TX
+//   uo_out[5]      SD CS# = GPIO OUT 5 (RTS# is a pinmux feature only)
+//   uo_out[6]      RES#/VCCEN = GPIO OUT 6
+//   uo_out[7]      PWM1 (the tone output)
+//                Pin 5 can take RTS#, pin 6 PWM0 (pin 7 is PWM1).
 //   uio[0]       QSPI CS0, flash         uio[3]  QSPI SCK
 //   uio[6]       QSPI CS1, PSRAM A       uio[7]  QSPI CS2, PSRAM B
 //   uio[1], uio[2], uio[4], uio[5]       QSPI SD0, SD1, SD2, SD3
@@ -31,7 +37,8 @@
 // SoC's flops happened to power up with:
 //   * all eight bidirectional pins are inputs. Whoever holds the chip in
 //     reset owns the QSPI bus and can program the flash through it;
-//   * uo_out shows the SoC's reset values: TX and RTS# high, GPIO OUT 0x89.
+//   * uo_out is the constant 0x39 (OLED CS#, SCK, TX, SD CS# high, the rest low),
+//     which is also what the pin flops hold in reset.
 // The straps on ui_in[0] and ui_in[2] are read on every clock edge while rst is high, the
 // last of them the second edge after rst_n rises: hold it until then.
 //
@@ -83,6 +90,7 @@ module tt_um_alfadelta10010_alphaone_soc (
     wire [3:0] qspi_io_out;
     wire       uart_tx, uart_rts_n;
     wire [7:0] gpio_out;
+    wire [7:0] uo;
 
     alphaone_soc soc (
         .clk         (clk),
@@ -99,17 +107,17 @@ module tt_um_alfadelta10010_alphaone_soc (
         .uart_tx     (uart_tx),
         .uart_rts_n  (uart_rts_n),
         .gpio_in     (ui_in),
-        .gpio_out    (gpio_out)
+        .gpio_out    (gpio_out),
+        .uo          (uo)
     );
 
     // ── Pins ────────────────────────────────────────────────────────────────
-    // UO_RESET is what the SoC itself drives once reset has reached it (the
-    // UART's and the GPIO block's reset values), so nothing moves when rst
-    // falls. Each bit comes down to one two-input gate of run and the SoC's
-    // bit, which cannot glitch when only run changes.
-    localparam [7:0] UO_RESET = 8'hB9;
-    assign uo_out  = run ? {gpio_out[7:6], uart_rts_n, uart_tx, gpio_out[3:0]}
-                         : UO_RESET;
+    // UO_RESET is what the pinmux's pin flops hold in reset (and load from the
+    // sources' reset values on the first running edge), so nothing moves when
+    // rst falls. Each bit comes down to one two-input gate of run and the
+    // pin flop, which cannot glitch when only run changes.
+    localparam [7:0] UO_RESET = 8'h39;
+    assign uo_out  = run ? uo : UO_RESET;
 
     assign uio_out = {qspi_cs_n[2], qspi_cs_n[1], qspi_io_out[3], qspi_io_out[2],
                       qspi_sck, qspi_io_out[1], qspi_io_out[0], qspi_cs_n[0]};
@@ -118,8 +126,8 @@ module tt_um_alfadelta10010_alphaone_soc (
     wire io_oe  = qspi_io_oe  && run;     // SD0..SD3
     assign uio_oe  = {ctl_oe, ctl_oe, io_oe, io_oe, ctl_oe, io_oe, io_oe, ctl_oe};
 
-    // gpio_out[5:4] are always 0: those two pins are the UART's.
-    wire _unused = &{ena, uio_in[7:6], uio_in[3], uio_in[0], gpio_out[5:4], 1'b0};
+    // uart_tx, uart_rts_n and gpio_out are the pre-mux taps; the pins use uo.
+    wire _unused = &{ena, uio_in[7:6], uio_in[3], uio_in[0], uart_tx, uart_rts_n, gpio_out, 1'b0};
 
 endmodule
 

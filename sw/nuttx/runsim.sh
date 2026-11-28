@@ -8,4 +8,4 @@ riscv64-unknown-elf-objcopy -O binary nuttx $B/nuttx.bin
 ENTRY=$(riscv64-unknown-elf-nm nuttx | awk '$3=="__start"{print $1}')
 python3 $W/sw/tools/mkflash.py --loader $W/build/sw/loader/loader.bin --image $B/nuttx.bin --load 0x80000000 --entry 0x$ENTRY --out $B/flash.hex
 IN=; [ -n "${3:-}" ] && IN="+UART_IN=$3"
-stdbuf -o0 nice -n 19 $W/build/sw/bench/sim +FLASH_FILE=$B/flash.hex +UART_DIV=34 +MAX_CYCLES=$2 $IN > $B/$1.log 2>&1
+stdbuf -o0 nice -n 19 $W/build/sw/bench/sim +FLASH_FILE=$B/flash.hex +UART_DIV=29 +MAX_CYCLES=$2 $IN > $B/$1.log 2>&1

@@ -34,23 +34,48 @@ FSM = ("soc.cpu.exwb_memSize", "soc.cpu.muldiv_inst.st", "soc.qspi.state",
 # (the pc[0] flop; the RTL's if_pc_next[0] is a combinational copy of it).
 EXPLICIT = [("soc.cpu.imem_addr[0]", "soc.cpu.if_pc_next[0]")]
 EXPLICIT_CUT = ["soc.cpu.if_pc_next[0]"]
+# Used only when the gate needs them (a gate flop carries the name and the gold flop's own name is
+# not in the gate): the 256 B AREA 2 netlists (Fp190n2j, SYNTH_AUTONAME) name the pmpaddr flops
+# after the cpu wire csr_pmpaddrN = pmpaddrN_vis (accounting.py EXPLICIT_RENAME). In gold that
+# name is the mux output of pmpaddr_vis, a different net: the name is cut on the gold side and
+# the gold flop is matched to the gate flop. Where gold has the name as an alias of the flop
+# itself (A0-core RTL), EQY matches it by name and no rule is added. Bits [29:10] are st[29:10]; bit 0 is
+# napot = pmpcfg0[8N+4].
+# branchCtrl's log-depth compare tree (l0..l5, e0..e5, `(* keep *)` wires in branchCtrl.v) is
+# never matched by name. The keep attribute keeps the names, but ABC still rewrites a level across
+# them: the Fp190n2j gate has l1[13] = (l0[27] | l0[26]) & !gt (o21ba, nl.v:69038), gt = r1[27] &
+# ~r2[27] taken from l0[27]'s own driver cone, for the RTL's l0[27] | (e0[27] & l0[26]) (equal
+# only while l0/e0 agree with the operands). A cut at a tree name makes l0/e0 free inputs of the
+# partition while the gate cone also reads the operand logic behind them: sat finds an assignment
+# no circuit can reach (e0[27] = 0 with equal operand bits) and FAILs on equivalent logic (13
+# bcmp partitions and alu_r.0, whose slt/sltu bit reads lt_unsigned). Unmatched, the tree is
+# compared whole, from the operand cuts to lt_signed / lt_unsigned / eq / diff. Gold names only;
+# a netlist of RTL without the tree (A0-core) has none, and its rules are unchanged.
+NOMATCH_TREE = re.compile(r"^soc\.cpu\.bcmp\.[le][0-5]$")
+COND_EXPLICIT = [(f"soc.cpu.csr_unit.pmpaddr{n}[{k}]", f"soc.cpu.csr_pmpaddr{n}[{k}]")
+                 for n in range(4) for k in range(10, 30)] + \
+                [(f"soc.cpu.csr_pmpcfg0[{8 * n + 4}]", f"soc.cpu.csr_pmpaddr{n}[0]") for n in range(4)]
 
 
 def load(path):
     m = json.load(open(path))["modules"]["tt_um_alfadelta10010_alphaone_soc"]
     ports = set(m["ports"])
     names = collections.defaultdict(set)         # bit id -> names
+    tree = set()                                 # NOMATCH_TREE names, one per bit
     for n, d in m["netnames"].items():
         if n.startswith("$") or re.match(r"^[A-Za-z_0-9$]+\.[A-Z][A-Z0-9_]*$", n):
             continue
         base = re.sub(r"\[\d+\]$", "", n)
         if base in FSM or n in FSM:
             continue
+        if NOMATCH_TREE.match(base):
+            tree.update(n if len(d["bits"]) == 1 else f"{n}[{i + d.get('offset', 0)}]" for i in range(len(d["bits"])))
+            continue
         for i, b in enumerate(d["bits"]):
             if isinstance(b, int):
                 names[b].add(n if len(d["bits"]) == 1 else f"{n}[{i + d.get('offset', 0)}]")
     isport = lambda n: re.sub(r"\[\d+\]$", "", n) in ports or n in ports
-    return names, isport
+    return names, isport, tree
 
 
 def esc_sel(n):
@@ -63,8 +88,14 @@ def esc(n):
 
 
 def main():
-    gnames, gport = load(sys.argv[1])
-    tnames, tport = load(sys.argv[2])
+    gnames, gport, gtree = load(sys.argv[1])
+    tnames, tport, _ = load(sys.argv[2])
+    gname_bit = {n: b for b, ns in gnames.items() for n in ns}
+    tname_bit = {n: b for b, ns in tnames.items() for n in ns}
+    active = [(g, t) for g, t in COND_EXPLICIT if g in gname_bit and t in tname_bit and g not in tname_bit
+              and gname_bit.get(t) != gname_bit[g]]   # in gold the name is another net, not an alias of the flop
+    explicit = EXPLICIT + active
+    explicit_cut = EXPLICIT_CUT + [t for _, t in active]
     gate_by_name = collections.defaultdict(set)
     for b, ns in tnames.items():
         for n in ns:
@@ -102,7 +133,7 @@ def main():
             for p in ps:
                 if p != best:
                     cut.extend(pair[p])
-    cut = sorted(set(cut) | set(EXPLICIT_CUT))
+    cut = sorted(set(cut) | set(explicit_cut))
     # representative names: the common names that stay matched
     reps_g = collections.defaultdict(set)         # gold bit -> matched names
     reps_t = collections.defaultdict(set)
@@ -111,9 +142,7 @@ def main():
         for n in ns:
             if n not in cutset:
                 reps_g[g].add(n); reps_t[t].add(n)
-    gname_bit = {n: b for b, ns in gnames.items() for n in ns}
-    tname_bit = {n: b for b, ns in tnames.items() for n in ns}
-    for gn, tn in EXPLICIT:
+    for gn, tn in explicit:
         reps_g[gname_bit[gn]].add(gn); reps_t[tname_bit[tn]].add(tn)
     hide_g = sorted(n for b, ns in gnames.items() if b in reps_g for n in ns if n not in reps_g[b] and not gport(n))
     hide_t = sorted(n for b, ns in tnames.items() if b in reps_t for n in ns if n not in reps_t[b] and not tport(n))
@@ -124,12 +153,14 @@ def main():
     with open(sys.argv[3], "w") as f:
         for n in cut:
             f.write(f"gold-nomatch {esc(n)}\n")
-        for g, t in EXPLICIT:
+        for n in sorted(gtree):
+            f.write(f"gold-nomatch {esc(n)}\n")
+        for g, t in explicit:
             f.write(f"gold-match {esc(g)} {esc(t)}\n")
     with open(sys.argv[4], "w") as f:
         f.write(f"net pairs sharing a name: {len(pair)}; names cut ({len(cut)}) so that one name per net is matched\n")
         f.write("\n".join(report) + "\n")
-    print(f"{len(pair)} pairs, {len(cut)} names cut, {len(report)} conflicts, "
+    print(f"{len(pair)} pairs, {len(cut)} names cut, {len(report)} conflicts, {len(active)} conditional explicit pairs, {len(gtree)} compare-tree names unmatched, "
           f"{len(hide_g)} gold and {len(hide_t)} gate names made private")
 
 

@@ -16,10 +16,10 @@
  *   0F CMD18 R1  10 CMD12 R1  11 CMD12 busy timeout
  */
 #ifndef CLK_HZ
-#define CLK_HZ 62500000
+#define CLK_HZ 52631579
 #endif
 #ifndef SD_HZ
-#define SD_HZ 12500000             /* the device tree's spi-max-frequency for the card */
+#define SD_HZ 8771930              /* the device tree's spi-max-frequency for the card (BAUD 2) */
 #endif
 #define SD_ID_HZ 400000
 #define BAUD_OF(hz) ((((CLK_HZ) + 2 * (hz) - 1) / (2 * (hz))) - 1)   /* the driver's formula */
@@ -27,11 +27,12 @@
 #define BAUD_DT BAUD_OF(SD_HZ)
 
 /* whole-word OUT writes with bits 1 and 3 deliberately inverted, as a stale
- * gpio-mmio shadow would write them: bit 7 SD CS#, bit 6 RES#, bit 2 D/C#, bit 0 OLED CS# */
+ * gpio-mmio shadow would write them: bit 6 RES#, bit 5 SD CS#, bit 2 D/C#, bit 0 OLED CS#
+ * (bits 7 and 4 reach no pin by default: PWM1 and UART TX) */
 #define OUT_SD_SEL    0x43        /* SD CS# low, the rest high-ish */
-#define OUT_DESEL     0xC3        /* both CS# high, RES# high */
-#define OUT_OLED_CMD  0xC2        /* OLED CS# low, D/C# 0 */
-#define OUT_OLED_DATA 0xC6        /* OLED CS# low, D/C# 1 */
+#define OUT_DESEL     0x63        /* both CS# high, RES# high */
+#define OUT_OLED_CMD  0x62        /* OLED CS# low, D/C# 0 */
+#define OUT_OLED_DATA 0x66        /* OLED CS# low, D/C# 1 */
 
 .macro OUTW v
     li   t5, \v

@@ -1,21 +1,55 @@
 # Ported unchanged from localFiles/setup-timing-2026-10-14/tools/gls-sdf/prep.py (the 2026-10-18 SDF recipe;
 # sandbox ~/regr/rfm/gls-sdf/prep.py) for WO-34 (tb/gls_sdf/run_glitch.sh).
 # prep.py <pnl.v> <sdf> <out pnl> <out sdf> : make a LibreLane netlist + SDF simulate in Icarus.
-#  - The macro instance \soc.cpu.rf.rf_macro becomes rf_macro_i (Icarus's SDF reader cannot
-#    resolve the escaped dots), and the macro's own CELL block is dropped (its bit-indexed
-#    IOPATHs do not parse; rf_top_timing.v carries the same 4.0 ns).
+#  - The macro instances \soc.cpu.rf.rf_macro and (4x4 netlists) \soc.icache.data_mem become rf_macro_i and
+#    icache_data_mem_i / icache_data_hi_i (256 B cache, WO-77; Icarus's SDF reader cannot resolve the escaped dots; each one that is present is
+#    renamed, at least one must be), and every rf_top CELL block is dropped (its bit-indexed IOPATHs do not
+#    parse; rf_top_timing.v carries the same 4.0 ns for both).
 #  - Icarus ignores SDF INTERCONNECT, so every wire delay is put into the netlist instead: the
 #    load pin is reconnected to a wire of its own, driven by `assign #(rise, fall)` from the net,
 #    and the INTERCONNECT entries are removed from the SDF so nothing counts twice.
 import re, sys
 nl, sdf, onl, osdf = sys.argv[1:]
 t = open(nl).read()
-assert t.count('\\soc.cpu.rf.rf_macro ') == 1
-t = t.replace('\\soc.cpu.rf.rf_macro ', 'rf_macro_i ')
+MACROS = [('soc.cpu.rf.rf_macro', 'rf_macro_i'), ('soc.icache.data_mem', 'icache_data_mem_i'),
+          ('soc.icache.data_hi', 'icache_data_hi_i')]
 s = open(sdf).read()
-blk = re.search(r' \(CELL\n  \(CELLTYPE "rf_top"\)\n.*?\n \)\n', s, re.S)
-s = s[:blk.start()] + s[blk.end():]
-s = s.replace('soc\\.cpu\\.rf\\.rf_macro', 'rf_macro_i')
+n_ren = 0
+for old, new in MACROS:
+    c = t.count('\\' + old + ' ')
+    assert c <= 1, (old, c)
+    if c:
+        t = t.replace('\\' + old + ' ', new + ' ')
+        # whole instance name only: an escaped SYNTH_AUTONAME name can start with the macro's name (soc\.icache\.data_hi_w_ena_...)
+        s = re.sub(re.escape(old.replace('.', '\\.')) + r'(?![\w\\\[])', new, s)
+        n_ren += 1
+assert n_ren >= 1, 'no macro instance found in the netlist'
+s, n_cell = re.subn(r' \(CELL\n  \(CELLTYPE "rf_top"\)\n.*?\n \)\n', '', s, flags=re.S)
+assert n_cell >= 1, 'no rf_top CELL block in the SDF'
+print(f'{n_ren} macro instance(s) renamed, {n_cell} rf_top CELL block(s) dropped')
+if '\\' in s:   # escaped instance names (SYNTH_AUTONAME netlists): rename each to a legal identifier in both files,
+    # since Icarus's SDF reader cannot resolve escaped names. Netlists without them (e.g. hd-r) skip this block.
+    used = set(re.findall(r'^ (?:sky130_\w+|rf_top) (\S+)\s*\(', t, re.M))
+    emap = {}
+    def _legal(p):
+        b = 'e_' + re.sub(r'\W', '_', p); n, i = b, 0
+        while n in used: i += 1; n = f'{b}_{i}'
+        used.add(n); return n
+    def _ren(m):
+        p = m.group(2)[1:]
+        assert p not in emap, ('duplicate instance', p)
+        emap[p] = _legal(p)
+        return f' {m.group(1)} {emap[p]}{m.group(3)}'
+    t = re.sub(r'^ (sky130_\w+|rf_top) (\\\S+)(\s*\()', _ren, t, flags=re.M)
+    _unesc = lambda x: re.sub(r'\\(.)', r'\1', x)
+    def _sdf(m):
+        tok = m.group(0); u = _unesc(tok)
+        if u in emap: return emap[u]
+        i = max((k for k, c in enumerate(tok) if c == '.' and tok[k - 1] != '\\'), default=-1)
+        if i > 0 and _unesc(tok[:i]) in emap: return emap[_unesc(tok[:i])] + tok[i:]
+        return tok                                 # unknown: left escaped, the assert below stops the run
+    s = re.sub(r'(?:[\w$.]|\\.)*\\.(?:[\w$.]|\\.)*', _sdf, s)
+    print(f'{len(emap)} escaped instance name(s) renamed')
 assert '\\' not in s
 
 ic = {}

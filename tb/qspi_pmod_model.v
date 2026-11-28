@@ -275,6 +275,10 @@ module qspi_pmod_model #(
     // sequential reads shows one), n_resume = SCK edges after a pause in a
     // flash read's data phase, n_bytes = flash bytes launched (both nibbles).
     integer n_eb = 0, n_edh = 0, n_resume = 0, n_bytes = 0;
+    integer n_pr = 0;                // PSRAM 0Bh reads opened (a CE#-low burst of several words is one)
+    integer n_prb = 0;               // PSRAM read bytes launched
+    reg [13:0] rd_page;              // the 1 KB page of a read's first byte (burst page-crossing check)
+    real    tcem_max = 0.0;          // longest PSRAM CE#-low time seen at a launch or a deselect (ns)
     wire [31:0] n_ebh = n_eb;
 
     // Per PSRAM, bit 0 = A (CS1), bit 1 = B (CS2).
@@ -517,6 +521,7 @@ module qspi_pmod_model #(
                 fail("PSRAM selected within tRST of its reset");
             psram_rsten = rsten_q & cs_n[2:1];
         end else if (!any_sel && phase != P_IDLE) begin
+            if (chip != 2'd0 && ($realtime - t_sel) > tcem_max) tcem_max = $realtime - t_sel;
             if (chip != 2'd0 && ($realtime - t_sel) > TCEM_NS)
                 fail("PSRAM chip select held low longer than tCEM");
             if (rst_now[0]) t_rst[0] = $realtime;
@@ -876,6 +881,7 @@ module qspi_pmod_model #(
                             fail("both PSRAMs selected for a read or write");
                         else if (cmd == 8'h0B || cmd == 8'h38 || cmd == 8'h02) begin
                             need_reset(psel);
+                            if (cmd == 8'h0B) n_pr = n_pr + 1;
                             phase = P_ADDR;
                         end else
                             fail("unsupported QPI command for the PSRAM");
@@ -1045,6 +1051,21 @@ module qspi_pmod_model #(
             // hold until the next launch.
             launch = launch + 1;
             nib_k  = launch;
+            // A PSRAM read burst: tCEM bounds the CE#-low time and a burst may not run on
+            // across a 1 KB page (the first byte may start anywhere; a later byte at the page
+            // start means the burst crossed). Checked at every launched byte of a PSRAM read.
+            if (first_nib) rd_page = addr[23:10];
+            if (chip != 2'd0) begin
+                if (($realtime - t_sel) > tcem_max) tcem_max = $realtime - t_sel;
+                if (($realtime - t_sel) > TCEM_NS)
+                    fail("PSRAM read: chip select low longer than tCEM");
+                // rd_late runs the SCK one byte past a read's last byte (never used: CE# rises right after, and
+                // a plain read of the page's last word does it too), so a launch at the page's byte 0 is allowed
+                // and one at byte 1 means a word was read across the boundary.
+                if (hi && !first_nib && addr[9:0] == 10'd1 && addr[23:10] != rd_page)
+                    fail("PSRAM read burst crossed a 1 KB page");
+                if (hi) n_prb = n_prb + 1;
+            end
             nib_v  = hi ? rd(chip, addr) >> 4 : rd(chip, addr) & 8'h0F;
             fork
                 nibble_x(nib_k);

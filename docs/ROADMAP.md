@@ -16,7 +16,8 @@ been synthesised; nothing here is measured unless it cites a run.
 
 | Decision (user, 2026-10-23 unless dated) | Consequence |
 |---|---|
-| **Stay at 3x4 (12 tiles).** A 4x4 slot was considered and not taken. | Every addition below must fit the current die. |
+| ~~**Stay at 3x4 (12 tiles).** A 4x4 slot was considered and not taken.~~ **Superseded 2026-11-20: see the next row.** | Everything up to PR #16 was judged against the 3x4 die; a 3x4 revision is already submitted, so the 4x4 work is an upgrade. |
+| (2026-11-20, amended 2026-11-21) **4x4 (16 tiles) on sky26d; PLIC, 16550A UART (RX 8 / THR 1, trigger 1/2/4/7) with interrupt, one-pad gamepad receiver, timer/PWM with 2 comparators (PWM1 plays tones on uo_out[7]; the audio block was removed 2026-11-24), an output pinmux (a feature overlay) and an instruction cache (K4: 128 B direct-mapped, 16 B lines, 256 B from WO-77, 8 lines x 32 B with 16 B sectors from WO-cache832, `CACHE_CTL` at `0x1002_0024`, off at reset), with a new default pin map** (`uo_out[0]` OLED CS#, `[1]` MOSI, `[2]` D/C, `[3]` SCK, `[4]` UART TX, `[5]` SD CS#, `[6]` RES#/VCCEN, `[7]` PWM1; RTS# a pinmux feature; the gamepad on `ui_in[4..6]` replaces the keypad; reset `uo_out` = 0x39). User decisions 2026-11-21: cache K4 in ("caches are more important than peripherals"), paid for by the trims (UART RX 16 to 8 and one TX holding register, PWM 4 to 2 comparators, audio to one tone), watchdog interrupt mode yes, GPIO input-change interrupt no (reversed 2026-11-21: built, all 8 inputs, PLIC source 4, WO-69), SD capped at BAUD 2; if the harden misses the ceiling, trim further (gamepad), then drop audio (WO-67, not applied). PSRAM line bursts (`CACHE_CTL.PBURST`, WO-68) are built (662982d, f73a2d8), **experimental, off at reset**, for use only at 15 MHz or more with `QSPI_CFG.STREAM` = 1; the CE# bound is proved (k-induction, `mem_tcem_burst`, WO-72). The 4x4 baseline harden of main passed sign-off (`localFiles/harden-4x4-2026-11-20/RESULTS.md`): routing 53.27 % / overflow 0, hold +0.053 ns at min_ff (thinner than 3x4's +0.091). The bundle fits under the 3x4 routing ceiling (71.83 % / 117) only with every IO read registered (measured 66.04 % / 16, against 78.26 % / 4,290 combinational); the gate harden decides the final area. | The final figures come from the gate harden of the integrated tree plus the full regression; the submission-repo port is held until the user picks 3x4 or 4x4 after it. Status of each block: `docs/pins-and-peripherals.md`; loader duties and clock-dependent constants: `docs/boot-contract-4x4.md`; device tree: `docs/alphaone-4x4.dts`. |
 | The SPI transmitter becomes a **general SPI controller**, with an **SD card and the OLED** on one bus. | Section 1.1. Merged (PR #14). |
 | **syscon** gets reboot, power-off and the rest of what a syscon block usually does. | Section 1.2. Merged (PR #12). |
 | Order: **lock the RTL**, then the **Verilator port and Linux bring-up**, then **FPGA ports** as a stretch goal. | Sections 1-2, then 3-4, then 5. |
@@ -24,7 +25,7 @@ been synthesised; nothing here is measured unless it cites a run.
 | Explore **power domains and power optimisation**. | Section 6. |
 | This branch targets the **sky26d** shuttle unless the user decides otherwise (2026-10-24). SKY26d closes 2026-11-30 20:00 UTC. | Area figures are sky130 cell-library figures; the harden, timing sign-off and pinout are for sky26d. |
 | (2026-11-08) **QSPI: streaming flash reads on by default** (proven in several TT designs), **DDR (DTR) flash reads switchable by software** so an unstable DDR falls back to SDR; flash only (PSRAM streaming later). Off switches: QSPI_CFG.STREAM and the `ui_in[2]` no-stream strap, dropped (streaming-only) if routing cannot take them. Also on that branch: FC02/FC49 removed, UART reset divisor 33 (34 since the 62.5 MHz retarget, 1.5). | Built on branch `qspi-stream_alfadelta10010`: streaming and `EDh` DDR are in `qspi_ctrl`, DDR is off at reset and selected by QSPI_CFG (syscon +0x1C, reset by every reset). A boot-time sweep over `DDR_CAP` picks the capture point and falls back to SDR (9.1 item 8). Wire protocol, timing budget and the measured sweep: `docs/qspi-ddr.md`. |
-| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. On 2026-11-01 the tree with all three blocks missed 16 ns by 0.303 ns at the slowest corner, so the clock was documented as 60 MHz. **Met again at 16 ns (2026-11-09):** the af1c678 3x4 harden closes all 9 corners at `CLOCK_PERIOD` 16 ns, and the user set the target to **62.5 MHz** (2026-11-09). The margin is small, +0.56 ns at max_ss, and varies between hardens, so every RTL change re-runs the corners. | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 62.5 MHz unless a line says otherwise; the board may also run the chip at 60 MHz (the benches keep a 60 MHz run). |
+| (2026-11-01) **3x4 is fixed; the clock gives way** when the two conflict. On 2026-11-01 the tree with all three blocks missed 16 ns by 0.303 ns at the slowest corner, so the clock was documented as 60 MHz. **Met again at 16 ns (2026-11-09):** the af1c678 3x4 harden closes all 9 corners at `CLOCK_PERIOD` 16 ns, and the user set the target to **62.5 MHz** (2026-11-09). The margin is small, +0.56 ns at max_ss, and varies between hardens, so every RTL change re-runs the corners. | `CLOCK_PERIOD` stays 16 ns, so the submission CI rebuilds the layout that was checked. Figures below that depend on the clock are at 62.5 MHz unless a line says otherwise; the board may also run the chip at 60 MHz (the benches keep a 60 MHz run). **Recalibrated to 52.63 MHz (2026-11-24):** the A0-core ship candidate's chip clock is 52.63 MHz and every clock-dependent constant follows (`localFiles/wo-4x4/freq/FREQ-RECAL-52.63.md`); the figures below that say 62.5 MHz are history or the reset values. |
 
 The limits every item is judged against:
 
@@ -92,7 +93,7 @@ the SSD1331's 150 ns minimum SCK period needs DIV = 3 (3.9 MHz).
 | Need | Why | Change |
 |---|---|---|
 | Receive (MISO) | Every SD response and data block comes back on MISO | Synchronise MISO, shift it into the same shift register on the sampling edge, keep the received byte readable |
-| 100-400 kHz during card initialisation | SD spec: identification mode runs at 400 kHz or less | 8-bit divisor: SCK = clk / (2 x (BAUD + 1)), 122 kHz to 31 MHz at 62.5 MHz. Data transfer at 10.4 MHz (BAUD = 2, the device tree's cap; BAUD 1 is lost to the pin flop) |
+| 100-400 kHz during card initialisation | SD spec: identification mode runs at 400 kHz or less | 8-bit divisor: SCK = clk / (2 x (BAUD + 1)), 103 kHz to 26.3158 MHz at 52.63 MHz. Data transfer at 8.77 MHz (BAUD = 2, the device tree's cap; BAUD 1 is lost to the pin flop) |
 | Mode 0 | SD's SPI mode is mode 0 (most cards also work in mode 3); the OLED is mode 3 | CPOL and CPHA bits |
 | A second chip select | SD and OLED share MOSI/SCK | SD CS# on `uo_out[7]` as an ordinary OUT bit |
 
@@ -421,7 +422,7 @@ results are BOUNDED only.
 | `spi_bb`, `spi_bb1` | BOUNDED 96 | A black-box reference model of the controller at gpio's ports |
 | `spi_cover` | COVERED 6/6 | Guards `spi_bb`'s assumptions against vacuity |
 | `spi_f12` | PROVED (structural) | GPIO's pin outputs come straight from flops (finding F12) |
-| `bus` | PROVED (k-induction, length 1) | An IO target drops ready only while selected; decode; read mux |
+| `bus` | PROVED (pdr) | An IO target drops ready only while selected; decode; read mux |
 | `qspi_strap` | PROVED (pdr) | The `rd_late` strap is held after reset |
 | `qspi_pins` | PROVED (pdr) | The real engine, DDR free (clk2fflogic): CS0 never low with CS1/CS2, CS high >= 2 clocks between selects, an idle open stream has SCK low and the pins released, no EDh command without DDR |
 | `mem_flash` | PROVED (pdr) | Flash never selected for a write; CS0 sees only EB/FF |
@@ -680,8 +681,9 @@ Considered on 2026-10-22, kept for later:
   core runs breaks that; only short bounded bursts are allowed, which is what
   the PSRAM gets today.
 * **Instruction cache:** 256 B direct-mapped from two more RF macros plus
-  tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. Needs
-  the 4x4 slot that was not taken.
+  tags, about 27,000 µm² (*estimate*), far beyond what 3x4 has left. The 4x4
+  slot now exists, but the peripheral set takes about 86 % of its placed-area
+  headroom, so a cache needs cuts (decided 2026-11-21: K4 is in).
   Size it first with a cache simulator on a Spike Linux trace.
 * **JTAG debug module** (halt, resume, abstract register access; the demo
   board's RP2350 as the probe): about 17,000-34,000 µm² (*estimate*, a
@@ -689,8 +691,8 @@ Considered on 2026-10-22, kept for later:
   costs no pins but is non-standard.
 * **Code-size extensions** (Zcb; Zcmp push/pop): fewer bytes fetched. Zcmp
   needs a sequencer and kernel support checked.
-* **UART interrupt with an RX FIFO**, a small interrupt controller, a
-  timer/PWM block. (The watchdog is built, in syscon.)
+* ~~**UART interrupt with an RX FIFO**, a small interrupt controller, a
+  timer/PWM block.~~ Done on the 4x4 branch (PLIC, 16550A, PWM, all committed). The watchdog is built, in syscon, with an interrupt mode.
 * **A standard peripheral bus** (Wishbone, OBI or APB) behind `soc_bus`, so
   existing open-source peripherals drop in.
 * **Parameterise the core** (PMP entries, C, M unit kind, memory map) for
@@ -702,7 +704,7 @@ Considered on 2026-10-22, kept for later:
 Not worth doing while memory-bound: Zba/Zbb, a faster multiplier, forwarding,
 vectored mtvec, a faster core clock (QSPI is pad-limited). Rejected earlier:
 SCK = core clock (pads), flash continuous read or QPI (decided 2026-09-26),
-a PLIC (all devices are polled).
+a PLIC (all devices polled; reversed 2026-11-20, the 4x4 branch builds one with a 16550A UART with an 8-entry RX FIFO).
 
 ## 8. Order
 
@@ -731,14 +733,17 @@ have been built and run (9.4).
 
 What software gets: RV32IMAC with Zicsr, Zicntr and Zifencei; M and U modes;
 4 PMP entries; no S-mode and no MMU. The CLINT's timer and software
-interrupts are the only interrupts: there is no PLIC, and every device is
-polled. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
-16 MB of PSRAM at `0x8000_0000`. An ns16550 subset UART, GPIO, the tiny_spi
+interrupts are the only interrupts on the 3x4 submission: it has no PLIC and
+every device is polled. The 4x4 branch adds a PLIC at `0x0C00_0000` and
+interrupt-driven devices (UART, watchdog, PWM, gamepad, GPIO input change), so the interrupt ladder rungs can use them. 16 MB of flash at `0x2000_0000` (execute in place; the reset pc) and
+16 MB of PSRAM at `0x8000_0000`. An ns16550 subset UART (a 16550A on the 4x4 branch), GPIO, the tiny_spi
 controller with an SD card and the OLED, and syscon (reboot, power-off,
 reset cause, boot mode, watchdog). About 1.5 million instructions per second
 at 62.5 MHz.
 
 ### 9.1 Boot contract
+
+The 4x4 additions (SPICTL.EN, CACHE_CTL, watchdog TORR, DTB hand-over, clock-dependent constants) are in `docs/boot-contract-4x4.md`.
 
 Rules that whatever runs first from flash keeps. Each is documented with the
 block it comes from; the loader (rung 1) is where they all meet, and Linux
@@ -746,10 +751,10 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
 
 1. **Set `mtvec` before anything can trap.** It resets to 0, which is
    outside flash and PSRAM, so a trap before it is set faults again at 0.
-2. **Set the UART divisor before the first character** if the clock is not
-   62.5 MHz: set LCR.DLAB, write DLL and DLM, clear DLAB. The reset divisor is
-   34: 114,890 baud at 62.5 MHz (115,200 - 0.27%); at 60 MHz write 33 (113,636
-   baud, -1.4%).
+2. **Set the UART divisor before the first character** (the clock is 52.63 MHz, not the
+   62.5 MHz the reset value is sized for): set LCR.DLAB, write DLL = 29 and DLM = 0, clear DLAB. The reset divisor is
+   34: 114,890 baud at 62.5 MHz (115,200 - 0.27%); at 52.63 MHz that is 96,749 baud, so write 29 (113,430
+   baud, -1.54 %).
 3. **Read RESET_CAUSE and BOOT_MODE, then write `0x7` to RESET_CAUSE** so that
    the next boot sees only its own cause (`docs/soc-architecture.md`,
    syscon).
@@ -758,16 +763,16 @@ block it comes from; the loader (rung 1) is where they all meet, and Linux
    kernel. Linux never writes it. With the keypad fitted, EN stays 0.
 5. **SD first, on every boot, before any other SPI traffic:** with both CS#
    high clock at least 74 cycles (10 bytes of `0xFF`; BAUD resets to `0xFF`,
-   122 kHz at 62.5 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
+   103 kHz at 52.63 MHz), then send CMD0 with SD CS# low. After a reboot in the middle of a
    block, first clock `0xFF` with SD CS# low until the card returns `0xFF`
    (`docs/pins-and-peripherals.md` section 3).
 6. **The watchdog is off at reset, and once enabled only a reset turns it
    off** (the DesignWare behaviour). Enable it only in code that services it.
-7. **Timebase:** `mtime` counts every core clock, 62.5 MHz as documented
+7. **Timebase:** `mtime` counts every core clock, 52.63 MHz as documented
    (section 0).
    FreeRTOS's RISC-V port computes its tick from `configCPU_CLOCK_HZ`, and
    Linux reads `timebase-frequency`: both take that value
-   (`configCPU_CLOCK_HZ` 62500000, `timebase-frequency` = 62500000).
+   (`configCPU_CLOCK_HZ` 52631579, `timebase-frequency` = 52631579).
 8. **QSPI_CFG (syscon +0x1C: STREAM bit 0, DDR bit 1, DDR_CAP bits 4:2) is
    reset by every reset** (pin, reboot, watchdog expiry): the boot always
    starts in SDR, `DDR_CAP` 2, STREAM on unless the `ui_in[2]` strap is high.
@@ -888,8 +893,8 @@ of `sw/Makefile`. Output goes to `build/sw`.
 * **FatFs** (`sw/fatfs`, `make -C sw run-fatfs`): ChaN's FatFs R0.16 (long
   file names, relative paths, `f_printf`) on `sw/common/sd.c`, an SD card
   driver on the SPI controller that keeps the boot contract's rules 4 and 5
-  (EN with every CS# high, 80 clocks, CMD0, CMD8, ACMD41 at 122 kHz, then
-  10.4 MHz; SDHC by block number). The bench gives the card a 4 MB FAT image
+  (EN with every CS# high, 80 clocks, CMD0, CMD8, ACMD41 at 103 kHz, then
+  8.8 MHz; SDHC by block number). The bench gives the card a 4 MB FAT image
   made with mtools (`sw/tools/mkdisk.sh`). The test mounts it, lists the root,
   reads a short file, a long-named file in a directory and a 16 KB file
   against its pattern, seeks, then creates, grows, appends, renames, makes a
@@ -959,7 +964,7 @@ million clocks: the run below is 70 iterations.
 | Dhrystone 2.2 (500 runs) | 16,697 clocks per run; 59.9 Dhrystones/s per MHz; **0.034 DMIPS/MHz**; all 14 final values correct | |
 | CoreMark (2000-byte performance run) | 13.7 million clocks an iteration | A valid run (70 iterations, 957.5 million clocks = 15.3 s at 62.5 MHz; at 60 MHz 50 iterations, 684 million, 11.4 s): CoreMark validated the result, **4.57 iterations/s at 62.5 MHz (4.39 at 60), 0.073 CoreMark/MHz** both times; its own integer print says 4. 691 million clocks and 15.8 million instructions took 11 minutes on the sandbox |
 | Embench-IoT speed, 19 benchmarks, scale 1 | 51.5 to 199.5 million clocks each; all results correct; **geometric mean 0.0306 per MHz** (the Cortex-M4 reference is 1.0) | Table in `docs/sw-embench-results.md`: best `tarfind` 0.078, worst `xgboost` 0.020 |
-| FatFs, mount to delete | 140 million clocks in all, at the SD data phase's BAUD 2 (10.4 MHz; 131 at BAUD 1, 108 at BAUD 1 before the CRC16 check of read data: a table lookup a byte, 3.5 million instructions now; the bitwise loop made it 276 at BAUD 1); 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 10.4 MHz SPI clock |
+| FatFs, mount to delete | 140 million clocks in all, at the SD data phase's BAUD 2 (8.8 MHz; 131 at BAUD 1, 108 at BAUD 1 before the CRC16 check of read data: a table lookup a byte, 3.5 million instructions now; the bitwise loop made it 276 at BAUD 1); 123 blocks read, 69 written | The 16 KB read is the bulk: each sector costs about 0.5 million clocks, the byte loop of the SPI driver at about 40 clocks an instruction, not the 10.4 MHz SPI clock |
 | FreeRTOS, 100 Hz tick | one `taskYIELD` through `ecall`, which switches to the other task: **9,191 clocks** (91 and 90 yields in 3 ticks, which alternate); a queue round trip between two tasks: **57,498 clocks**; compare match to the tick hook under a shift/multiply/divide load: **6,119 clocks on average, 9,131 at most** (with the tick hook's watchdog kick in the measured path) | The latency includes the port's entry (30-register save, stack switch, compare update) before the hook, so the hardware's own delay is a part of it. The whole tick path is an estimated ten thousand clocks (not measured), so 100 Hz takes under 2% of the CPU. |
 
 **Still owed from the ladder's own rungs:**

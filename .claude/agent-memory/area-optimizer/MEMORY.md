@@ -8,3 +8,5 @@
 - [KianV reference](kianv-reference.md) — TT05/TT06 were 8x2 (not 6x2): 163.9k µm² synth, 2,554 flops; TT latch-RAM precedent.
 - [SoC performance measured](soc-performance-measured.md) — 42 clk/fetch floor; C bench 56.1 -> 48.3 (perf fixes) -> 48.4 (area stack).
 - [ICG flow evidence](icg-flow-evidence.md) — dlclkp in LibreLane/OpenROAD: little-cpu PRs, TritonCTS doc, yosys 0.62 clockgate bug.
+- [Area review 2026-11-22](review-2026-11-22-area.md) — 4x4 2a2978e ranked cuts: cache 8x32B -6k, PMP G=10 -4k, AMO on muldiv adder, signExt; per-hier inflation (inc64 x3).
+- [CSR/UART slim 2026-11-24](csr-uart-slim-2026-11-24.md) — measured: CSR A+B+D -6.6k synth (~-8.7k PnR); PMP 2/1/0 entries; zero items; UART lean -1.7k; SiFive no gain.

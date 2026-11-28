@@ -8,10 +8,14 @@
 //   (b) between one CS-low period and the next every CS is high for >= 2 clocks (tCPH), and a CS
 //       never moves from one chip straight to another
 //   (c) engine idle with CS0 low (a stream is open): SCK low and io_oe 0
+//   (c') the same for a PSRAM burst: engine idle with any chip select low: SCK low, bus released, and that
+//       state lasts one clock at most (a request is taken, or chip select rises at once)
+//   (e) not a rule here: the SCK count of a PSRAM window needs the engine's request-hold contract (nbytes_m1 is read live), so it is
+//       checked by tb_qspi_burst (model: <= 4 words, no 1 KB page crossing, CE# low <= tCEM) and, in composition, by mem_tcem_burst
 //   (d) an EDh command (8 bits on IO0 in the first 8 SCK rising edges of a CS0 window, taken at the
 //       rising edge: io_out one step before it) only after ddr has been high at some clock
 module qspi_pins_props (
-    input  wire        clk, rst, rd_late, stream_en, ddr,
+    input  wire        clk, rst, rd_late, stream_en, ddr, burst,
     input  wire [2:0]  ddr_cap,
     input  wire        start, we,
     input  wire [1:0]  cs_sel, nbytes_m1,
@@ -23,7 +27,7 @@ module qspi_pins_props (
     wire [31:0] rdata;
     wire [2:0]  cs_n;
     wire [3:0]  io_out;
-    qspi_ctrl dut (.clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en), .ddr(ddr), .ddr_cap(ddr_cap),
+    qspi_ctrl dut (.clk(clk), .rst(rst), .rd_late(rd_late), .stream_en(stream_en), .ddr(ddr), .ddr_cap(ddr_cap), .burst(burst),
         .start(start), .cs_sel(cs_sel), .addr(addr), .we(we), .nbytes_m1(nbytes_m1), .wdata(wdata),
         .idle(idle), .done(done), .rdata(rdata), .sck(sck), .cs_n(cs_n), .ctl_oe(ctl_oe), .io_out(io_out),
         .io_oe(io_oe), .io_in(io_in));
@@ -63,7 +67,21 @@ module qspi_pins_props (
         end
     end
 
+    // (c')/(e) monitors
+    wire ps_cs = !cs_n[1] || !cs_n[2];
+    reg [5:0] pn = 6'd0;                    // SCK rises of the PSRAM window so far
+    reg burst_ever = 1'b0, idle_q = 1'b0;
+    wire edgeP = ps_cs && sck && !sck_q;
+    wire [5:0] pn_now = !ps_cs ? 6'd0 : edgeP ? (pn == 6'd63 ? pn : pn + 6'd1) : pn;
+    always @(posedge clk) begin
+        pn <= rst ? 6'd0 : pn_now;
+        if (burst) burst_ever <= 1'b1;
+        idle_q <= idle && ps_cs && !start;
+    end
+
     always @(*) if (live) begin
+        if (idle && cs_n != 3'b111) assert (!sck && !io_oe);                              // (c')
+        if (idle && ps_cs && !start) assert (!idle_q);                                    // (c') one clock (a flash stream, CS0, may idle open)
         assert (!(!cs_n[0] && (!cs_n[1] || !cs_n[2])));                                   // (a)
         if (fall && seen_low) assert (hi == 2'd2);                                        // (b) gap
         assert (!switch);                                                                 // (b) no direct move
@@ -74,8 +92,8 @@ module qspi_pins_props (
     // clock model
     (* gclk *) reg gclk;
     reg gseen = 1'b0, clk_p = 1'b0;
-    wire [68:0] ins = {rst, rd_late, stream_en, ddr, ddr_cap, start, we, cs_sel, nbytes_m1, addr, wdata};
-    reg  [68:0] ins_p;
+    wire [69:0] ins = {rst, rd_late, stream_en, ddr, burst, ddr_cap, start, we, cs_sel, nbytes_m1, addr, wdata};
+    reg  [69:0] ins_p;
     always @(posedge gclk) begin gseen <= 1'b1; clk_p <= clk; ins_p <= ins; end
     always @(*) begin
         assume (gseen || !clk);
@@ -88,7 +106,9 @@ module qspi_pins_props (
         cover (live && idle && !cs_n[0] && !sck && !io_oe);                               // an open stream, idle
         cover (live && fall && seen_low && hi == 2'd2);                                   // a CS gap of exactly 2 clocks
         cover (live && !cs_n[0] && ps_low);                                               // CS0 after a PSRAM transfer
-        cover (live && ed_full && ddr_ever);                                              // an EDh command
+        cover (live && ed_full && ddr_ever);
+        cover (live && pn_now == 6'd44);                                                  // a full 4-word PSRAM line in one window
+        cover (live && idle && ps_cs && !sck && !io_oe);                                  // a PSRAM burst open, idle                                              // an EDh command
     end
 `endif
 endmodule

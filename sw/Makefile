@@ -11,8 +11,15 @@
 #         FreeRTOS and the ddr payloads do)
 #         CFLAGS=-Os (everything else)   RUNARGS=+MAX_CYCLES=...
 #
+#         BENCH=bench-pins   run on the TT top (RTL wrapper) through its pins: tb_sw.v -DTB_PINS
+#         BENCH=bench-gl     the same on the shipped gate-level netlist (NETLIST=<nl.v>, converted by
+#                            scripts/gl/gl2verilator.sh into build/sw/gl-model/gate.v, or GL_MODEL=<gate.v>):
+#                            make run-hello BENCH=bench-gl NETLIST=...   (the log is run-<BENCH>.log)
+#
 # Output goes to ../build/sw (make clean here removes only that).
 TC      ?= riscv64-unknown-elf-
+BENCH   ?= bench
+RUNLOG  := $(if $(filter bench,$(BENCH)),run.log,run-$(BENCH).log)
 VERILATOR ?= verilator
 ROOT    := $(abspath ..)
 BUILD   := $(ROOT)/build/sw
@@ -25,13 +32,15 @@ FREESTANDING := -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns
 LDLIBS  := -Wl,--start-group -lc -lm -lgcc -Wl,--end-group
 COMMON  := common/crt0.S common/trap_entry.S common/trap.c common/uart.c common/exit.c common/printf.c
 
-# 114,890 baud at 62.5 MHz (common/soc.h UART_DIVISOR); the bench checks the program ends with it
-UART_DIVISOR := 34
+# 113,430 baud at 52.63 MHz (common/soc.h UART_DIVISOR); the bench checks the program ends with it
+UART_DIVISOR := 29
 BENCH_OPT ?= -O2
+# The bench clock: the chip's 19 ns (52.63 MHz); the Pmod model's ns timing and the DDR window follow it.
+CHIP_TCLK_NS ?= 19.0
 CM_ITER   ?= 1
 
 RTL := $(addprefix $(ROOT)/src/,alu branchCtrl clint compressed_decoder controller csr decoder fyracore \
-        muldiv pmp regFile rf_top signExt qspi_ctrl mem_ctrl soc_bus uart gpio spi syscon alphaone_soc)
+        muldiv pmp regFile rf_top regs signExt qspi_ctrl mem_ctrl cache soc_bus plic uart gamepad pwm pinmux gpio spi syscon alphaone_soc)
 RTL := $(addsuffix .v,$(RTL))
 
 # The third-party sources are needed to read the benchmark lists below.
@@ -46,7 +55,7 @@ $(error fetch.sh failed ($(FETCH_RC)); see above)
 endif
 endif
 
-.PHONY: ddrdt run-ddrdt fatfsfull run-fatfsfull sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
+.PHONY: bench-pins bench-gl ddrdt run-ddrdt fatfsfull run-fatfsfull sdtest run-sdtest ddr ddrwd ddrrb ddrwd0 ddrdf run-ddr run-ddrwd run-ddrrb run-ddrwd0 run-ddrdf bench-icarus all hello monitor fatfs run-fatfs freertos run-freertos coremark dhrystone run-hello run-coremark run-dhrystone bench fetch clean embench embench-score
 all: hello
 
 fetch:
@@ -95,9 +104,9 @@ $$(BUILD)/$(1)/flash.hex: $$(BUILD)/$(1)/$(1).bin $$(BUILD)/loader/loader.bin to
 	    --entry 0x$$$$($$(TC)nm $$(BUILD)/$(1)/$(1).elf | awk '$$$$3=="_start"{print $$$$1}') \
 	    --out $$@ --bin $$(BUILD)/$(1)/flash.bin $$($(1)_MKFLASH) $$(if $$(DDR),--ddr)
 $(1): $$(BUILD)/$(1)/flash.hex
-run-$(1): $(1) $$(BUILD)/bench/sim $$($(1)_RUNDEP)
-	cd $$(BUILD)/$(1) && $$(SIMRUN) +FLASH_FILE=$$(BUILD)/$(1)/flash.hex +UART_DIV=$$(UART_DIVISOR) $$($(1)_RUNARGS) $$(RUNARGS) | tee run.log
-	python3 tools/check_run.py $$(BUILD)/$(1)/run.log $$(or $$($(1)_EXPECT),$(1)/expect.txt)
+run-$(1): $(1) $$(BUILD)/$$(BENCH)/sim $$($(1)_RUNDEP)
+	cd $$(BUILD)/$(1) && $$(SIMRUN) +FLASH_FILE=$$(BUILD)/$(1)/flash.hex +UART_DIV=$$(UART_DIVISOR) $$($(1)_RUNARGS) $$(RUNARGS) | tee $$(RUNLOG)
+	python3 tools/check_run.py $$(BUILD)/$(1)/$$(RUNLOG) $$(or $$($(1)_EXPECT),$(1)/expect.txt)
 	$$($(1)_CHECK)
 	@echo "$(1): ok"
 endef
@@ -118,7 +127,7 @@ $(BUILD)/monitor/in.hex: $(MON_SCRIPT) tools/mkscript.py $(BUILD)/monitor/monito
 .PHONY: run-monitor-scan
 run-monitor-scan:
 	$(MAKE) run-monitor MON_SCRIPT=monitor/script-scan.txt monitor_EXPECT=monitor/expect-scan.txt
-	python3 tools/csr_scan_check.py $(BUILD)/monitor/run.log
+	python3 tools/csr_scan_check.py $(BUILD)/monitor/$(RUNLOG)
 $(eval $(call PAYLOAD,monitor))
 
 # Rung 4: FatFs on the SD card. ff.c reads ffconf.h from its own directory, so the sources
@@ -143,7 +152,7 @@ fatfs_SDARG  := $(if $(filter sdsc,$(SD)),+SD_SDSC,$(if $(filter v1,$(SD)),+SD_V
 fatfs_RUNDEP := $(BUILD)/fatfs/disk-$(DISK).hex
 fatfs_RUNARGS := +SD_IMAGE=$(BUILD)/fatfs/disk-$(DISK).hex +SD_DUMP=$(BUILD)/fatfs/dump.hex $(fatfs_SDARG) \
                  $(if $(filter fat32,$(DISK)),+SD_SPARSE +SD_BLKS=70000)
-fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex $(if $(filter fat32,$(DISK)),--fat32) && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/run.log
+fatfs_CHECK  := python3 tools/fatfs_check.py $(BUILD)/fatfs/dump.hex $(if $(filter fat32,$(DISK)),--fat32) && grep -q "mounted $(fatfs_TYPE)" $(BUILD)/fatfs/$(RUNLOG)
 $(BUILD)/fatfs/disk-%.hex: tools/mkdisk.sh tools/img2hex.py
 	@mkdir -p $(dir $@)
 	./tools/mkdisk.sh $(BUILD)/fatfs/disk-$*.img $@ $*
@@ -191,7 +200,7 @@ dhrystone_SRC    := $(DH)/dhrystone_main.c $(DH)/dhrystone.c
 dhrystone_CFLAGS := $(BENCH_OPT) -w -Wno-error=implicit-int -Wno-error=implicit-function-declaration \
                     -Wno-error=int-conversion -Wno-error=incompatible-pointer-types -I$(DH) -Idhrystone/port \
                     -Wl,--allow-multiple-definition   # printf.c supplies the debug_printf the vendored file stubs out
-dhrystone_CHECK  := python3 tools/dhry_check.py $(BUILD)/dhrystone/run.log
+dhrystone_CHECK  := python3 tools/dhry_check.py $(BUILD)/dhrystone/$(RUNLOG)
 $(eval $(call PAYLOAD,dhrystone))
 
 # Embench-IoT: one payload per benchmark, built the way the suite's sconstruct
@@ -285,7 +294,7 @@ SDTESTS := sdhc: sdsc:+SD_SDSC v1:+SD_V1 rderr:+SD_RDERR=123 wrerr:+SD_WRRESP=0d
            slow:+SD_BUSY=1500 cmd8bad:+SD_CMD8BAD no16:+SD_SDSC,+SD_NO16 \
            big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648 rdcrc:+SD_RDCRC=123 sdscbig:+SD_SDSC,+SD_SPARSE,+SD_BLKS=4194304
 .PHONY: run-sdtest-all
-run-sdtest-all: sdtest $(BUILD)/bench/sim $(sdtest_RUNDEP)
+run-sdtest-all: sdtest $(BUILD)/$(BENCH)/sim $(sdtest_RUNDEP)
 	@for v in $(SDTESTS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \
 	  echo "== sdtest $$n: $$a"; \
 	  (cd $(BUILD)/sdtest && $(SIMRUN) +FLASH_FILE=$(BUILD)/sdtest/flash.hex +UART_DIV=$(UART_DIVISOR) $(sdtest_RUNARGS) $$a $(RUNARGS) > run-$$n.log 2>&1); \
@@ -303,7 +312,7 @@ SDMULTIS := sdhc: sdsc:+SD_SDSC,+SD_SPARSE,+SD_BLKS=8388608 v1:+SD_V1,+SD_SPARSE
             rderr:+SD_RDERR=203 wrerr:+SD_WRRESP=0d,+SD_WRONCE \
             big32g:+SD_SPARSE,+SD_BLKS=67108864 big1t:+SD_SPARSE,+SD_BLKS=2147483648
 .PHONY: sdmulti run-sdmulti run-sdmulti-all
-run-sdmulti-all: sdmulti $(BUILD)/bench/sim $(sdmulti_RUNDEP)
+run-sdmulti-all: sdmulti $(BUILD)/$(BENCH)/sim $(sdmulti_RUNDEP)
 	@for v in $(SDMULTIS); do n=$${v%%:*}; a=$$(echo "$${v#*:}" | tr ',' ' '); \
 	  echo "== sdmulti $$n: $$a"; \
 	  (cd $(BUILD)/sdmulti && $(SIMRUN) +FLASH_FILE=$(BUILD)/sdmulti/flash.hex +UART_DIV=$(UART_DIVISOR) $(sdmulti_RUNARGS) $$a $(RUNARGS) > run-$$n.log 2>&1); \
@@ -346,19 +355,41 @@ check-bench:
 # ── the bench ───────────────────────────────────────────────────────────────
 # Verilator by default. The same bench builds with Icarus (the reference simulator, about 30x
 # slower): make bench-icarus, then  make run-hello SIMRUN='vvp $(BUILD)/bench/tb_sw.vvp'
-SIMRUN ?= $(BUILD)/bench/sim
+SIMRUN ?= $(BUILD)/$(BENCH)/sim
 bench-icarus: $(BUILD)/bench/tb_sw.vvp
 $(BUILD)/bench/tb_sw.vvp: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
 	@mkdir -p $(dir $@)
-	iverilog -g2012 -o $@ -s tb_sw $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v \
+	iverilog -g2012 -DTCLK_NS=$(CHIP_TCLK_NS) -o $@ -s tb_sw $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v \
 	    $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v
 bench: $(BUILD)/bench/sim
 $(BUILD)/bench/sim: $(RTL) $(ROOT)/tb/tb_sw.v $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v
 	@mkdir -p $(dir $@)
-	$(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD \
+	$(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -DTCLK_NS=$(CHIP_TCLK_NS) \
 	    --top-module tb_sw -Mdir $(BUILD)/bench/obj -o ../sim \
 	    $(RTL) $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v \
 	    > $(BUILD)/bench/build.log 2>&1 || { tail -30 $(BUILD)/bench/build.log; exit 1; }
+
+# The pins variants (tb_sw.v -DTB_PINS): the TT wrapper's RTL, or the converted gate-level netlist.
+BENCH_SRCS := $(ROOT)/tb/qspi_pmod_model.v $(ROOT)/tb/req_hold_check.v $(ROOT)/tb/sd_spi_model.v $(ROOT)/tb/tb_sw.v
+bench-pins: $(BUILD)/bench-pins/sim
+$(BUILD)/bench-pins/sim: $(RTL) $(ROOT)/src/tt_um_alfadelta10010_alphaone_soc.v $(BENCH_SRCS)
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --binary --timing -j $(or $(VLJ),4) -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -DTCLK_NS=$(CHIP_TCLK_NS) -DTB_PINS \
+	    --top-module tb_sw -Mdir $(BUILD)/bench-pins/obj -o ../sim \
+	    $(RTL) $(ROOT)/src/tt_um_alfadelta10010_alphaone_soc.v $(BENCH_SRCS) \
+	    > $(BUILD)/bench-pins/build.log 2>&1 || { tail -30 $(BUILD)/bench-pins/build.log; exit 1; }
+GL_MODEL ?= $(BUILD)/gl-model/gate.v
+bench-gl: $(BUILD)/bench-gl/sim
+ifneq ($(NETLIST),)
+$(BUILD)/gl-model/gate.v: $(NETLIST) $(ROOT)/scripts/gl/gl2verilator.sh
+	$(ROOT)/scripts/gl/gl2verilator.sh NETLIST=$(NETLIST) OUT=$(BUILD)/gl-model
+endif
+$(BUILD)/bench-gl/sim: $(GL_MODEL) $(ROOT)/src/rf_top.v $(BENCH_SRCS)
+	@mkdir -p $(dir $@)
+	$(VERILATOR) --binary --timing -j $(or $(VLJ),4) -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -Wno-PINMISSING -DTCLK_NS=$(CHIP_TCLK_NS) -DTB_PINS -DTB_GATE \
+	    --top-module tb_sw -Mdir $(BUILD)/bench-gl/obj -o ../sim \
+	    $(GL_MODEL) $(ROOT)/src/rf_top.v $(BENCH_SRCS) \
+	    > $(BUILD)/bench-gl/build.log 2>&1 || { tail -30 $(BUILD)/bench-gl/build.log; exit 1; }
 
 clean:
 	rm -rf $(BUILD)

@@ -14,8 +14,10 @@
 //   M1  [t_f + RST_CHK_NS, e3 + T)   any X or Z on a B bit
 //   M0  [t_f, t_f + RST_CHK_NS)      more than one change of a bit (the entry into reset is monotonic)
 //   M2  [t_f + RST_CHK_NS, e3)       any change of a B bit
-//   M3  [e3, e3 + T)                 more than one change of a bit; uo_out changing at all, except RTS#
-//                                    (uo_out[5]) falling once (the UART asserts it out of reset: measured, WO-34)
+//   M3  [e3, e3 + T)                 more than one change of a bit; uo_out changing at all. (The WO-34
+//                                    exemption for RTS# on uo_out[5] is gone: since the slim pinmux the pin is
+//                                    gpio_out[5], SD CS#, reset high like its in-reset value; RTS# needs pinmux
+//                                    code 2, which a reset clears, so no uo_out bit may move in this window.)
 //
 // Output, one line per event (violations first, up to 20, as `<rule> <bit> <time> <old>-><new>`):
 //   GLITCH-MON event <k> clk_in_reset=<n> t_r=<ns> e1=<ns> e2=<ns> e3=<ns> d_oe3=<ns>: PASS|FAIL
@@ -141,9 +143,8 @@ module glitch_mon;
                     else begin
                         cnt3[j] = cnt3[j] + 1;
                         if (cnt3[j] > 1) viol("M3", j, t, pb[j], B[j]);
-                        // uo_out may not move here, except RTS# (uo_out[5]) falling once: it leaves reset
-                        // high and the UART asserts it when it is ready to receive (tb_tt_um.v header).
-                        if (j >= 8 && !(j == 13 && pb[j] === 1'b1 && B[j] === 1'b0)) viol("M3", j, t, pb[j], B[j]);
+                        // uo_out may not move here (no pinmux alternate survives a reset; see the header)
+                        if (j >= 8) viol("M3", j, t, pb[j], B[j]);
                         if (j == 3 && B[j] === 1'b1 && d_oe3 < 0.0) d_oe3 = t - e3;
                     end
                 end

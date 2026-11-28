@@ -15,7 +15,9 @@
 //     while it is in EX (ex_nofetch), 1-cycle bubble taken or not
 //   - CSR write in WB: the next instruction is still in EX (3-cycle EX, ex_wait)
 //   - Fetch PMP check in U-mode or with a locked entry: one or two EX cycles
-//   - M ops and shifts: multi-cycle in muldiv, started during the fetch wait
+//   - M ops: multi-cycle in muldiv, started during the fetch wait
+//   - A fetch that completes while the pipeline is stalled is kept (if_wv,
+//     if_wlo + if_kbuf) and not requested again
 //   - AMO: 2-cycle WB (stall pipeline)
 
 module fyracore #(
@@ -50,8 +52,10 @@ module fyracore #(
     parameter [31:0] PMA_RAM_TOP  = 32'h80FF_FFFF,
     parameter [31:0] PMA_IO0_BASE = 32'h0200_0000,  // CLINT
     parameter [31:0] PMA_IO0_TOP  = 32'h0200_FFFF,
-    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon
-    parameter [31:0] PMA_IO1_TOP  = 32'h1002_FFFF
+    parameter [31:0] PMA_IO1_BASE = 32'h1000_0000,  // UART, GPIO, syscon, PWM
+    parameter [31:0] PMA_IO1_TOP  = 32'h1003_FFFF,
+    parameter [31:0] PMA_IO2_BASE = 32'h0C00_0000,  // PLIC (4 MB: priorities, pending, enables, context 0 at +0x200000)
+    parameter [31:0] PMA_IO2_TOP  = 32'h0C3F_FFFF
 )(
     input  wire        clk,
     input  wire        rst,
@@ -73,9 +77,10 @@ module fyracore #(
     // PC lies in an executable PMA window (PMA_ROM_*, PMA_RAM_*), EX holds
     // no instruction that decides the next pc (ex_nofetch) and the
     // instruction at pc is not already in hand (see if_kv below); outside
-    // them no fetch is requested at all (see imem_req below). When the
-    // pipeline is stalled with a fetch already completed, the same address is
-    // requested again.
+    // them no fetch is requested at all (see imem_req below). When a fetch
+    // completes while the pipeline is stalled, the word is kept and imem_req
+    // drops until IF/EX takes it (if_wv), except when a data access is in WB in
+    // the completion cycle: then the same address is requested again.
     //
     // A fetch returns the 4 bytes from pc. When the instruction at pc is
     // compressed, the upper two bytes are the halfword behind it; the core
@@ -190,11 +195,25 @@ module fyracore #(
     // !stall edge, so a held if_kv is never stale.
     reg  [15:0] if_kbuf;         // upper halfword of the last fetch (no reset)
     reg         if_kv;           // if_kbuf is the compressed instruction at pc
+    // Fetch hold. A fetch that completes on a stalled edge (IF/EX and pc hold)
+    // with no data access in WB is kept whole: {if_kbuf, if_wlo} are the 4
+    // bytes at pc and if_wv says so. imem_req stays low until the next !stall
+    // edge, which loads IF/EX from the held word or redirects (it clears
+    // if_wv either way). No data request can start while if_wv is 1 (EX/WB
+    // takes bubbles while the EX instruction is stalled), so no store
+    // completes after the word was read and the data-per-fetch bound holds.
+    reg  [15:0] if_wlo;          // lower halfword of the last fetch (no reset)
+    reg         if_wv;           // {if_kbuf, if_wlo} is the word at pc, held
     wire        if_hit        = if_kv;
     // The mux is in front of the window mask: a kept halfword at pc outside
     // the window (the last halfword of a window) is forced to 0 like a fetched
     // one and faults in EX. The upper half of the word is not used on a hit.
-    wire [31:0] if_word       = {imem_rdata[31:16], if_hit ? if_kbuf : imem_rdata[15:0]};
+    // Both selects are flops; the held-word mux is flop to flop. A load from
+    // the held word takes the upper half from if_kbuf as well.
+    wire        if_bsel       = if_hit || if_wv;
+    wire [15:0] if_bdat       = if_wv ? if_wlo : if_kbuf;
+    wire [31:0] if_word       = {if_wv ? if_kbuf : imem_rdata[31:16],
+                                 if_bsel ? if_bdat : imem_rdata[15:0]};
     wire [31:0] if_fetched    = if_word & {32{if_exec}};
     wire        if_compressed = (if_fetched[1:0] != 2'b11);
     // A compressed instruction is expanded here, on its way into IF/EX, so
@@ -239,17 +258,20 @@ module fyracore #(
     // fetch would have to complete (~42 clocks) before the redirect could be
     // taken. See ex_nofetch. A not-taken branch then costs one bubble.
     assign if_exec   = in_exec(pc);
-    // Nothing is requested while the instruction at pc is in hand (if_hit).
-    assign imem_req  = if_exec && !ex_nofetch && !if_hit;
+    // Nothing is requested while the instruction at pc is in hand (if_hit) or
+    // its whole word is held (if_wv).
+    assign imem_req  = if_exec && !ex_nofetch && !if_hit && !if_wv;
 
     // Captured on every completed fetch, not on the IF/EX load: no fetch can
-    // complete while if_kv is 1 (imem_req is low), so the bits are frozen
-    // exactly while they are needed, and the 16 enables stay off the stall
-    // net. imem_ready alone is not enough: a memory may raise it with no
+    // complete while if_kv or if_wv is 1 (imem_req is low), so the bits are
+    // frozen exactly while they are needed, and the 32 enables stay off the
+    // stall net. imem_ready alone is not enough: a memory may raise it with no
     // request, and the kept bits would be overwritten while in use.
     always @(posedge clk)
-        if (imem_req && imem_ready)
+        if (imem_req && imem_ready) begin
             if_kbuf <= imem_rdata[31:16];
+            if_wlo  <= imem_rdata[15:0];
+        end
 
     // ================================================================
     //  IF/EX Pipeline Register
@@ -538,11 +560,9 @@ module fyracore #(
     wire        muldiv_start;   // driven by assign in Hazard Detection
     wire        muldiv_stall;   // driven by assign in Hazard Detection
 
-    // The shifts (aluOp 00001 SLL, 00101 SRL, 01101 SRA) run through muldiv's
-    // shift register as well, one bit per cycle: the ALU has no shifter.
-    // Everything below that says "M instruction" covers them too.
-    wire ex_is_shift = !ctrl_aluOp[4] && (ctrl_aluOp[1:0] == 2'b01);
-    wire ex_is_iter  = ctrl_isMulDiv || ex_is_shift;
+    // The shifts are single-cycle in the ALU; only the M instructions are
+    // iterative.
+    wire ex_is_iter  = ctrl_isMulDiv;
 
 `ifdef RISCV_FORMAL_ALTOPS
     wire [31:0] muldiv_result_raw;
@@ -552,10 +572,8 @@ module fyracore #(
         .rst   (rst),
         .start (muldiv_start),
         .op    (ctrl_aluOp[2:0]),    // op encoded in lower 3 bits of aluOp
-        .shift (ex_is_shift),
-        .sra   (ctrl_aluOp[3]),
-        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext and shifts)
-        .b     (alu_d2),             // rs2, or the immediate shift amount
+        .a     (alu_d1),             // rs1 (aluSrc1=0 for M-ext)
+        .b     (alu_d2),             // rs2
 `ifdef RISCV_FORMAL_ALTOPS
         .result(muldiv_result_raw),
 `else
@@ -719,7 +737,8 @@ module fyracore #(
     wire ex_pma_in_rom = in_win(alu_r, PMA_ROM_BASE, PMA_ROM_TOP);
     wire ex_pma_in_ram = in_win(alu_r, PMA_RAM_BASE, PMA_RAM_TOP);
     wire ex_pma_in_io  = in_win(alu_r, PMA_IO0_BASE, PMA_IO0_TOP) ||
-                         in_win(alu_r, PMA_IO1_BASE, PMA_IO1_TOP);
+                         in_win(alu_r, PMA_IO1_BASE, PMA_IO1_TOP) ||
+                         in_win(alu_r, PMA_IO2_BASE, PMA_IO2_TOP);
     // LR/SC need a reservation set, which only PSRAM can provide -- an IO
     // window is not idempotent and has no reservation set to track, and flash
     // cannot be written. The reference model agrees about IO: its reservable()
@@ -816,10 +835,9 @@ module fyracore #(
     wire flush = ex_branch_taken || ex_is_mret || ex_trap || ex_is_fencei || ex_pmp_csr_wr ||
                  irq_inject;
 
-    // stall_other: all stall sources except muldiv (used to gate muldiv_start)
+    // stall_other: all stall sources except muldiv
     // wfi_active stalls the pipeline until an interrupt becomes pending.
-    // stall_nofetch is the same without the pending fetch: an M instruction
-    // starts on it (see muldiv_start).
+    // stall_nofetch is the same without the pending fetch.
     //
     // No stall term for "a CSR write is in WB": the 3-cycle EX does that job.
     // A CSR write commits in WB, and the instruction behind it is still in EX
@@ -856,7 +874,7 @@ module fyracore #(
     // trap would never commit.
     // It depends on neither stall nor flush, so this closes no loop.
     //
-    // ex_trap_iter is all of ex_trap here. An M instruction or a shift is OP
+    // ex_trap_iter is all of ex_trap here. An M instruction is OP
     // or OP-IMM: it makes no memory access and no jump, so the three address
     // causes cannot be raised for it, and it is no SYSTEM instruction, CSR
     // access, LR or FENCE, which leaves a fetch fault, a bad funct7 and the
@@ -883,8 +901,9 @@ module fyracore #(
     // operation, and that phantom's done later set muldiv_ready for the
     // *next* M instruction, which then captured the previous result.
     wire muldiv_have = muldiv_ready || muldiv_done;
-    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result.
-    wire muldiv_capture = muldiv_want && muldiv_have && !stall_other;
+    // The cycle EX/WB actually captures muldiv_result into exwb_alu_result
+    // (never while a data access is in WB, see muldiv_stall).
+    wire muldiv_capture = muldiv_want && muldiv_have && !dmem_req && !stall_other;
     // No `!flush` on capture or start, and no flush term in the muldiv_ready
     // reset: flush and muldiv_want are never both 1 (a flush source in EX
     // means the EX instruction is not an M op, and a trapping M op is
@@ -894,12 +913,27 @@ module fyracore #(
 
     // A pending fetch does not hold the operation back: it runs during the
     // fetch wait and is captured (muldiv_capture) once the fetch is in.
+    // Nor does a stall for anything else (WB busy, a data access in WB, the
+    // EX instruction's own c1/c2): the operation starts in the first cycle
+    // its operands are final (ex_rf_ok, no use_hazard: the cycle that sets
+    // ex_ph), which is the one before the old !stall_nofetch condition held.
+    // The operands are then the registers it will use; nothing is committed
+    // before the capture, which waits for stall_other as before.
     // Waiting for the fetch as well started it on the cycle the fetch
     // completed, and muldiv_stall then dropped that fetch and fetched the
     // same word again: one extra memory read per M instruction.
     assign muldiv_start = muldiv_want && !muldiv_busy && !muldiv_have
-                          && !stall_nofetch;
-    assign muldiv_stall = muldiv_want && !muldiv_have;
+                          && ex_rf_ok && !use_hazard && !ex_ifetch_hi_phase;
+    // The result waits out a data access in WB, its completion cycle too
+    // (wb_mem_stall already covers the cycles before it). Starting under the
+    // access lets the operation finish first, and the M instruction then left
+    // EX on the edge the access completed: IF/EX took the next instruction
+    // from a fetch that completed on that same edge, i.e. read before a store
+    // to it wrote (a store, a MUL, then the stored-to instruction ran the old
+    // word, where the core with the M start after the access, and Spike, run
+    // the new one; tests/directed/fh_store_held). One clock, only when the
+    // result is in before the access completes.
+    assign muldiv_stall = muldiv_want && (!muldiv_have || dmem_req);
 
     always @(posedge clk) begin
         // capture before done: a result taken on its own done cycle must not
@@ -1330,9 +1364,17 @@ module fyracore #(
             reservation_addr  <= 30'b0;
             // Fetch word reuse
             if_kv             <= 1'b0;
+            if_wv             <= 1'b0;
         end else begin
             // ---- PC ----
             pc <= next_pc;
+
+            // ---- Fetch hold ----
+            // Set when a fetch completes on a stalled edge with nothing left
+            // to transfer in WB; held while stalled; every !stall edge
+            // consumes or discards it.
+            if_wv <= stall && (if_wv ||
+                     (imem_req && imem_ready && !dmem_req && !wb_busy));
 
             // ---- Privilege mode update ----
             // Trap (WB stage): always enter M-mode

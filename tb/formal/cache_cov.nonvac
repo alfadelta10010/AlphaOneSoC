@@ -1,0 +1,7 @@
+# WO-62: broken copies for the cover harness: some cover point must become unreachable (anything but COVERED).
+# no lookups at all: no fill, no hit
+sed cache.v s@wire        look  = act \&\& f_req@wire        look  = 1'b0 \&\& f_req@
+# a hit never completes: ready never comes from the cache
+sed cache.v s@hit_q <= look \&\& hit \&\& (b_ph || !pc1);@hit_q <= 1'b0;@
+# no straddle ever completes: the B phase is never entered
+sed cache.v s@b_ph  <= look \&\& hit \&\& !b_ph \&\& pc1;@b_ph  <= 1'b0;@

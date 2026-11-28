@@ -1,0 +1,6 @@
+# WO-62: broken copies for the pass-through proof (EN tied 0): each must FAIL.
+sed cache.v s@: f_addr;@: f_addr + 32'd4;@
+sed cache.v s@assign f_ready = act ? hit_q : m_ready;@assign f_ready = act ? hit_q : 1'b0;@
+sed cache.v s@assign f_rdata = !act ? m_rdata :@assign f_rdata = !act ? ~m_rdata :@
+sed cache.v s@wire        on    = !act \&\& en \&\& (!f_req || m_ready);@wire        on    = !act \&\& (!f_req || m_ready);@
+sed cache.v s@assign m_req   = act ? fill_active : f_req;@assign m_req   = act ? fill_active : 1'b1;@

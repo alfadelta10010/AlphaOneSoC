@@ -6,13 +6,16 @@
 # No BUSY polling between a DATA store and the OUT store that changes D/C
 # or raises CS#: the OUT store waits while the byte shifts, and lands half
 # an SCK period after its last rising edge (tAH, tCSH). The reviewer's
-# sequence -- TXDATA; OUT(D/C); TXDATA; TXDATA; OUT(CS#) -- at BAUD 7 and 3,
+# sequence -- TXDATA; OUT(D/C); TXDATA; TXDATA; OUT(CS#) -- at BAUD 7 and OLED_BAUD (4 at 55 MHz),
 # then the same with BUSY polled.
 #
 # Last, one byte at BAUD 1 (an 80 ns SCK period at 50 MHz) between cues 9
 # and 10: the SSD1331 model must flag it -- the check that its timing
 # checks are awake.
 #include "periph.h"
+#ifndef OLED_BAUD
+#define OLED_BAUD 4                /* the fastest the SSD1331 takes at 55 MHz: (BAUD + 1) T >= 75 ns (3 is 72.7 ns) */
+#endif
     .section .text.init
     .globl _start
 _start:
@@ -20,7 +23,7 @@ _start:
     MB_INIT
     li   s1, GPIO
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x89, 0x201        # reset: SD CS# and OLED CS# high, SCK idle high, RES# low
+    CHECK t0, 0xB9, 0x201        # reset: SD CS# and OLED CS# high, SCK idle high, RES# low
     lw   t0, G_CTRL(s1)
     CHECK t0, 0x00, 0x202
     lw   t0, S_CONTROL(s1)
@@ -33,8 +36,8 @@ _start:
     li   t0, 0xC9
     sw   t0, G_OUT(s1)           # RES# and VCCEN high, CS# high
     DELAY 200                    # >= 3 us before VCC
-    li   t0, 3
-    sw   t0, S_BAUD(s1)          # BAUD 3: SCK = clk/8 = 160 ns
+    li   t0, OLED_BAUD
+    sw   t0, S_BAUD(s1)          # OLED_BAUD: SCK = clk / (2 (OLED_BAUD + 1)), 182 ns at 55 MHz
     li   t0, 1
     sw   t0, G_CTRL(s1)          # EN
     li   t0, 0xC8
@@ -72,8 +75,8 @@ _start:
     sw   t2, S_TXDATA(s1)          # data
     sw   t3, S_TXDATA(s1)          # data
     sw   a2, G_OUT(s1)           # CS# = 1
-    li   t0, 3
-    sw   t0, S_BAUD(s1)          # BAUD 3, the same again
+    li   t0, OLED_BAUD
+    sw   t0, S_BAUD(s1)          # OLED_BAUD, the same again
     li   t0, 0xC8
     sw   t0, G_OUT(s1)
     li   t0, 0xA6

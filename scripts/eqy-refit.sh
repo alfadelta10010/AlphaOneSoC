@@ -10,7 +10,7 @@
 # which stops after the EQY setup. It
 #   1. prints the netlist md5;
 #   2. runs the read, lemma and fsminv stages (flop accounting by tb/eqy/accounting.py,
-#      the 186 constant bits, the one-hot invariant of the four recoded FSMs);
+#      the constant bits (256 B Fp190n2j: 191), the one-hot invariant of the four recoded FSMs);
 #   3. runs the setup of the prove stage and prints the partition count;
 #   4. writes WORK/refit.patch: NL_MD5 in run.sh, the EXPECT tables of accounting.py and
 #      matchreport.py, and the partition count of verdict.py.
@@ -18,12 +18,15 @@
 # accounting shows a flop that nothing explains, an unmatched flop, a changed constant set or a
 # changed recoded FSM (new FSMs need an enc/dec table in fsmcut.v and tie lists by a person).
 # The partition count is read from EXPECT_PARTITIONS in tb/eqy/verdict.py (a count mismatch is an
-# EQY FAIL there, so a refit is how a changed count is accepted). The constant counts (186
-# tied bits, 2 unused, FSM bits 10/19, 7 renames) are the "what the last refit established"
-# values: they are read from tb/eqy/accounting.py EXPECT and tb/eqy/matchreport.py, so a refit is
-# automatic only while those do not change; any other count goes MANUAL (a person looks).
-# NOT VALIDATED ON A REAL NETLIST: the fin-3x4 netlist was lost from the sandbox (2026-11-07), so
-# this script has been syntax-checked only; its first real run is the next harden.
+# EQY FAIL there, so a refit is how a changed count is accepted). The constant counts (256 B Fp190n2j: 191
+# tied bits = 181 CSR + gpio out_r[1], [3] + PLIC pend/insvc of sources 5-8 (source 4 is live since WO-69); 0 unused; FSM
+# bits 11/21 (MULDIV_N 5); 96 renames (84 pmpaddr/pmpcfg aliases); 3 + 3 memory read-address bits) are the "what the last re-baseline
+# established" values: they are read from tb/eqy/accounting.py EXPECT and tb/eqy/matchreport.py, so
+# a refit is automatic only while those do not change; any other count goes MANUAL (a person looks:
+# a new constant needs its reason and an assertion in lemma_props.sv, a new memory a MEMRD entry).
+# First real run 2026-11-21 on the 4x4 hd netlist (757ba9e9): it stopped (exit 3) on the six new
+# PLIC constants and the 67 rx_mem / read-address flops, as it should; the 4x4 tables were then
+# re-baselined by hand (commit "test(eqy): re-baseline ... 4x4").
 # Exit status: 0 patch written (and applied if asked), 3 a person must look, 2 a stage failed.
 set -u
 for a in "$@"; do case $a in *=*) export "${a%%=*}=${a#*=}";; *) echo "eqy-refit.sh: unknown argument $a" >&2; exit 2;; esac; done
@@ -34,6 +37,7 @@ T=$WORK/tree
 md5=$(md5sum "$NETLIST" | cut -d' ' -f1)
 echo "netlist  $NETLIST"; echo "md5      $md5"
 rm -rf "$T"; mkdir -p "$T/tb"; cp -r "$R/src" "$T/src"; cp -r "$R/tb/eqy" "$T/tb/eqy"; rm -rf "$T/tb/eqy/__pycache__"
+mkdir -p "$T/scripts"; cp "$R/scripts/wrapper-srcs.sh" "$T/scripts/"; cp "$R/Makefile" "$T/Makefile"   # run.sh reads WRAPPER_SRC through them (880a0b0)
 RUN=$T/tb/eqy/run.sh
 n=$(grep -c '^NL_MD5=[0-9a-f]*$' "$RUN"); [ "$n" = 1 ] || { echo "eqy-refit.sh: NL_MD5 line not found once in run.sh" >&2; exit 2; }
 sed -i "s/^NL_MD5=[0-9a-f]*\$/NL_MD5=$md5/" "$RUN"
@@ -44,9 +48,11 @@ sed -i '/^  say "prove: \$(tail -1/a\  [ -n "${SETUP_ONLY:-}" ] \&\& { echo "EQY
 PCX=$(sed -n 's/^EXPECT_PARTITIONS = \([0-9]*\).*/\1/p' "$R/tb/eqy/verdict.py"); [ -n "$PCX" ] || { echo "eqy-refit.sh: EXPECT_PARTITIONS not found in tb/eqy/verdict.py" >&2; exit 2; }
 accx() { sed -n "/^EXPECT = dict(/,/)/p" "$R/tb/eqy/accounting.py" | tr -d '\n ' | grep -o "$1=[0-9]*" | head -1 | cut -d= -f2; }
 X_TIED=$(sed -n 's/^EXPECT = dict(.*tied=\([0-9]*\).*/\1/p' "$R/tb/eqy/matchreport.py"); X_UNUSED=$(sed -n 's/^EXPECT = dict(.*unused=\([0-9]*\).*/\1/p' "$R/tb/eqy/matchreport.py")
-X_RG=$(accx recode_gold); X_RT=$(accx recode_gate); X_REN=$(accx rename)
-for v in "$X_TIED" "$X_UNUSED" "$X_RG" "$X_RT" "$X_REN"; do [ -n "$v" ] || { echo "eqy-refit.sh: could not read an expected count from tb/eqy (tied=$X_TIED unused=$X_UNUSED recode=$X_RG/$X_RT rename=$X_REN)" >&2; exit 2; }; done
-echo "expected: partitions $PCX tied $X_TIED unused $X_UNUSED recode $X_RG/$X_RT rename $X_REN"
+# EXPECT recode_gate counts a 6-state muldiv (A0); PX trees have 5 (PX-6 removed S_SH), counted from the RTL as in run.sh
+X_RG=$(accx recode_gold); X_RT=$(accx recode_gate); X_RT=$((X_RT + $(grep -oE "\bS_[A-Z0-9]+ *= *3.d[0-9]" "$R/src/muldiv.v" | wc -l) - 6)); X_REN=$(accx rename); X_MG=$(accx memaddr_gold); X_MT=$(accx memaddr_gate)
+[ "$(accx cand)" = "$X_TIED" ] && [ "$(accx unused)" = "$X_UNUSED" ] || { echo "eqy-refit.sh: accounting.py EXPECT cand/unused ($(accx cand)/$(accx unused)) and matchreport.py tied/unused ($X_TIED/$X_UNUSED) disagree" >&2; exit 2; }
+for v in "$X_TIED" "$X_UNUSED" "$X_RG" "$X_RT" "$X_REN" "$X_MG" "$X_MT"; do [ -n "$v" ] || { echo "eqy-refit.sh: could not read an expected count from tb/eqy (tied=$X_TIED unused=$X_UNUSED recode=$X_RG/$X_RT rename=$X_REN)" >&2; exit 2; }; done
+echo "expected: partitions $PCX tied $X_TIED unused $X_UNUSED recode $X_RG/$X_RT rename $X_REN memaddr $X_MG/$X_MT"
 export GITREV="refit"
 for s in read lemma fsminv prove; do
   echo "--- stage $s"
@@ -61,10 +67,10 @@ done
 B=$T/build/eqy
 PC=$(grep -c . "$B/prove/eqy/partition.list"); echo "--- partitions $PC"
 echo "--- match report"; cat "$B/prove/match.txt"
-python3 - "$R" "$B" "$WORK" "$md5" "$PC" "$X_TIED" "$X_UNUSED" "$X_RG" "$X_RT" "$X_REN" <<'PY'
+python3 - "$R" "$B" "$WORK" "$md5" "$PC" "$X_TIED" "$X_UNUSED" "$X_RG" "$X_RT" "$X_REN" "$X_MG" "$X_MT" <<'PY'
 import re, sys, os, difflib
 R, B, W, md5 = sys.argv[1:5]
-pc, X_TIED, X_UNUSED, X_RG, X_RT, X_REN = map(int, sys.argv[5:11])
+pc, X_TIED, X_UNUSED, X_RG, X_RT, X_REN, X_MG, X_MT = map(int, sys.argv[5:13])
 acc = open(B + "/read/accounting.txt").read(); mt = open(B + "/prove/match.txt").read()
 def num(pat, s):
     m = re.search(pat, s, re.M); return int(m.group(1)) if m else None
@@ -72,15 +78,18 @@ got = dict(gold=num(r"gold flop bits\s+(\d+)", acc), gate=num(r"gate flops\s+(\d
            rename=num(r"same flop, other name\s+(\d+)", acc), recode_gold=num(r"recoded FSM bits, gold\s+(\d+)", acc),
            recode_gate=num(r"recoded FSM bits, gate\s+(\d+)", acc), removed=num(r"removed by synthesis\s+(\d+)", acc),
            cand=num(r"constant bits \(CSR.*?\)\s+(\d+)", acc), unused=num(r"unused gpio bits\s+(\d+)", acc),
-           stray=num(r"no gold bit explains: (\d+)", acc), unmatched=num(r"^\s*UNMATCHED\s+(\d+)", mt))
+           live_gone=num(r"no flop in this netlist\s+(\d+)", acc), stray=num(r"no gold bit explains: (\d+)", acc), unmatched=num(r"^\s*UNMATCHED\s+(\d+)", mt),
+           memaddr_gold=num(r"read-address register, gold\s+(\d+)", acc), memaddr_gate=num(r"read-address register, gate\s+(\d+)", acc))
 print("--- derived:", got)
 why = []
 if None in got.values(): why.append("a count could not be read (%s)" % [k for k, v in got.items() if v is None])
 else:
     if got["stray"]: why.append("%d gate flops that no gold bit explains (new flops)" % got["stray"])
+    if got["live_gone"]: why.append("%d flops the RTL drives live (accounting.py LIVE) have no flop in the netlist: it predates the RTL (WO-69)" % got["live_gone"])
     if got["unmatched"]: why.append("%d flop bits EQY did not match" % got["unmatched"])
     if got["cand"] != X_TIED or got["unused"] != X_UNUSED: why.append("the constant set changed (cand %s, unused %s)" % (got["cand"], got["unused"]))
     if (got["recode_gold"], got["recode_gate"]) != (X_RG, X_RT): why.append("the recoded FSM bits changed (gold %s, gate %s): a new or changed FSM" % (got["recode_gold"], got["recode_gate"]))
+    if (got["memaddr_gold"], got["memaddr_gate"]) != (X_MG, X_MT): why.append("the memory read-address bits changed (gold %s, gate %s): a new or changed memory (accounting.py MEMRD)" % (got["memaddr_gold"], got["memaddr_gate"]))
     if got["rename"] != X_REN: why.append("the rename count changed to %s (check EXPLICIT_RENAME and renames.txt)" % got["rename"])
 def edit(path, fn):
     s = open(R + "/" + path).read(); t = fn(s); return s, t

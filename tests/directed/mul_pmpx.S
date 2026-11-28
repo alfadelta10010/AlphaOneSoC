@@ -3,15 +3,17 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw pmpcfg0, zero          # Spike resets pmpcfg0 to NAPOT RWX, the core to OFF: start both from OFF (a pmpaddr write is logged as read back)
   la   t0, handler
   csrw mtvec, t0
-  # entry0: TOR [0, noexec) RWX ; entry1: TOR [noexec, noexec+16) R only ; entry2: TOR [.., top) RWX
+  # entry0: TOR [0, noexec) RWX ; entry1: TOR [noexec, noexec+4K) R only ; entry2: TOR [.., top) RWX
+  # (noexec starts a page: 4 KiB is the PMP grain)
   la   t1, noexec
   srli t2, t1, 2
   csrw pmpaddr0, t2
-  addi t2, t2, 4
+  addi t2, t2, 0x400
   csrw pmpaddr1, t2
-  li   t2, -1
+  li   t2, 0x3fffffff
   csrw pmpaddr2, t2
   li   t2, 0x000f090f        # cfg0=TOR|RWX, cfg1=TOR|R, cfg2=TOR|RWX
   csrw pmpcfg0, t2
@@ -23,12 +25,14 @@ rvtest_entry_point:
 umode:
   la   t1, noexec
   jr   t1
-  .align 4
+  .section .text.nx,"ax",@progbits
+  .balign 4096
 noexec:
   mul  a2, a0, a1
   nop
   nop
   nop
+  .section .text.init
   .align 4
 handler:
   csrr a3, mcause

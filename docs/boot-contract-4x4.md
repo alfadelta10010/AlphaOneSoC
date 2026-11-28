@@ -1,0 +1,126 @@
+# AlphaOneSoC 4x4: boot contract
+
+What the flash loader must do before it hands the hart to a NOMMU Linux kernel (or any OS that
+reads a device tree), what it may choose, and which constants move together with the clock. The clock is **52.63 MHz** (recalibrated from 62.5 MHz;
+`localFiles/wo-4x4/freq/FREQ-RECAL.md`). No Linux driver does any of the items in section 1: they are loader
+material. The device tree is `docs/alphaone-4x4.dts` (board) and `docs/devicetree-4x4.dtsi` (SoC).
+
+## 1. The loader's duties, in order
+
+The loader is ordinary code in flash (`docs/soc-architecture.md`, "Boot" and "Linux"). It runs
+with the cache off and QSPI_CFG at its reset value (SDR, streaming per the strap).
+
+1. **`mtvec`.** Set it to a handler in flash or PSRAM before anything can trap. It has no reset
+   (unspecified, Priv 3.4), so a trap before it is written vectors to an arbitrary address.
+   **Every unreset CSR:** mtvec, mscratch, mepc, mtval and pmpaddr0-3 power up unknown (X in
+   simulation). Write each one before reading it. In particular the trap idiom `csrrw sp, mscratch, sp`
+   must not run before mscratch has been written (it would swap in an unknown stack pointer), and a
+   pmpaddr must be written before use, including as the lower bound of a TOR entry (a TOR entry i
+   matches against pmpaddr(i-1) whatever pmpcfg(i-1) says).
+   PMP grain is 4 KiB and NA4 is not selectable (`docs/FyraCore_CPU_Reference.md`, 7.7).
+2. **UART divisor and early output** (section 4). The divisor resets to 34 (a silicon constant sized for 62.5 MHz:
+   96,749 baud at 52.63 MHz, -16.0 % from 115200, unusable). Write **29** (113,430 baud, -1.54 %) before the first character.
+3. **`SPICTL.EN = 1`** (GPIO `+0x0C`, bit 0). `spi-oc-tiny` never writes it. With EN = 0 the engine
+   runs but MOSI and SCK stay on OUT bits 1 and 3 (`src/spi.v`: every pin update is `if (en)`), so
+   SD and OLED transfers, including the SD init of step 4, fail silently. Set it only with every
+   CS# high (the 0 to 1 edge can move SCK).
+4. **SD/OLED bus (when the board has them).** Clock at least 74 cycles (10 bytes of `0xFF`) with both
+   CS# high, then CMD0 with SD CS# low, before any other SPI traffic, and after a reboot in the middle
+   of a block clock `0xFF` with CS# low until the card returns `0xFF`
+   (`docs/pins-and-peripherals.md`, section 3). This needs step 3 first.
+5. **Optional DDR bring-up** (section 3). Do it before the cache is turned on and before the kernel
+   is copied, so the copy runs at the faster read speed.
+6. **Copy the images into PSRAM:** the kernel image, the DTB and any initramfs, all inside the
+   16 MB at `0x8000_0000`. Load the NOMMU RV32 kernel at `0x8000_0000` (the safest choice: only a relocatable kernel
+   may sit at another 4 MB boundary, `docs/soc-architecture.md`, "Linux"); put the DTB 8-byte aligned and clear of the kernel's `.bss` and the initramfs. Stores
+   to PSRAM are QPI writes and complete before the next access.
+7. **Cache (optional): `CACHE_CTL` at `0x1002_0024`.** Bit 0 EN, bit 1 reads 1 (a cache is built),
+   bit 2 PBURST. Reset 0 on every reset, including a reboot.
+   * EN may be written at any time, from flash or from PSRAM. Enabling starts cold; clearing returns
+     to the pass-through. The cache is a read cache for instruction fetches: it snoops the core's own
+     stores, AMOs and successful SCs, so a fetch that starts after such a store sees the new bytes;
+     the instruction fetched in the store's completing cycle may run the old bytes (measured: only
+     that one, with the cache on or off); always FENCE.I after writing code (Zifencei).
+   * **Still issue FENCE.I after loading code** (Zifencei requires it, and FENCE.I also flushes the
+     cache). Do it after step 6 and before the jump.
+   * **PBURST (bit 2)** (WO-68, 662982d/f73a2d8): built, **experimental, off at reset**. Set it only
+     with `QSPI_CFG.STREAM = 1` (the engine never opens a PSRAM stream without it, so STREAM = 0, e.g.
+     the no-stream strap, also disables bursts) and only if the core clock is at least **15 MHz**; the
+     loader sets it only from the DT `clock-frequency`. A PSRAM line burst holds CE# low for at most
+     101 clocks (worst case with rd_late = 1; measured 97 with rd_late = 0; the bound is
+     proved against 104 by k-induction, harness `mem_tcem_burst`, WO-72; 1.92 us at 52.63 MHz); the
+     APS6404L allows 8 us (tCEM, standard grade), which fixes the floor at 12.6 MHz, rounded up to
+     15 MHz. Below that leave PBURST at 0 (the reset value; the pins are then unchanged).
+8. **Watchdog.** If the DDR sweep passed it left the watchdog armed with TOP 1 (about 2 to 3 ms) and
+   it cannot be disabled. Before the jump write `WDT_TORR` with a long TOP (the write kicks): TOP 15
+   is 41 s at 52.63 MHz, and Linux's `dw_wdt` then takes over (build with
+   `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`). A loader that never armed it can leave it off.
+9. **Hand-over state:** `a0 = 0` (hartid), `a1` = the DTB's physical address, `mstatus.MIE = 0`,
+   `mie = 0`, **`mcounteren = 0x7`** (it resets to 0, so U-mode `rdcycle`/`rdtime`/`rdinstret` trap as illegal
+   instructions, and an M-mode NOMMU kernel never writes it: the DT advertises `zicntr`, so set it here),
+   FENCE.I done, then `jr` to the kernel entry. The kernel sets up PMP, `mtvec` and the
+   CLINT itself and reads `mhartid`. The PLIC needs nothing from the loader: every source is disabled
+   and threshold 0 at reset, and the kernel's probe sets priorities and enables.
+
+`QSPI_CFG` returns to SDR on any reboot or watchdog reset, so a loader that wants DDR repeats
+section 3 on each boot (or reads BOOT_MODE first, as the reference routine does).
+
+## 2. What the DT supplies and the loader must match
+
+| DT item | Value | Must agree with |
+|---|---|---|
+| `memory@80000000` | 16 MB | the PSRAM window in the core's PMA; the loader's copy |
+| `clk_core`, `uart0`, `spi0` `clock-frequency`; `timebase-frequency` | 52,631,579 | the real core clock (section 4) |
+| `chosen` `stdout-path`, `bootargs` | `serial0:115200n8`, earlycon | the UART divisor (section 4) |
+| CLINT `reg` | `0x0200_0000` + 64 KB | `fyracore` IO0 window |
+| PLIC `riscv,ndev` | 9 | `src/plic.v` NSRC |
+
+## 3. QSPI_CFG and the boot-time DDR sweep
+
+`QSPI_CFG` (syscon `+0x1C`, lane 0): bit 0 STREAM (streaming flash reads), bit 1 DDR (`EDh` DTR
+reads), bits 4:2 DDR_CAP (capture point). Reset: STREAM = the inverse of the no-stream strap
+(`ui_in[2]`), DDR 0, **DDR_CAP 2** (`syscon.v` `DDR_CAP_RESET`). Cap 2 is outside the passing window at
+low clocks (it hangs at 18 MHz on the twin), so the loader must always write DDR_CAP in the same store
+that sets DDR, never read-modify-write. The chip always boots in SDR; DDR is switched on by software after it
+has proved on this board and temperature that it works. The reference routine is
+`tests/soc/ddr_sweep.S` (`docs/soc-architecture.md`, "DDR bring-up"): reboot check, PSRAM copy of
+the sweep, reference block, load sweep over DDR_CAP 1..6 (choose the middle of the longest passing
+run, ties to the later one), a flash execute test under the watchdog, then pass or fall back to SDR.
+BOOT_MODE `0xD0`..`0xDF` belong to it. While Linux runs BOOT_MODE keeps its `0xD8 + k` value, so a
+watchdog reboot after an unrelated kernel hang reads as "DDR crashed at k" and leaves DDR off until a
+pin reset; `syscon-reboot-mode` overwrites BOOT_MODE on a clean reboot, so every clean reboot re-sweeps. At a lower core clock the margins grow, so the sweep still
+works; if it finds nothing the board runs SDR. Fallbacks for the read path that need no software are
+the `rd_late` strap (`ui_in[0]`) and the no-stream strap (`ui_in[2]`), both sampled at the pin reset.
+
+## 4. Clock-dependent constants
+
+Everything below is written for **52.63 MHz** (T = 19.00 ns; the 62.5 MHz values are in
+`localFiles/wo-4x4/freq/FREQ-RECAL.md`). If the board runs at another *f*, change all of them together. The silicon constants cannot change; the DT and loader values
+can.
+
+| Constant | At 52.63 MHz | At another *f* | Where |
+|---|---|---|---|
+| UART divisor (`UART_DIV_RESET`, a hardwired parameter) | reset 34 = 96,749 baud (-16.0 %); the loader writes **29 = 113,430 baud (-1.54 %)** | The reset value stays 34, so the first characters come out at *f* / 544 baud until the loader writes DLL/DLM: divisor = round(*f* / (16 x baud)). 50 MHz: 27 (115,741, +0.47 %); 25 MHz: 14 (111,607, -3.1 %, or a lower baud); 15 MHz: 8 (117,188, +1.7 %); 10 MHz: 11 at 57,600 baud (56,818, -1.4 %) | `src/uart.v`, loader, `bootargs` |
+| DT `clock-frequency` x3 (`clk_core`, `uart0`, `spi0`) | 52,631,579 | the real *f*. `clk_core` also feeds `pwm0` (period 2^(16+scale) clocks) and `dw_wdt` (timeouts) | `docs/devicetree-4x4.dtsi` |
+| `timebase-frequency` | 52,631,579 | *f* (mtime counts the core clock) | `docs/alphaone-4x4.dts` |
+| `earlycon` | no baud, clock from the node | with an explicit baud also give the clock in Hz (`earlycon=uart8250,mmio,0x10000000,115200,<f>`) | `bootargs` |
+| SPI BAUD: SCK = *f* / (2 (BAUD + 1)) | SD at BAUD 2 = 8.77 MHz (`spi-max-frequency` 8771930) | The driver derives BAUD = ceil(*f* / (2 x `spi-max-frequency`)) - 1. BAUD 1 is lost to the pin flop, so keep `spi-max-frequency` **below *f* / 4**: 10,416,667 at 62.5 MHz gives BAUD 2, but at 25 MHz it would give BAUD 1, so use at most 6,249,999 there (BAUD 2 = 4.17 MHz). SD init needs SCK <= 400 kHz (BAUD <= 255 up to 204 MHz, always met). The OLED needs 75 ns phases: BAUD >= ceil(*f* x 75 ns) - 1 (5 at 62.5 MHz; 1 at 25 MHz, but BAUD 1 is only unsafe for MISO, never use 0 to receive) | `spi0` node, loader |
+| Watchdog: timeout = 2^(16+TOP) clocks | TOP 15 = 40.8 s; DDR test TOP 1 = 2.5 to 3.7 ms | scales as 1/*f*: at 15 MHz TOP 15 = 143 s, TOP 1 = 8.7 to 13 ms. The driver reads the rate from `clk_core`, so a correct DT needs nothing else | `docs/soc-architecture.md` (Watchdog), loader |
+| PSRAM minimum clock, any access | 8.0 MHz (tCEM 8 us; a single read holds CE# low 64 clocks at worst, 1.22 us at 52.63 MHz) | **below 8 MHz every PSRAM access breaks tCEM and corrupts RAM silently**; add margin (use 8.3 MHz or more) | PSRAM, always (with or without PBURST) |
+| PBURST minimum clock | 15 MHz (tCEM 8 µs, at most 101 clocks per line: floor 12.6 MHz; 1.92 µs at 52.63 MHz) | **below 15 MHz PBURST stays 0** | CACHE_CTL |
+| PWM1 tone: 52.6316e6 / (N * 2^S + 1) Hz | N = round((52.6316e6 / f - 1) / 2^S) | recompute the note table (pins-and-peripherals.md, Tones) | bare-metal software |
+| UART RX slack without RTS# | 88 µs per character at 113,430 baud | set by the baud, not the clock: unchanged once the divisor is retuned | `docs/pins-and-peripherals.md` |
+
+## 5. Checking the device tree
+
+On the sandbox (never locally):
+
+```
+dtc -I dts -O dtb -@ -o alphaone-4x4.dtb alphaone-4x4.dts     # with devicetree-4x4.dtsi alongside
+dt-validate -s <linux>/Documentation/devicetree/bindings alphaone-4x4.dtb
+```
+
+Expected remaining reports (2026-11-21, dtschema 2026.9 against torvalds/master): the PLIC's
+out-of-tree `alfadelta10010,alphaone-plic` (the schema accepts `sifive,plic-1.0.0` only behind a
+listed SoC name; the driver matches the fallback) and the legacy `baud-width` of `spi-oc-tiny`
+(its binding is a text file, so there is no schema for the property). Nothing else.

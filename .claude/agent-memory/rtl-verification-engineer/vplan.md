@@ -421,3 +421,19 @@ non-vacuity matrix". Mutant map in WO-38 step 3.
 - M2 (muldiv_busy -> (st==S_SH)==ex_is_shift && (st==S_SH || isdiv==ctrl_aluOp[2])) is necessary, NOT sufficient: L1 induction still fails (5 s probe). FC02/FC49 -> "equivalent (argument + bounded)".
 - md07 PROVED L1 accepted. md07_miter drv1 ERROR no verdict; drv2 pending at review time.
 - WO-30 logs show NONVAC-MISS spi_dc SPI01/SPI20 - confirm resolved.
+- 2026-11-21 EQY 4x4 re-baseline (hd nl 757ba9e9, RTL 1f2a473 + hd plic.v): accounting MATCH (gold 2142 /
+  gate 1961: 1925 direct incl. 64 rx_mem, 11 rename, 11/22 recode, 192 tied, 3/3 rx_mem rdreg), lemma PROVED
+  192 consts k=2, fsminv PROVED, setup MATCH. First prove (242 partitions, sandbox ~/acc/eqy4x4): 188 sat
+  PROVED, 23 pdr FAIL, 30 OPEN vacuous-base, amo_old_val UNKNOWN -> NOT signed off. Root cause per f0ca0b2
+  (another session): icache macro rb_addr/w_ena pin nets cut (nxt[0]==pc[2] impossible pair). Re-run with
+  f0ca0b2 (251 partitions) + the run.sh half (localFiles/wo-4x4/deferred/EQY.txt) still owed; mutants stage
+  never run on 4x4.
+- 2026-11-22 WO-75: WO-70 adversarial programs (tb_adv) status = passing at 9e385c0: adv_reboot c0/c1/c2/15m,
+  adv_ctl c0/c1/c2, adv_irq c0/c1/c2/div4, adv_smc late(10 ns)/ddr2; smc_10m negative control fires.
+  Cross-mode SIG identical (reboot 000007e0, ctl d6b744da, irq 000116e0). Single seed; no coverage collection.
+- 2026-11-23 px/memctrl (PX-1/PX-3) at 26d909d: mem_pw PROVED + nonvac 12/0/0; mem_arb nonvac 9/0/0; cache BOUNDED 18,
+  cache_en BOUNDED 12, cache_pt PROVED, cache_cov 10/10, nonvac cache 14/0, cache_en 2/0; test-qspi 66 PASS.
+  Open: MP3 with BURST_FREE, mem_ld ML1 (no verdict at 454), LD/LI defines, pw_order.ref. memctrl-triage.md.
+- 2026-11-24 formal triage: qspi_strap FAILS on PBURST trees (stale miter, TB-021), PROVED on A0/a0core; patched PROVED
+  head+gA. mem_tcem PROVED pdr on head/gA/A0 (1931/1264/1829 s). cache BOUNDED 18 head/gA/A0 (2353/1193/1197 s).
+  qspi_burst_eq_cov cover 3 unreachable (TB-022). None of the patches committed (coordinator decides).

@@ -1,0 +1,8 @@
+# WO-62: broken copies of the EN-edge logic for the EN-free harness (cache_en, depth 12 by default). A counterexample
+# needs a fill, EN falling and a fetch; the second may need CACHE_EN_DEPTH >= 20 here (tb_cache +ENFAST kills it on every seed).
+# takes the fetch path over while a pass-through request is still in flight on mem_ctrl
+sed cache.v s@wire        on    = !act \&\& en \&\& (!f_req || m_ready);@wire        on    = !act \&\& en;@
+# a fill may start on the way out (EN falls): its state outlives the pass-through
+sed cache.v s@\&\& !fill_active \&\& en;@\&\& !fill_active;@
+# (not listed: valid not cleared on the way out. The stores are snooped in the pass-through too, so a retained line
+#  is never stale and the data cannot show it; tb_cache checks valid == 0 at every takeover and kills it.)

@@ -13,15 +13,18 @@ apart, this document says which one won and why.
 | Flash | `0x2000_0000` | 16 MB | read, execute | W25Q128JV on QSPI CS0 |
 | PSRAM | `0x8000_0000` | 16 MB | read, write, execute, LR/SC, AMO | 2x 8 MB PSRAM on QSPI CS1 (A) / CS2 (B), `addr[23]` picks the chip |
 | CLINT | `0x0200_0000` | 64 KB | read, write, AMO | `src/clint.v` |
-| PLIC | `0x0C00_0000` | — | reserved, not implemented (accesses fault) | — |
-| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550-compatible subset, byte registers, polled (`docs/pins-and-peripherals.md`) |
-| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]` (`docs/pins-and-peripherals.md`) |
-| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps (section "syscon") |
+| PLIC | `0x0C00_0000` | 4 MB | read, write, AMO; its own PMA window IO2 | `src/plic.v`: `sifive,plic-1.0.0` subset, 9 sources, 1 context; word reads only (`docs/pins-and-peripherals.md` 7) |
+| UART | `0x1000_0000` | 64 KB | read, write, AMO | `src/uart.v`: 16550A, byte registers, RX FIFO 8, one TX holding register, interrupt 1 (the 3x4 submission has the polled subset) (`docs/pins-and-peripherals.md` 2) |
+| GPIO | `0x1001_0000` | 64 KB | read, write, AMO | `src/gpio.v` + `src/spi.v`: GPIO at `+0x00`-`+0x0C` and the SPI controller (tiny_spi registers) at `+0x20`-`+0x30`, decoded on `addr[5:2]`; the one-pad gamepad at `+0x10` (GAMEPAD) and `+0x14` (GPSTAT) is carved out in `soc_bus` (`src/gamepad.v`); `+0x18`/`+0x1C` IN_IE/IN_IP, the input-change interrupt (PLIC source 4) (`docs/pins-and-peripherals.md`) |
+| syscon | `0x1002_0000` | 64 KB | read, write, AMO | `src/syscon.v`: reboot, power-off, reset cause, boot mode, chip ID, straps, QSPI_CFG, watchdog (section "syscon"); `+0x20` is the PINMUX word (`src/pinmux.v`) and `+0x24` is CACHE_CTL (`src/alphaone_soc.v`, `src/cache.v`), both carved out in `soc_bus` |
+| PWM | `0x1003_0000` | 64 KB slot | read, write, AMO | `src/pwm.v`: sifive,pwm0 layout, 2 built comparators (cmp2/3 read `0xFFFF`), no sticky / one-shot / interrupt; the second IO slot, `addr[17:16] = 3` |
 
 Everything else is unmapped: an access raises an access fault (cause 1 / 5 /
 7) from the core's PMA check, before anything reaches the bus. The windows are
-`fyracore` parameters (`PMA_ROM_*`, `PMA_RAM_*`, `PMA_IO0_*`, `PMA_IO1_*`);
-the defaults are this map.
+`fyracore` parameters (`PMA_ROM_*`, `PMA_RAM_*`, `PMA_IO0_*`, `PMA_IO1_*`,
+`PMA_IO2_*`); the defaults are this map. IO1 runs to `0x1003_FFFF` (it was
+`0x1002_FFFF`) and IO2 is the PLIC's 4 MB window. The 4x4 branch's decision
+and the harden numbers are in `docs/ROADMAP.md` section 0.
 
 * **Flash is read-only.** A store, AMO or SC to it is a store access fault
   (cause 7) and an LR is a load access fault (cause 5): flash has no write
@@ -51,15 +54,17 @@ in flash, `.data`/`.bss`/stack in PSRAM) and starts with
 `0x8000_0000`, is for the verification flow, which starts the core straight
 in PSRAM.)
 
-`mtvec` resets to 0. The spec leaves it unspecified, boot code must set it
-before it can take a trap, and 0 matches Spike, so lockstep traces agree from
-reset. A trap taken before `mtvec` is written jumps to 0, which is unmapped,
-and faults there over and over: a cause-1 loop at 0 that rewrites mepc,
-mcause and mtval on every pass, so the first trap's cause is lost, and the
-QSPI bus goes quiet, since 0 is outside every window. Erased flash
-(`0xFFFFFFFF`, an illegal instruction) at the reset vector ends this way.
-Kept at 0 by decision (2026-09-29); the first thing boot code does is set
-`mtvec`.
+`mtvec` has no reset (Priv 3.4 leaves it unspecified; so are mscratch, mepc,
+mtval and pmpaddr0-3, none of which has a reset either: only mstatus,
+mcause, mie, misa, the counters' control CSRs and the PMP A/L fields do).
+Boot code must set `mtvec` before it can take a trap. A trap taken before
+`mtvec` is written vectors to an unspecified address; it used to jump to 0,
+which is unmapped, and fault there in a cause-1 loop (decision 2026-09-29,
+reversed 2026-11-24 to save the 30 reset gates and for the same reason
+mepc/mtval/mscratch/pmpaddr lost theirs). Erased flash (`0xFFFFFFFF`, an
+illegal instruction) at the reset vector now ends in an arbitrary jump
+instead. The first thing boot code does is set `mtvec`; the verification
+flow's lockstep traces start from a program that does.
 
 **A reboot restarts the SoC from flash exactly as a pin reset does.** A write
 of `0x7777` to syscon's FINISH register holds the SoC in reset for two clock
@@ -84,9 +89,28 @@ held request (see `src/fyracore.v`), which is all a single-master bus needs.
   `addr[17:16]`), otherwise the CLINT;
 * a read-data and ready mux.
 
-It has no registers. Peripherals answer with combinational read data, and
-in the cycle they are selected, so a peripheral access is one cycle -- except
-for back-pressure: the UART holds a THR write, and the GPIO block a write to the SPI controller, until it is ready. An IO target may hold `ready` low only
+**Three carves** sit on top of that decode: the PLIC is
+selected by `addr[27]` (its own PMA window); in the GPIO slot, offsets
+`0x10`-`0x17` of every 64-byte alias go to the gamepad and `gpio.v` never sees
+them; in the syscon slot, `0x1002_0020` goes to the pinmux and `syscon.v`
+still reads 0 there, so its proofs stand (CACHE_CTL at `0x1002_0024` is the same kind of carve). The PWM is IO slot 3: the whole slot decodes to the PWM, and 0x1003_0100 (the old audio window) aliases it.
+The new targets never hold `ready` low.
+
+**Registered IO read path (decision D14).** The 3x4
+submission has no registers in `soc_bus`: peripherals answer with
+combinational read data in the cycle they are selected. The 4x4 bus has one
+state flop `ph` and a 32-bit `io_q`. Selects are high only in phase 1; the
+target acts, and `io_q` captures the read data, on the edge where
+`sel && ready`; the core completes one clock later (`d_ready = ph`, data from
+`io_q`) while every select is low, so a pop, a claim, a W1C or a write acts
+exactly once. The memory path is unchanged. Why: with combinational read
+data the area-agent's real-block routing screen failed (global-route usage
+78.26 %, overflow 4,290, against the 3x4 ceiling 71.83 % / 117); with it
+registered it passed (66.04 % / 16) for 32 flops and 632 µm². The bundle
+fits under the 3x4 routing ceiling only this way. Cost: one clock per IO
+access.
+
+Before that change an access was one cycle, except for back-pressure: the UART holds a THR write, and the GPIO block a write to the SPI controller, until it is ready. An IO target may hold `ready` low only
 on a cycle its own select is high, so the bus simply ANDs the IO readies. A
 peripheral with a side effect (a UART RX pop, a THR load) acts only on the
 cycle its select and its `ready` are both high; the request strobe
@@ -106,7 +130,7 @@ Joins the core's two ports onto the one QSPI engine.
   load and a store each), not one. The bound is what keeps a fetch from being
   starved: the formal harness `core_df` checks at most 4 data handshakes per
   held fetch (BOUNDED, 32 steps from reset), and the worst fetch latency of
-  449/482 clocks (`rd_late` 0/1, streaming on; 442/456 off) is stated for that bound. Serving data first
+  449/482 clocks (`rd_late` 0/1, streaming on; 442/456 off) is stated for that bound, **with the cache off**. With the cache on (CACHE_CTL.EN = 1) the requester is the cache, one aligned word per request; a fill word can be starved by data traffic (no deadlock: the core is not waiting for it) and a data request can wait behind one fill word. The wait the core sees on a miss is bounded by 4 data, 3 old fill and 4 own fill transactions plus 3 clocks: 476 clocks with PSRAM-only code up to 581 with flash code (`src/mem_ctrl.v` header). Serving data first
   also avoids reading the next instruction before a load and then losing it
   while the load stalls the pipeline; fetch-first would do that on every load.
 * **Chip select** from the address: flash if `addr[31]` is 0, otherwise PSRAM
@@ -172,7 +196,8 @@ enters continuous-read mode) and releases the bus for the other four.
   pad round trip up to about 2 clocks. At 1 it is sampled three clocks after,
   which covers about 1 to 3 clocks, and chip select stays low one clock
   longer for the last nibble. TinyQV measured the TinyTapeout pad round trip
-  at a little over 20 ns; at 50 MHz use 0, and at 62.5 MHz (the clock the
+  at a little over 20 ns; at 50 and 55 MHz use 0 (the chip clock is 52.63 MHz:
+  `docs/qspi-ddr.md` 3.5), and at 62.5 MHz (the clock the
   3x4 harden closes at) and near 66 MHz use 1. It is a
   strap rather than a register because flash reads must work before any
   software runs, and it is sampled during reset and held, so a pin that
@@ -246,8 +271,9 @@ reset (`docs/pins-and-peripherals.md`).
 * The devices' power-up time (150 µs for the PSRAM) has passed before reset
   is released. On the demo board it long has.
 * PSRAM maximum chip-select-low time (tCEM) is 8 µs for the standard grade
-  the Pmod carries (APS6404L-3SQR-SN). The longest transaction is about 60
-  clocks, so the core clock must be above about 8 MHz.
+  the Pmod carries (APS6404L-3SQR-SN). The longest plain read is 64 clocks, so
+  without PBURST the core clock must be at least 8.0 MHz (use 8.3 or more for margin); below that every
+  PSRAM access breaks tCEM and silently corrupts RAM. PBURST needs 15 MHz (`docs/boot-contract-4x4.md`).
 * The flash is idle when reset is released: no program, erase or status
   write still running, and no erase or program suspended. While BUSY the
   flash ignores everything but status reads and suspend (-DTR §7.1.1; a
@@ -265,9 +291,19 @@ reset (`docs/pins-and-peripherals.md`).
   `mtime >= mtimecmp` compare out of the path into the core's interrupt and
   next-PC logic, at the cost of one flop and one cycle of latency.
 * `mtimecmp` resets to all-ones, so no timer interrupt is pending out of reset.
-* No PLIC. With a polled UART, Linux needs no external interrupt; the `0x0C00_0000`
-  window is reserved for one if that changes. `docs/pins-and-peripherals.md`
-  explains why interrupts would not make the console faster on this core.
+* **PLIC at `0x0C00_0000`** (4x4 branch). One context (hart 0, M-mode, line 11 of
+  the cpu interrupt controller), 9 sources (8 level-triggered and the watchdog pulse): 1 UART, 2 SPI (polled,
+  not in the DT), 3 gamepad, 4 GPIO input change (IN_IE/IN_IP, all 8 inputs,
+  bare-metal/FreeRTOS only: gpio-mmio has no irqchip), 5-8 PWM
+  (interrupts removed, tied 0), 9 watchdog (a one-clock pulse at the first
+  expiry). The claim ignores the threshold (spec), a complete clears the
+  in-service mark only for an enabled source, and reads must be words (a byte
+  read claims). Its output `meip` is registered, like MTIP, and drives the
+  core's `external_irq`, so `mip.MEIP` is no longer constant 0. Priority
+  MEI > MSI > MTI; WFI wakes on pending and enabled regardless of `mstatus.MIE`.
+  The 3x4 submission has no PLIC and every device is polled; the 16550A's trigger
+  levels are what make the UART interrupt worth taking
+  (`docs/pins-and-peripherals.md` 2 and 7).
 * Registered MTIP is legal: Priv §3.2.1 says MTIP reflects the comparison
   "eventually, but not necessarily immediately". Linux's CLINT driver sets
   MTIE before it writes `mtimecmp` (low word, then high), with MIE off, and
@@ -290,7 +326,7 @@ into.
 | +0x10 | STRAPS | R, [0] = `qspi_rd_late`, [1] = the no-stream strap (`ui_in[2]`), as latched at the last pin reset | the pins | kept |
 | +0x14 | CLK_GATE | reserved: reads 0, writes ignored | - | - |
 | +0x18 | POWER | reserved: reads 0, writes ignored | - | - |
-| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR, DDR_CAP: stored, no effect until the DTR read path lands | STREAM = ~no-stream strap, DDR 0, DDR_CAP 0 | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
+| +0x1C | QSPI_CFG | R/W, lane 0, `{27'b0, DDR_CAP[2:0], DDR, STREAM}`. STREAM: streaming flash reads allowed (`qspi_ctrl` `stream_en`). DDR (`EDh` DTR flash reads) and DDR_CAP (the capture point) as in "DDR bring-up" | STREAM = ~no-stream strap, DDR 0, **DDR_CAP 2** (the loader must always write DDR_CAP in the same store as DDR) | reset to the same values (reset by every reset, so a reboot or watchdog expiry comes back in SDR) |
 | +0x20..+0xFC | - | read 0, writes ignored | - | - |
 | +0x100..+0x1FF | WDT | the watchdog, below | 0 (TOP 15) | disabled |
 | +0x200..+0xFFFC | - | read 0, writes ignored; no register is aliased | - | - |
@@ -345,7 +381,7 @@ two-flop hand-over on the reset.
 | Edge | `rst_soc` before it | At the edge |
 |---|---|---|
 | E0 | 0 | The store completes; `rq` <- 1, RESET_CAUSE.SOFT <- 1 |
-| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0xB9`, pc <- the reset vector; `rq2` <- 1 |
+| E1 | 1 | Every block but syscon resets: `ctl_oe` and `io_oe` <- 0 (QSPI pins released), `cs_n` <- 111, `sck` <- 0, `uo_out` = `0x39` (the 3x4 design: `0xB9`), pc <- the reset vector; `rq2` <- 1 |
 | E2 | 1 | Still in reset; `rq` <- 0, `rq2` <- 0 |
 | E3 | 0 | First running edge: `ctl_oe` <- 1 (SCK and the chip selects driven idle), the start-up sequence starts 8 clocks later, the core fetches `0x2000_0000` |
 
@@ -362,8 +398,8 @@ A store of `0x5555` (or the fail value `0x3333`) sets `off`, which holds
 
 * The QSPI pins are released. The Pmod's 10 kΩ pull-ups hold every chip
   select high, so the flash and both PSRAMs deselect and drop to standby.
-* `uo_out` = `0xB9`: UART idle, RTS# not ready, the OLED in reset with its
-  panel supply off.
+* `uo_out` = `0x39` (the 3x4 design: `0xB9`): UART idle, SD CS# high, the OLED in reset with its
+  panel supply off, audio low.
 * The clock keeps running. Nothing gates a clock yet, so only the clock tree
   and the flops' clock pins toggle; `mtime` stops, because the CLINT is in
   reset.
@@ -442,7 +478,7 @@ fails:
 5. **Execute test.** A stream framing error (the device launching half an SCK
    late) is invisible to loads, so the routine runs flash code in DDR at the
    chosen point with the watchdog armed: BOOT_MODE = `0xD8 + k`, WDT_TORR TOP 1
-   (131 072 to 196 608 clocks, about 2.1 to 3.1 ms at 62.5 MHz, written first so
+   (131 072 to 196 608 clocks, about 2.5 to 3.7 ms at 52.63 MHz, written first so
    the write kicks) and WDT_CR.EN, then QSPI_CFG DDR on at k, then a call to a
    straight-line flash routine (300+ instructions from immediates, then a short
    loop) whose checksum is compared with the SDR one. A trap during the test:
@@ -518,11 +554,12 @@ It gets its own device-tree node, beside the `syscon` node, not inside its
 
 | Offset | Name | Access | After any `rst_soc` reset |
 |---|---|---|---|
-| +0x100 | WDT CR | Lane 0. [0] EN: a write with bit 0 = 1 sets it; nothing clears it but a reset. [1] RESP_MODE reads 0 and ignores writes | 0 |
+| +0x100 | WDT CR | Lane 0. [0] EN: a write with bit 0 = 1 sets it; nothing clears it but a reset. [1] RMOD (RESP_MODE), written by every CR write: 0 = an expiry reboots, 1 = interrupt mode (first expiry raises PLIC source 9, the second reboots) | 0 |
 | +0x104 | WDT TORR | [3:0] TOP, R/W, lane 0; reads `{TOP, TOP}` in [7:0]. A write also kicks | `0xFF` (TOP 15) |
 | +0x108 | WDT CCVR | Reads 0 | - |
 | +0x10C | WDT CRR | Lane 0: writing `0x76` kicks, any other value is ignored. Reads 0 | - |
-| +0x110, +0x114 | STAT, EOI | Read 0 | - |
+| +0x110 | STAT | [0] the interrupt-mode flag; cleared by a kick, a TORR write, an EOI read or a reset | 0 |
+| +0x114 | EOI | Reads 0; a read clears the flag | - |
 | +0x1F4 | COMP_PARAMS_1 | Reads `0x0000_0040` (USE_FIX_TOP: timeout TOP = 2^(16+TOP) clocks) | - |
 | other +0x100..+0x1FF | - | Read 0, writes ignored | - |
 
@@ -533,16 +570,16 @@ COMP_PARAMS_1 bit 6 to learn that the timeouts are the fixed powers of two.
 
 **Timeout.** TOP *t* gives 2^(16+*t*) clocks, *t* = 0..15.
 
-| TOP | 2^(16+TOP) clocks | at 62.5 MHz | at 50 MHz | TOP | at 62.5 MHz | at 50 MHz |
+| TOP | 2^(16+TOP) clocks | at 52.63 MHz | at 50 MHz | TOP | at 52.63 MHz | at 50 MHz |
 |---|---|---|---|---|---|---|
-| 0 | 65,536 | 1.05 ms | 1.31 ms | 8 | 268 ms | 336 ms |
-| 2 | 262,144 | 4.19 ms | 5.24 ms | 10 | 1.07 s | 1.34 s |
-| 4 | 1,048,576 | 16.8 ms | 21.0 ms | 12 | 4.29 s | 5.37 s |
-| 6 | 4,194,304 | 67.1 ms | 83.9 ms | 14 | 17.2 s | 21.5 s |
-| | | | | 15 | 34.4 s | 42.9 s |
+| 0 | 65,536 | 1.25 ms | 1.31 ms | 8 | 319 ms | 336 ms |
+| 2 | 262,144 | 4.98 ms | 5.24 ms | 10 | 1.28 s | 1.34 s |
+| 4 | 1,048,576 | 19.9 ms | 21.0 ms | 12 | 5.10 s | 5.37 s |
+| 6 | 4,194,304 | 79.7 ms | 83.9 ms | 14 | 20.4 s | 21.5 s |
+| | | | | 15 | 40.8 s | 42.9 s |
 
-At 62.5 MHz `dw_wdt` has `min_timeout` 1 s (TOP 10), `max_hw_heartbeat_ms`
-34,359 (TOP 15) and a default of 30 s (TOP 15); for longer timeouts the
+At 52.63 MHz `dw_wdt` has `min_timeout` 1 s (TOP 10), `max_hw_heartbeat_ms`
+40,802 (TOP 15) and a default of 30 s (TOP 15); for longer timeouts the
 watchdog core pings on the kernel's behalf.
 
 **Timebase: a tap of `mtime`.** syscon takes `wdt_tap = mtime[29:14]` from the
@@ -582,8 +619,15 @@ so neither matters to it.
   cycle is swallowed, so the bound is 3Pt + 1.
 * TORR resets to TOP 15 (reads `0xFF`): a program that sets EN without writing
   TORR gets 34 s, not 1 ms.
-* RESP_MODE reads 0 and ignores writes: there is no interrupt line, and with
-  no `interrupts` property the driver offers no pretimeout.
+* RMOD set (interrupt mode): the first expiry sets STAT and restarts the period, and
+  raises PLIC source 9 as a **one-clock pulse** (not the STAT level: `dw_wdt`
+  requests the IRQ rising-edge, its ISR reads STAT only and never EOI, and the
+  PLIC is level-only, so a level would re-pend after every complete); an expiry
+  with STAT still set reboots. The PLIC pend is sticky, so the pulse is lost only
+  while source 9 is claimed and not completed (WDT_STAT stays pollable). Linux
+  sets RMOD itself for a pretimeout (`dw_wdt_update_mode`) and the DT's
+  `interrupts = <9>` lets the driver offer one; without `interrupts` it stays
+  reset-only. Do not mask it in the DT.
 
 **CCVR reads 0**, so `/sys/class/watchdog/watchdog0/timeleft` shows 0 s. A real
 readback needs a variable shifter, about +0.12 tile.
@@ -678,7 +722,7 @@ The watchdog node, with a fixed clock for the core clock (`dw_wdt` needs
 sysclk: sysclk {                      /* the core clock = timebase-frequency */
     compatible = "fixed-clock";
     #clock-cells = <0>;
-    clock-frequency = <62500000>;
+    clock-frequency = <52631579>;
 };
 
 watchdog@10020100 {
@@ -693,7 +737,7 @@ watchdog@10020100 {
   NOMMU config) and `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`, so the kernel
   pings a watchdog the flash loader armed until userspace opens
   `/dev/watchdog`. Userspace: busybox `watchdog`.
-* What the driver does here: probe clears RESP_MODE (already 0) and takes the
+* What the driver does here: probe clears RMOD (already 0) and takes the
   timeouts from the fixed TOPs; start writes TORR, kicks, sets EN; ping writes
   CRR = `0x76`; stop cannot stop it and the core keeps pinging; timeleft is 0.
   Its restart handler (priority 128, below `syscon-reboot`'s 192) writes
@@ -832,6 +876,26 @@ was split over three cycles the 3x4 harden closes at 62.5 MHz at every corner
 clocks through the pins. Per instruction: ALU 42 clocks; `lw`,
 a taken branch and every M op 84; `sw` 76; `sb` 64.
 
+With the 4x4 instruction cache (`CACHE_CTL`, section "Instruction cache" in
+`docs/pins-and-peripherals.md`), measured as CoreMark per MHz in the Verilator
+SoC bench at 62.5 MHz, 10 iterations, without the WO-76 fetch hold (128 B rows: tree
+a732aaa; 256 B rows: tree 2a2978e; cache off is the same on both):
+
+| Configuration | CoreMark/MHz |
+|---|---|
+| cache off | 0.073 |
+| 128 B cache, on | 0.130 |
+| 128 B cache, on + PBURST | 0.154 |
+| 256 B cache (WO-77), on | 0.163 |
+| 256 B cache (WO-77), on + PBURST | 0.181 |
+| 256 B, 8 x 32 B sectored (WO-cache832, tree 2c48f74 = 3bff64f + sectored cache.v, with the WO-76 fetch hold), on | 0.154 |
+| 256 B, 8 x 32 B sectored (WO-cache832, tree 2c48f74), on + PBURST | 0.175 |
+
+Embench (geometric mean per MHz) exists only for the 128 B cache: 0.0306 off,
+0.0495 on, 0.0599 on + PBURST. FatFs numbers also exist only for 128 B and are
+not repeated here. Data accesses go to PSRAM uncached (about 41 clocks each) and
+are the next bottleneck.
+
 Options not yet taken, roughly in order of payoff per gate:
 
 1. **Keep the fetch stream open.** Leave chip select low after a fetch and,
@@ -840,17 +904,20 @@ Options not yet taken, roughly in order of payoff per gate:
    bus, for about 0.5–0.7 kGE. It also ends the refetching during WFI and
    M-op stalls. It must close the stream at every 1 KB PSRAM page and within
    tCEM, and it is the heaviest to verify.
-2. **Stop the two wasted fetches (prototyped, for a follow-up branch).**
-   A taken branch pays for the fall-through fetch already in flight, and an
-   M op starts only after a fetch completes and then discards it, so both
-   cost one extra QSPI read (about 42 clocks). Holding `imem_req` low while
-   a branch or jump is in EX, and letting `muldiv_start` ignore only a
-   pending fetch, fix both at 0.00 tiles with no change to the
-   request/ready contract: a taken branch drops from 84 to 43 clocks, an M
-   op from 84 to 42, a not-taken branch rises from 42 to 43, and the
-   compiled-C benchmark goes from 56.1 to 48.3 clocks per instruction
-   (−14%). Prototypes in `localFiles/area-audit/pr5/`; kept off this branch
-   by decision (2026-09-29).
+2. **Stop the two wasted fetches: done.** The branch/jump fetch hold (9dc7443,
+   2026-10-01, `ex_nofetch`; extended to ECALL, EBREAK, MRET, FENCE.I and PMP
+   writes in d19ceed) and the M op starting during the fetch wait (ff130fb,
+   `muldiv_start` on `stall_nofetch`) are in the RTL: a taken branch costs one
+   fetch, not two, and an M op no longer waits for a fetch it then discards.
+   The last piece, a fetch that completes while the pipeline is stalled being
+   discarded and fetched again, is WO-76: the fetch hold register (`if_wlo`,
+   `if_wv`). A fetch that completes on a stalled edge with no data access in WB
+   is kept whole and `imem_req` stays low until IF/EX takes it (or a redirect
+   drops it); with the cache on that takes an aligned hit from 4 clocks to 3
+   per instruction, with the cache off and the flash stream open it saves the
+   57-clock re-read after an M op, and in WFI the bus goes idle. A fetch that
+   completes with a data access in WB is still requested again (the
+   data-per-fetch bound of 4 and the store ordering depend on it).
 
 3. **SCK = clk.** Anywhere between no gain and 2x, depending on whether the
    core or the pads limit the clock. With a round trip over 20 ns it needs

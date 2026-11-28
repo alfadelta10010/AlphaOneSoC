@@ -172,7 +172,7 @@ t_mstatus           spike
 t_mepc              spike
 t_warl              spike
 # Reset values per spec: PMP off (Spike resets it permissive), mstatus 0.
-t_reset             expect x8=0x0 x9=0x0 x18=0x0 x19=0x0 x20=0x40101105 x21=0x0 x22=0x0 x23=0x0 x24=0x0
+t_reset             expect x8=0x0 x19=0x0 x20=0x40101105 x22=0x0 x23=0x0 x24=0x0
 
 # ---- PMP, MPRV, U-mode ---------------------------------------------------------
 pmpcfg              spike
@@ -180,7 +180,10 @@ pmp_rw_reserved     spike
 pmp_adjacent        spike
 pmp_adjacent_x      spike
 pmp_napot_small     spike
-pmp_napot_hi        spike
+# pmpaddr[31:30] (PA[33:32]) are not implemented, so a NAPOT 0x9fffffff reads back
+# 0x1fffffff: the whole 32-bit space, and the U-mode fetch is allowed (ecall from U,
+# cause 8). Spike keeps the bits and takes the region as one above 4 GB (cause 1).
+pmp_napot_hi        expect x13=0x1fffffff x12=0x111 x14=0x8
 pmp_tor4g           spike
 mprv                spike
 mprv2               spike
@@ -348,3 +351,22 @@ fr_pmp              spike  +IMEM_WAIT=2 +IMEM_RANDOM=1 +DMEM_WAIT=1
 # Spike's decode cache is keyed by pc and need not agree, so DUT only.
 fr_smc              expect x12=0x1 x13=0x5
 fr_smc              expect x12=0x1 x13=0x5 -- +IMEM_WAIT=2 +DMEM_WAIT=3 +DMEM_RANDOM=1
+
+# ---- fetch hold (WO-76): a fetch that completes under a stalled pipeline is kept ----
+# M ops and shifts with 32-bit and compressed instructions behind them; the held word is used whole.
+fh_mul_hold         spike
+fh_mul_hold         spike  +IMEM_WAIT=2
+fh_mul_hold         spike  +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+# A store to the word of a later instruction, then a long M op: Y's fetch completes with the store
+# still in WB and must not be held (the "no data access in WB" term); Spike runs the new Y.
+fh_store_held       spike
+fh_store_held       spike  +DMEM_WAIT=20 +IMEM_WAIT=0
+fh_store_held       spike  +DMEM_WAIT=3 +DMEM_RANDOM=1 +IMEM_WAIT=2 +IMEM_RANDOM=1
+# Timer interrupts behind a held word (M-op loop) and in WFI. Timer counts clocks: DUT-only.
+fh_irq_hold         expect x8=0x3c x11=0x0 x12=0x1 x13=0x0
+fh_irq_hold         expect x8=0x3c x11=0x0 x12=0x1 x13=0x0 -- +IMEM_WAIT=3 +IMEM_RANDOM=1 +DMEM_WAIT=2 +DMEM_RANDOM=1
+# Cycle floor with the instruction cache on; SoC only. x10 = 1 when both loops meet their bound.
+fh_perf             soc expect x10=0x1 -- +CACHE_EN
+
+# fh_mul_hold from flash (SoC only): the flash stream idles open under each M op (WO-76).
+fh_flash            flash

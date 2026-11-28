@@ -13,7 +13,7 @@
 # and that mip.MSIP stayed clear. Interrupts stay off (mstatus.MIE = 0).
 #
 # The stores:
-#   GPIO   +0x0000 OUT  <- 0x09 (not the reset value 0x89: SD CS# low)  msip bit 0
+#   GPIO   +0x0000 OUT  <- 0x09 (not the reset value 0xB9: SD CS# low)  msip bit 0
 #          +0x4000 OUT  <- 0x09                        mtimecmp[31:0]
 #          +0x4004 IN   <- 0x11 (read-only: ignored)   mtimecmp[63:32]
 #          +0xBFFC slot 0x3C <- 0x100 (the window aliases every 64 B, so this is
@@ -78,7 +78,7 @@ _start:
     sw   t0, 0(t1)               # CTRL
 
     li   s5, UART
-    li   t0, 0x12345678
+    li   t0, 0x12345662          # MCR byte 0x62: LOOP stays clear (loopback would hold TX high) and RTS set
     li   t1, 0x4004
     add  t1, s5, t1
     sw   t0, 0(t1)               # MCR LSR MSR SCR

@@ -3,12 +3,13 @@
   .section .text.init
   .globl rvtest_entry_point
 rvtest_entry_point:
+  csrw pmpcfg0, zero          # Spike resets pmpcfg0 to NAPOT RWX, the core to OFF: start both from OFF (a pmpaddr write is logged as read back)
   la   t0, handler
   csrw mtvec, t0
   la   t1, boundary
   srli t2, t1, 2
   csrw pmpaddr0, t2          # entry0 TOR [0, boundary) RWX
-  li   t2, -1
+  li   t2, 0x3fffffff
   csrw pmpaddr1, t2          # entry1 TOR [boundary, top) R only
   li   t2, 0x0000090f
   csrw pmpcfg0, t2
@@ -22,8 +23,11 @@ umode:
   li   a0, 0x5a
   la   t1, straddle
   jr   t1
-  .balign 4
-  .skip 2
+  # The PMP grain is 4 KiB: the boundary has to be a page boundary, so the
+  # straddling instruction goes in a section of its own at the end of a page.
+  .section .text.sa,"ax",@progbits
+  .balign 4096
+  .skip 4094
 straddle:
   .option push
   .option norvc
@@ -32,6 +36,8 @@ straddle:
   .balign 4, 0
   .equ boundary, straddle + 2
   nop
+  .section .text.init
+  .balign 4
 handler:
   csrr s0, mcause
   csrr s1, mepc

@@ -11,6 +11,7 @@ cd "$(dirname "$0")/.."
 B=${BUILD_DIR:-build/pmod_dtr}
 MODEL=${MODEL:-tb/qspi_pmod_model.v}
 IV=${IVERILOG:-/usr/bin/iverilog}
+VV=${VVP:-$(dirname "$IV")/vvp}   # the vvp of the same Icarus build (a newer vvp on PATH rejects its output)
 mkdir -p "$B"
 TOP=tb_pmod_dtr
 K=0; N=0
@@ -21,7 +22,7 @@ compile() {   # compile <out> [iverilog -P args...]
 }
 simulate() {  # simulate <vvp> <log> plusargs...
   local vvp=$1 log=$2; shift 2
-  timeout 300 vvp -n "$vvp" "$@" > "$log" 2>&1
+  timeout 300 $VV -n "$vvp" "$@" > "$log" 2>&1
   echo $? >> "$log.rc"
 }
 verdict() {   # verdict <id> <ok:0|1> <text>

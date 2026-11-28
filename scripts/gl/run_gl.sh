@@ -9,10 +9,14 @@
 # One compile, then the list with JOBS vvp processes (auto: 2 while the file
 # Q3DONE is missing, else 5). A line with +SIG_REF=<file> whose file is missing or empty stops the
 # whole run before the compile (exit 1, message on stderr and in STATUS). Resumable: a test with a <name>.verdict is skipped.
+# CACHE_EN=1 adds +CACHE_EN to every run (EN forced two clocks after each reset release, RTL and netlist).
 # Per test OUT/<name>.log and OUT/<name>.verdict:
 #   `PASS|FAIL|TIMEOUT <cycles> cycles <wall> s [known: <label>]`
 # MAX_CYCLES = BASE's cycles * 2 + 50000, else DEFMAX (5,000,000). The last
 # step is OUT/summary (counts, wall time, slowest test).
+# VL=<gate.v> (from gl2verilator.sh) or VL=rtl builds the same bench with Verilator instead of Icarus (the gate model, or the RTL
+# tt_um wrapper; a 2-state simulator: the bench's X checks are vacuous there, the Icarus run stays the X reference) and runs
+# ./sim in place of vvp. VERILATOR=<binary> (default verilator), VLJ=<-j for the build, default 2>.
 # The cell models are PDK_ROOT's ciel version 8afc8346 (the harden's), or CELLS=<dir>
 # (primitives.v, sky130_fd_sc_hd.v) for the local smoke run.
 set -u
@@ -39,9 +43,14 @@ while IFS='|' read -r name hex args; do
   [ -n "$ref" ] && [ ! -s "$ref" ] && { echo "run_gl.sh: no reference signature for $name: $ref missing or empty (run spike_sig.sh OUT=<build dir>)" | tee -a "$OUT/STATUS" >&2; nref=$((nref + 1)); }
 done < "$LIST"
 [ "$nref" -eq 0 ] || { echo "run_gl.sh: $nref list line(s) without a SIG_REF file: nothing simulated" | tee -a "$OUT/STATUS" >&2; exit 1; }
+VL=${VL:-}
+if [ "$VL" = rtl ]; then RTL=1; fi
 if [ "${RTL:-0}" = 1 ]; then
-  SRC="$R/src/alu.v $R/src/branchCtrl.v $R/src/clint.v $R/src/compressed_decoder.v $R/src/controller.v $R/src/csr.v $R/src/decoder.v $R/src/fyracore.v $R/src/muldiv.v $R/src/pmp.v $R/src/regFile.v $R/src/regs.v $R/src/rf_top.v $R/src/signExt.v $R/src/qspi_ctrl.v $R/src/mem_ctrl.v $R/src/soc_bus.v $R/src/uart.v $R/src/gpio.v $R/src/spi.v $R/src/syscon.v $R/src/alphaone_soc.v $R/src/tt_um_alfadelta10010_alphaone_soc.v"
+  SRC=$(for f in $("$R/scripts/wrapper-srcs.sh" "$R"); do echo -n "$R/src/$f "; done)
   DEFS=""
+elif [ -n "$VL" ]; then
+  [ -s "$VL" ] || { echo "run_gl.sh: VL=$VL is not a file" >&2; exit 1; }
+  SRC="$VL $R/src/rf_top.v"; DEFS="-DGL_TEST"; md5sum "$VL" > "$OUT/files.md5"
 else
   : "${NETLIST:?NETLIST= or RTL=1}"
   CD=${CELLS:-${PDK_ROOT:?PDK_ROOT=}/ciel/sky130/versions/$PDKV/sky130A/libs.ref/sky130_fd_sc_hd/verilog}
@@ -52,17 +61,26 @@ else
 fi
 if [ ! -e "$OUT/done.compile" ]; then
   log "compile ($DEFS)"
-  $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
-    || { log "COMPILE FAILED"; exit 1; }
+  if [ -n "$VL" ]; then
+    ${VERILATOR:-verilator} --binary --timing -j ${VLJ:-2} -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTH -Wno-TIMESCALEMOD -Wno-PINMISSING \
+        --top-module tb_tt_um -Mdir "$OUT/obj" -o ../sim -I"$R/src" $DEFS $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v \
+        $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/gamepad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
+      || { log "COMPILE FAILED"; exit 1; }
+  else
+    $IVERILOG -g2012 -I "$R/src" $DEFS -o "$OUT/sim" -s tb_tt_um $TCLKDEF $SRC $R/tb/qspi_pmod_model.v $R/tb/rp2350_uart_model.v $R/tb/ssd1331_model.v $R/tb/keypad_model.v $R/tb/gamepad_model.v $R/tb/pin_meter.v $R/tb/tb_tt_um.v > "$OUT/compile.log" 2>&1 \
+      || { log "COMPILE FAILED"; exit 1; }
+  fi
   touch "$OUT/done.compile"; log "compiled"
 fi
+SIMCMD="$VVP -n sim"; [ -n "$VL" ] && SIMCMD=./sim
 limit() { if [ "$JOBS" = auto ]; then [ -e "$Q3DONE" ] && echo 5 || echo 2; else echo "$JOBS"; fi; }
 run_one() { # name hex args
   local name=$1 hex=$2 args=${3//@RUN@/$OUT} mc=$DEFMAX s=$SECONDS c v lab=""
+  [ "${CACHE_EN:-0}" = 1 ] && args="$args +CACHE_EN"     # CACHE_EN=1: the instruction cache on after every reset release (tb_tt_um.v)
   if [ -n "${BASE:-}" ] && [ -s "$BASE/$name.verdict" ]; then
     c=$(awk '{print $2}' "$BASE/$name.verdict"); [[ $c =~ ^[0-9]+$ ]] && [ "$c" -gt 0 ] && mc=$(( c * 2 + 50000 ))
   fi
-  ( cd "$OUT" && timeout -k 10 $WALL $VVP -n sim +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
+  ( cd "$OUT" && timeout --foreground -k 10 $WALL $SIMCMD +FLASH_FILE="$HEXDIR/$hex.hex" +RF_X +RF_COLLIDE_X $args +MAX_CYCLES=$mc > "$name.log" 2>&1 )
   if grep -q '^PASS tb_tt_um' "$OUT/$name.log" && ! grep -qE '^(FAIL|ERROR)' "$OUT/$name.log"; then v=PASS
   elif grep -q '^TIMEOUT' "$OUT/$name.log"; then v=TIMEOUT; else v=FAIL; fi
   c=$(grep -oE '[0-9]+ cycles\)$|stuck at cycle [0-9]+|\(cycle [0-9]+\)' "$OUT/$name.log" | grep -oE '[0-9]+' | tail -1)
@@ -76,11 +94,11 @@ run_one() { # name hex args
       v=FAIL; echo "FAIL cycle count: gate level ${c:-0}, RTL $rc" >> "$OUT/$name.log"; log "CYCLES $name rtl $rc gl ${c:-0} MISMATCH"
     else log "CYCLES $name rtl $rc gl ${c:-0} match"; fi
   fi
-  [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" '$1==n{$1="";print}' "$KNOWN")
+  [ -n "${KNOWN:-}" ] && lab=$(awk -v n="$name" -v v="$v" '$1==n && $2==v{$1="";$2="";print}' "$KNOWN")
   echo "$v ${c:-0} cycles $((SECONDS - s)) s${lab:+ known:$lab}" > "$OUT/$name.verdict"
   log "$name $(cat "$OUT/$name.verdict")"
 }
-KNOWN=${KNOWN:-$R/scripts/gl/known.txt}
+KNOWN=${KNOWN:-$R/scripts/gl/known.txt}   # lines: <program> <PASS|FAIL|TIMEOUT> <label>: the label excuses that outcome only
 log "start $(basename "$LIST") jobs=$JOBS"
 while IFS='|' read -r name hex args; do
   [ -n "$name" ] || continue

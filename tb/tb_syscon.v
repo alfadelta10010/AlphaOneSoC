@@ -20,14 +20,14 @@ module tb_syscon;
     reg  [13:0] aw = 0;               // addr[15:2]
     reg  [31:0] wdata = 0;
     reg  [31:0] tc = 0;               // scaled mtime: wdt_tap = tc[15:0]
-    wire        rst_soc, rd_late, q_stream, q_ddr;
+    wire        rst_soc, rd_late, q_stream, q_ddr, wdt_irq;
     wire [2:0]  q_cap;
     wire [31:0] rdata;
     syscon uut (
         .clk(clk), .rst(rst), .rst_soc(rst_soc), .sel(sel), .we(we), .be(be),
         .addr(aw), .wdata(wdata), .rdata(rdata),
         .strap_rd_late(pin), .rd_late(rd_late), .wdt_tap(tc[15:0]),
-        .strap_no_stream(pin2), .qspi_stream_en(q_stream), .qspi_ddr(q_ddr), .qspi_ddr_cap(q_cap));
+        .strap_no_stream(pin2), .wdt_irq(wdt_irq), .qspi_stream_en(q_stream), .qspi_ddr(q_ddr), .qspi_ddr_cap(q_cap));
     always #5 clk = ~clk;
     always @(posedge clk) tc <= tc + 1;
     // the no-stream strap pin: random each clock unless a section pins it
@@ -43,7 +43,8 @@ module tb_syscon;
     reg        mv = 0;                // model valid (after the first reset edge)
     reg [2:0]  m_cause;
     reg [7:0]  m_bm;
-    reg        m_strap, m_off, m_en, m_tprev, m_ns, m_stream, m_ddr;
+    reg        m_irq;                 // the PLIC pulse: a one-clock delayed first expiry
+    reg        m_rmod, m_stat, m_strap, m_off, m_en, m_tprev, m_ns, m_stream, m_ddr;
     reg [2:0]  m_cap;
     integer    cv_cfgw = 0, cv_ns1 = 0, cv_ns0 = 0, cv_cfghold = 0;
     reg [3:0]  m_top;
@@ -54,7 +55,7 @@ module tb_syscon;
     reg        cv_on = 0;
     integer cv_reboot = 0, cv_off = 0, cv_fail = 0, cv_fires = 0, cv_ign = 0;
     integer cv_w1c0 = 0, cv_w1c1 = 0, cv_w1c2 = 0, cv_bm = 0, cv_good = 0, cv_wdt_other = 0;
-    integer cv_hdone = 0, cv_rb_soft = 0;
+    integer cv_hdone = 0, cv_rb_soft = 0, cv_first = 0, cv_eoic = 0, cv_kclr = 0, cv_rmreb = 0;
     integer cv_torr = 0, cv_hw = 0, cv_rsth = 0, cv_rsto = 0, cv_hpin = 0;
 
     task chk(input [8*10-1:0] what, input [31:0] got, input [31:0] want);
@@ -90,8 +91,9 @@ module tb_syscon;
                 endcase
             end else if (a[13:6] == 8'h01) begin
                 case (a[5:0])
-                    6'd0:  e_rd = {31'b0, m_en};
+                    6'd0:  e_rd = {30'b0, m_rmod, m_en};
                     6'd1:  e_rd = {24'b0, m_top, m_top};
+                    6'd4:  e_rd = {31'b0, m_stat};
                     6'd61: e_rd = `WDT_COMP1_VAL;
                     default: e_rd = 32'h0;
                 endcase
@@ -103,12 +105,12 @@ module tb_syscon;
     function pred_fire(input dummy);
         begin
             pred_fire = mv && !rst && !(m_hold > 0 || m_off) && m_en &&
-                        (tc[m_top] & ~m_tprev) && (m_ticks == 2);
+                        (tc[m_top] & ~m_tprev) && (m_ticks == 2) && (!m_rmod || m_stat);
         end
     endfunction
 
     always @(posedge clk) begin : model
-        reg        held, wt, tk, fr, kick, torr, cren, soft, offs, ign;
+        reg        held, wt, tk, fr, kick, torr, cren, soft, offs, ign, expd, first, eoi, crw;
         reg [2:0]  w1c;
         reg [3:0]  ntop;
         integer    nt, d, p;
@@ -120,6 +122,7 @@ module tb_syscon;
             chk("q_stream", q_stream, m_stream);
             chk("q_ddr", q_ddr, m_ddr);
             chk("q_cap", q_cap, m_cap);
+            chk("wdt_irq", wdt_irq, m_irq);
             if (sel && !we && !rst) chk("rdata", rdata, e_rd(aw));
         end
         if (rst) begin
@@ -130,7 +133,7 @@ module tb_syscon;
             m_cause = 3'b001; m_bm = 8'h00; m_strap = pin; m_hold = 0; m_off = 0;
             m_ns = pin2; m_stream = ~pin2; m_ddr = 0; m_cap = `QCFG_CAP_RESET;
             if (cv_on) begin if (pin2) cv_ns1 = cv_ns1 + 1; else cv_ns0 = cv_ns0 + 1; end
-            m_en = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1; mv = 1;
+            m_en = 0; m_rmod = 0; m_stat = 0; m_irq = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1; mv = 1;
         end else if (mv) begin
             if (m_hold > 0 || m_off) begin
                 if (cv_on && sel && we) cv_hw = cv_hw + 1;
@@ -139,11 +142,15 @@ module tb_syscon;
                 if (m_hold > 0) m_hold = m_hold - 1;
                 if (cv_on && (m_stream !== ~m_ns || m_ddr || m_cap !== `QCFG_CAP_RESET)) cv_cfghold = cv_cfghold + 1;
                 m_stream = ~m_ns; m_ddr = 0; m_cap = `QCFG_CAP_RESET;
-                m_en = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1;
+                m_en = 0; m_rmod = 0; m_stat = 0; m_irq = 0; m_top = `WDT_TOP_RESET; m_ticks = 0; m_tprev = 1;
             end else begin
                 wt = tc[m_top];
                 tk = wt & ~m_tprev;
-                fr = m_en & tk & (m_ticks == 2);
+                expd = m_en & tk & (m_ticks == 2);
+                first = expd & m_rmod & ~m_stat;   // interrupt mode: flag, not reboot
+                fr = expd & ~first;
+                eoi = sel && !we && aw[13:6] == 8'h01 && aw[5:0] == 6'd5;
+                crw = 0;
                 kick = 0; torr = 0; cren = 0; soft = 0; offs = 0; ign = 0; w1c = 0; ntop = m_top;
                 if (sel && we) begin
                     if (aw < 14'd8) begin
@@ -166,7 +173,7 @@ module tb_syscon;
                         endcase
                     end else if (aw[13:6] == 8'h01 && be[0]) begin
                         case (aw[5:0])
-                            6'd0: if (wdata[0]) cren = 1;
+                            6'd0: begin crw = 1; if (wdata[0]) cren = 1; end
                             6'd1: begin torr = 1; ntop = wdata[3:0]; end
                             6'd3: if (wdata[7:0] == `WDT_KEY) kick = 1;
                             default: ;
@@ -186,6 +193,10 @@ module tb_syscon;
                     if (sel && we && m_en && m_ticks > 0 && !kick && !torr && (aw == 14'h43 || wdata[7:0] == `WDT_KEY)) cv_wdt_other = cv_wdt_other + 1;
                     if (torr && m_en) cv_torr = cv_torr + 1;
                     if (fr) cv_fires = cv_fires + 1;
+                    if (first) cv_first = cv_first + 1;
+                    if (fr && m_rmod) cv_rmreb = cv_rmreb + 1;
+                    if (eoi && m_stat) cv_eoic = cv_eoic + 1;
+                    if ((kick || torr) && m_stat) cv_kclr = cv_kclr + 1;
                 end
                 // independent timing check of the stated bound (SYS-015)
                 if (fr && (kick || torr)) begin
@@ -204,13 +215,16 @@ module tb_syscon;
                                      d, 2 * p, 3 * p + 1, m_top, cyc);
                     end
                 end
-                if (kick || torr) lclr = cyc;
+                if (kick || torr || first) lclr = cyc;
                 if (cren && !m_en) lclr = cyc;
                 nt = m_ticks;
                 if (m_en && tk && m_ticks < 2) nt = m_ticks + 1;
-                if (kick || torr || !m_en) nt = 0;
+                if (kick || torr || !m_en || first) nt = 0;
                 m_cause = (m_cause & ~w1c) | (soft ? 3'b010 : 3'b000) | (fr ? 3'b100 : 3'b000);
                 m_tprev = torr | wt;
+                m_irq = first;
+                m_stat = first ? 1'b1 : (kick || torr || eoi) ? 1'b0 : m_stat;
+                if (crw) m_rmod = wdata[1];
                 m_en = m_en | cren;
                 m_top = ntop;
                 m_ticks = nt;
@@ -285,6 +299,22 @@ module tb_syscon;
             f0 = fires; i = 0;
             while (fires == f0 && i < lim) begin nxt; drv_idle; i = i + 1; end
             if (fires == f0) xfail("expected a watchdog fire, none came");
+        end
+    endtask
+    // The first expiry (interrupt mode, flag clear) happens at the coming edge.
+    function pred_first(input dummy);
+        begin
+            pred_first = mv && !rst && !(m_hold > 0 || m_off) && m_en &&
+                         (tc[m_top] & ~m_tprev) && (m_ticks == 2) && m_rmod && !m_stat;
+        end
+    endfunction
+    task aim_first(input integer lim);
+        integer i;
+        begin
+            i = 0;
+            nxt; drv_idle;
+            while (!pred_first(0) && i < lim) begin nxt; drv_idle; i = i + 1; end
+            if (!pred_first(0)) xfail("could not aim at a first expiry");
         end
     endtask
     // idle to the cycle in which the watchdog fires; leaves the negedge open
@@ -601,6 +631,90 @@ module tb_syscon;
                 2: st(`WDT_CRR, 32'h5A00_1276, 4'h5);
                 default: st(`WDT_CRR, 32'h0000_0076, 4'h3);
             endcase
+        end
+    endtask
+
+    // interrupt mode (RMOD = 1), DesignWare two-stage: directed, with explicit checks
+    // beside the model's. TOP 0: the tapped bit is tc[0], a period is 2 clocks.
+    task wait_irq(input integer lim);
+        integer i;
+        begin
+            i = 0;
+            while (!wdt_irq && !rst_soc && i < lim) begin nxt; drv_idle; i = i + 1; end
+            if (!wdt_irq) xfail("expected wdt_irq, none came");
+        end
+    endtask
+    task s_rmod;
+        integer k;
+        begin
+            sec("watchdog interrupt mode (RMOD)");
+            for (k = 0; k < 4; k = k + 1) begin
+                prs; st(`WDT_TORR, 32'h1, 4'h1); st(`WDT_CR, 32'h3, 4'h1);
+                ld(`WDT_CR); #4; chk("rmod cr", rdata, 32'h3);
+                wait_irq(400);
+                nxt; drv_idle; #1; chk("irq 1clk", wdt_irq, 1'b0);              // the PLIC source is a one-clock pulse
+                chk("irq first", rst_soc, 1'b0);
+                ld(`WDT_STAT); #4; chk("stat 1", rdata, 32'h1);
+                ld(`SYS_CAUSE); #4; chk("no wdt rc", rdata & 32'h4, 32'h0);
+                case (k)
+                    0: begin ld(`WDT_EOI); #4; chk("eoi rd", rdata, 32'h0); end       // EOI read clears
+                    1: st(`WDT_CRR, 32'h76, 4'h1);                                    // a kick clears
+                    2: st(`WDT_TORR, 32'h1, 4'h1);                                    // so does a TORR write
+                    default: begin st(`WDT_CRR, 32'h75, 4'h1); st(`WDT_EOI, 32'h1, 4'hF); end   // neither a bad key nor an EOI write
+                endcase
+                nxt; drv_idle; #1;
+                if (k == 3) begin
+                    chk("irq pulse", wdt_irq, 1'b0);
+                    ld(`WDT_STAT); #4; chk("stat held", rdata, 32'h1);              // the level is only STAT
+                    wait_fire(2000); idle(6);
+                    chk("2nd exp", rst_soc, 1'b0);
+                    ld(`SYS_CAUSE); #4; chk("rc wdt", rdata & 32'h4, 32'h4);
+                    ld(`WDT_CR); #4; chk("cr rst", rdata, 32'h0);
+                    ld(`WDT_STAT); #4; chk("stat rst", rdata, 32'h0);
+                end else begin
+                    chk("stat clr", wdt_irq, 1'b0);
+                    ld(`WDT_STAT); #4; chk("stat clr", rdata, 32'h0);
+                    wait_irq(400);                                                    // the period restarted: it comes again
+                    chk("irq again", wdt_irq, 1'b1);
+                end
+            end
+            // RMOD 0: the first expiry reboots; switching RMOD off keeps the flag until a clear
+            prs; st(`WDT_TORR, 32'h1, 4'h1); st(`WDT_CR, 32'h1, 4'h1);
+            wait_fire(400); idle(6); ld(`WDT_STAT); #4; chk("rm0 stat", rdata, 32'h0);
+            prs; st(`WDT_TORR, 32'h1, 4'h1); st(`WDT_CR, 32'h3, 4'h1); wait_irq(400);
+            st(`WDT_CR, 32'h1, 4'h1); nxt; drv_idle; #1; chk("rm off", wdt_irq, 1'b0);
+            ld(`WDT_STAT); #4; chk("rm off", rdata, 32'h1);
+            ld(`WDT_CR); #4; chk("rm cr", rdata, 32'h1);
+            prs;
+        end
+    endtask
+
+    // V2: the first expiry in the same clock as a kick, a TORR write, an EOI read (and a plain clock).
+    // Set wins over every clear: the pulse comes and STAT reads 1 either way; the model checks every clock too.
+    task s_first_same;
+        integer q;
+        begin
+            sec("first expiry in the clock of a kick, TORR write, EOI read");
+            for (q = 0; q < 6; q = q + 1) begin
+                prs; st(`WDT_TORR, 32'h1, 4'h1); st(`WDT_CR, 32'h3, 4'h1);
+                aim_first(100);
+                case (q)
+                    0: drv(1, 1, 4'h1, `WDT_CRR, 32'h76);
+                    1: drv(1, 1, 4'h1, `WDT_TORR, 32'h1);
+                    2: drv(1, 0, 4'hF, `WDT_EOI, gr(0));
+                    3: drv_idle;
+                    4: drv(1, 1, 4'hF, `WDT_CRR, 32'hFFFF_FF76);
+                    default: drv(1, 1, 4'h1, `WDT_CR, 32'h1);                // CR write clearing RMOD: the pulse still comes
+                endcase
+                nxt; drv_idle; #1;
+                chk("first irq", wdt_irq, 1'b1);                                  // the pulse, one clock after the expiry
+                chk("first rst", rst_soc, 1'b0);
+                ld(`WDT_STAT); #4; chk("first stat", rdata, 32'h1);                // set wins over the same-clock clear
+                nxt; drv_idle; #1; chk("first 1clk", wdt_irq, 1'b0);
+                ld(`WDT_EOI); nxt; drv_idle; #1;
+                ld(`WDT_STAT); #4; chk("first eoi", rdata, 32'h0);
+            end
+            prs;
         end
     endtask
 
@@ -986,6 +1100,7 @@ module tb_syscon;
             end
             nxt; rst = 0; drv_idle;
             cv_on = 0;
+            $display("coverage rmod: first-expiry %0d rmod-reboots %0d eoi-clears %0d kick-clears %0d", cv_first, cv_rmreb, cv_eoic, cv_kclr);
             $display("coverage cfg: writes %0d reset-in-hold %0d pin2 at pin reset 0:%0d 1:%0d", cv_cfgw, cv_cfghold, cv_ns0, cv_ns1);
             $display("coverage: reboots %0d power-offs %0d fails %0d fires %0d ignored-FINISH %0d W1C %0d/%0d/%0d BM-writes %0d good-kicks %0d other-WDT-writes %0d TORR-enabled %0d held-writes %0d rst-in-hold %0d rst-in-off %0d held-pin-changes %0d hold-done %0d reboots-with-SOFT-set %0d",
                      cv_reboot, cv_off, cv_fail, cv_fires, cv_ign, cv_w1c0, cv_w1c1, cv_w1c2, cv_bm, cv_good, cv_wdt_other,
@@ -993,7 +1108,7 @@ module tb_syscon;
             if (cv_reboot < 50 || cv_off < 20 || cv_fail < 20 || cv_fires < 30 || cv_ign < 500 ||
                 cv_w1c0 < 50 || cv_w1c1 < 50 || cv_w1c2 < 50 || cv_bm < 500 || cv_good < 200 ||
                 cv_wdt_other < 200 || cv_torr < 50 || cv_hw < 200 || cv_rsth < 5 || cv_rsto < 5 || cv_hpin < 50 || cv_hdone < 100 || cv_rb_soft < 1 ||
-                cv_cfgw < 20 || cv_cfghold < 5 || cv_ns0 < 5 || cv_ns1 < 5) begin
+                cv_first < 20 || cv_rmreb < 5 || cv_eoic < 5 || cv_kclr < 5 || cv_cfgw < 20 || cv_cfghold < 5 || cv_ns0 < 5 || cv_ns1 < 5) begin
                 fails = fails + 1;
                 $display("FAIL coverage: a floor was missed (see the coverage line)");
             end
@@ -1017,6 +1132,8 @@ module tb_syscon;
         s_cfg;
         s_poweroff_wdt;
         s_kicks;
+        s_rmod;
+        s_first_same;
         s_torr;
         $display("TORR cells reached: %0d of %0d", cells, cells_want);
         if (cells != cells_want) xfail("TORR phase/count cells not all reached");

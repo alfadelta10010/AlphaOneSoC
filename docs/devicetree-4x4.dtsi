@@ -1,0 +1,208 @@
+/* AlphaOneSoC 4x4 device-tree include: the SoC's own nodes (docs/alphaone-4x4.dts is the board file
+ * that includes it and supplies the root, cpus, memory, CLINT and chosen).
+ *
+ * Every compatible and property below was checked on 2026-11-21 against torvalds/master: the driver
+ * source (gpio-mmio.c, pinctrl-single.c, irq-sifive-plic.c, 8250_of.c, spi-oc-tiny.c, pwm-sifive.c,
+ * dw_wdt.c, timer-clint.c) and the schemas in Documentation/devicetree/bindings. The board file is
+ * compiled with dtc and checked with dt-validate (docs/boot-contract-4x4.md, section 5).
+ *
+ * Clock-dependent values (the three clock-frequency properties here, clk_core, timebase-frequency in the
+ * board file) must change together with the core clock: docs/boot-contract-4x4.md, section 4.
+ */
+
+/ {
+	clk_core: clock-core {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <52631579>;
+	};
+
+	cpus {
+		cpu0: cpu@0 {
+			/* the board file supplies compatible, riscv,isa and mmu-type "none" */
+			cpu0_intc: interrupt-controller {
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+				#interrupt-cells = <1>;
+			};
+		};
+	};
+
+	soc: soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		/* "sifive,plic-1.0.0" is what irq-sifive-plic.c matches and what the schema wants as the fallback,
+		 * but the schema accepts it only behind a SoC name from its fixed list, so dt-validate reports the
+		 * out-of-tree "alfadelta10010,alphaone-plic" (expected; "riscv,plic0" alone fails the schema too).
+		 * PLIC at 0x0C00_0000, 4 MB, hart 0 M-mode only (context 0 = cpu0_intc line 11).
+		 * Sources: 1 UART, 2 SPI (not described: polled), 3 gamepad (no Linux driver),
+		 * 4 GPIO input change (gpio.v IN_IE/IN_IP at +0x18/+0x1C; gpio-mmio has no irqchip, so the gpio nodes
+		 * carry no `interrupts` property: bare-metal / FreeRTOS only), 5-8 PWM (interrupts removed, tied 0:
+		 * they never fire), 9 watchdog (one-clock pulse). */
+		plic: interrupt-controller@c000000 {
+			compatible = "alfadelta10010,alphaone-plic", "sifive,plic-1.0.0";
+			reg = <0x0c000000 0x400000>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			#address-cells = <0>;
+			riscv,ndev = <9>;
+			interrupts-extended = <&cpu0_intc 11>;
+		};
+
+		/* The CLINT at 0x0200_0000 (mtime = the core clock) is in the board file, next to
+		 * timebase-frequency. */
+
+		/* 16550A, byte registers, trimmed: 8-entry RX FIFO, a one-byte TX holding
+		 * register, RX trigger codes 1/2/4/7 bytes. 8250_of.c sets UPF_FIXED_TYPE, so autoconfig
+		 * never runs and does not overwrite fifosize/tx_loadsz with the 16550A table's 16/16;
+		 * it reads tx-threshold and sets tx_loadsz = fifosize - tx_threshold = 8 - 7 = 1, so
+		 * serial8250_tx_chars() writes one byte per THRE interrupt and the CPU never waits on a
+		 * full THR (a console write with tx_loadsz = 1 also takes the byte-by-byte path, not
+		 * the FIFO one). Were it to push more, THR stalls the CPU up to one frame (~87 us at
+		 * 115200). The driver still writes FCR = ENABLE_FIFO | R_TRIG_10 (code 2), which this
+		 * UART maps to 4 bytes here (decision on review S2), leaving 5 characters (~435 us) of
+		 * slack before an RX overrun. For sustained input at 113,430 baud use the RTS# pinmux
+		 * feature (flow control), or set rx_trig_bytes to 1 (sysfs; it reads back the 16550A
+		 * table's values, not ours). */
+		uart0: serial@10000000 {
+			compatible = "ns16550a";
+			reg = <0x10000000 0x100>;
+			reg-shift = <0>;
+			reg-io-width = <1>;
+			clocks = <&clk_core>;
+			clock-frequency = <52631579>;
+			fifo-size = <8>;
+			tx-threshold = <7>;	/* tx_loadsz = 8 - 7 = 1 */
+			interrupt-parent = <&plic>;
+			interrupts = <1>;
+		};
+
+		/* GPIO: bit i of each chip = OUT bit i / IN bit i. The OUT chip is the pinmux's GPIO
+		 * source; pads follow it only where PINMUX selects GPIO (OLED CS#, D/C, RES#, SD CS#).
+		 * "wd,mbl-gpio" is the generic single-data-register entry in gpio-mmio.c's OF table
+		 * ("gpio-mmio" matches nothing); "dat" is one 32-bit register, ngpios keeps bits 0-7.
+		 * The OUT register reads back the GPIO outputs, not the pads, so get() on gpo is the
+		 * driven value. The IN register has no outputs: no-output. Little-endian, as the core. */
+		gpo: gpio@10010000 {
+			compatible = "wd,mbl-gpio";
+			reg = <0x10010000 0x4>;
+			reg-names = "dat";
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+		};
+
+		gpi: gpio@10010004 {
+			compatible = "wd,mbl-gpio";
+			reg = <0x10010004 0x4>;
+			reg-names = "dat";
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			no-output;
+		};
+
+		/* tiny_spi at GPIO +0x20. The SPI interrupt is built but deliberately not described:
+		 * spi-oc-tiny then takes one interrupt per byte, ~1 ms each at BAUD 2, and polling is faster.
+		 * Chip selects are GPIO OUT bits: OLED CS# = 0, SD CS# = 5 (both active low). D/C is bit 2,
+		 * RES#/VCCEN bit 6. The SD card is capped at BAUD 2 (8.77 MHz); BAUD 1 is lost to the pin flop. */
+		spi0: spi@10010020 {
+			compatible = "opencores,tiny-spi-rtlsvn2";
+			reg = <0x10010020 0x14>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clock-frequency = <52631579>;
+			baud-width = <8>;	/* legacy text binding (spi_oc_tiny.txt): dt-validate has no schema for it */
+			cs-gpios = <&gpo 0 1>, <&gpo 5 1>;
+
+			/* oled@0 and mmc@1 (compatible "mmc-spi-slot", spi-max-frequency <8771930>:
+			 * tiny_spi rounds the divider up, so 8771929 would give BAUD 3, 8771930 gives BAUD 2)
+			 * belong in the board file. */
+		};
+
+		/* syscon at 0x1002_0000: the 8 implemented words (docs/soc-architecture.md "Linux").
+		 * The PINMUX word at +0x20 and CACHE_CTL at +0x24 are carved out of this window. */
+		syscon: syscon@10020000 {
+			compatible = "alfadelta10010,alphaone-syscon", "syscon", "simple-mfd";
+			reg = <0x10020000 0x20>;
+			reg-io-width = <4>;
+
+			poweroff {
+				compatible = "syscon-poweroff";
+				offset = <0x0>;
+				value = <0x5555>;
+			};
+
+			reboot {
+				compatible = "syscon-reboot";
+				offset = <0x0>;
+				value = <0x7777>;
+			};
+
+			reboot-mode {
+				compatible = "syscon-reboot-mode";
+				offset = <0x8>;
+				mask = <0xff>;
+				mode-normal = <0x1>;
+				mode-bootloader = <0x2>;
+			};
+		};
+
+		/* Pinmux word at 0x1002_0020: pin i's code in bits [4i+2:4i], 4-bit nibbles (bit 4i+3 reads 0).
+		 * Only pins 5 and 6 have an alternate function (WARL: any other code stores 0 and reads 0):
+		 * pin 5 code 2 = RTS#, pin 6 code 4 = PWM0; code 0 = the default; pin 7 is always PWM1. pinctrl-single's "bits" path needs
+		 * bit-per-mux, #pinctrl-cells = 2, and function-mask 0xf (bits_per_pin = fls(mask) = 4, so 8
+		 * pins of 4 bits in the 32-bit word). Each "bits" entry is <word-offset value mask>, and the
+		 * mask MUST cover the whole 4-bit field (0xf << shift): pinctrl-single.c skips an entry whose
+		 * mask & (function-mask << shift) differs from (function-mask << shift) ("Invalid submask"),
+		 * so a narrower mask such as 0x7 silently leaves the group empty. Bit 4i+3 is not stored
+		 * (reads 0), so writing it is harmless. */
+		pinmux: pinmux@10020020 {
+			compatible = "pinctrl-single";
+			reg = <0x10020020 0x4>;
+			#pinctrl-cells = <2>;
+			pinctrl-single,register-width = <32>;
+			pinctrl-single,function-mask = <0xf>;
+			pinctrl-single,bit-per-mux;
+
+			/* uo_out[5] as UART RTS# (gives up the SD card's CS#), field 5 = shift 20, code 2 */
+			uart_rts_pins: uart-rts-pins {
+				pinctrl-single,bits = <0x0 (2 << 20) (0xf << 20)>;
+			};
+		};
+
+		watchdog@10020100 {
+			compatible = "snps,dw-wdt";
+			reg = <0x10020100 0x100>;
+			clocks = <&clk_core>;	/* the driver asks for "tclk" first, then falls back to the unnamed one */
+			/* PLIC source 9 is a ONE-clock pulse at the first expiry (not the STAT level): dw_wdt
+			 * requests the IRQ edge-triggered, never clears STAT in the ISR, and our PLIC is
+			 * level-only, so a level would re-pend after every complete. Valid only with that
+			 * pulse (syscon.v). A pulse arriving while source 9 is claimed and not yet completed
+			 * is lost (one pretimeout per period). */
+			interrupt-parent = <&plic>;
+			interrupts = <9>;
+		};
+
+		/* PWM at 0x1003_0000: 2 of 4 comparators built; period 2^(16 + scale) clocks.
+		 * Channels 2-3 are inert: pwmcmp2/3 read 0xFFFF (duty 0 for pwm-sifive get_state),
+		 * writes ignored, no pin, no irq. PWM0 reaches pin 6 and PWM1 pin 7 through the pinmux.
+		 * No sticky, no one-shot and no interrupt at all: PLIC sources 5-8 are tied 0 and never
+		 * fire. The binding (pwm-sifive.yaml) still requires `interrupts`, so the four are kept;
+		 * the driver never requests them. */
+		pwm0: pwm@10030000 {
+			compatible = "sifive,fu540-c000-pwm", "sifive,pwm0";	/* the schema wants the SoC name first; the driver matches the fallback */
+			reg = <0x10030000 0x30>;
+			clocks = <&clk_core>;
+			#pwm-cells = <3>;
+			interrupt-parent = <&plic>;
+			interrupts = <5>, <6>, <7>, <8>;
+		};
+
+		/* The gamepad (GPIO +0x10/+0x14) has no Linux driver (there is no audio block: PWM1 on uo_out[7] plays tones);
+		 * bare-metal software drives them. */
+	};
+};

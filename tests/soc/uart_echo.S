@@ -4,10 +4,9 @@
 # own copy of the line. The model can only send while RTS# is asserted, so
 # nothing is lost and OE never rises, however slowly the program runs.
 #
-# Then an overrun on purpose (cue 2): the model sends "XYZ" back to back
-# with flow control off while the program keeps its hands off the UART. X
-# is kept, Y and Z are dropped: LSR = DR | OE | THRE | TEMT, RBR = X, and
-# the LSR read clears OE.
+# Then a burst with flow control off (cue 2): the model sends "XYZ" back to
+# back while the program keeps its hands off the UART. The UART's 8-entry
+# RX FIFO keeps all three (no overrun): LSR = DR | THRE | TEMT, RBR = X, Y, Z.
 #include "periph.h"
     .section .text.init
     .globl _start
@@ -37,11 +36,19 @@ _start:
     CHECK t1, 0x60, 0x13
 
     EVENT_P 2                      # "XYZ", flow control off
+#ifdef MB_DIV
+    DELAY (750 * MB_DIV)         # three frames at the program's divisor (160 x MB_DIV clocks each)
+#else
     DELAY 3000                   # three frames at divisor 4 are 1920 clocks
+#endif
     lbu  t1, LSR(s0)
-    CHECK t1, 0x63, 0x20
+    CHECK t1, 0x61, 0x20         # the 8-deep RX FIFO keeps all three: DR | THRE | TEMT, no overrun
     lbu  t1, RBR(s0)
     CHECK t1, 'X', 0x21
+    lbu  t1, RBR(s0)
+    CHECK t1, 'Y', 0x23
+    lbu  t1, RBR(s0)
+    CHECK t1, 'Z', 0x24
     lbu  t1, LSR(s0)
     CHECK t1, 0x60, 0x22
     EVENT_P 3

@@ -10,7 +10,7 @@
 // per cycle, held while ready is low, changed on the negative edge, checked
 // on the positive edge.
 //
-// Timing equations (T = 16 ns, B = BAUD frozen at the load, P = B + 1):
+// Timing equations (T = `SPI_T_NS, 16 ns at 62.5 MHz; B = BAUD frozen at the load, P = B + 1):
 //   a LOAD is at w + 1 for an idle engine (w = the accepted TXDATA write), or
 //   at the end of the byte that is shifting; with L the load edge, bit k
 //   launches at L + 2kP, its A->B edge is at L + 2kP + P, its sample edge is
@@ -37,13 +37,14 @@ module tb_spi;
     wire        in1;                     // MISO: the probe or the analog slave
     wire [31:0] rdata;
     wire        ready;
-    wire [7:0]  out;
+    wire [7:0]  out, in_sync;
+    wire        spi_irq;
     wire [7:0]  in = {in_hi[7:2], in1, in_hi[0]};
 
     always #(T / 2.0) clk = ~clk;
 
     gpio dut (.clk(clk), .rst(rst), .sel(sel), .we(we), .be(be), .addr(addr), .wdata(wdata),
-              .rdata(rdata), .ready(ready), .in(in), .out(out));
+              .rdata(rdata), .ready(ready), .in(in), .out(out), .in_sync(in_sync), .spi_irq(spi_irq));
 
     // ── Random numbers (xorshift, seeded by +SEED) ──────────────────────────
     reg [31:0] rs = 32'h1;
@@ -81,7 +82,8 @@ module tb_spi;
     // ── The model ───────────────────────────────────────────────────────────
     reg        armed = 1'b0;
     reg        x_ok = 1'b0;              // rdata may legitimately be X (RT sweep, failing region)
-    reg [7:0]  m_o = 8'h81;              // OUT bits 7, 6, 2, 0
+    reg [7:0]  m_o = 8'hB1;              // OUT bits 7:4, 2, 0
+    reg        m_txren = 1'b0, m_txeen = 1'b0;  // STATUS write: IRQ enables
     reg        m_p1 = 1'b0, m_p3 = 1'b1; // MOSI and SCK pin flops
     reg        m_en = 1'b0, m_cpol = 1'b1, m_cpha = 1'b1;
     reg [7:0]  m_baud = 8'hFF, m_bb = 8'h00, m_sr = 8'h00, m_tx = 8'h00, m_rx = 8'h00;
@@ -91,7 +93,7 @@ module tb_spi;
     integer    last_acc_edge = 0;
 
     function [7:0] m_pins(input dummy);
-        m_pins = {m_o[7:6], 2'b00, m_p3, m_o[2], m_p1, m_o[0]};
+        m_pins = {m_o[7:4], m_p3, m_o[2], m_p1, m_o[0]};
     endfunction
 
     // Coverage (5.4)
@@ -142,10 +144,12 @@ module tb_spi;
         integer    t, k, r, bin, cls;
         ecnt = ecnt + 1;
         txe = !m_active && !m_bba;
-        exp_stall = sel && we && be[0] && ((addr == `SL_TXDATA) ? m_bba : !txe);
+        exp_stall = sel && we && be[0] && ((addr == `SL_TXDATA) ? m_bba : (addr == `SL_STATUS || addr == 4'd6 || addr == 4'd7) ? 1'b0 : !txe);
         acc = sel && we && be[0] && !exp_stall;
         if (armed) begin
-            checks = checks + 3;
+            checks = checks + 4;
+            if (spi_irq !== ((!m_bba && m_txren) || (txe && m_txeen))) fail("spi_irq", spi_irq, (!m_bba && m_txren) || (txe && m_txeen));
+            if (in_sync !== m_ins && ^m_ins !== 1'bx) fail("in_sync", in_sync, m_ins);
             if (ready !== !exp_stall) fail("ready", ready, !exp_stall);
             if (out !== m_pins(0)) fail("out", out, m_pins(0));
             if (^out === 1'bx) fail("X on out", out, 0);
@@ -160,6 +164,7 @@ module tb_spi;
                     `SL_STATUS:  exp_rd = {30'b0, !m_bba, txe};
                     `SL_CONTROL: exp_rd = {30'b0, m_cpol, m_cpha};
                     `SL_BAUD:    exp_rd = {24'b0, m_baud};
+                    4'd6, 4'd7:  begin exp_rd = 32'h0; skip = 1'b1; end   // IN_IE / IN_IP (WO-69): tb_gpio checks the values
                     default:     exp_rd = 32'h0;
                 endcase
                 checks = checks + 1;
@@ -176,7 +181,7 @@ module tb_spi;
                 if ((t % (2 * m_P)) < m_P) n_rst_a = n_rst_a + 1; else n_rst_b = n_rst_b + 1;
             end
             if (m_bba) n_rst_bba = n_rst_bba + 1;
-            m_o = 8'h81; m_p1 = 1'b0; m_p3 = 1'b1; m_en = 1'b0; m_cpol = 1'b1; m_cpha = 1'b1;
+            m_o = 8'hB1; m_txren = 1'b0; m_txeen = 1'b0; m_p1 = 1'b0; m_p3 = 1'b1; m_en = 1'b0; m_cpol = 1'b1; m_cpha = 1'b1;
             m_baud = 8'hFF; m_bb = 8'h00; m_sr = 8'h00; m_bba = 1'b0; m_active = 1'b0;
             armed = 1'b1; cur_stalled = 1'b0; last_ld_idle = 1'b0;
         end else begin
@@ -224,8 +229,9 @@ module tb_spi;
                 case (addr)
                     4'd0: begin
                         if (!m_en) begin m_p1 = wdata[1]; m_p3 = wdata[3]; end
-                        m_o = {wdata[7:6], 3'b000, wdata[2], 1'b0, wdata[0]};
+                        m_o = {wdata[7:4], 1'b0, wdata[2], 1'b0, wdata[0]};
                     end
+                    `SL_STATUS: begin m_txren = wdata[1]; m_txeen = wdata[0]; end
                     4'd3: begin
                         if (wdata[0]) m_p3 = m_cpol;
                         if (wdata[0] && !m_en) n_en01 = n_en01 + 1;
@@ -431,11 +437,11 @@ module tb_spi;
             for (i = 0; i < 16; i = i + 1) begin
                 rd(i[3:0], v);
                 case (i)
-                    0:  ckv("OUT reset", v, 32'h89);
+                    0:  ckv("OUT reset", v, 32'hB9);
                     10: ckv("STATUS reset", v, 32'h3);
                     11: ckv("CONTROL reset", v, 32'h3);
                     12: ckv("BAUD reset", v, 32'hFF);
-                    1:  ;
+                    1, 6, 7: ;                  // IN; IN_IE / IN_IP (WO-69: tb_gpio checks them)
                     default: ckv("reset value of a reserved slot / register", v, 32'h0);
                 endcase
             end
@@ -455,15 +461,15 @@ module tb_spi;
                     if (j == 2) up = 32'h0000_0000;
                     wr(`SL_CONTROL, up | pat[i]); rd(`SL_CONTROL, v); ckv("CONTROL readback", v, {30'b0, pat[i][1:0]});
                     wr(`SL_BAUD, up | pat[i]);    rd(`SL_BAUD, v);    ckv("BAUD readback", v, pat[i]);
-                    wr(4'd0, up | pat[i]);        rd(4'd0, v);        ckv("OUT readback (bits 7, 6, 2, 0; 5:4 read 0)", v & 32'hF5, pat[i] & 32'hC5);
+                    wr(4'd0, up | pat[i]);        rd(4'd0, v);        ckv("OUT readback (bits 7:4, 2, 0)", v & 32'hF5, pat[i] & 32'hF5);
                     wr(4'd3, up | pat[i]);        rd(4'd3, v);        ckv("SPICTL readback", v, {31'b0, pat[i][0]});
-                    wr(`SL_STATUS, up | pat[i]);  rd(`SL_STATUS, v);  ckv("STATUS write ignored", v, 32'h3);
+                    wr(`SL_STATUS, up | pat[i]);  rd(`SL_STATUS, v);  ckv("STATUS write leaves the status bits", v, 32'h3);
                     for (m = 0; m < 16; m = m + 1)
-                        if (m != 0 && m != 1 && m != 3 && m != 8 && m != 9 && m != 10 && m != 11 && m != 12) begin
+                        if (m != 0 && m != 1 && m != 3 && m != 6 && m != 7 && m != 8 && m != 9 && m != 10 && m != 11 && m != 12) begin
                             wr(m[3:0], up | pat[i]); rd(m[3:0], v); ckv("reserved slot", v, 32'h0);
                         end
                 end
-            wr(4'd3, 0); wr(4'd0, 32'h89); wr(`SL_CONTROL, 3); wr(`SL_BAUD, 8'hFF);
+            wr(4'd3, 0); wr(4'd0, 32'hB9); wr(`SL_CONTROL, 3); wr(`SL_BAUD, 8'hFF);
         end
     endtask
 
@@ -577,7 +583,7 @@ module tb_spi;
                     wait_txe; wr(`SL_TXDATA, rnd(0));
                     aim(p0);
                     case (c)
-                        0: acc_now(1'b1, 4'h1, 4'd0, 32'h89, dummy_r);
+                        0: acc_now(1'b1, 4'h1, 4'd0, 32'hB9, dummy_r);
                         1: acc_now(1'b1, 4'h1, 4'd3, 32'h1, dummy_r);
                         2: acc_now(1'b1, 4'h1, `SL_CONTROL, 32'h3, dummy_r);
                         3: acc_now(1'b1, 4'h1, `SL_BAUD, 32'h1, dummy_r);
@@ -591,7 +597,7 @@ module tb_spi;
                     wait_txe; wr(`SL_TXDATA, rnd(0));
                     aim(64 + p0);
                     case (c)
-                        0: acc_now(1'b1, 4'h1, 4'd0, 32'h89, dummy_r);
+                        0: acc_now(1'b1, 4'h1, 4'd0, 32'hB9, dummy_r);
                         1: acc_now(1'b1, 4'h1, 4'd3, 32'h1, dummy_r);
                         2: acc_now(1'b1, 4'h1, `SL_CONTROL, 32'h3, dummy_r);
                         3: acc_now(1'b1, 4'h1, `SL_BAUD, 32'h3, dummy_r);
@@ -630,7 +636,7 @@ module tb_spi;
                         acc(1'b1, msk[3:0], slot[3:0], d, dummy_r);
                         wait_txe;
                     end
-            wr(4'd0, 32'h89);
+            wr(4'd0, 32'hB9);
         end
     endtask
 
@@ -644,14 +650,14 @@ module tb_spi;
             wr(4'd0, 32'h0000_0081); wr(`SL_TXDATA, 8'h3C); wait_txe;
             // (b) OUT writes to bits 1/3 are ignored with EN = 1, incl. a gpio-mmio style whole word
             wr(4'd3, 1);
-            for (i = 0; i < 16; i = i + 1) begin wr(4'd0, {24'b0, i[3:0], 4'b0000} | 32'h89 | (i << 1)); rd(4'd0, v); end
-            wr(4'd0, 32'h0000_0081); wr(4'd0, 32'h0000_00FF); wr(4'd0, 32'h89);
+            for (i = 0; i < 16; i = i + 1) begin wr(4'd0, {24'b0, i[3:0], 4'b0000} | 32'hB9 | (i << 1)); rd(4'd0, v); end
+            wr(4'd0, 32'h0000_00B1); wr(4'd0, 32'h0000_00FF); wr(4'd0, 32'hB9);
             wr(`SL_TXDATA, 8'hC3); wait_txe;
-            wr(4'd0, 32'h0000_0001 ^ 32'h0000_008A);                // bits 1/3 inverted vs the pins
+            wr(4'd0, 32'h0000_0001 ^ 32'h0000_00BA);                // bits 1/3 inverted vs the pins
             // (c) OUT bit 3 = !CPOL, then EN 0 -> 1: SCK goes to CPOL on that edge
             for (i = 0; i < 4; i = i + 1) begin
                 wr(4'd3, 0); wr(`SL_CONTROL, i[1:0]);
-                wr(4'd0, {24'b0, 8'h81 | ((i[1] ? 8'h00 : 8'h08))});  // SCK = !CPOL
+                wr(4'd0, {24'b0, 8'hB1 | ((i[1] ? 8'h00 : 8'h08))});  // SCK = !CPOL
                 wr(4'd3, 1); rd(4'd0, v);
             end
             // (d) EN 1 -> 0: the pins hold
@@ -661,7 +667,7 @@ module tb_spi;
             for (i = 0; i < 4; i = i + 1) begin wr(`SL_CONTROL, i[1:0]); rd(4'd0, v); end
             wr(4'd3, 0);
             for (i = 0; i < 4; i = i + 1) begin wr(`SL_CONTROL, i[1:0]); rd(4'd0, v); end
-            wr(`SL_CONTROL, 3); wr(4'd0, 32'h89); wr(4'd3, 1); rd(4'd0, v); ckv("SCK at the mode-3 idle level", v, 32'h89);
+            wr(`SL_CONTROL, 3); wr(4'd0, 32'hB9); wr(4'd3, 1); rd(4'd0, v); ckv("SCK at the mode-3 idle level", v, 32'hB9);
         end
     endtask
 
@@ -678,7 +684,7 @@ module tb_spi;
                     if (p0 > 1 && rn(2)) wr(`SL_TXDATA, rnd(0));   // bba = 1 in some of them
                     aim((bi == 0) ? p0 : 2 + rn(16 * (bb + 1)));
                     rst = 1'b1; @(negedge clk); rst = 1'b0;
-                    rd(4'd0, v); ckv("OUT after a mid-byte reset", v, 32'h89);
+                    rd(4'd0, v); ckv("OUT after a mid-byte reset", v, 32'hB9);
                     rd(`SL_STATUS, v); ckv("STATUS after a mid-byte reset", v, 32'h3);
                     rd(`SL_BAUD, v); ckv("BAUD after a mid-byte reset", v, 32'hFF);
                 end
@@ -736,13 +742,13 @@ module tb_spi;
             for (b = 0; b < 3; b = b + 1) begin
                 wait_txe; cfg(2'b11, b);
                 n = (b == 0) ? 11 : 81;
-                pred = (2.0 * b + 1.0) * T - `SD_T_ODLY - 0.5;
+                pred = (2.0 * b + 1.0) * T - `SD_T_ODLY;   // pass iff rt + t_ODLY < (2B+1) T, exact at any T (rt on a .5 grid)
                 lp = -1; ff = -1; bad = 0;
                 for (k = 0; k < n; k = k + 1) begin
                     rt = k + 0.5;
                     rt_point(rt, ok);
                     if (ok) lp = k; else if (ff < 0) ff = k;
-                    if ((rt <= pred) != ok) bad = bad + 1;
+                    if ((rt < pred) != ok) bad = bad + 1;
                 end
                 $display("RTSWEEP baud=%0d last_pass=%0.1f first_fail=%0.1f predicted=%0.1f %0s", b,
                          (lp < 0) ? -1.0 : lp + 0.5, (ff < 0) ? -1.0 : ff + 0.5, pred, bad == 0 ? "OK" : "MISMATCH");

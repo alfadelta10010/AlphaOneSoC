@@ -35,9 +35,9 @@ _start:
 
     # ---- UART loads, every width ----
     lw   t0, 4(s0)
-    CHECK t0, 0x00B06000, 0x101  # SCR MSR LSR MCR
+    CHECK t0, 0x00B06002, 0x101  # SCR MSR LSR MCR (resets 0x02: RTS set)
     lhu  t0, 4(s0)
-    CHECK t0, 0x6000, 0x102      # LSR MCR
+    CHECK t0, 0x6002, 0x102      # LSR MCR
     lh   t0, 6(s0)
     CHECK t0, 0x00B0, 0x103      # SCR MSR
     lb   t0, 6(s0)
@@ -62,7 +62,7 @@ _start:
     CHECK t0, 0x60, 0x10B        # offset 5
     li   t2, 0x1000ABC4
     lw   t0, 0(t2)
-    CHECK t0, 0x00B06000, 0x10C
+    CHECK t0, 0x00B06002, 0x10C
 
     # ---- UART stores, every width ----
     li   t0, 0x0241
@@ -70,7 +70,7 @@ _start:
     lbu  t0, IER(s0)
     CHECK t0, 0x02, 0x110
     lbu  t0, IIR(s0)
-    CHECK t0, 0x01, 0x111        # 'A' still going: THRE clear
+    CHECK t0, 0x02, 0x111        # THRE is the TX FIFO empty (the shifter already took 'A'): level interrupt
     WAIT_LSR s0, LSR_TEMT
     lbu  t0, IIR(s0)
     CHECK t0, 0x02, 0x112
@@ -94,8 +94,9 @@ _start:
     li   t0, 0x55
     sb   t0, SCR(s0)
     lbu  t0, SCR(s0)
-    CHECK t0, 0x00, 0x117        # SCR reads 0
-    sw   t0, 4(s0)               # a word store to offsets 4-7: all ignored
+    CHECK t0, 0x55, 0x117        # SCR is an 8-bit scratch (16550A)
+    li   t0, 2
+    sw   t0, 4(s0)               # a word store to offsets 4-7: MCR = 2 (RTS stays set), SCR = 0, LSR / MSR ignored
     lw   t0, 4(s0)
     li   t1, 0x00B00000          # (THRE and TEMT may be clear: 'B' may still go)
     srli t0, t0, 16
@@ -106,10 +107,11 @@ _start:
     # ---- UART AMOs ----
     addi t2, s0, 4
     amoor.w t0, zero, (t2)       # reads SCR MSR LSR MCR, writes them back: ignored
-    CHECK t0, 0x00B06000, 0x120
+    CHECK t0, 0x00B06002, 0x120
     RP_SEND 'q'
-    amoor.w t0, zero, (s0)       # read pops RBR; write puts the same word back:
-    andi t0, t0, 0xFF            # THR = 'q', IER 0, FCR 0, LCR 0
+    li   t1, 0xFF00FFFF          # the word goes back with its IIR lane cleared: a 1 there would be
+    amoand.w t0, t1, (s0)        # FCR.FEN, and a write that changes FEN clears the FIFOs (16550A).
+    andi t0, t0, 0xFF            # read pops RBR; write: THR = 'q', IER 0, FCR 0, LCR 0
     CHECK t0, 'q', 0x121
     lbu  t0, LSR(s0)
     andi t0, t0, LSR_DR
@@ -157,13 +159,13 @@ _start:
 
     # ---- GPIO ----
     lw   t0, G_OUT(s1)
-    CHECK t0, 0x89, 0x140
-    PINS 0x89
+    CHECK t0, 0xB9, 0x140
+    PINS 0xB9                    # the reset value, all eight bits real since WO-52
     li   t0, 0xFF
     sw   t0, G_OUT(s1)
     lw   t1, G_OUT(s1)
-    CHECK t1, 0xCF, 0x141
-    PINS 0xCF
+    CHECK t1, 0xFF, 0x141
+    PINS 0xFF
     li   t0, 0x42
     sb   t0, G_OUT(s1)
     li   t0, 0x7E
@@ -193,6 +195,42 @@ _start:
     CHECK t0, 0xAC, 0x149
     lw   t0, 0x8(s1)
     CHECK t0, 0, 0x14A           # reserved slot 0x08 reads 0
+    lw   t0, 0x10(s1)
+    CHECK t0, 0, 0x14B           # GAMEPAD (WO-53): no frame yet, no pad present
+    lw   t0, 0x14(s1)
+    CHECK t0, 0, 0x14C           # GPSTAT: chg 0, ie 0
+    li   t0, 2
+    sw   t0, 0x14(s1)            # ie = 1
+    lw   t0, 0x14(s1)
+    CHECK t0, 2, 0x14D
+    sw   zero, 0x14(s1)
+    li   t2, 0x1001FFD4          # GPSTAT through the 64-byte alias
+    lw   t0, 0(t2)
+    CHECK t0, 0, 0x14E
+    lw   t0, 0x18(s1)
+    CHECK t0, 0, 0x14F           # +0x18 (input-change IRQ, not built) reads 0
+    # the pinmux at syscon +0x20 (WO-56) and the PWM slot (IO slot 3, WO-54)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0, 0x170
+    li   t0, 0x04000000          # pin 6 = PWM0 (idle low = the level OUT[6] already has)
+    sw   t0, 0x20(s11)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0x04000000, 0x171
+    li   t0, 0x01000000          # code 1 (GPIO) is gone: WARL stores 0
+    sw   t0, 0x20(s11)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0, 0x176
+    sw   zero, 0x20(s11)
+    lw   t0, 0x20(s11)
+    CHECK t0, 0, 0x172
+    li   t2, 0x10030000
+    lw   t0, 0x20(t2)
+    CHECK t0, 0xFFFF, 0x173      # PWMCMP0 resets to 0xFFFF
+    lw   t0, 0(t2)
+    CHECK t0, 0, 0x174           # PWMCFG
+    li   t2, 0x10030100
+    lw   t0, 0x20(t2)
+    CHECK t0, 0xFFFF, 0x175      # the old audio window is the PWM again (the slot aliases it): PWMCMP0
     # AMOs on OUT
     li   t0, 0x40
     amoor.w t1, t0, (s1)

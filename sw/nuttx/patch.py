@@ -15,9 +15,9 @@ edit(f"{A}/qemu_rv_irq.c", "  putreg32(0x0, QEMU_RV_PLIC_ENABLE1);\n  putreg32(0
       "  /* AlphaOneSoC: no PLIC */\n#else")
 edit(f"{A}/qemu_rv_irq.c", "  for (id = 1; id <= 52; id++)\n    {\n      putreg32(1, (uintptr_t)(QEMU_RV_PLIC_PRIORITY + 4 * id));\n    }\n\n  /* Set irq threshold to 0 (permits all global interrupts) */\n\n  putreg32(0, QEMU_RV_PLIC_THRESHOLD);\n",
       "  UNUSED(id);\n")
-# 62.5 MHz timebase
+# 52.63 MHz timebase
 edit(f"{A}/qemu_rv_timerisr.c", "#define MTIMER_FREQ 10000000\n#define TICK_COUNT (10000000 / TICK_PER_SEC)",
-      "#define MTIMER_FREQ 62500000\n#define TICK_COUNT (62500000 / TICK_PER_SEC)")
+      "#define MTIMER_FREQ 52631579\n#define TICK_COUNT (52631579 / TICK_PER_SEC)")
 # polled UART
 edit(f"{A}/Make.defs", "CHIP_CSRCS += qemu_rv_timerisr.c qemu_rv_allocateheap.c", "CHIP_CSRCS += qemu_rv_timerisr.c qemu_rv_allocateheap.c qemu_rv_alphauart.c")
 edit(f"{A}/qemu_rv_start.c", "#ifdef CONFIG_16550_UART\n  u16550_earlyserialinit();\n#endif", "#ifdef CONFIG_16550_UART\n  u16550_earlyserialinit();\n#else\n  alpha_uart_earlyinit();\n#endif")

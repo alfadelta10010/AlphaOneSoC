@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/* AlphaOneSoC 4x4: board file for a NOMMU, M-mode Linux (or any DT-driven OS).
+ *
+ * Includes docs/devicetree-4x4.dtsi (the SoC's peripherals, the cpu interrupt controller, the 52.63 MHz
+ * fixed clock) and adds what that file defers: root, cpus, memory, CLINT, aliases, chosen and the SPI
+ * children. The flash loader must still do the things no driver does (docs/boot-contract-4x4.md).
+ *
+ * Build and check (on the sandbox, never locally):
+ *   dtc -I dts -O dtb -@ -o alphaone-4x4.dtb alphaone-4x4.dts
+ *   dt-validate -s <linux>/Documentation/devicetree/bindings/processed-schema.json alphaone-4x4.dtb
+ */
+
+/dts-v1/;
+
+/include/ "devicetree-4x4.dtsi"
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "alfadelta10010,alphaone-soc";
+	model = "AlphaOneSoC 4x4 (FyraCore RV32IMAC)";
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		/* earlycon takes its clock from the node when stdout-path is used; the explicit form
+		 * without a baud leaves the divisor alone (the loader's divisor 29: 113,430 baud at 52.63 MHz; out of reset it is 34, 96,749 baud). */
+		stdout-path = "serial0:115200n8";
+		bootargs = "earlycon=uart8250,mmio,0x10000000 console=ttyS0,115200 rootwait";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		/* mtime counts the core clock: the same number as clk_core and the UART's clock-frequency */
+		timebase-frequency = <52631579>;
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		/* the 16 MB APS6404L on the QSPI Pmod (RAM window 0x8000_0000 + 16 MB in the core's PMA) */
+		reg = <0x80000000 0x01000000>;
+	};
+};
+
+&cpu0 {
+	device_type = "cpu";
+	compatible = "riscv";
+	reg = <0>;
+	status = "okay";
+	/* no MMU (NOMMU Linux, M-mode); misaligned accesses trap and are emulated in software */
+	mmu-type = "riscv,none";
+	riscv,isa-base = "rv32i";
+	riscv,isa-extensions = "i", "m", "a", "c", "zicsr", "zifencei", "zicntr";
+};
+
+&soc {
+	/* CLINT at 0x0200_0000 (64 KB window): msip at +0, mtimecmp at +0x4000, mtime at +0xBFF8.
+	 * "sifive,clint0" selects drivers/clocksource/timer-clint.c (M-mode NOMMU), which takes its
+	 * rate from timebase-frequency. Lines 3 (MSI) and 7 (MTI) of the cpu interrupt controller. */
+	clint: timer@2000000 {
+		compatible = "sifive,clint0", "riscv,clint0";
+		reg = <0x02000000 0x10000>;
+		interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+	};
+};
+
+&spi0 {
+	/* oled@0 and mmc@1 are optional board children. tiny_spi rounds the divider up, so
+	 * spi-max-frequency 8771930 gives BAUD 2 (8.77 MHz at 52.63 MHz); the SD card is capped there. */
+	mmc@1 {
+		compatible = "mmc-spi-slot";
+		reg = <1>;
+		spi-max-frequency = <8771930>;
+		voltage-ranges = <3200 3400>;
+		spi-cpol;	/* mode 3 like the OLED: mmc_spi falls back to mode 0 without both, and the */
+		spi-cpha;	/* controller keeps one mode, so a mode change would move SCK with CS# low */
+		status = "disabled";	/* enable when the card is fitted; the loader sets SPICTL.EN first */
+	};
+};

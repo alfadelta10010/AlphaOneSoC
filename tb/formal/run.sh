@@ -32,6 +32,8 @@
 # that redefines a built-in harness, or names a harness with no props file,
 # gives ERROR (exit 2).
 # MODE sbmc is bmc that always runs through sby (a depth sat cannot reach in time).
+# MODE sind is induct that always runs through sby (sat's base case starts from all-zero state;
+# smtbmc's leaves unreset flops free), for harnesses whose lemmas need it (mem_tcem_burst).
 # Engines: FORMAL_ENGINE=sat (default, yosys's built-in solver) or sby (sby with
 # bitwuzla smtbmc, generated from the same tables; a pdr harness always uses
 # sby with `abc pdr`, and a pdr PASS counts as PROVED). `run.sh -e DIR names`
@@ -51,7 +53,7 @@ DEPTH="${DEPTH:-12}"
 OUT="${OUT_DIR:-$ROOT/build}"
 mkdir -p "$OUT"
 BMC_DEPTH="${BMC_DEPTH:-10}"
-SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v uart.v"
+SOC="alphaone_soc.v syscon.v alu.v branchCtrl.v clint.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v gpio.v spi.v mem_ctrl.v cache.v muldiv.v pmp.v qspi_ctrl.v regFile.v regs.v signExt.v soc_bus.v plic.v uart.v gamepad.v pwm.v pinmux.v"
 CORE="alu.v branchCtrl.v compressed_decoder.v controller.v csr.v decoder.v fyracore.v muldiv.v pmp.v regFile.v signExt.v"
 declare -A FILES=( [csr]="csr.v" [core_hold]="$CORE" [core_req]="$CORE" [core_fetch]="$CORE" [syscon_comb]="syscon.v" [syscon_gate]="syscon.v" [soc_rst_sync]="$SOC"
                    [spi_core]="spi.v" [spi_dc]="spi.v" [spi_f12]="$SOC tt_um_alfadelta10010_alphaone_soc.v" [spi_bus]="gpio.v spi.v" [spi_bb]="gpio.v spi.v" [spi_bb1]="gpio.v spi.v" [spi_cover]="gpio.v spi.v" )
@@ -62,7 +64,8 @@ declare -A MODE=( [csr]=pdr [core_hold]=induct [core_req]=sbmc [core_fetch]=indu
 declare -A BDEPTH=( [core_req]=${CR_DEPTH:-150} [syscon_comb]=24 [spi_bb]=${BB_DEPTH:-96} [spi_bb1]=${BB1_DEPTH:-96} [spi_cover]=48 )     # per-harness bmc depth; default $BMC_DEPTH
 # spi_*: only induction length 1 counts as PROVED (WO-29 7.1); a harness that
 # needs more reports FAILED and gets a strengthening invariant instead.
-declare -A IDEPTH=( [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
+# core_fetch: the fetch-hold lemmas F4/F8 (WO-76) close at length 2 (1 before).
+declare -A IDEPTH=( [core_fetch]=2 [spi_core]=1 [spi_dc]=1 [spi_bus]=1 )
 # spi_*: white-box access with `expose` (a hierarchical reference such as
 # dut.x would become an undriven wire, and `bind` does nothing: both are
 # forbidden). PRE runs after the RTL is read and before the harness is.
@@ -70,9 +73,9 @@ SPI_EXPOSE="w:st w:sr w:bb w:bba w:cc w:bc w:cpol w:cpha w:baud"
 # gpio is flattened and the wires of its spi instance renamed s_<port>, then
 # exposed (the names of spi.v's ports and of the flops listed in WO-28 2.1).
 GPIO_PRE="hierarchy -top gpio; proc; flatten; cd gpio;"
-for x in wr_tx wr_ctl wr_baud wr_en wr_out miso st bba bb sr baud cpol cpha cc bc; do GPIO_PRE="$GPIO_PRE rename spi_inst.$x x_$x;"; done
-GPIO_PRE="$GPIO_PRE expose w:x_wr_tx w:x_wr_ctl w:x_wr_baud w:x_wr_en w:x_wr_out w:x_miso w:x_st w:x_bba w:x_bb w:x_sr w:x_baud w:x_cpol w:x_cpha w:x_cc w:x_bc w:spi_en w:in_m w:in_s w:out_r; cd .."
-declare -A PRE=( [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
+for x in wr_tx wr_ctl wr_baud wr_en wr_out wr_st miso st bba bb sr baud cpol cpha cc bc; do GPIO_PRE="$GPIO_PRE rename spi_inst.$x x_$x;"; done
+GPIO_PRE="$GPIO_PRE expose w:x_wr_tx w:x_wr_ctl w:x_wr_baud w:x_wr_en w:x_wr_out w:x_wr_st w:x_miso w:x_st w:x_bba w:x_bb w:x_sr w:x_baud w:x_cpol w:x_cpha w:x_cc w:x_bc w:spi_en w:in_m w:in_s w:in_p w:in_ie w:in_ip w:out_r; cd .."
+declare -A PRE=( [syscon_gate]="hierarchy -top syscon; proc; expose w:stat" [spi_core]="hierarchy -top spi; proc; expose $SPI_EXPOSE" [spi_dc]="hierarchy -top spi; proc; expose $SPI_EXPOSE"
                  [spi_bus]="$GPIO_PRE" [spi_bb]="" [spi_bb1]="" [spi_cover]="$GPIO_PRE" )
 # spi_bb1 is spi_bb_props.sv built with -DBB_BAUD1 (BAUD 1 and narrowed inputs)
 declare -A PROPN=( [spi_bb1]=spi_bb ); declare -A DEFS=( [spi_bb1]="-DBB_BAUD1" )
@@ -186,7 +189,7 @@ guard_hit() { grep -E "is implicitly declared|is used but has no driver" "$1" | 
 # `chformal -lower` (sby wants the formal cells as they are).
 sby_harness() {
   local n=$1 m=${MODE[$1]} d="$OUT/sby_$1" top="${PROPN[$1]:-$1}_props" dfn="${DEFS[$1]:-} ${EXTRA_DEFS:-}" opts engines sf="" f st tr
-  [ "$m" = sbmc ] && m=bmc
+  [ "$m" = sbmc ] && m=bmc; [ "$m" = sind ] && m=induct
   if ! command -v sby >/dev/null 2>&1; then echo "ERROR $n: sby not found on PATH (set FORMAL_BIN)"; err=1; return; fi
   mkdir -p "$d"
   case "$m" in
@@ -245,10 +248,10 @@ for n in "${names[@]}"; do
   if [ "${PROPN[$n]:-$n}" = core_fetch ]; then
     # fyracore.v with the f_* observation ports (see core_fetch_props.sv)
     inst="$OUT/formal_core_fetch_fyracore.v"
-    sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf,\n\1output wire        f_kv, f_exec, f_load/' \
-        -e 's/^endmodule$/    assign f_pc = pc; assign f_fetched = if_fetched; assign f_kbuf = if_kbuf;\n    assign f_kv = if_kv; assign f_exec = if_exec;\n    assign f_load = !rst \&\& !stall \&\& !(flush || ex_nofetch);\nendmodule/' \
+    sed -e 's/^\( *\)output wire        dbg_trap$/\1output wire        dbg_trap,\n\1output wire [31:0] f_pc, f_fetched,\n\1output wire [15:0] f_kbuf, f_wlo,\n\1output wire        f_kv, f_exec, f_load, f_wv, f_cti,\n\1output wire [31:0] f_cause/' \
+        -e 's/^endmodule$/    assign f_pc = pc; assign f_fetched = if_fetched; assign f_kbuf = if_kbuf;\n    assign f_kv = if_kv; assign f_exec = if_exec;\n    assign f_wlo = if_wlo; assign f_wv = if_wv; assign f_cause = exwb_trap_cause;\n    assign f_cti = ifex_valid \&\& (ctrl_doBranch || ctrl_doJump);\n    assign f_load = !rst \&\& !stall \&\& !(flush || ex_nofetch);\nendmodule/' \
         "$SRC/fyracore.v" > "$inst"
-    grep -q "f_load" "$inst" && grep -q "assign f_pc" "$inst" || { echo "ERROR $n: could not instrument fyracore.v"; err=1; continue; }
+    grep -q "f_load" "$inst" && grep -q "assign f_pc" "$inst" && grep -q "assign f_wv" "$inst" && grep -q "f_wv, f_cti" "$inst" && grep -q "assign f_cause" "$inst" || { echo "ERROR $n: could not instrument fyracore.v"; err=1; continue; }
     srcs="${srcs/$SRC\/fyracore.v/$inst}"
   fi
   for f in ${EXTRA[$n]:-}; do srcs="$srcs $HERE/$f"; done
@@ -262,13 +265,13 @@ for n in "${names[@]}"; do
     if guard_hit "$log"; then echo "ERROR $n: an undriven or implicitly declared wire (hierarchical reference?) (log: $log)"; err=1; continue; fi
     if [ "$n" = spi_f12 ]; then
     out=$(python3 - "$json" <<'PYEOF'
-# F12 (SPI-014): MOSI, SCK and the chip selects leave from flops.
-#   F1  gpio's out[0,1,2,3,6,7]: the driver, through wires and $pos only, is the
+# F12 (SPI-014, WO-58): every uo_out pin (MOSI, SCK, the chip selects, TX, the PWM1 tone, ...) leaves from a flop.
+#   F1  the pinmux's uo[0..7] (soc.pinmux_inst.uo): the driver, through wires and $pos only, is the
 #       Q of a sequential cell.
-#   F2  the wrapper's uo_out[0,1,2,3,6,7]: the cone back to sequential Q outputs
+#   F2  the wrapper's uo_out[0..7]: the cone back to sequential Q outputs
 #       holds exactly one gate (a 2-input logic cell, or a mux with a constant
 #       leg) that has `run` in its cone, plus at most one inverter; its leaves
-#       are the gpio pin flop and the flop `run`.
+#       are that pin's own pinmux flop (F1's bit i) and the flop `run`.
 import json, sys
 d = json.load(open(sys.argv[1]))
 top = d["modules"]["tt_um_alfadelta10010_alphaone_soc"]
@@ -286,23 +289,27 @@ bad = []
 def seqcell(c):
     return c["type"].startswith(SEQ)
 # F1
-gout = [n for n in top["netnames"] if n.endswith("gpio_inst.out")]
+gout = [n for n in top["netnames"] if n.endswith("pinmux_inst.uo")]
 if len(gout) != 1:
-    print("ERROR no gpio_inst.out net"); sys.exit()
+    print("ERROR no pinmux_inst.uo net"); sys.exit()
 gb = bits_of(gout[0])
-for i in (0, 1, 2, 3, 6, 7):
+if len(gb) != 8:
+    print("ERROR pinmux_inst.uo is not 8 bits"); sys.exit()
+pinq = {}
+for i in range(8):
     b = gb[i]
     seen = 0
     while isinstance(b, int) and b in drv and drv[b][1]["type"] == "$pos" and seen < 20:
         b = drv[b][1]["connections"]["A"][drv[b][3]]; seen += 1
     if not (isinstance(b, int) and b in drv and seqcell(drv[b][1])):
         t = drv[b][1]["type"] if isinstance(b, int) and b in drv else "undriven"
-        bad.append("F1 out[%d] driven by %s" % (i, t))
+        bad.append("F1 uo[%d] driven by %s" % (i, t))
+    pinq[i] = b
 # F2
 run_bits = bits_of("run")
 runq = set(run_bits)
 ub = bits_of("uo_out")
-for i in (0, 1, 2, 3, 6, 7):
+for i in range(8):
     gates, leaves, work, seen = [], set(), [ub[i]], set()
     while work:
         b = work.pop()
@@ -327,7 +334,8 @@ for i in (0, 1, 2, 3, 6, 7):
     logic = [c for c in gates if c["type"] not in ("$not", "$logic_not")]
     inv   = [c for c in gates if c["type"] in ("$not", "$logic_not")]
     seqleaves = {b for kind, b in leaves if kind == "seq"}
-    ok = len(logic) == 1 and len(inv) <= 1 and run_bits[0] in seqleaves and len(seqleaves) == 2
+    ok = (len(logic) == 1 and len(inv) <= 1 and run_bits[0] in seqleaves and len(seqleaves) == 2
+          and pinq.get(i) in seqleaves)
     if ok:
         c = logic[0]
         wide = [p for p, bs in c["connections"].items() if c["port_directions"].get(p) == "input" and len(bs) > 1]
@@ -380,8 +388,9 @@ PYEOF
   # --nonvac child run: an induct harness runs as bmc (a broken copy must give a
   # counterexample from reset, not merely "induction did not close")
   if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = induct ]; then MODE[$n]=bmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
+  if [ -n "${NONVAC_RUN:-}" ] && [ "${MODE[$n]}" = sind ]; then MODE[$n]=sbmc; BDEPTH[$n]="${NVDEPTH[$n]:-24}"; fi
   bd="${BDEPTH[$n]:-$BMC_DEPTH}"
-  if [ "${MODE[$n]}" = pdr ] || [ "${MODE[$n]}" = sbmc ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
+  if [ "${MODE[$n]}" = pdr ] || [ "${MODE[$n]}" = sbmc ] || [ "${MODE[$n]}" = sind ] || { [ "${MODE[$n]}" = cover ] && [ "$n" != spi_cover ]; } || { [ "$ENGINE" = sby ] && [ "${MODE[$n]}" != struct ]; }; then
     sby_harness "$n"; continue
   fi
   if [ "${MODE[$n]}" = cover ]; then

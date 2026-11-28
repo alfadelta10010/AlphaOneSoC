@@ -1,21 +1,31 @@
 // RTL lemma for the equivalence check (tb/eqy/run.sh, stage lemma).
 //
-// Synthesis removed 186 flops that hold a constant once the chip has been
-// reset (184 CSR bits: the WARL-hardwired bits of mstatus, mie, mtvec, mepc,
-// mcounteren, mcountinhibit, misa, pmpcfg0, the pipeline's trap_cause and
-// trap_pc; plus gpio out_r[1] and [3], which live in spi's pin flops), and
+// Synthesis removed 191 flops that hold a constant once the chip has been
+// reset (256 B Fp190n2j, src 93a5e4c; 5 of them reset to 1, all in misa):
+//   181 CSR bits, the WARL-hardwired bits: mie 29, pmpcfg0 8 (bits 6:5 of
+//       each entry), mcounteren 29, mcountinhibit 30, misa 31, mstatus 26,
+//       the pipeline's trap_cause 27 and trap_pc 1 (mtvec [31:2] and mepc
+//       [31:1] store only writable bits and have no reset since the CSR slim)
+//     2 gpio out_r[1] and [3], which live in spi's pin flops
+//     8 the PLIC's pend and insvc bits of sources 5-8, whose inputs are tied 0
+//       (the PWM has no interrupt: alphaone_soc.v ties PLIC sources 8..5 to 0;
+//       source 4 is the GPIO input-change irq since WO-69, so its pend and
+//       insvc are live and not listed), and
 // re-encoded four FSMs one-hot, leaving the unlisted codes out. This file
 // proves, on the RTL and from any state, that both are sound:
 //
-//   L1  once a reset has been applied, every one of the 186 bits equals its
+//   L1  once a reset has been applied, every one of the 191 bits equals its
 //       reset value, whatever the pins do afterwards
 //   L2  once a reset has been applied, exwb_memSize is never 3, muldiv's st
-//       is never 6 or 7, qspi's state is never 7, and spi's st is never 3
+//       is never 6 or 7 (with MULDIV5: never 5, 6 or 7), qspi's state is
+//       never above 9, and spi's st is never 3
 //
 // The masks and values come from the generated consts.vh (run.sh): the mask
 // is the list of removed bits that tb/eqy/accounting.py found, the value is
 // what the RTL's own reset gives those bits (read off a solver trace), so
-// none of the 186 is typed here. The design's internal nets are brought out
+// none of the 191 is typed here. pend and insvc are declared [NSRC:1]; their
+// ports here are [8:0] (position = index - 1), and lemma_gen.py makes their
+// masks by position. The design's internal nets are brought out
 // as ports by yosys's `expose` (hierarchical references are not supported),
 // and rst_soc is the reset that reaches every flop of the SoC.
 //
@@ -25,6 +35,18 @@
 // any state. All assertions are assumed in the earlier steps of an
 // induction, so they strengthen each other.
 `include "consts.vh"
+// A register with no removed bit in this netlist has no macro in consts.vh
+// (since the slim RTL, mtvec [31:2] and mepc [31:1] store only writable bits):
+// its mask is 0 and its check holds trivially. lemma_gen.py stops if consts.vh
+// names a register this file does not check.
+`ifndef LM_soc_cpu_csr_mtvec
+`define LM_soc_cpu_csr_mtvec 32'h0
+`define LV_soc_cpu_csr_mtvec 32'h0
+`endif
+`ifndef LM_soc_cpu_csr_unit_mepc
+`define LM_soc_cpu_csr_unit_mepc 32'h0
+`define LV_soc_cpu_csr_unit_mepc 32'h0
+`endif
 module lemma_props (
     input  wire       clk,
     input  wire       rst_n,
@@ -41,6 +63,7 @@ module lemma_props (
     wire [31:0] pc, ifex_pc;
     wire [1:0]  exwb_memSize;
     wire [2:0]  muldiv_st; wire [3:0] qspi_state;
+    wire [8:0]  plic_pend, plic_insvc;     // pend[9:1], insvc[9:1]
 
     tt_um_alfadelta10010_alphaone_soc dut (
         .ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in), .uio_out(uio_out),
@@ -62,7 +85,9 @@ module lemma_props (
         .\soc.cpu.muldiv_inst.st (muldiv_st),
         .\soc.qspi.state (qspi_state),
         .\soc.gpio_inst.out_r (gpio_out_r),
-        .\soc.gpio_inst.spi_inst.st (spi_st));
+        .\soc.gpio_inst.spi_inst.st (spi_st),
+        .\soc.plic_inst.pend (plic_pend),
+        .\soc.plic_inst.insvc (plic_insvc));
 
     // A reset edge has happened: rst_soc is high at a clock edge, and every
     // flop of the SoC takes its reset value at that edge.
@@ -82,9 +107,15 @@ module lemma_props (
     wire ok_trap_cause    = !armed || ((trap_cause    & `LM_soc_cpu_csr_unit_trap_cause)    == `LV_soc_cpu_csr_unit_trap_cause);
     wire ok_trap_pc       = !armed || ((trap_pc       & `LM_soc_cpu_csr_unit_trap_pc)       == `LV_soc_cpu_csr_unit_trap_pc);
     wire ok_gpio_out_r    = !armed || ((gpio_out_r    & `LM_soc_gpio_inst_out_r)            == `LV_soc_gpio_inst_out_r);
+    wire ok_plic_pend     = !armed || ((plic_pend     & `LM_soc_plic_inst_pend)             == `LV_soc_plic_inst_pend);
+    wire ok_plic_insvc    = !armed || ((plic_insvc    & `LM_soc_plic_inst_insvc)            == `LV_soc_plic_inst_insvc);
     wire ok_spi_st        = !armed || (spi_st != 2'b11);                       // L2
     wire ok_memSize       = !armed || (exwb_memSize != 2'b11);                 // L2
+`ifdef MULDIV5   // PX-6 removed S_SH (3'd5): codes 5, 6 and 7 are never reached
+    wire ok_st            = !armed || (muldiv_st != 3'b101 && muldiv_st != 3'b110 && muldiv_st != 3'b111);   // L2
+`else
     wire ok_st            = !armed || (muldiv_st != 3'b110 && muldiv_st != 3'b111);   // L2
+`endif
     wire ok_state         = !armed || (qspi_state <= 4'd9);                // L2
     // Supporting invariant (H1): the pc is halfword-aligned. mepc[0] and
     // trap_pc[0] load from it, and induction cannot see that without it.
@@ -98,5 +129,6 @@ module lemma_props (
         assert (ok_trap_pc);       assert (ok_memSize);        assert (ok_st);
         assert (ok_state);         assert (ok_pc_aligned);
         assert (ok_gpio_out_r);    assert (ok_spi_st);
+        assert (ok_plic_pend);     assert (ok_plic_insvc);
     end
 endmodule

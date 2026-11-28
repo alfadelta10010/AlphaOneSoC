@@ -68,6 +68,8 @@ module tb_rivercore;
     // switched off by making BASE > TOP -- a window that matches nothing.
     parameter IO1_BASE = 32'hFFFF_FFFF;
     parameter IO1_TOP  = 32'h0000_0000;
+    parameter IO2_BASE = 32'hFFFF_FFFF;  // Spike's PLIC is a documented divergence: closed like IO1
+    parameter IO2_TOP  = 32'h0000_0000;
 
 `ifdef SOC_TB
     // ── The whole SoC ────────────────────────────────────────────────────
@@ -103,6 +105,18 @@ module tb_rivercore;
         force soc.qspi_ddr     = 1'b1;
         force soc.qspi_ddr_cap = soc_ddr_cap[2:0];
     end
+    // +CACHE_EN=1: the instruction cache is switched on (CACHE_CTL.EN) two clocks after every release of rst.
+    // The program cannot write CACHE_CTL here (CACHE_CTL is in IO1, which is closed), so the flop is forced; a pin reset releases it
+    // again, as the hardware's reset clears EN.
+    reg cache_en_arg;
+    initial cache_en_arg = $test$plusargs("CACHE_EN");
+    always @(posedge rst) if (cache_en_arg) release soc.cache_en;
+    always @(negedge rst) if (cache_en_arg) begin repeat (2) @(posedge clk); if (!rst) force soc.cache_en = 1'b1; end
+    // +CACHE_PBURST: CACHE_CTL.PBURST forced on the same way (PSRAM line fills in one CE# period; with +CACHE_EN)
+    reg cache_pb_arg;
+    initial cache_pb_arg = $test$plusargs("CACHE_PBURST");
+    always @(posedge rst) if (cache_pb_arg) release soc.cache_pburst;
+    always @(negedge rst) if (cache_pb_arg) begin repeat (2) @(posedge clk); if (!rst) force soc.cache_pburst = 1'b1; end
     wire       qspi_sck, qspi_ctl_oe, qspi_io_oe, pmod_oe;
     wire [2:0] qspi_cs_n;
     wire [3:0] qspi_io_out, pmod_io;
@@ -116,7 +130,9 @@ module tb_rivercore;
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
-        .PMA_IO1_TOP (IO1_TOP)
+        .PMA_IO1_TOP (IO1_TOP),
+        .PMA_IO2_BASE(IO2_BASE),
+        .PMA_IO2_TOP (IO2_TOP)
     ) soc (
         .clk        (clk),
         .rst        (rst),
@@ -194,7 +210,9 @@ module tb_rivercore;
         .PMA_IO0_BASE(IO0_BASE),
         .PMA_IO0_TOP (IO0_TOP),
         .PMA_IO1_BASE(IO1_BASE),
-        .PMA_IO1_TOP (IO1_TOP)
+        .PMA_IO1_TOP (IO1_TOP),
+        .PMA_IO2_BASE(IO2_BASE),
+        .PMA_IO2_TOP (IO2_TOP)
     ) cpu(
         .clk         (clk),
         .rst         (rst),
@@ -258,9 +276,26 @@ module tb_rivercore;
 `define MEMARR mem.mem
 `endif
 
-    // Clock generation: 10ns period
+    // mtvec, mscratch, mepc, mtval and pmpaddr0-3 have no reset (Priv 3.4: unspecified), so they
+    // power up as X here. Spike resets them to 0, and the arch tests' prologues save mtvec and
+    // mscratch before writing them, so for lockstep runs they start at 0 -- the one thing this
+    // testbench initialises that the RTL does not. +CSR_X leaves them X: tests/directed/run.sh
+    // passes it, so a directed test that reads one of them before writing it fails on the X.
+    initial if (!$test$plusargs("CSR_X")) begin
+        #1;
+        `CPU.csr_unit.mtvec_r  = 0;  `CPU.csr_unit.mscratch = 0;
+        `CPU.csr_unit.mepc_r   = 0;  `CPU.csr_unit.mtval    = 0;
+        `CPU.csr_unit.pmpaddr0 = 0;  `CPU.csr_unit.pmpaddr1 = 0;
+        `CPU.csr_unit.pmpaddr2 = 0;  `CPU.csr_unit.pmpaddr3 = 0;
+    end
+
+    // Clock generation: 10ns period (-DTB_TCLK_NS=<ns> another; tests/directed/run.sh soc passes SOC_TCLK_NS)
     initial clk = 0;
+`ifdef TB_TCLK_NS
+    always #(`TB_TCLK_NS / 2.0) clk = ~clk;
+`else
     always #5 clk = ~clk;
+`endif
 
     // ================================================================
     //  Plusarg handling
@@ -405,6 +440,17 @@ module tb_rivercore;
     // ================================================================
     //  Counters
     // ================================================================
+`ifdef SOC_TB
+    // I-cache activity (summary line "icache:"), so a river_core run shows the cache was really in the path.
+    integer ic_act_cyc = 0, ic_fills = 0, ic_hit_cyc = 0;
+    reg ic_fill_q = 1'b0;
+    always @(posedge clk) begin
+        ic_fill_q <= soc.icache.fill_active;
+        if (soc.icache.active) ic_act_cyc <= ic_act_cyc + 1;
+        if (soc.icache.fill_active && !ic_fill_q) ic_fills <= ic_fills + 1;
+        if (soc.icache.hit_q) ic_hit_cyc <= ic_hit_cyc + 1;
+    end
+`endif
     integer instr_count = 0;
     integer cycle_count = 0;
 
@@ -988,10 +1034,23 @@ module tb_rivercore;
     //             other load. Without it a buffer that never hits is
     //             functionally invisible.
     //
-    //  The counters are in the summary ("fetch-reuse:"), so a run can show
-    //  that it exercised hits at all.
+    //  Fetch hold (WO-76): a fetch that completes on a stalled edge with no
+    //  data access in WB is kept whole (if_wv, {if_kbuf, if_wlo}).
+    //  C-hold     never imem_req, if_kv or dmem_req while if_wv is 1 (the
+    //             last one is lemma H-L2: no store completes under a held
+    //             word); if_wv equals an independent shadow of the rule.
+    //  C-held     a load from the held word has the memory's 4 bytes at pc
+    //             (PSRAM only, skipped once a store wrote one of them since
+    //             the capture).
+    //  R8         imem_req is low while a branch or jump is in EX.
+    //
+    //  The counters are in the summary ("fetch-reuse:", "fetch-hold:"), so a
+    //  run can show that it exercised hits and held words at all.
     // ================================================================
-    integer fr_hits = 0, fr_fetches = 0, fr_loads = 0;
+    integer fr_hits = 0, fr_fetches = 0, fr_loads = 0, fh_loads = 0;
+    reg        fr_exp_wv = 1'b0, fr_hdirty = 1'b0;
+    reg [31:0] fr_fpc = 32'h0;
+    reg [31:0] fr_mem_w;
     reg        fr_exp_kv = 1'b0, fr_dirty = 1'b0, fr_seen_rst = 1'b0;
     reg [31:0] fr_kaddr = 32'h0;
     reg [15:0] fr_mem_h;
@@ -1015,17 +1074,32 @@ module tb_rivercore;
     always @(posedge clk) begin
         if (rst) begin
             fr_exp_kv   <= 1'b0;
+            fr_exp_wv   <= 1'b0;
             fr_seen_rst <= 1'b1;
         end else if (fr_seen_rst) begin
             if (`CPU.if_kv !== fr_exp_kv)
                 fr_fail("if_kv differs from the rule");
             if (`CPU.imem_req && `CPU.if_kv)
                 fr_fail("fetch requested with the instruction in hand");
+            if (`CPU.if_wv !== fr_exp_wv)
+                fr_fail("if_wv differs from the rule");
+            if (`CPU.if_wv && `CPU.imem_req)
+                fr_fail("fetch requested with the word in hand");
+            if (`CPU.if_wv && `CPU.if_kv)
+                fr_fail("if_wv and if_kv both set");
+            if (`CPU.if_wv && `CPU.dmem_req)
+                fr_fail("data request while a word is held");
+            if (`CPU.ifex_valid && (`CPU.ctrl_doBranch || `CPU.ctrl_doJump) && `CPU.imem_req)
+                fr_fail("fetch issued behind a branch or jump");
+            fr_exp_wv <= `CPU.stall && (fr_exp_wv ||
+                         (`CPU.imem_req && `CPU.imem_ready && !`CPU.dmem_req && !`CPU.wb_busy));
             // the shadow and the fill/store bookkeeping
             if (`CPU.imem_req && `CPU.imem_ready) begin
                 fr_fetches = fr_fetches + 1;
                 fr_kaddr   = `CPU.pc + 32'd2;
                 fr_dirty   = 1'b0;
+                fr_hdirty  = 1'b0;
+                fr_fpc     = `CPU.pc;
             end
             if (dmem_req && dmem_ready && dmem_we) begin     // a store in a fetch's cycle counts too
                 for (fr_k = 0; fr_k < 4; fr_k = fr_k + 1)
@@ -1033,12 +1107,28 @@ module tb_rivercore;
                         ({dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr ||
                          {dmem_addr[31:2], 2'b00} + fr_k == fr_kaddr + 32'd1))
                         fr_dirty = 1'b1;
+                for (fr_k = 0; fr_k < 4; fr_k = fr_k + 1)
+                    if (dmem_be[fr_k] &&
+                        ({dmem_addr[31:2], 2'b00} + fr_k >= fr_fpc &&
+                         {dmem_addr[31:2], 2'b00} + fr_k <= fr_fpc + 32'd3))
+                        fr_hdirty = 1'b1;
             end
             if (!`CPU.stall) begin
                 if (`CPU.flush || `CPU.ex_nofetch) begin
                     fr_exp_kv <= fr_exp_kv && !`CPU.flush;
                 end else begin
                     fr_loads = fr_loads + 1;
+                    if (`CPU.if_wv) begin
+                        fh_loads = fh_loads + 1;
+                        if (`CPU.pc !== fr_fpc)
+                            fr_fail("held word loaded at another pc");
+                        if (`CPU.pc[31] && `CPU.if_exec && !fr_hdirty) begin
+                            fr_mem_w = {fr_byte(`CPU.pc + 32'd3), fr_byte(`CPU.pc + 32'd2),
+                                        fr_byte(`CPU.pc + 32'd1), fr_byte(`CPU.pc)};
+                            if ({`CPU.if_kbuf, `CPU.if_wlo} !== fr_mem_w)
+                                fr_fail("held word is not the memory's");
+                        end
+                    end
                     if (`CPU.if_hit) begin
                         fr_hits = fr_hits + 1;
                         if (`CPU.pc !== fr_kaddr)
@@ -1050,7 +1140,7 @@ module tb_rivercore;
                         end
                     end
                     fr_exp_kv <= !fr_exp_kv && `CPU.if_exec && `CPU.if_compressed &&
-                                 (`CPU.imem_rdata[17:16] != 2'b11);
+                                 (`CPU.if_fetched[17:16] != 2'b11);
                 end
             end
         end
@@ -1095,6 +1185,10 @@ module tb_rivercore;
             $display("  FC02/FC49/FC49b checks: %0d cycles, flush %0d, muldiv_want %0d, M-unit-active %0d, CSR-write-in-WB with EX valid %0d, %0d FAIL",
                      inv_cycles, inv_flush, inv_muldiv, inv_mdact, inv_csrwb, inv_fail);
             $display("  fetch-reuse: hits %0d fetches %0d loads %0d", fr_hits, fr_fetches, fr_loads);
+            $display("  fetch-hold: %0d", fh_loads);
+`ifdef SOC_TB
+            $display("  icache: active %0d cycles, fills %0d, hit cycles %0d", ic_act_cyc, ic_fills, ic_hit_cyc);
+`endif
             $display("  Dump: %0s", dump_file_str);
         end
     endtask

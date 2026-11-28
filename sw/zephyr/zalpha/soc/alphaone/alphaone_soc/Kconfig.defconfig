@@ -1,7 +1,7 @@
 if SOC_ALPHAONE_SOC
 
 config SYS_CLOCK_HW_CYCLES_PER_SEC
-	default 62500000
+	default 52631579
 
 config RISCV_SOC_INTERRUPT_INIT
 	default n
@@ -11,6 +11,11 @@ config NUM_IRQS
 
 config PMP_SLOTS
 	default 4
+
+# the core's PMP grain is 4 KiB and NA4 is not selectable: a smaller granularity makes z_riscv_pmp_init request
+# sub-grain regions (a 4-byte stack guard becomes a locked 32 MiB no-access region and wedges the core)
+config PMP_GRANULARITY
+	default 4096 if RISCV_PMP
 
 # with 4 slots the ROM and IRQ-stack-guard entries must be NAPOT (one slot each): as TOR pairs they use all 4 and the
 # MPRV catch-all has no slot, so an image with HW_STACK_PROTECTION (every ztest) hangs before the banner
